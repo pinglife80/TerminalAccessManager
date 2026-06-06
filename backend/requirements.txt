@@ -1,0 +1,40 @@
+# FastAPI and core dependencies
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+pydantic[email]==2.5.0
+pydantic-settings==2.1.0
+
+# Database
+sqlalchemy==2.0.23
+asyncpg==0.29.0
+alembic==1.12.1
+
+# Authentication & Security
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+bcrypt==4.1.1
+python-multipart==0.0.6
+
+# HTTP Client
+httpx==0.25.2
+
+# Redis
+redis==5.0.1
+aioredis==2.0.1
+
+# Utilities
+python-dotenv==1.0.0
+loguru==0.7.2
+
+# Testing
+pytest==7.4.3
+pytest-asyncio==0.21.1
+pytest-cov==4.1.0
+httpx==0.25.2
+
+# Network Operations
+netmiko==4.1.2
+# pymssql==2.2.10  # Removed - causes build issues on Alpine, not needed for demo
+
+# Monitoring
+prometheus-fastapi-instrumentator==6.1.0

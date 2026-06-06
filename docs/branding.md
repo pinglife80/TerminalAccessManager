@@ -1,0 +1,566 @@
+# 品牌自定义指南
+
+## 概述
+
+MAC Security Platform 支持全面的品牌自定义，无需修改任何组件代码。所有品牌相关的配置（应用名称、Logo、Favicon、登录页样式、页脚信息等）均集中在单一配置文件中管理。
+
+只需修改配置文件和替换静态资源，即可将平台适配为不同公司或部署场景的品牌形象。
+
+## 配置文件位置
+
+```
+frontend/src/config/branding.ts
+```
+
+静态资源文件目录：
+
+```
+frontend/public/
+```
+
+## 配置项详解
+
+### 完整接口定义
+
+```typescript
+interface BrandingConfig {
+  appName: string;        // 应用全名，显示在侧边栏、登录页、浏览器标题
+  appShortName: string;   // 应用短名，侧边栏展开时显示
+  appSubtitle: string;    // 副标题，显示在侧边栏应用名下方
+  version: string;        // 版本号，显示在页脚
+  title: string;          // 浏览器标签页标题
+  favicon: string;        // Favicon 路径
+  logo: {                 // Logo 配置
+    type: 'icon' | 'image';   // 'icon' 使用 Lucide 图标，'image' 使用图片文件
+    name: string;             // Lucide 图标名称（type 为 'icon' 时生效）
+    path: string;             // 图片路径（type 为 'image' 时生效）
+    className: string;        // Tailwind CSS 类名（用于图标颜色等）
+  };
+  login: {                // 登录页配置
+    heading: string;          // 登录页标题
+    subheading: string;       // 登录页副标题
+    footerText: string;       // 登录卡片底部文字
+    background: {             // 登录页背景
+      type: 'gradient' | 'image';    // 'gradient' 使用渐变色，'image' 使用背景图片
+      gradientClass: string;         // Tailwind 渐变色类名（type 为 'gradient' 时生效）
+      imagePath: string;             // 图片路径（type 为 'image' 时生效）
+    };
+    buttonGradient: string;   // 登录按钮渐变色类名
+    headerGradient: string;   // 登录页头部渐变色类名
+  };
+  footer: {               // 页脚配置
+    copyright: string;        // 版权信息，{year} 会被替换为当前年份
+    icpNumber: string;        // ICP 备案号，留空则隐藏
+    icpUrl: string;           // ICP 备案链接
+    links: { label: string; url: string }[];  // 额外页脚链接
+  };
+}
+```
+
+### 配置项说明表
+
+| 配置项 | 字段路径 | 类型 | 默认值 | 说明 |
+|--------|----------|------|--------|------|
+| 应用全名 | `appName` | string | `Terminal Access Platform` | 侧边栏、登录页标题 |
+| 应用短名 | `appShortName` | string | `Terminal Access` | 侧边栏展开时显示 |
+| 副标题 | `appSubtitle` | string | `Manager` | 侧边栏应用名下方 |
+| 版本号 | `version` | string | `v2.0.0` | 页脚显示 |
+| 浏览器标题 | `title` | string | `Terminal Access Platform` | 标签页标题 |
+| Favicon | `favicon` | string | `/favicon.svg` | 浏览器标签图标路径 |
+| Logo 类型 | `logo.type` | `'icon'` \| `'image'` | `'icon'` | 图标或图片模式 |
+| Logo 图标名 | `logo.name` | string | `Shield` | Lucide 图标名称 |
+| Logo 图片路径 | `logo.path` | string | `/logo.svg` | 图片文件路径 |
+| Logo 样式 | `logo.className` | string | `text-blue-500` | Tailwind CSS 类名 |
+| 登录标题 | `login.heading` | string | `Terminal Access Platform` | 登录页大标题 |
+| 登录副标题 | `login.subheading` | string | `Sign in to your account` | 登录页副标题 |
+| 登录页脚文字 | `login.footerText` | string | `Secure authentication · Session-based access control` | 登录卡片底部 |
+| 背景类型 | `login.background.type` | `'gradient'` \| `'image'` | `'gradient'` | 渐变色或背景图片 |
+| 渐变色类名 | `login.background.gradientClass` | string | `bg-gradient-to-br from-gray-50 via-blue-50 to-indigo-100` | Tailwind 渐变类 |
+| 背景图片路径 | `login.background.imagePath` | string | `/login-bg.jpg` | 背景图片路径 |
+| 按钮渐变色 | `login.buttonGradient` | string | `from-blue-600 to-indigo-600` | 登录按钮渐变 |
+| 头部渐变色 | `login.headerGradient` | string | `from-blue-600 to-indigo-600` | 登录头部渐变 |
+| 版权信息 | `footer.copyright` | string | `© {year} MAC Security Manager` | `{year}` 自动替换 |
+| ICP 备案号 | `footer.icpNumber` | string | `京ICP备XXXXXXXX号` | 留空隐藏 |
+| ICP 链接 | `footer.icpUrl` | string | `https://beian.miit.gov.cn/` | 备案链接 |
+| 额外链接 | `footer.links` | array | `[]` | 页脚附加链接 |
+
+## 自定义操作指南
+
+### 1. 修改应用名称
+
+修改 `branding.ts` 中的以下字段：
+
+```typescript
+const branding: BrandingConfig = {
+  appName: '我的安全平台',        // 全名 - 登录页标题、浏览器标题
+  appShortName: '安全平台',       // 短名 - 侧边栏展开时
+  appSubtitle: '管理系统',        // 副标题 - 侧边栏应用名下方
+  title: '我的安全平台',          // 浏览器标签页标题
+  // ...
+};
+```
+
+**影响范围**：
+- `appName` → 登录页标题、浏览器标题
+- `appShortName` → 侧边栏展开时的名称
+- `appSubtitle` → 侧边栏名称下方的副标题
+- `title` → 浏览器标签页标题（通过 `document.title` 设置）
+
+### 2. 修改 Logo
+
+#### 方式一：使用 Lucide 图标（默认）
+
+```typescript
+logo: {
+  type: 'icon',
+  name: 'Shield',           // Lucide 图标组件名称
+  path: '/logo.svg',        // 此项在 icon 模式下不生效，但需保留
+  className: 'text-blue-500', // Tailwind 颜色类名
+},
+```
+
+修改 `name` 为其他 Lucide 图标名称，修改 `className` 调整颜色。常用图标参见 [Lucide 图标参考](#lucide-图标参考)。
+
+#### 方式二：使用自定义图片
+
+1. 将 Logo 图片文件放入 `frontend/public/` 目录，例如 `frontend/public/company-logo.svg`
+2. 修改配置：
+
+```typescript
+logo: {
+  type: 'image',
+  name: 'Shield',              // icon 模式备用，image 模式下不生效
+  path: '/company-logo.svg',   // 指向 public/ 目录下的图片
+  className: 'text-blue-500',  // image 模式下不生效
+},
+```
+
+**支持的图片格式**：SVG（推荐）、PNG、JPG、WebP
+
+**推荐尺寸**：64×64px 或更大（侧边栏显示为 32×32px，登录页显示为 40×40px）
+
+### 3. 修改 Favicon
+
+1. 将 Favicon 文件放入 `frontend/public/` 目录，例如 `frontend/public/favicon.ico`
+2. 修改 `branding.ts` 配置：
+
+```typescript
+favicon: '/favicon.ico',
+```
+
+3. 同时修改 `frontend/index.html` 中的 `<link>` 标签：
+
+```html
+<link rel="icon" type="image/x-icon" href="/favicon.ico" />
+```
+
+**支持的格式**：SVG（推荐）、ICO、PNG
+
+**推荐尺寸**：32×32px 或 64×64px
+
+### 4. 修改登录页背景
+
+#### 方式一：使用渐变色（默认）
+
+```typescript
+login: {
+  // ...
+  background: {
+    type: 'gradient',
+    gradientClass: 'bg-gradient-to-br from-gray-50 via-blue-50 to-indigo-100',
+    imagePath: '/login-bg.jpg',   // gradient 模式下不生效，但需保留
+  },
+  // ...
+},
+```
+
+修改 `gradientClass` 为其他 Tailwind 渐变色类名。常用渐变色参见 [Tailwind 渐变色参考](#tailwind-渐变色参考)。
+
+#### 方式二：使用背景图片
+
+1. 将背景图片放入 `frontend/public/` 目录，例如 `frontend/public/login-bg.jpg`
+2. 修改配置：
+
+```typescript
+login: {
+  // ...
+  background: {
+    type: 'image',
+    gradientClass: 'bg-gradient-to-br from-gray-50 via-blue-50 to-indigo-100', // image 模式下不生效，但需保留
+    imagePath: '/login-bg.jpg',
+  },
+  // ...
+},
+```
+
+**推荐图片**：
+- 格式：JPG 或 WebP（压缩率高）
+- 尺寸：1920×1080px 或更大
+- 文件大小：建议不超过 500KB
+
+### 5. 修改登录页配色
+
+登录页有两处渐变色可自定义：
+
+```typescript
+login: {
+  // ...
+  buttonGradient: 'from-blue-600 to-indigo-600',   // 登录按钮渐变色
+  headerGradient: 'from-blue-600 to-indigo-600',   // 登录页头部色带渐变色
+  // ...
+},
+```
+
+**配色示例**：
+
+| 风格 | buttonGradient | headerGradient |
+|------|----------------|----------------|
+| 蓝色（默认） | `from-blue-600 to-indigo-600` | `from-blue-600 to-indigo-600` |
+| 绿色 | `from-emerald-600 to-teal-600` | `from-emerald-600 to-teal-600` |
+| 紫色 | `from-purple-600 to-pink-600` | `from-purple-600 to-pink-600` |
+| 橙色 | `from-orange-600 to-red-600` | `from-orange-600 to-red-600` |
+| 深色 | `from-gray-800 to-gray-900` | `from-gray-800 to-gray-900` |
+
+> 注意：`buttonGradient` 和 `headerGradient` 的值不需要加 `bg-gradient-to-r` 前缀，组件内部已自动添加。
+
+### 6. 修改页脚信息
+
+```typescript
+footer: {
+  copyright: '© {year} 我的公司',     // {year} 自动替换为当前年份
+  icpNumber: '京ICP备12345678号',      // ICP 备案号，留空字符串 '' 则隐藏
+  icpUrl: 'https://beian.miit.gov.cn/', // 备案链接
+  links: [                              // 额外页脚链接
+    { label: '隐私政策', url: 'https://example.com/privacy' },
+    { label: '使用条款', url: 'https://example.com/terms' },
+  ],
+},
+```
+
+**页脚显示位置**：
+- 主布局页脚（侧边栏右侧底部）
+- 登录页底部
+
+**ICP 备案**：`icpNumber` 为空字符串时，备案信息不会显示。
+
+### 7. 修改版本号
+
+```typescript
+version: 'v2.1.0',
+```
+
+版本号显示在页脚版权信息旁边。
+
+## 资源文件管理
+
+### 目录结构
+
+```
+frontend/public/
+├── favicon.svg          # 浏览器标签图标（默认）
+├── logo.svg             # Logo 图片（如使用 image 模式）
+├── login-bg.jpg         # 登录页背景图片（如使用 image 模式）
+└── ...                  # 其他自定义资源
+```
+
+### 资源引用规则
+
+- 所有静态资源放置在 `frontend/public/` 目录下
+- 在 `branding.ts` 中使用绝对路径引用，以 `/` 开头
+- 例如：文件 `frontend/public/company-logo.svg` → 配置路径 `/company-logo.svg`
+- Vite 构建时会自动将 `public/` 目录内容复制到输出目录
+
+### 文件格式建议
+
+| 资源类型 | 推荐格式 | 推荐尺寸 | 最大文件大小 |
+|----------|----------|----------|-------------|
+| Favicon | SVG、ICO | 32×32px | 10KB |
+| Logo | SVG | 64×64px+ | 50KB |
+| 登录背景 | WebP、JPG | 1920×1080px+ | 500KB |
+
+## Lucide 图标参考
+
+Logo 配置中 `type: 'icon'` 模式使用 [Lucide](https://lucide.dev/) 图标库。以下是适合安全/网络类应用的常用图标：
+
+| 图标名称 | 描述 | 适合场景 |
+|----------|------|----------|
+| `Shield` | 盾牌 | 安全防护（默认） |
+| `ShieldCheck` | 带勾盾牌 | 安全认证 |
+| `ShieldAlert` | 警告盾牌 | 安全告警 |
+| `Lock` | 锁 | 访问控制 |
+| `Key` | 钥匙 | 认证授权 |
+| `Network` | 网络 | 网络管理 |
+| `Globe` | 地球 | 全球访问 |
+| `Server` | 服务器 | 基础设施 |
+| `Monitor` | 显示器 | 终端管理 |
+| `Wifi` | 无线 | 无线网络 |
+| `Fingerprint` | 指纹 | 身份认证 |
+| `Eye` | 眼睛 | 监控审计 |
+| `Radar` | 雷达 | 安全扫描 |
+| `Scan` | 扫描 | 安全检测 |
+| `CheckCircle` | 勾选圆圈 | 合规管理 |
+
+> 完整图标列表请访问 [Lucide 官网](https://lucide.dev/icons/)。
+
+### 图标颜色
+
+通过 `logo.className` 设置图标颜色，使用 Tailwind 文字颜色类名：
+
+| 颜色 | className |
+|------|-----------|
+| 蓝色（默认） | `text-blue-500` |
+| 靛蓝色 | `text-indigo-500` |
+| 绿色 | `text-emerald-500` |
+| 紫色 | `text-purple-500` |
+| 红色 | `text-red-500` |
+| 橙色 | `text-orange-500` |
+| 青色 | `text-cyan-500` |
+| 灰色 | `text-gray-500` |
+
+## Tailwind 渐变色参考
+
+登录页背景和按钮/头部使用 Tailwind CSS 渐变色类名。
+
+### 背景渐变色（用于 `login.background.gradientClass`）
+
+背景渐变需要完整的 Tailwind 类名，包含 `bg-gradient-to-` 前缀：
+
+| 风格 | gradientClass |
+|------|---------------|
+| 蓝白渐变（默认） | `bg-gradient-to-br from-gray-50 via-blue-50 to-indigo-100` |
+| 蓝紫渐变 | `bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-100` |
+| 绿白渐变 | `bg-gradient-to-br from-gray-50 via-emerald-50 to-teal-100` |
+| 紫粉渐变 | `bg-gradient-to-br from-purple-50 via-pink-50 to-rose-100` |
+| 暖色渐变 | `bg-gradient-to-br from-orange-50 via-amber-50 to-yellow-100` |
+| 深色渐变 | `bg-gradient-to-br from-gray-800 via-gray-900 to-black` |
+| 冷色渐变 | `bg-gradient-to-br from-slate-50 via-cyan-50 to-blue-100` |
+
+### 方向关键字
+
+渐变方向由 `bg-gradient-to-{direction}` 控制：
+
+| 方向 | 类名 | 效果 |
+|------|------|------|
+| 右下 | `bg-gradient-to-br` | 左上 → 右下（推荐） |
+| 右 | `bg-gradient-to-r` | 左 → 右 |
+| 下 | `bg-gradient-to-b` | 上 → 下 |
+| 右上 | `bg-gradient-to-tr` | 左下 → 右上 |
+
+### 按钮/头部渐变色（用于 `login.buttonGradient` 和 `login.headerGradient`）
+
+按钮和头部渐变**不需要** `bg-gradient-to-r` 前缀，组件内部已自动添加：
+
+| 风格 | 渐变色值 |
+|------|----------|
+| 蓝色（默认） | `from-blue-600 to-indigo-600` |
+| 绿色 | `from-emerald-600 to-teal-600` |
+| 紫色 | `from-purple-600 to-pink-600` |
+| 橙色 | `from-orange-600 to-red-600` |
+| 青色 | `from-cyan-600 to-blue-600` |
+| 深色 | `from-gray-700 to-gray-900` |
+
+## 完整配置示例
+
+### 示例一：企业安全平台
+
+```typescript
+const branding: BrandingConfig = {
+  appName: 'Enterprise Security Center',
+  appShortName: 'Security',
+  appSubtitle: 'Center',
+  version: 'v2.0.0',
+  title: 'Enterprise Security Center',
+  favicon: '/favicon.svg',
+
+  logo: {
+    type: 'icon',
+    name: 'ShieldCheck',
+    path: '/logo.svg',
+    className: 'text-emerald-500',
+  },
+
+  login: {
+    heading: 'Enterprise Security Center',
+    subheading: 'Sign in to your account',
+    footerText: 'Enterprise-grade security · Multi-factor authentication',
+    background: {
+      type: 'gradient',
+      gradientClass: 'bg-gradient-to-br from-gray-50 via-emerald-50 to-teal-100',
+      imagePath: '/login-bg.jpg',
+    },
+    buttonGradient: 'from-emerald-600 to-teal-600',
+    headerGradient: 'from-emerald-600 to-teal-600',
+  },
+
+  footer: {
+    copyright: '© {year} Enterprise Inc.',
+    icpNumber: '',
+    icpUrl: '',
+    links: [
+      { label: 'Privacy Policy', url: 'https://example.com/privacy' },
+      { label: 'Terms of Service', url: 'https://example.com/terms' },
+    ],
+  },
+};
+```
+
+### 示例二：使用自定义 Logo 和背景图片
+
+```typescript
+const branding: BrandingConfig = {
+  appName: '网络准入管理平台',
+  appShortName: '准入管理',
+  appSubtitle: '平台',
+  version: 'v2.0.0',
+  title: '网络准入管理平台',
+  favicon: '/favicon.ico',
+
+  logo: {
+    type: 'image',
+    name: 'Shield',
+    path: '/company-logo.svg',
+    className: 'text-blue-500',
+  },
+
+  login: {
+    heading: '网络准入管理平台',
+    subheading: '请登录您的账户',
+    footerText: '安全认证 · 会话访问控制',
+    background: {
+      type: 'image',
+      gradientClass: 'bg-gradient-to-br from-gray-50 via-blue-50 to-indigo-100',
+      imagePath: '/login-bg.jpg',
+    },
+    buttonGradient: 'from-blue-600 to-indigo-600',
+    headerGradient: 'from-blue-600 to-indigo-600',
+  },
+
+  footer: {
+    copyright: '© {year} 某某科技有限公司',
+    icpNumber: '京ICP备12345678号-1',
+    icpUrl: 'https://beian.miit.gov.cn/',
+    links: [
+      { label: '隐私政策', url: 'https://example.com/privacy' },
+      { label: '服务条款', url: 'https://example.com/terms' },
+    ],
+  },
+};
+```
+
+## 构建与生效
+
+### 开发环境
+
+修改 `branding.ts` 后，Vite 热模块替换（HMR）会自动刷新页面，无需手动重启。
+
+```bash
+cd frontend
+npm run dev
+```
+
+### 生产构建
+
+修改配置后需重新构建前端：
+
+```bash
+cd frontend
+npm run build
+```
+
+### Docker 部署
+
+使用 Docker 部署时，通过管理脚本重新构建：
+
+```bash
+./manage.sh update --no-git
+```
+
+或仅重建前端并重启：
+
+```bash
+docker compose up -d --build frontend
+./manage.sh restart nginx
+```
+
+### 静态资源更新
+
+如果替换了 `frontend/public/` 目录下的资源文件（如 Logo、Favicon、背景图片）：
+
+1. **开发环境**：刷新浏览器即可（Vite 直接服务 `public/` 目录）
+2. **生产环境**：需重新构建前端，因为资源会在构建时被复制到 `dist/` 目录
+3. **Docker 环境**：需重新构建 frontend 容器
+
+## 常见问题
+
+### Q: 修改了 branding.ts 但页面没有变化？
+
+**A:** 检查以下几点：
+1. 确认修改的是 `frontend/src/config/branding.ts` 文件
+2. 开发环境下检查浏览器控制台是否有编译错误
+3. 生产环境下确认已重新构建（`npm run build`）
+4. Docker 环境下确认已重新构建容器（`./manage.sh update --no-git`）
+5. 清除浏览器缓存后重试
+
+### Q: 使用自定义图片 Logo 但不显示？
+
+**A:** 检查以下几点：
+1. 确认图片文件已放入 `frontend/public/` 目录
+2. 确认 `logo.type` 设置为 `'image'`
+3. 确认 `logo.path` 以 `/` 开头，且文件名与实际文件一致
+4. 确认图片文件名大小写与配置一致（Linux 区分大小写）
+5. 检查浏览器控制台 Network 面板，确认图片请求返回 200
+
+### Q: Favicon 没有更新？
+
+**A:** Favicon 缓存较为顽固，需要：
+1. 同时修改 `branding.ts` 中的 `favicon` 字段和 `frontend/index.html` 中的 `<link>` 标签
+2. 强制刷新浏览器（Ctrl+Shift+R 或 Cmd+Shift+R）
+3. 清除浏览器缓存
+4. 如果仍不生效，尝试在路径后添加版本参数：`/favicon.svg?v=2`
+
+### Q: 登录背景图片不显示？
+
+**A:** 检查以下几点：
+1. 确认 `login.background.type` 设置为 `'image'`
+2. 确认图片文件已放入 `frontend/public/` 目录
+3. 确认 `login.background.imagePath` 路径正确
+4. 确认图片文件大小合理（建议不超过 500KB）
+5. 检查浏览器控制台是否有图片加载错误
+
+### Q: 渐变色类名不生效？
+
+**A:** 检查以下几点：
+1. 确认使用的是 Tailwind CSS 支持的类名
+2. 背景渐变需要完整的类名（包含 `bg-gradient-to-` 前缀）
+3. 按钮和头部渐变**不需要** `bg-gradient-to-r` 前缀
+4. 如果使用自定义颜色，需在 `tailwind.config.js` 中配置
+5. 确认类名拼写正确，Tailwind 类名不支持动态拼接
+
+### Q: ICP 备案号如何隐藏？
+
+**A:** 将 `footer.icpNumber` 设置为空字符串即可：
+
+```typescript
+footer: {
+  icpNumber: '',  // 留空即可隐藏
+  // ...
+},
+```
+
+### Q: 如何添加多个页脚链接？
+
+**A:** 在 `footer.links` 数组中添加：
+
+```typescript
+footer: {
+  links: [
+    { label: '隐私政策', url: 'https://example.com/privacy' },
+    { label: '服务条款', url: 'https://example.com/terms' },
+    { label: '帮助中心', url: 'https://example.com/help' },
+  ],
+},
+```
+
+### Q: 修改品牌配置是否需要修改组件代码？
+
+**A:** 不需要。所有品牌配置通过 `branding.ts` 集中管理，组件通过 `import branding from '@/config/branding'` 读取配置。只需修改配置文件即可，无需修改任何组件代码。

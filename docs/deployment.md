@@ -1,0 +1,568 @@
+# MAC Security Platform - 部署与运维手册
+
+## 目录
+
+- [1. 环境要求](#1-环境要求)
+- [2. 快速开始（一键部署）](#2-快速开始一键部署)
+- [3. 生产环境部署](#3-生产环境部署)
+- [4. 命令参考手册](#4-命令参考手册)
+- [5. 典型运维场景](#5-典型运维场景)
+- [6. 故障排查](#6-故障排查)
+- [7. 架构说明](#7-架构说明)
+
+---
+
+## 1. 环境要求
+
+| 依赖 | 最低版本 | 说明 |
+|------|---------|------|
+| Docker | 20.10+ | 容器运行时 |
+| Docker Compose | v2.0+ | 服务编排（`docker compose` 命令） |
+| 磁盘空间 | 5GB+ | 镜像 + 数据卷 |
+| 内存 | 2GB+ | 推荐 4GB |
+| OpenSSL | 任意 | 生成 SSL 证书 |
+
+**端口占用：**
+
+| 端口 | 用途 |
+|------|------|
+| 8080 | HTTP（自动重定向到 HTTPS） |
+| 8443 | HTTPS（Web 管理界面） |
+
+> 其他服务端口（PostgreSQL 5432、Redis 6379、Backend 8000）不对外暴露，仅通过 Nginx 代理访问。
+
+---
+
+## 2. 快速开始（一键部署）
+
+### 2.1 克隆项目
+
+```bash
+git clone <repository-url>
+cd mac_security_web
+```
+
+### 2.2 一键 Demo 部署
+
+```bash
+chmod +x manage.sh
+./manage.sh deploy --demo
+```
+
+这将自动完成：
+1. 检查系统前提条件
+2. 生成 SSL 自签名证书
+3. 自动生成数据库密码、Redis 密码、JWT 密钥
+4. 构建并启动所有 Docker 服务
+5. 初始化数据库和 admin 用户
+6. 生成演示数据（50 个 MAC 地址、15 个白名单、10 个黑名单、100 条审计日志）
+
+### 2.3 访问系统
+
+部署完成后：
+
+- **HTTPS**: https://localhost:8443
+- **HTTP**: http://localhost:8080（自动重定向到 HTTPS）
+- **登录账号**: admin / admin123
+
+> Demo 环境仅用于评估和测试，不适合生产使用。
+
+---
+
+## 3. 生产环境部署
+
+### 3.1 交互式向导部署
+
+```bash
+./manage.sh deploy --prod
+```
+
+向导将引导你配置：
+
+1. **数据库密码** — 至少 8 位，建议使用强密码
+2. **Redis 密码** — 缓存服务密码
+3. **JWT 密钥** — 自动生成 64 位随机密钥
+4. **Sangfor API**（可选） — API 地址、用户名、密码
+5. **网络交换机**（可选） — 交换机 IP、用户名、密码
+
+### 3.2 已有配置文件部署
+
+如果 `.env` 已存在，使用 `-y` 标志跳过交互：
+
+```bash
+./manage.sh -y deploy --prod
+```
+
+### 3.3 手动配置
+
+也可以先编辑 `.env`，再部署：
+
+```bash
+cp .env.example .env
+vim .env                          # 编辑配置
+./manage.sh -y deploy --prod     # 使用已有配置部署
+```
+
+### 3.4 配置项说明
+
+| 变量 | 必填 | 说明 |
+|------|------|------|
+| `DB_USER` | 是 | 数据库用户名（默认 mac_admin） |
+| `DB_PASSWORD` | 是 | 数据库密码 |
+| `REDIS_PASSWORD` | 是 | Redis 密码 |
+| `SECRET_KEY` | 是 | JWT 签名密钥 |
+| `SANGFOR_BASE_URL` | 否 | 深信服 API 地址 |
+| `SANGFOR_USERNAME` | 否 | 深信服 API 用户名 |
+| `SANGFOR_PASSWORD` | 否 | 深信服 API 密码 |
+| `SWITCH_HOST` | 否 | 网络交换机 IP |
+| `SWITCH_USERNAME` | 否 | 交换机用户名 |
+| `SWITCH_PASSWORD` | 否 | 交换机密码 |
+
+---
+
+## 4. 命令参考手册
+
+### 全局选项
+
+| 选项 | 说明 |
+|------|------|
+| `-y, --yes` | 跳过所有确认提示（非交互模式） |
+| `-v, --verbose` | 启用调试输出 |
+| `-h, --help` | 显示帮助信息 |
+
+### 4.1 生命周期命令
+
+#### `deploy [--demo|--prod]`
+
+完整部署，包含初始化向导。
+
+```bash
+./manage.sh deploy --demo        # Demo 模式（自动配置 + 示例数据）
+./manage.sh deploy --prod        # 生产模式（交互式向导）
+./manage.sh -y deploy --prod     # 生产模式（非交互，使用已有 .env）
+```
+
+#### `start`
+
+启动所有服务（幂等 — 已运行则跳过）。
+
+```bash
+./manage.sh start
+```
+
+#### `stop`
+
+停止所有服务（幂等 — 已停止则跳过）。
+
+```bash
+./manage.sh stop
+```
+
+#### `restart [service]`
+
+重启服务。不指定服务名则重启全部。
+
+```bash
+./manage.sh restart              # 重启所有服务
+./manage.sh restart backend      # 只重启后端
+./manage.sh restart nginx        # 只重启 Nginx
+```
+
+#### `status`
+
+查看服务状态和健康信息。
+
+```bash
+./manage.sh status
+```
+
+输出示例：
+```
+Service Health:
+  ● PostgreSQL: healthy
+  ● Redis: healthy
+  ● Backend API: healthy
+  ● Nginx Proxy: running
+
+Web Access:
+  ● https://localhost:8443 (200 OK)
+
+Deployment:
+  Mode: demo
+  Time: 2026-06-06T14:00:36+08:00
+```
+
+#### `health`
+
+深度健康检查（8 项检查）。
+
+```bash
+./manage.sh health
+```
+
+检查项目：
+1. Docker 守护进程
+2. 服务容器状态
+3. 数据库连接
+4. Redis 连接
+5. 后端 API 可用性
+6. Web UI 可达性
+7. SSL 证书有效期
+8. 磁盘空间
+
+#### `update [--no-git]`
+
+更新应用（拉取代码 + 重建 + 重启）。
+
+```bash
+./manage.sh update               # 自动 git pull + 重建
+./manage.sh update --no-git      # 跳过 git pull，只重建
+```
+
+> 更新前会自动备份数据库。
+
+### 4.2 数据管理命令
+
+#### `init`
+
+初始化数据库和管理员用户（幂等 — 已初始化则跳过）。
+
+```bash
+./manage.sh init
+```
+
+#### `mock generate`
+
+生成演示数据。
+
+```bash
+./manage.sh mock generate
+```
+
+生成内容：
+- 5 个用户（含 admin）
+- 50 个 MAC 地址
+- 15 个白名单条目
+- 10 个黑名单条目
+- 100 条审计日志
+
+#### `mock clear`
+
+清除所有演示数据（保留 admin 用户）。
+
+```bash
+./manage.sh mock clear           # 需要确认
+./manage.sh -y mock clear        # 非交互模式
+```
+
+> 清除前会自动备份数据库。
+
+#### `backup [file]`
+
+备份数据库到 SQL 文件。
+
+```bash
+./manage.sh backup                                    # 自动生成文件名
+./manage.sh backup /path/to/my_backup.sql             # 指定文件名
+```
+
+备份文件存储在 `backups/` 目录，自动保留最近 10 个备份。
+
+#### `restore <file>`
+
+从 SQL 文件恢复数据库。
+
+```bash
+./manage.sh restore backups/backup_20260606_140053.sql
+```
+
+> 恢复前会自动备份当前数据库。恢复过程会先清空目标数据库再导入。
+
+### 4.3 开发命令
+
+#### `test`
+
+运行后端测试套件。
+
+```bash
+./manage.sh test
+```
+
+如果服务未运行，会自动启动。
+
+#### `shell [backend|db|redis]`
+
+进入服务容器的交互式 Shell。
+
+```bash
+./manage.sh shell backend         # 后端 Shell (sh)
+./manage.sh shell db              # PostgreSQL Shell (psql)
+./manage.sh shell redis           # Redis CLI
+# 简写
+./manage.sh shell b               # = backend
+./manage.sh shell p               # = db (postgres)
+./manage.sh shell r               # = redis
+```
+
+#### `logs [service] [-n N]`
+
+查看服务日志（实时跟踪模式）。
+
+```bash
+./manage.sh logs                  # 所有服务日志
+./manage.sh logs backend          # 只看后端日志
+./manage.sh logs backend -n 50    # 后端最近 50 行
+./manage.sh logs nginx -n 200     # Nginx 最近 200 行
+```
+
+按 `Ctrl+C` 退出日志跟踪。
+
+#### `validate`
+
+运行项目验证检查。
+
+```bash
+./manage.sh validate
+```
+
+检查内容：文件结构、Python 语法、配置完整性、安全验证、API 端点、Docker 配置。
+
+### 4.4 工具命令
+
+#### `config [key] [value]`
+
+查看或修改配置。
+
+```bash
+./manage.sh config                         # 查看所有配置
+./manage.sh config DB_USER                 # 查看单个配置
+./manage.sh config DB_PASSWORD newpass123  # 修改配置
+```
+
+> 敏感信息（密码、密钥）自动脱敏显示。修改后需 `./manage.sh restart` 生效。
+
+#### `ssl [--force]`
+
+管理 SSL 证书（幂等 — 有效证书存在则跳过）。
+
+```bash
+./manage.sh ssl              # 仅在证书不存在/过期时生成
+./manage.sh ssl --force      # 强制重新生成
+```
+
+证书有效期 10 年，存储在 `nginx/certs/` 目录。如果 Nginx 正在运行，会自动 reload。
+
+#### `clean`
+
+清理所有容器、镜像、数据卷和部署状态。
+
+```bash
+./manage.sh clean            # 需要确认
+./manage.sh -y clean         # 非交互模式
+```
+
+> **危险操作**：会删除所有数据，不可恢复！
+
+#### `version`
+
+显示版本和系统信息。
+
+```bash
+./manage.sh version
+```
+
+---
+
+## 5. 典型运维场景
+
+### 场景 1：首次部署到生产服务器
+
+```bash
+# 1. 克隆项目
+git clone <repo-url> && cd mac_security_web
+
+# 2. 执行生产部署向导
+./manage.sh deploy --prod
+
+# 3. 验证部署
+./manage.sh health
+
+# 4. 访问系统并修改默认密码
+# https://your-server:8443
+```
+
+### 场景 2：代码更新后重新部署
+
+```bash
+./manage.sh update
+```
+
+自动完成：git pull → 重建镜像 → 重启服务。更新前自动备份数据库。
+
+### 场景 3：数据库备份与恢复
+
+```bash
+# 备份
+./manage.sh backup
+
+# 查看可用备份
+ls -lh backups/
+
+# 恢复（会自动备份当前数据）
+./manage.sh restore backups/backup_20260606_140053.sql
+```
+
+### 场景 4：查看后端日志排查问题
+
+```bash
+./manage.sh logs backend -n 100    # 查看最近 100 行
+./manage.sh logs postgres          # 查看数据库日志
+```
+
+### 场景 5：修改配置后重启
+
+```bash
+# 修改 Redis 密码
+./manage.sh config REDIS_PASSWORD new_redis_pass
+
+# 重启服务使配置生效
+./manage.sh restart
+```
+
+### 场景 6：完全重新部署
+
+```bash
+./manage.sh -y clean              # 清理所有
+./manage.sh deploy --prod         # 重新部署
+```
+
+### 场景 7：生成演示数据用于测试
+
+```bash
+./manage.sh mock generate          # 生成数据
+# ... 测试操作 ...
+./manage.sh -y mock clear          # 清除数据
+```
+
+### 场景 8：SSL 证书即将过期
+
+```bash
+./manage.sh ssl --force            # 强制重新生成
+```
+
+### 场景 9：CI/CD 自动化部署
+
+```bash
+./manage.sh -y deploy --prod       # 非交互模式
+./manage.sh health                 # 健康检查
+```
+
+---
+
+## 6. 故障排查
+
+### 服务无法启动
+
+```bash
+# 1. 查看服务状态
+./manage.sh status
+
+# 2. 查看详细日志
+./manage.sh logs backend
+
+# 3. 深度健康检查
+./manage.sh health
+```
+
+### 数据库连接失败
+
+```bash
+# 检查数据库是否就绪
+./manage.sh shell db -c "SELECT 1;"
+
+# 重启数据库
+./manage.sh restart postgres
+```
+
+### Web 界面无法访问
+
+```bash
+# 1. 检查端口占用
+ss -tlnp | grep -E '8080|8443'
+
+# 2. 检查 Nginx 日志
+./manage.sh logs nginx
+
+# 3. 检查 SSL 证书
+./manage.sh ssl
+```
+
+### 前端页面空白
+
+```bash
+# 前端构建容器可能未完成，重启 Nginx
+./manage.sh restart nginx
+```
+
+### 清理并重新部署
+
+```bash
+./manage.sh -y clean
+./manage.sh deploy --demo
+```
+
+---
+
+## 7. 架构说明
+
+### 服务拓扑
+
+```
+                    ┌──────────────┐
+                    │   Internet   │
+                    └──────┬───────┘
+                           │
+                    ┌──────▼───────┐
+                    │    Nginx     │ :8080→80, :8443→443
+                    │  (反向代理)   │
+                    └──┬───────┬───┘
+                       │       │
+              ┌────────▼┐  ┌──▼────────┐
+              │ Frontend │  │  Backend  │
+              │ (构建产物) │  │  (FastAPI) │
+              └─────────┘  └──┬─────┬──┘
+                              │     │
+                    ┌─────────▼┐ ┌─▼────────┐
+                    │ PostgreSQL│ │  Redis   │
+                    │  (数据库)  │ │ (缓存)    │
+                    └──────────┘ └──────────┘
+```
+
+### 端口映射
+
+| 对外端口 | 容器端口 | 服务 | 说明 |
+|---------|---------|------|------|
+| 8080 | 80 | Nginx | HTTP（重定向到 HTTPS） |
+| 8443 | 443 | Nginx | HTTPS |
+| - | 5432 | PostgreSQL | 仅内部网络 |
+| - | 6379 | Redis | 仅内部网络 |
+| - | 8000 | Backend | 仅内部网络 |
+
+### 数据卷
+
+| 卷名 | 用途 |
+|------|------|
+| `postgres_data` | PostgreSQL 数据持久化 |
+| `redis_data` | Redis 数据持久化 |
+| `frontend_dist` | 前端构建产物共享 |
+
+### 部署状态
+
+部署状态存储在 `.manage/state.env`，用于幂等性控制：
+
+| 状态键 | 说明 |
+|--------|------|
+| `deployed` | 是否已部署 |
+| `deploy_mode` | 部署模式（demo/prod） |
+| `deploy_time` | 部署时间 |
+| `db_initialized` | 数据库是否已初始化 |

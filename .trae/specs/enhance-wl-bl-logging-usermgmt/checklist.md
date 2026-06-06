@@ -1,0 +1,21 @@
+- [x] 白名单 MAC+IP 绑定时仅允许单个 IP（后端校验+前端提示）
+- [x] 黑名单 MAC+IP 绑定时仅允许单个 IP（后端校验+前端提示）
+- [x] 黑名单数据库模型新增 comments 列
+- [x] 黑名单 Schema 新增 comments 字段
+- [x] 黑名单前端表单新增 comments 输入框
+- [x] 黑名单表格和详情弹窗显示 comments
+- [x] 日志配置支持文件输出+轮转归档+定期清理
+- [x] 日志时间戳统一 UTC 时区格式
+- [x] manage.sh user unlock 命令可用
+- [x] manage.sh user create 命令可用
+- [x] manage.sh user delete 命令可用（禁止删除 admin）
+- [x] manage.sh user list 命令可用
+- [x] manage.sh user reset-password 命令可用
+- [x] 后端用户管理 API 端点可用
+- [x] 前端用户管理页面可用（列表/创建/删除/重置密码）
+- [x] 前端个人密码修改页面可用（需验证旧密码）
+- [x] 侧边栏菜单新增用户管理和个人设置入口
+- [x] Terminal 页搜索框 placeholder 提示明确
+- [x] Whitelist 页搜索框 placeholder 提示明确
+- [x] Blacklist 页搜索框 placeholder 提示明确（含 comments）
+- [x] AuditLogs 页搜索框 placeholder 提示明确

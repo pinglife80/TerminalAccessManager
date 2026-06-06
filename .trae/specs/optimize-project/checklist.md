@@ -1,0 +1,14 @@
+- [x] 后端所有列表接口返回分页结构 `{items, total, page, page_size}`，不再全量加载
+- [x] Dashboard 统计接口 `/stats` 返回聚合数据，前端不再本地计算
+- [x] MAC 地址和 IP 地址在 Schema 层进行格式校验，非法输入返回 422
+- [x] 审计日志记录操作者客户端 IP 地址
+- [x] 健康检查端点复用已有 Redis 连接，无连接泄漏
+- [x] Prometheus 监控通过配置项控制，不再硬编码 `or True`
+- [x] CORS 配置从环境变量读取，生产环境无硬编码默认值
+- [x] SangforService 使用上下文管理器模式，连接自动关闭
+- [x] 黑名单查询返回 `is_expired` 字段，前端可区分过期条目
+- [x] 前端 access_token 过期时自动使用 refresh_token 刷新
+- [x] 前端所有列表页面使用服务端分页，不再前端本地分页
+- [x] Dashboard 系统状态通过 `/health` 接口实时获取
+- [x] Sidebar 登出调用后端 `/auth/logout` 接口
+- [x] 前端提供 404 页面，访问不存在路由时显示
