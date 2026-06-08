@@ -4,24 +4,30 @@ from fastapi.security import OAuth2PasswordRequestForm, OAuth2PasswordBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from jose import JWTError, jwt
+from typing import Optional
 
 from app.core.database import get_db
 from app.core.security import (
     authenticate_user,
-    create_access_token,
-    create_refresh_token,
+    verify_password,
+    create_access_token_async,
+    create_refresh_token_async,
     hash_password,
     get_current_user,
     add_token_to_blacklist,
     is_token_blacklisted,
     check_login_attempts,
+    check_captcha_required,
     record_failed_login,
     reset_login_attempts,
 )
 from app.core.config import settings
 from app.models.user import User
-from app.schemas.auth import Token, UserCreate, UserResponse
-from app.schemas.mac_address import ResponseMessage
+from app.schemas.auth import (
+    Token, UserCreate, UserResponse, UserDetailResponse,
+    UserUpdate, AdminUserCreate, PasswordChange, AdminPasswordReset, ProfileUpdate,
+)
+from app.schemas.terminal import ResponseMessage
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -31,6 +37,7 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.API_V1_STR}/auth/login
 @router.post("/login", response_model=Token)
 async def login(
     form_data: OAuth2PasswordRequestForm = Depends(),
+    captcha: str = None,
     db: AsyncSession = Depends(get_db)
 ):
     """Login and get access token"""
@@ -38,45 +45,112 @@ async def login(
 
     # Check if account is locked
     if await check_login_attempts(username):
+        # Get remaining lock time
+        from app.core.security import get_redis_client
+        redis_client = await get_redis_client()
+        lock_key = f"login_lock:{username}"
+        ttl = await redis_client.ttl(lock_key)
+        remaining_minutes = max(0, (ttl + 59) // 60) if ttl > 0 else settings.LOCKOUT_DURATION_MINUTES
+
         raise HTTPException(
             status_code=status.HTTP_423_LOCKED,
-            detail=f"Account locked due to too many failed attempts. Try again in {settings.LOCKOUT_DURATION_MINUTES} minutes.",
+            detail=f"Account locked due to too many failed attempts. Try again in {remaining_minutes} minutes.",
+            headers={"X-Account-Locked": "true", "X-Lock-Remaining": str(remaining_minutes * 60)},
         )
 
-    user = await authenticate_user(db, username, form_data.password)
+    # Check if captcha is required
+    captcha_required = await check_captcha_required(username)
+
+    # If captcha is required but not provided, reject
+    if captcha_required and not captcha:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Captcha verification is required. Please solve the captcha and try again.",
+            headers={"X-Captcha-Required": "true"},
+        )
+
+    # Step 1: Check if user exists
+    from sqlalchemy import select
+    from app.models.user import User as UserModel
+    result = await db.execute(select(UserModel).where(UserModel.username == username))
+    user = result.scalar_one_or_none()
 
     if not user:
-        # Record failed login attempt
+        # User does not exist - record failed attempt for anti-enumeration
         await record_failed_login(username)
+        captcha_now = await check_captcha_required(username)
+        headers = {"X-Captcha-Required": "true" if captcha_now else "false"}
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect username or password",
-            headers={"WWW-Authenticate": "Bearer"},
+            detail="Username does not exist",
+            headers=headers,
+        )
+
+    # Step 2: Verify password
+    if not verify_password(form_data.password, user.hashed_password):
+        # Password incorrect - record failed attempt
+        await record_failed_login(username)
+        captcha_now = await check_captcha_required(username)
+        locked_now = await check_login_attempts(username)
+
+        headers = {
+            "X-Captcha-Required": "true" if captcha_now else "false",
+        }
+        if locked_now:
+            from app.core.security import get_redis_client
+            redis_client = await get_redis_client()
+            lock_key = f"login_lock:{username}"
+            ttl = await redis_client.ttl(lock_key)
+            remaining_minutes = max(0, (ttl + 59) // 60) if ttl > 0 else settings.LOCKOUT_DURATION_MINUTES
+            headers["X-Account-Locked"] = "true"
+            headers["X-Lock-Remaining"] = str(remaining_minutes * 60)
+
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect password",
+            headers=headers,
         )
 
     if not user.is_active:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Inactive user"
+            detail="Account is disabled"
         )
 
     # Reset failed login attempts on successful login
     await reset_login_attempts(username)
 
-    # Create tokens
-    access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-    access_token = create_access_token(
-        data={"sub": user.username},
-        expires_delta=access_token_expires
-    )
-
-    refresh_token = create_refresh_token(data={"sub": user.username})
+    # Create tokens (uses hot-reloadable config for expiration)
+    access_token = await create_access_token_async(data={"sub": user.username})
+    refresh_token = await create_refresh_token_async(data={"sub": user.username})
 
     return {
         "access_token": access_token,
         "refresh_token": refresh_token,
         "token_type": "bearer"
     }
+
+
+@router.get("/login-status")
+async def get_login_status(username: str):
+    """Get login status for a username (captcha required, account locked)"""
+    captcha_required = await check_captcha_required(username)
+    locked = await check_login_attempts(username)
+
+    result = {
+        "captcha_required": captcha_required,
+        "locked": locked,
+    }
+
+    if locked:
+        from app.core.security import get_redis_client
+        redis_client = await get_redis_client()
+        lock_key = f"login_lock:{username}"
+        ttl = await redis_client.ttl(lock_key)
+        remaining_seconds = max(0, ttl) if ttl > 0 else settings.LOCKOUT_DURATION_MINUTES * 60
+        result["lock_remaining_seconds"] = remaining_seconds
+
+    return result
 
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
@@ -173,14 +247,9 @@ async def refresh_token(
                 detail="Invalid user"
             )
 
-        # Create new tokens
-        access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-        access_token = create_access_token(
-            data={"sub": username},
-            expires_delta=access_token_expires
-        )
-
-        new_refresh_token = create_refresh_token(data={"sub": username})
+        # Create new tokens (uses hot-reloadable config for expiration)
+        access_token = await create_access_token_async(data={"sub": username})
+        new_refresh_token = await create_refresh_token_async(data={"sub": username})
 
         # Blacklist old refresh token
         if jti:
@@ -218,3 +287,212 @@ async def logout(
         pass  # Even if token parsing fails, return success
 
     return {"message": "Successfully logged out", "success": True}
+
+
+# ==================== User Profile APIs ====================
+
+@router.put("/me/profile", response_model=UserResponse)
+async def update_profile(
+    profile: ProfileUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Update current user's profile (email)"""
+    if profile.email is not None:
+        # Check email uniqueness
+        if profile.email != current_user.email:
+            result = await db.execute(select(User).where(User.email == profile.email))
+            if result.scalar_one_or_none():
+                raise HTTPException(status_code=400, detail="Email already in use")
+        current_user.email = profile.email
+        await db.commit()
+        await db.refresh(current_user)
+    return current_user
+
+
+@router.put("/me/password", response_model=ResponseMessage)
+async def change_password(
+    data: PasswordChange,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Change current user's password (requires current password verification)"""
+    from app.core.security import verify_password
+    if not verify_password(data.current_password, current_user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Current password is incorrect",
+        )
+    current_user.hashed_password = hash_password(data.new_password)
+    await db.commit()
+    return {"message": "Password changed successfully", "success": True}
+
+
+# ==================== Admin User Management APIs ====================
+
+async def get_current_active_superuser(current_user: User = Depends(get_current_user)) -> User:
+    """Dependency: ensure current user is a superuser"""
+    if not current_user.is_superuser:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Superuser access required",
+        )
+    return current_user
+
+
+@router.get("/users", response_model=list[UserDetailResponse])
+async def list_users(
+    search: Optional[str] = None,
+    is_active: Optional[bool] = None,
+    current_user: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    """List all users with optional search and filter (superuser only)"""
+    stmt = select(User).order_by(User.id)
+    if search:
+        stmt = stmt.where(
+            (User.username.ilike(f"%{search}%")) | (User.email.ilike(f"%{search}%"))
+        )
+    if is_active is not None:
+        stmt = stmt.where(User.is_active == is_active)
+    result = await db.execute(stmt)
+    return result.scalars().all()
+
+
+@router.post("/users", response_model=UserDetailResponse, status_code=status.HTTP_201_CREATED)
+async def admin_create_user(
+    user_data: AdminUserCreate,
+    current_user: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    """Create a new user (superuser only)"""
+    # Check username uniqueness
+    result = await db.execute(select(User).where(User.username == user_data.username))
+    if result.scalar_one_or_none():
+        raise HTTPException(status_code=400, detail="Username already exists")
+
+    # Check email uniqueness
+    if user_data.email:
+        result = await db.execute(select(User).where(User.email == user_data.email))
+        if result.scalar_one_or_none():
+            raise HTTPException(status_code=400, detail="Email already in use")
+
+    new_user = User(
+        username=user_data.username,
+        email=user_data.email,
+        hashed_password=hash_password(user_data.password),
+        is_active=user_data.is_active,
+        is_superuser=user_data.is_superuser,
+    )
+    db.add(new_user)
+    await db.commit()
+    await db.refresh(new_user)
+    return new_user
+
+
+@router.get("/users/{user_id}", response_model=UserDetailResponse)
+async def get_user(
+    user_id: int,
+    current_user: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get user details by ID (superuser only)"""
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user
+
+
+@router.put("/users/{user_id}", response_model=UserDetailResponse)
+async def admin_update_user(
+    user_id: int,
+    user_data: UserUpdate,
+    current_user: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    """Update user info (superuser only)"""
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Prevent self-demotion
+    if user.id == current_user.id and user_data.is_superuser is False:
+        raise HTTPException(status_code=400, detail="Cannot remove your own superuser status")
+
+    if user_data.email is not None:
+        if user_data.email != user.email:
+            email_check = await db.execute(select(User).where(User.email == user_data.email))
+            if email_check.scalar_one_or_none():
+                raise HTTPException(status_code=400, detail="Email already in use")
+        user.email = user_data.email
+
+    if user_data.is_active is not None:
+        # Prevent self-deactivation
+        if user.id == current_user.id and not user_data.is_active:
+            raise HTTPException(status_code=400, detail="Cannot deactivate your own account")
+        user.is_active = user_data.is_active
+
+    if user_data.is_superuser is not None:
+        user.is_superuser = user_data.is_superuser
+
+    await db.commit()
+    await db.refresh(user)
+    return user
+
+
+@router.delete("/users/{user_id}", response_model=ResponseMessage)
+async def admin_delete_user(
+    user_id: int,
+    current_user: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete a user (superuser only). Cannot delete self."""
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if user.id == current_user.id:
+        raise HTTPException(status_code=400, detail="Cannot delete your own account")
+
+    await db.delete(user)
+    await db.commit()
+    return {"message": f"User '{user.username}' deleted successfully", "success": True}
+
+
+@router.put("/users/{user_id}/password", response_model=ResponseMessage)
+async def admin_reset_password(
+    user_id: int,
+    data: AdminPasswordReset,
+    current_user: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    """Reset a user's password (superuser only)"""
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    user.hashed_password = hash_password(data.new_password)
+    await db.commit()
+    return {"message": f"Password for '{user.username}' reset successfully", "success": True}
+
+
+@router.post("/users/{user_id}/unlock", response_model=ResponseMessage)
+async def admin_unlock_user(
+    user_id: int,
+    current_user: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    """Unlock a locked user account (superuser only)"""
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Clear Redis lock and attempts
+    await reset_login_attempts(user.username)
+
+    return {"message": f"Account '{user.username}' unlocked successfully", "success": True}

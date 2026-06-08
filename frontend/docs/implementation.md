@@ -2,7 +2,7 @@
 
 ## 概述
 
-MAC Security Platform 的前端已使用现代 React + TypeScript 技术栈完整实现，包含认证系统、终端管理、白名单/黑名单管理、审计日志等全部核心功能，以及品牌自定义配置系统。
+TerminalAccessManager 的前端已使用现代 React + TypeScript 技术栈完整实现，包含认证系统、终端合规监控、数据源管理、白名单/黑名单管理、审计日志、用户管理等全部核心功能，以及品牌动态配置系统。
 
 ---
 
@@ -25,7 +25,7 @@ frontend/
 │   ├── config/           # 配置
 │   │   └── branding.ts          # 品牌自定义配置
 │   ├── hooks/            # 自定义 Hooks
-│   │   └── useMacData.ts        # 数据查询 Hooks（MAC 地址、白名单、统计）
+│   │   └── useTerminalData.ts    # 数据查询 Hooks（终端、白名单、统计）
 │   ├── lib/              # 工具和 API 客户端
 │   │   ├── api.ts               # 带拦截器的 Axios 客户端
 │   │   ├── constants.ts         # 常量定义（状态、导航、API 端点等）
@@ -33,12 +33,16 @@ frontend/
 │   ├── pages/            # 页面组件
 │   │   ├── Login.tsx            # 登录页（验证码、账户锁定）
 │   │   ├── Dashboard.tsx        # 主仪表板
-│   │   ├── MacAddresses.tsx     # 终端管理
+│   │   ├── Terminals.tsx         # 终端管理
 │   │   ├── Whitelist.tsx        # 白名单管理
 │   │   ├── Blacklist.tsx        # 黑名单管理
-│   │   └── AuditLogs.tsx        # 审计日志
+│   │   ├── AuditLogs.tsx        # 审计日志
+│   │   ├── DataSources.tsx      # 数据源管理（管理员专属）
+│   │   ├── Users.tsx            # 用户管理（管理员专属）
+│   │   └── Profile.tsx          # 个人资料
 │   ├── store/            # 状态管理
-│   │   └── auth.ts              # 认证状态管理
+│   │   ├── auth.ts              # 认证状态管理
+│   │   └── branding.ts         # 品牌动态配置 store（useBrandingStore）
 │   ├── App.tsx           # 带路由的主应用
 │   ├── main.tsx          # 入口点
 │   ├── index.css         # TailwindCSS 全局样式
@@ -80,6 +84,7 @@ frontend/
 
 #### 状态管理
 - Zustand store 管理认证
+- Zustand store 管理品牌动态配置（useBrandingStore，从后端动态加载品牌设置）
 - 跨页面重载的持久认证状态
 - 类型安全的状态管理
 - TanStack Query 管理服务端数据缓存
@@ -99,7 +104,6 @@ frontend/
 #### 样式
 - TailwindCSS 实用优先框架
 - 自定义配色方案（主蓝色调色板）
-- 深色模式支持（CSS 变量）
 - 响应式设计（移动优先）
 - 现代图标（Lucide React）
 
@@ -224,13 +228,13 @@ apiClient.interceptors.request.use((config) => {
 ### 2. 仪表板 (`/dashboard`)
 **功能：**
 - 带用户信息的欢迎头部
-- 统计卡片（终端总数、白名单数、已封禁数、活跃数）
+- 统计卡片（Total/Normal/Bypass/Blocked/Pending，共 5 个）
 - 快速操作面板（跳转到终端管理、白名单、黑名单、审计日志）
 - 系统状态指示器
 - 骨架屏加载状态
 - 错误状态处理
 
-### 3. 终端管理 (`/mac-addresses`)
+### 3. 终端管理 (`/terminals`)
 **功能：**
 - 终端列表数据表格
 - 搜索过滤（按 IP/MAC 地址搜索）
@@ -285,6 +289,33 @@ apiClient.interceptors.request.use((config) => {
 - 可折叠过滤器面板
 - 空状态和加载状态
 
+### 7. 数据源管理 (`/data-sources`)（管理员专属）
+**功能：**
+- 数据源列表数据表格
+- 添加/编辑/删除数据源
+- 数据源绑定管理（绑定 MAC 地址到数据源）
+- 合规检查操作
+- 自动封禁/自动解封配置
+- Compliance Baselines Tab（合规基准管理，支持 CRUD、测试连接、手动同步）
+- 搜索和过滤
+- 高级分页
+- 空状态和加载状态
+
+### 8. 用户管理 (`/users`)（管理员专属）
+**功能：**
+- 用户列表数据表格
+- 添加/编辑/删除用户
+- 角色分配
+- 搜索过滤
+- 高级分页
+- 空状态和加载状态
+
+### 9. 个人资料 (`/profile`)
+**功能：**
+- 查看和编辑个人资料信息
+- 修改密码
+- 个人信息展示
+
 ---
 
 ## 创建的文件
@@ -304,7 +335,7 @@ apiClient.interceptors.request.use((config) => {
 2. `Dockerfile` - Docker 构建
 3. `nginx.conf` - Nginx 配置
 
-### 源代码文件（19）
+### 源代码文件（23）
 1. `src/main.tsx` - React 入口点
 2. `src/App.tsx` - 带路由的主应用
 3. `src/index.css` - 带 Tailwind 的全局样式
@@ -314,24 +345,28 @@ apiClient.interceptors.request.use((config) => {
 7. `src/lib/utils.ts` - 工具函数
 8. `src/config/branding.ts` - 品牌自定义配置
 9. `src/store/auth.ts` - 认证 store
-10. `src/hooks/useMacData.ts` - 数据查询 Hooks
-11. `src/components/Layout.tsx` - 主布局组件
-12. `src/components/Sidebar.tsx` - 侧边栏导航
-13. `src/components/Pagination.tsx` - 分页组件
-14. `src/components/DateRangeFilter.tsx` - 日期范围过滤器
-15. `src/components/Button.tsx` - 按钮组件
-16. `src/components/StateDisplay.tsx` - 状态显示组件
-17. `src/components/Skeleton.tsx` - 骨架屏组件
-18. `src/components/ProtectedRoute.tsx` - 路由守卫
-19. `src/components/ErrorBoundary.tsx` - 错误边界
+10. `src/store/branding.ts` - 品牌动态配置 store（useBrandingStore）
+11. `src/hooks/useTerminalData.ts` - 数据查询 Hooks
+12. `src/components/Layout.tsx` - 主布局组件
+13. `src/components/Sidebar.tsx` - 侧边栏导航
+14. `src/components/Pagination.tsx` - 分页组件
+15. `src/components/DateRangeFilter.tsx` - 日期范围过滤器
+16. `src/components/Button.tsx` - 按钮组件
+17. `src/components/StateDisplay.tsx` - 状态显示组件
+18. `src/components/Skeleton.tsx` - 骨架屏组件
+19. `src/components/ProtectedRoute.tsx` - 路由守卫
+20. `src/components/ErrorBoundary.tsx` - 错误边界
 
-### 页面文件（6）
+### 页面文件（9）
 1. `src/pages/Login.tsx` - 登录页面
 2. `src/pages/Dashboard.tsx` - 仪表板页面
-3. `src/pages/MacAddresses.tsx` - 终端管理页面
+3. `src/pages/Terminals.tsx` - 终端管理页面
 4. `src/pages/Whitelist.tsx` - 白名单管理页面
 5. `src/pages/Blacklist.tsx` - 黑名单管理页面
 6. `src/pages/AuditLogs.tsx` - 审计日志页面
+7. `src/pages/DataSources.tsx` - 数据源管理页面（管理员专属）
+8. `src/pages/Users.tsx` - 用户管理页面（管理员专属）
+9. `src/pages/Profile.tsx` - 个人资料页面
 
 ### 静态资源（1）
 1. `public/favicon.svg` - 网站图标
@@ -406,12 +441,18 @@ apiClient.interceptors.request.use((config) => {
 
 ### 已连接
 - `POST /api/v1/auth/login` - 用户认证
+- `GET /api/v1/auth/login-status` - 登录状态查询（验证码/锁定状态）
 - `POST /api/v1/auth/refresh` - 令牌刷新
 - `GET /api/v1/auth/me` - 获取当前用户信息
-- `GET /api/v1/mac/search` - 搜索 MAC 地址
-- `GET /api/v1/mac/` - 列出 MAC 地址
-- `POST /api/v1/mac/block/{ip}` - 封禁 IP
-- `POST /api/v1/mac/unblock/{ip}` - 解封 IP
+- `POST /api/v1/auth/register` - 用户注册
+- `GET /api/v1/auth/users` - 用户列表（CRUD）
+- `POST /api/v1/auth/users` - 创建用户
+- `PUT /api/v1/auth/users/{id}` - 更新用户
+- `DELETE /api/v1/auth/users/{id}` - 删除用户
+- `GET /api/v1/terminals/search` - 搜索终端
+- `GET /api/v1/terminals/` - 列出终端
+- `POST /api/v1/terminals/block/{ip}` - 封禁 IP
+- `POST /api/v1/terminals/unblock/{ip}` - 解封 IP
 - `GET /api/v1/whitelist/` - 列出白名单
 - `POST /api/v1/whitelist/` - 添加到白名单
 - `DELETE /api/v1/whitelist/{mac}` - 从白名单移除
@@ -419,6 +460,30 @@ apiClient.interceptors.request.use((config) => {
 - `POST /api/v1/blacklist/` - 添加到黑名单
 - `DELETE /api/v1/blacklist/{id}` - 从黑名单移除
 - `GET /api/v1/logs/` - 列出审计日志
+- `GET /api/v1/logs/search` - 搜索审计日志
+- `GET /api/v1/logs/export` - 导出审计日志
+- `GET /api/v1/data-sources/` - 列出数据源（CRUD）
+- `POST /api/v1/data-sources/` - 创建数据源
+- `PUT /api/v1/data-sources/{id}` - 更新数据源
+- `DELETE /api/v1/data-sources/{id}` - 删除数据源
+- `GET /api/v1/data-sources/bindings/` - 列出数据源绑定（CRUD）
+- `POST /api/v1/data-sources/bindings/` - 创建数据源绑定
+- `PUT /api/v1/data-sources/bindings/{id}` - 更新数据源绑定
+- `DELETE /api/v1/data-sources/bindings/{id}` - 删除数据源绑定
+- `POST /api/v1/data-sources/compliance/check` - 合规检查
+- `POST /api/v1/data-sources/compliance/auto-block` - 自动封禁
+- `POST /api/v1/data-sources/compliance/auto-unblock` - 自动解封
+- `GET /api/v1/compliance-baselines/` - 列出合规基准
+- `POST /api/v1/compliance-baselines/` - 创建合规基准
+- `GET /api/v1/compliance-baselines/{id}` - 获取合规基准详情
+- `PUT /api/v1/compliance-baselines/{id}` - 更新合规基准
+- `DELETE /api/v1/compliance-baselines/{id}` - 删除合规基准
+- `POST /api/v1/compliance-baselines/{id}/test` - 测试合规基准连接
+- `POST /api/v1/compliance-baselines/{id}/sync` - 同步合规基准
+- `GET /api/v1/stats/` - 统计数据
+- `GET /api/v1/stats/system-status` - 系统状态
+- `GET /api/v1/settings/` - 获取系统设置（含品牌配置）
+- `PUT /api/v1/settings/` - 更新系统设置
 
 ---
 
@@ -525,7 +590,7 @@ npm run build
 前端已完整实现，包括：
 - 现代技术栈
 - 完整的认证系统（含验证码和账户锁定）
-- 全部 6 个页面（登录、仪表板、终端管理、白名单、黑名单、审计日志）
+- 全部 9 个页面（登录、仪表板、终端管理、白名单、黑名单、审计日志、数据源管理、用户管理、个人资料）
 - 品牌自定义配置系统
 - 所有后端 API 已连接
 - 响应式设计

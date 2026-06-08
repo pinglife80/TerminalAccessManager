@@ -99,7 +99,7 @@ const branding: BrandingConfig = {
   /** Footer configuration */
   footer: {
     /** Copyright text. {year} will be replaced with current year */
-    copyright: '© {year} MAC Security Manager',
+    copyright: '© {year} TerminalAccessManager (TAM)',
     /** ICP filing number (leave empty string to hide) */
     icpNumber: '京ICP备XXXXXXXX号',
     /** ICP filing URL */

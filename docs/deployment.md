@@ -1,4 +1,4 @@
-# MAC Security Platform - 部署与运维手册
+# TerminalAccessManager - 部署与运维手册
 
 ## 目录
 
@@ -38,8 +38,8 @@
 ### 2.1 克隆项目
 
 ```bash
-git clone <repository-url>
-cd mac_security_web
+git clone https://github.com/pinglife80/TerminalAccessManager.git
+cd TerminalAccessManager
 ```
 
 ### 2.2 一键 Demo 部署
@@ -55,15 +55,17 @@ chmod +x manage.sh
 3. 自动生成数据库密码、Redis 密码、JWT 密钥
 4. 构建并启动所有 Docker 服务
 5. 初始化数据库和 admin 用户
-6. 生成演示数据（50 个 MAC 地址、15 个白名单、10 个黑名单、100 条审计日志）
+6. 生成演示数据（50 个终端、15 个白名单、10 个黑名单、100 条审计日志）
 
 ### 2.3 访问系统
 
 部署完成后：
 
-- **HTTPS**: https://localhost:8443
-- **HTTP**: http://localhost:8080（自动重定向到 HTTPS）
-- **登录账号**: admin / admin123
+- **HTTPS**: `https://<HOST_IP>:8443`
+- **HTTP**: `http://<HOST_IP>:8080`（自动重定向到 HTTPS）
+- **登录账号**: admin / Admin123
+
+> `<HOST_IP>` 为实际部署主机 IP 地址。本机部署时使用 `localhost`。
 
 > Demo 环境仅用于评估和测试，不适合生产使用。
 
@@ -107,7 +109,7 @@ vim .env                          # 编辑配置
 
 | 变量 | 必填 | 说明 |
 |------|------|------|
-| `DB_USER` | 是 | 数据库用户名（默认 mac_admin） |
+| `DB_USER` | 是 | 数据库用户名（默认 tam_admin） |
 | `DB_PASSWORD` | 是 | 数据库密码 |
 | `REDIS_PASSWORD` | 是 | Redis 密码 |
 | `SECRET_KEY` | 是 | JWT 签名密钥 |
@@ -185,7 +187,7 @@ Service Health:
   ● Nginx Proxy: running
 
 Web Access:
-  ● https://localhost:8443 (200 OK)
+  ● https://<HOST_IP>:8443 (200 OK)
 
 Deployment:
   Mode: demo
@@ -210,16 +212,84 @@ Deployment:
 7. SSL 证书有效期
 8. 磁盘空间
 
-#### `update [--no-git]`
+#### `update`
 
-更新应用（拉取代码 + 重建 + 重启）。
+仅重建并重启服务（本地代码修改后使用）。不会拉取远程代码。
 
 ```bash
-./manage.sh update               # 自动 git pull + 重建
-./manage.sh update --no-git      # 跳过 git pull，只重建
+./manage.sh update
 ```
 
-> 更新前会自动备份数据库。
+执行流程：
+1. 自动备份数据库
+2. 重建 Docker 镜像
+3. 重启服务
+
+> 适用于本地代码修改后重新部署的场景。如需从远程仓库拉取新版本代码，请使用 `upgrade` 命令。
+
+#### `upgrade [version]`
+
+从远程仓库拉取新版本代码并升级系统。
+
+```bash
+./manage.sh upgrade                    # 升级到当前分支最新版本
+./manage.sh upgrade v1.2.0             # 升级到指定 tag
+./manage.sh upgrade main               # 升级到指定分支最新
+./manage.sh upgrade abc1234            # 升级到指定 commit
+./manage.sh upgrade --check            # 仅检查可用更新，不执行升级
+./manage.sh upgrade --skip-migrate     # 跳过数据库迁移（危险！）
+```
+
+**参数说明：**
+
+| 参数 | 说明 |
+|------|------|
+| `[version]` | 目标版本（git tag/branch/commit），默认当前分支最新 |
+| `--check` | 仅检查是否有可用更新，不执行升级 |
+| `--skip-migrate` | 跳过数据库迁移步骤（**危险**，可能导致数据不一致） |
+
+**前置检查：**
+
+升级前会自动执行以下检查：
+1. 当前目录是否为 git 仓库
+2. 服务是否健康运行
+3. 磁盘空间是否充足
+
+**版本差异展示：**
+
+升级前会显示当前 commit 与目标 commit 之间的差异：
+
+```
+升级版本差异：
+  当前版本: abc1234 (2026-06-01)
+  目标版本: def5678 (2026-06-08)
+  提交数量: 12 个新提交
+  变更文件: 34 个文件修改
+```
+
+> **⚠️ 升级警告**
+>
+> - 升级期间服务将**不可用**
+> - 数据库迁移可能**不可逆**
+> - 降级操作可能**不可行**
+>
+> 升级前**必须**：
+> 1. 备份数据库（`./manage.sh backup`）
+> 2. 备份 `.env` 配置文件
+> 3. 确认服务健康（`./manage.sh health`）
+>
+> 升级前**建议**：
+> 1. 提前通知所有用户服务将中断
+> 2. 先在测试环境验证升级流程
+
+**升级流程：**
+
+1. 自动备份数据库
+2. 拉取目标版本代码（`git fetch` + `git checkout`）
+3. 重建 Docker 镜像
+4. 重启服务
+5. 自动执行数据库迁移
+6. 迁移失败时自动回滚代码并重启（恢复到升级前状态）
 
 ### 4.2 数据管理命令
 
@@ -231,6 +301,18 @@ Deployment:
 ./manage.sh init
 ```
 
+#### `migrate [revision]`
+
+执行数据库迁移（幂等操作 — 已是最新则跳过）。默认迁移到最新版本（head），可指定目标版本号。
+
+```bash
+./manage.sh migrate               # 迁移到最新版本
+./manage.sh migrate head          # 同上，显式指定 head
+./manage.sh migrate abc123        # 迁移到指定版本
+```
+
+执行时会显示迁移前后的数据库版本状态。执行前会显示迁移确认提示，说明迁移可能不可逆，建议先备份数据库。
+
 #### `mock generate`
 
 生成演示数据。
@@ -241,7 +323,7 @@ Deployment:
 
 生成内容：
 - 5 个用户（含 admin）
-- 50 个 MAC 地址
+- 50 个终端
 - 15 个白名单条目
 - 10 个黑名单条目
 - 100 条审计日志
@@ -255,7 +337,18 @@ Deployment:
 ./manage.sh -y mock clear        # 非交互模式
 ```
 
-> 清除前会自动备份数据库。
+> 清除前会自动备份数据库。执行前会显示结构化警告框：
+>
+> ```
+> ⚠️ 数据清除警告
+> ─────────────────────────────
+> 操作：清除所有演示数据
+> 影响范围：
+>   • 删除所有终端、白名单、黑名单、审计日志数据
+>   • 保留 admin 用户
+>   • 此操作不可逆
+> ─────────────────────────────
+> ```
 
 #### `backup [file]`
 
@@ -276,7 +369,18 @@ Deployment:
 ./manage.sh restore backups/backup_20260606_140053.sql
 ```
 
-> 恢复前会自动备份当前数据库。恢复过程会先清空目标数据库再导入。
+> 恢复前会自动备份当前数据库。恢复过程会先清空目标数据库再导入。执行前会显示数据库恢复警告框：
+>
+> ```
+> ⚠️ 数据库恢复警告
+> ─────────────────────────────
+> 操作：从备份文件恢复数据库
+> 影响范围：
+>   • 当前数据库数据将被替换为备份数据
+>   • 所有活跃会话将被终止
+>   • 此操作不可逆
+> ─────────────────────────────
+> ```
 
 ### 4.3 开发命令
 
@@ -329,6 +433,111 @@ Deployment:
 
 ### 4.4 工具命令
 
+#### `redis info`
+
+显示 Redis 服务器信息，包括版本、内存使用和键空间统计。
+
+```bash
+./manage.sh redis info
+```
+
+#### `redis keys [pattern]`
+
+列出匹配的 Redis 键，显示键的类型和 TTL。默认匹配所有键（`*`）。
+
+```bash
+./manage.sh redis keys              # 列出所有键
+./manage.sh redis keys "session:*"  # 按模式匹配
+```
+
+#### `redis get <key>`
+
+获取 Redis 键的值。支持 string、hash、list、set、zset 类型，自动识别并格式化输出。
+
+```bash
+./manage.sh redis get mykey
+```
+
+#### `redis del <key>`
+
+删除 Redis 键。需要确认，使用 `-y` 跳过确认。
+
+```bash
+./manage.sh redis del mykey         # 需要确认
+./manage.sh -y redis del mykey      # 非交互模式
+```
+
+> 执行前会显示键删除影响说明，根据键名前缀自动识别影响范围：
+> - `scheduler:ctrl:{task}` — 调度器控制键，删除后任务将恢复/失去控制
+> - `session:*` / `rate_limit:*` — 缓存/会话键，删除后用户需重新登录或限速重置
+> - 其他键 — 通用缓存数据，删除后可能触发缓存重建
+
+#### `redis flush [db]`
+
+清空 Redis 数据库。默认清空 db 0，需要确认。
+
+```bash
+./manage.sh redis flush             # 清空 db 0（需要确认）
+./manage.sh redis flush 1           # 清空 db 1
+./manage.sh -y redis flush          # 非交互模式
+```
+
+> **危险操作**：会删除指定数据库中的所有数据，不可恢复！执行前会显示清空警告框：
+>
+> ```
+> ⚠️ Redis 清空警告
+> ─────────────────────────────
+> 操作：清空 Redis 数据库
+> 影响范围：
+>   • 所有活跃会话将被终止，用户需重新登录
+>   • 限速计数器将被重置
+>   • 调度器控制键将被清除，暂停中的任务将恢复运行
+>   • 缓存数据将被清除，后续请求将触发缓存重建
+> ─────────────────────────────
+> ```
+
+#### `scheduler status`
+
+显示定时任务运行状态和执行间隔。
+
+```bash
+./manage.sh scheduler status
+```
+
+#### `scheduler pause <task>`
+
+暂停指定定时任务。通过在 Redis 中设置键 `scheduler:ctrl:{task}` 来控制，任务循环中通过 `_is_task_paused()` 检查该键，暂停机制真正生效 — 被暂停的任务在循环中会被跳过，不会执行。
+
+```bash
+./manage.sh scheduler pause arp_collection
+```
+
+#### `scheduler resume <task>`
+
+恢复已暂停的定时任务。删除 Redis 键 `scheduler:ctrl:{task}`，任务循环中 `_is_task_paused()` 检测到键不存在后恢复执行。
+
+```bash
+./manage.sh scheduler resume arp_collection
+```
+
+#### `scheduler trigger <task>`
+
+手动触发一次定时任务执行。
+
+```bash
+./manage.sh scheduler trigger compliance_check
+```
+
+#### `scheduler intervals`
+
+显示所有配置的定时任务间隔。
+
+```bash
+./manage.sh scheduler intervals
+```
+
+可用任务名：`arp_collection`、`ipguard_sync`、`firewall_query`、`compliance_check`、`auto_unblock`。
+
 #### `config [key] [value]`
 
 查看或修改配置。
@@ -340,6 +549,24 @@ Deployment:
 ```
 
 > 敏感信息（密码、密钥）自动脱敏显示。修改后需 `./manage.sh restart` 生效。
+>
+> 修改配置时，执行前会显示新旧值对比：
+>
+> ```
+> 配置变更确认：
+> ─────────────────────────────
+> 配置项：DB_PASSWORD
+> 旧值：  ****1234
+> 新值：  newpass123
+> ─────────────────────────────
+> ```
+>
+> 以下安全类配置修改时需二次确认：
+> - `lockout_threshold` — 账户锁定阈值
+> - `lockout_duration` — 账户锁定时长
+> - `captcha_required` — 验证码开关
+> - `max_login_attempts` — 最大登录尝试次数
+> - `rate_limit` — 限速配置
 
 #### `ssl [--force]`
 
@@ -379,7 +606,7 @@ Deployment:
 
 ```bash
 # 1. 克隆项目
-git clone <repo-url> && cd mac_security_web
+git clone https://github.com/pinglife80/TerminalAccessManager.git && cd TerminalAccessManager
 
 # 2. 执行生产部署向导
 ./manage.sh deploy --prod
@@ -388,16 +615,31 @@ git clone <repo-url> && cd mac_security_web
 ./manage.sh health
 
 # 4. 访问系统并修改默认密码
-# https://your-server:8443
+# https://<HOST_IP>:8443
 ```
 
 ### 场景 2：代码更新后重新部署
+
+**本地代码修改后重新部署**（不拉取远程代码）：
 
 ```bash
 ./manage.sh update
 ```
 
-自动完成：git pull → 重建镜像 → 重启服务。更新前自动备份数据库。
+自动完成：备份数据库 → 重建镜像 → 重启服务。
+
+**从远程仓库升级到新版本**：
+
+```bash
+# 先检查可用更新
+./manage.sh upgrade --check
+
+# 备份数据库
+./manage.sh backup
+
+# 执行升级（自动拉取代码 + 重建 + 迁移）
+./manage.sh upgrade v1.2.0
+```
 
 ### 场景 3：数据库备份与恢复
 

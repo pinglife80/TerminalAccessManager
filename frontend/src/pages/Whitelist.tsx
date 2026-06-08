@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
-import { useWhitelist } from '@/hooks/useMacData';
-import { Search, Plus, Trash2, User, Server, Globe, RefreshCw, Download, Clock, ChevronDown } from 'lucide-react';
+import { useWhitelist, WhitelistEntry } from '@/hooks/useTerminalData';
+import { Search, Plus, Trash2, User, Server, Globe, RefreshCw, Download, Clock, ChevronDown, Eye, X } from 'lucide-react';
 import { apiClient } from '@/lib/api';
 import { toast } from 'sonner';
 import { PrimaryButton, IconButton } from '@/components/Button';
@@ -10,15 +10,17 @@ import { DateRangeFilter } from '@/components/DateRangeFilter';
 import { normalizeMacAddress, isValidMacAddress, isValidCidrOrRange, formatDate, downloadCSV } from '@/lib/utils';
 
 const Whitelist: React.FC = () => {
-  const { data: whitelist, isLoading, refetch } = useWhitelist();
   const [searchTerm, setSearchTerm] = useState('');
   const [showAddModal, setShowAddModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
-  const [deleteIdentifier, setDeleteIdentifier] = useState('');
-  const [deleteIpAddress, setDeleteIpAddress] = useState('');
+  const [showDetailsModal, setShowDetailsModal] = useState(false);
+  const [deleteIdentifier, setDeleteIdentifier] = useState<string>('');
+  const [deleteIpPattern, setDeleteIpPattern] = useState('');
+  const [selectedEntry, setSelectedEntry] = useState<WhitelistEntry | null>(null);
   const [macAddress, setMacAddress] = useState('');
   const [ipAddress, setIpAddress] = useState('');
   const [comments, setComments] = useState('');
+  const [commentsError, setCommentsError] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [isAdding, setIsAdding] = useState(false);
@@ -27,25 +29,13 @@ const Whitelist: React.FC = () => {
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
 
-  const filteredWhitelist = useMemo(() => {
-    return whitelist?.filter((item) => {
-      const matchesSearch =
-        (item.mac_address?.toLowerCase().includes(searchTerm.toLowerCase())) ||
-        (item.ip_address?.toLowerCase().includes(searchTerm.toLowerCase())) ||
-        (item.comments?.toLowerCase().includes(searchTerm.toLowerCase()));
+  const { data: whitelist, isLoading, refetch } = useWhitelist({
+    search: searchTerm || undefined,
+    start_date: startDate || undefined,
+    end_date: endDate || undefined,
+  });
 
-      const matchesDateRange = (() => {
-        if (!startDate && !endDate) return true;
-        if (startDate && endDate && new Date(endDate) < new Date(startDate)) return true;
-        const itemDate = new Date(item.created_at).getTime();
-        const start = startDate ? new Date(startDate).getTime() : 0;
-        const end = endDate ? new Date(endDate).getTime() + 24 * 60 * 60 * 1000 : Date.now();
-        return itemDate >= start && itemDate <= end;
-      })();
-
-      return matchesSearch && matchesDateRange;
-    }) || [];
-  }, [whitelist, searchTerm, startDate, endDate]);
+  const filteredWhitelist = whitelist || [];
 
   const totalPages = useMemo(() => Math.ceil(filteredWhitelist.length / pageSize), [filteredWhitelist, pageSize]);
   const paginatedWhitelist = useMemo(() => {
@@ -81,24 +71,27 @@ const Whitelist: React.FC = () => {
       return;
     }
 
+    // Comments is required
+    if (!comments.trim()) {
+      setCommentsError('Comments is required');
+      return;
+    }
+    setCommentsError('');
+
     setIsAdding(true);
     try {
       const payload: Record<string, string> = {};
-      
+
       if (macAddress) {
         payload['mac_address'] = normalizeMacAddress(macAddress);
       }
       if (ipAddress) {
         payload['ip_address'] = ipAddress;
       }
-      if (comments) {
-        payload['comments'] = comments;
-      } else {
-        payload['comments'] = 'Added from dashboard';
-      }
+      payload['comments'] = comments;
 
       const response = await apiClient.post('/whitelist/', payload);
-      
+
       const result = response.data;
       if (result.success) {
         let successMsg = '';
@@ -109,17 +102,18 @@ const Whitelist: React.FC = () => {
           successMsg += ` (${result.skipped} skipped)`;
         }
         toast.success(successMsg);
-        
+
         if (result.errors && result.errors.length > 0) {
           result.errors.forEach((error: string) => {
             toast.warning(error);
           });
         }
       }
-      
+
       setMacAddress('');
       setIpAddress('');
       setComments('');
+      setCommentsError('');
       setShowAddModal(false);
       refetch();
     } catch (error: any) {
@@ -138,10 +132,11 @@ const Whitelist: React.FC = () => {
   };
 
   const handleExport = () => {
-    const headers = ['MAC Address', 'IP Address', 'Added By', 'Added Date', 'Comments'];
+    const headers = ['MAC Address', 'IP Pattern', 'Pattern Type', 'Added By', 'Added Date', 'Comments'];
     const rows = filteredWhitelist?.map((item) => [
       item.mac_address || '-',
-      item.ip_address || '-',
+      item.ip_pattern || '-',
+      item.pattern_type || '-',
       item.added_by,
       formatDate(item.created_at),
       item.comments || ''
@@ -150,16 +145,16 @@ const Whitelist: React.FC = () => {
     downloadCSV(headers, rows, 'whitelist');
   };
 
-  const handleRemoveWhitelist = (identifier: string, ipAddress?: string) => {
-    setDeleteIdentifier(identifier);
-    setDeleteIpAddress(ipAddress || '');
+  const handleRemoveWhitelist = (identifier: string | null, ipPattern?: string | null) => {
+    setDeleteIdentifier(identifier || '');
+    setDeleteIpPattern(ipPattern || '');
     setShowDeleteModal(true);
   };
 
   const confirmDelete = async () => {
-    const identifier = deleteIdentifier || deleteIpAddress;
-    const displayText = deleteIpAddress ? `${deleteIdentifier || deleteIpAddress}` : deleteIdentifier;
-    
+    const identifier = deleteIdentifier || deleteIpPattern;
+    const displayText = deleteIpPattern ? `${deleteIdentifier || deleteIpPattern}` : deleteIdentifier;
+
     setIsDeleting(true);
     try {
       await apiClient.delete(`/whitelist/${identifier}`);
@@ -171,8 +166,13 @@ const Whitelist: React.FC = () => {
       setIsDeleting(false);
       setShowDeleteModal(false);
       setDeleteIdentifier('');
-      setDeleteIpAddress('');
+      setDeleteIpPattern('');
     }
+  };
+
+  const handleViewDetails = (entry: WhitelistEntry) => {
+    setSelectedEntry(entry);
+    setShowDetailsModal(true);
   };
 
   return (
@@ -188,7 +188,6 @@ const Whitelist: React.FC = () => {
             icon={Download}
             label="Export"
             variant="success"
-            size="sm"
             onClick={handleExport}
           />
           <PrimaryButton
@@ -222,7 +221,7 @@ const Whitelist: React.FC = () => {
               <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-5 w-5 text-gray-400" />
               <input
                 type="text"
-                placeholder="Search by MAC address, IP address, or description..."
+                placeholder="Search by MAC address, IP pattern, or description..."
                 value={searchTerm}
                 onChange={(e) => {
                   setSearchTerm(e.target.value);
@@ -299,7 +298,10 @@ const Whitelist: React.FC = () => {
                   MAC Address
                 </th>
                 <th className="px-4 sm:px-6 py-3.5 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                  IP Address
+                  IP Pattern
+                </th>
+                <th className="px-4 sm:px-6 py-3.5 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                  Type
                 </th>
                 <th className="px-4 sm:px-6 py-3.5 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
                   Added By
@@ -318,13 +320,13 @@ const Whitelist: React.FC = () => {
             <tbody className="bg-white divide-y divide-gray-200">
               {isLoading ? (
                 <tr>
-                  <td colSpan={6}>
+                  <td colSpan={7}>
                     <LoadingState message="Loading whitelist..." />
                   </td>
                 </tr>
               ) : filteredWhitelist?.length === 0 ? (
                 <tr>
-                  <td colSpan={6}>
+                  <td colSpan={7}>
                     <EmptyState
                       icon={Server}
                       title="No Whitelist Entries"
@@ -343,7 +345,24 @@ const Whitelist: React.FC = () => {
                       {item.mac_address || '-'}
                     </td>
                     <td className="px-4 sm:px-6 py-4 whitespace-nowrap font-mono text-sm text-gray-600">
-                      {item.ip_address || '-'}
+                      {item.ip_pattern || '-'}
+                    </td>
+                    <td className="px-4 sm:px-6 py-4 whitespace-nowrap">
+                      {item.pattern_type === 'single_ip' && (
+                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">Single IP</span>
+                      )}
+                      {item.pattern_type === 'cidr' && (
+                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800">CIDR</span>
+                      )}
+                      {item.pattern_type === 'ip_range' && (
+                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-orange-100 text-orange-800">IP Range</span>
+                      )}
+                      {item.pattern_type === 'mac_only' && (
+                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">MAC Only</span>
+                      )}
+                      {!item.pattern_type && (
+                        <span className="text-sm text-gray-400">-</span>
+                      )}
                     </td>
                     <td className="px-4 sm:px-6 py-4 whitespace-nowrap">
                       <div className="flex items-center text-sm text-gray-600">
@@ -361,13 +380,22 @@ const Whitelist: React.FC = () => {
                       <p className="text-sm text-gray-600 max-w-xs truncate">{item.comments}</p>
                     </td>
                     <td className="px-4 sm:px-6 py-4 whitespace-nowrap">
-                      <IconButton
-                        icon={Trash2}
-                        variant="danger"
-                        size="md"
-                        title="Remove from whitelist"
-                        onClick={() => handleRemoveWhitelist(item.mac_address, item.ip_address)}
-                      />
+                      <div className="flex items-center gap-1">
+                        <IconButton
+                          icon={Eye}
+                          variant="primary"
+                          size="md"
+                          title="View Details"
+                          onClick={() => handleViewDetails(item)}
+                        />
+                        <IconButton
+                          icon={Trash2}
+                          variant="danger"
+                          size="md"
+                          title="Remove from whitelist"
+                          onClick={() => handleRemoveWhitelist(item.mac_address, item.ip_pattern)}
+                        />
+                      </div>
                     </td>
                   </tr>
                 ))
@@ -394,7 +422,7 @@ const Whitelist: React.FC = () => {
           <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-lg">
             <h2 className="text-xl font-semibold text-gray-900 mb-2">Add Allowed Terminal</h2>
             <p className="text-sm text-gray-500 mb-6">Enter MAC address, IP address/range, or both</p>
-            
+
             {/* Format Help - Always visible */}
             <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
               <p className="text-sm font-medium text-blue-800 mb-2">Format Tips:</p>
@@ -417,7 +445,7 @@ const Whitelist: React.FC = () => {
                 </div>
               </div>
             </div>
-            
+
             <div className="space-y-4">
               {/* MAC Address Field */}
               <div>
@@ -448,23 +476,36 @@ const Whitelist: React.FC = () => {
                 </label>
                 <input
                   type="text"
-                  placeholder="192.168.1.100 or 192.168.1.0/24"
+                  placeholder="192.168.1.1, 192.168.1.0/24, 10.0.1.1-100"
                   value={ipAddress}
                   onChange={(e) => setIpAddress(e.target.value)}
                   className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono text-sm"
                 />
+                <p className="mt-1.5 text-xs text-gray-500">
+                  Supports: Single IP / CIDR / IP Range
+                </p>
               </div>
 
-              {/* Comments */}
+              {/* Comments - Required */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Comments</label>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Comments <span className="text-red-500">*</span>
+                </label>
                 <textarea
-                  placeholder="Optional comments..."
+                  placeholder="Required: describe this entry..."
                   value={comments}
-                  onChange={(e) => setComments(e.target.value)}
+                  onChange={(e) => {
+                    setComments(e.target.value);
+                    if (e.target.value.trim()) {
+                      setCommentsError('');
+                    }
+                  }}
                   rows={2}
-                  className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none text-sm"
+                  className={`w-full px-4 py-2.5 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none text-sm ${
+                    commentsError ? 'border-red-500' : 'border-gray-300'
+                  }`}
                 />
+                {commentsError && <p className="text-red-600 text-xs mt-1">{commentsError}</p>}
               </div>
 
               {/* Buttons */}
@@ -477,6 +518,7 @@ const Whitelist: React.FC = () => {
                     setMacAddress('');
                     setIpAddress('');
                     setComments('');
+                    setCommentsError('');
                   }}
                   className="flex-1"
                 />
@@ -507,11 +549,11 @@ const Whitelist: React.FC = () => {
                 <p className="text-sm text-gray-500">This action cannot be undone</p>
               </div>
             </div>
-            
+
             <p className="text-gray-700 mb-6">
-              Are you sure you want to remove <span className="font-mono font-medium">{deleteIdentifier || deleteIpAddress}</span> from the whitelist?
+              Are you sure you want to remove <span className="font-mono font-medium">{deleteIdentifier || deleteIpPattern}</span> from the whitelist?
             </p>
-            
+
             <div className="flex gap-3">
               <PrimaryButton
                 label="Cancel"
@@ -519,7 +561,7 @@ const Whitelist: React.FC = () => {
                 onClick={() => {
                   setShowDeleteModal(false);
                   setDeleteIdentifier('');
-                  setDeleteIpAddress('');
+                  setDeleteIpPattern('');
                 }}
                 className="flex-1"
               />
@@ -530,6 +572,84 @@ const Whitelist: React.FC = () => {
                 onClick={confirmDelete}
                 loading={isDeleting}
                 className="flex-1"
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Details Modal */}
+      {showDetailsModal && selectedEntry && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-md">
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center">
+                  <Globe className="h-6 w-6 text-green-600" />
+                </div>
+                <div>
+                  <h2 className="text-xl font-semibold text-gray-900">Whitelist Entry Details</h2>
+                  <p className="text-sm text-gray-500">ID: {selectedEntry.id}</p>
+                </div>
+              </div>
+              <IconButton
+                icon={X}
+                variant="ghost"
+                size="md"
+                onClick={() => {
+                  setShowDetailsModal(false);
+                  setSelectedEntry(null);
+                }}
+              />
+            </div>
+
+            <div className="space-y-4">
+              <div className="bg-gray-50 rounded-lg p-4">
+                <div className="space-y-3">
+                  {selectedEntry.mac_address && (
+                    <div className="flex justify-between">
+                      <span className="text-gray-500">MAC Address</span>
+                      <span className="font-mono text-gray-900">{selectedEntry.mac_address}</span>
+                    </div>
+                  )}
+                  {selectedEntry.ip_pattern && (
+                    <div className="flex justify-between">
+                      <span className="text-gray-500">IP Pattern</span>
+                      <span className="font-mono text-gray-900">{selectedEntry.ip_pattern}</span>
+                    </div>
+                  )}
+                  <div className="flex justify-between">
+                    <span className="text-gray-500">Pattern Type</span>
+                    <span className="text-gray-900 capitalize">{selectedEntry.pattern_type?.replace('_', ' ') || '-'}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-500">Added By</span>
+                    <span className="text-gray-900">{selectedEntry.added_by}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-500">Added Date</span>
+                    <span className="text-gray-900">{formatDate(selectedEntry.created_at)}</span>
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <span className="text-gray-500 block mb-2">Comments</span>
+                <p className="text-gray-900 bg-gray-50 rounded-lg p-4">
+                  {selectedEntry.comments || 'No comments available'}
+                </p>
+              </div>
+
+              <PrimaryButton
+                icon={Trash2}
+                label="Remove from Whitelist"
+                variant="danger"
+                onClick={() => {
+                  handleRemoveWhitelist(selectedEntry.mac_address, selectedEntry.ip_pattern);
+                  setShowDetailsModal(false);
+                  setSelectedEntry(null);
+                }}
+                className="w-full"
               />
             </div>
           </div>

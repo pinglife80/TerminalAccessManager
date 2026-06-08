@@ -99,7 +99,7 @@ async def admin_user(db_session: AsyncSession):
     user = User(
         username="admin",
         email="admin@example.com",
-        hashed_password=hash_password("admin123"),
+        hashed_password=hash_password("Admin123"),
         is_active=True,
         is_superuser=True
     )
@@ -277,7 +277,7 @@ class TestHealthAndRoot:
         assert response.status_code == 200
         data = response.json()
         assert "message" in data
-        assert "MAC Security Platform" in data["message"]
+        assert "TerminalAccessManager" in data["message"]
         assert "version" in data
     
     def test_health_check(self, client: TestClient):

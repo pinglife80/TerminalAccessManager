@@ -1,22 +1,22 @@
-from typing import List
+from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.security import get_current_user
 from app.models.user import User
-from app.models.mac_address import MacAddress
-from app.schemas.mac_address import (
-    MacAddressResponse,
-    MacAddressQuery,
+from app.models.terminal import Terminal
+from app.schemas.terminal import (
+    TerminalResponse,
+    TerminalQuery,
     ResponseMessage
 )
-from app.services.mac_service import MacService
+from app.services.terminal_service import TerminalService
 
-router = APIRouter(prefix="/mac", tags=["MAC Addresses"])
+router = APIRouter(prefix="/terminals", tags=["Terminals"])
 
 
-@router.get("/", response_model=List[MacAddressResponse])
+@router.get("/", response_model=List[TerminalResponse])
 async def get_invalid_mac_addresses(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
@@ -24,31 +24,35 @@ async def get_invalid_mac_addresses(
     current_user: User = Depends(get_current_user)
 ):
     """Get invalid (unfrozen) MAC addresses with pagination"""
-    service = MacService(db)
+    service = TerminalService(db)
     macs = await service.get_invalid_macs(skip=skip, limit=limit)
     return macs
 
 
-@router.get("/search", response_model=List[MacAddressResponse])
+@router.get("/search", response_model=List[TerminalResponse])
 async def search_mac_addresses(
     ip: str = Query(None, description="Filter by IP address"),
     mac: str = Query(None, description="Filter by MAC address"),
-    status_filter: str = Query(None, description="Filter by status"),
+    status_filter: str = Query(None, alias="status", description="Filter by status"),
+    start_date: str = Query(None, description="Filter by start date (YYYY-MM-DD)"),
+    end_date: str = Query(None, description="Filter by end date (YYYY-MM-DD)"),
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Search MAC addresses by various criteria"""
-    query = MacAddressQuery(
+    """Search MAC addresses by various criteria with date range filtering"""
+    query = TerminalQuery(
         ip=ip,
         mac=mac,
         status=status_filter,
+        start_date=start_date,
+        end_date=end_date,
         skip=skip,
         limit=limit
     )
-    
-    service = MacService(db)
+
+    service = TerminalService(db)
     results = await service.search_macs(query)
     return results
 
@@ -57,58 +61,62 @@ async def search_mac_addresses(
 async def block_ip_address(
     ip_address: str,
     mac_address: str = Query(..., description="MAC address associated with IP"),
+    block_time: str = Query("30d", description="Block duration (e.g. 30d, 15d, 7d, 1h)"),
+    firewall_tag: Optional[str] = Query(None, description="Firewall tag to route block operation"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     """Block an IP address via Sangfor API"""
-    service = MacService(db)
-    result = await service.block_ip(ip_address, mac_address, current_user.username)
-    
+    service = TerminalService(db)
+    result = await service.block_ip(ip_address, mac_address, current_user.username,
+                                     block_time=block_time, firewall_tag=firewall_tag)
+
     if not result["success"]:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=result["message"]
         )
-    
+
     return result
 
 
 @router.post("/unblock/{ip_address}", response_model=ResponseMessage)
 async def unblock_ip_address(
     ip_address: str,
+    firewall_tag: Optional[str] = Query(None, description="Firewall tag to route unblock operation"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     """Unblock an IP address via Sangfor API"""
-    service = MacService(db)
-    result = await service.unblock_ip(ip_address, current_user.username)
-    
+    service = TerminalService(db)
+    result = await service.unblock_ip(ip_address, current_user.username, firewall_tag=firewall_tag)
+
     if not result["success"]:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=result["message"]
         )
-    
+
     return result
 
 
-@router.get("/{mac_id}", response_model=MacAddressResponse)
+@router.get("/{mac_id}", response_model=TerminalResponse)
 async def get_mac_address_by_id(
     mac_id: int,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Get a specific MAC address record by ID"""
+    """Get a specific terminal record by ID"""
     from sqlalchemy import select
-    
-    stmt = select(MacAddress).where(MacAddress.id == mac_id)
+
+    stmt = select(Terminal).where(Terminal.id == mac_id)
     result = await db.execute(stmt)
     mac_record = result.scalar_one_or_none()
-    
+
     if not mac_record:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="MAC address record not found"
+            detail="Terminal record not found"
         )
-    
+
     return mac_record

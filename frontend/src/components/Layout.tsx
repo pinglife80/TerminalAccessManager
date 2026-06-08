@@ -1,10 +1,18 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { Outlet } from 'react-router-dom';
 import Sidebar from './Sidebar';
-import branding from '@/config/branding';
+import { useBrandingStore } from '@/store/branding';
 
 const Layout: React.FC = () => {
-  const copyrightText = branding.footer.copyright.replace('{year}', String(new Date().getFullYear()));
+  const { footerCopyright, footerIcpNumber, footerIcpUrl, loadFromBackend, isLoaded } = useBrandingStore();
+
+  useEffect(() => {
+    if (!isLoaded) {
+      loadFromBackend();
+    }
+  }, [isLoaded, loadFromBackend]);
+
+  const copyrightText = footerCopyright.replace('{year}', String(new Date().getFullYear()));
 
   return (
     <div className="flex h-screen bg-gray-100">
@@ -17,31 +25,18 @@ const Layout: React.FC = () => {
           <div className="flex flex-col sm:flex-row items-center justify-between gap-1 text-xs text-gray-400">
             <div className="flex items-center gap-3">
               <span>{copyrightText}</span>
-              <span className="hidden sm:inline">|</span>
-              <span className="hidden sm:inline">{branding.version}</span>
             </div>
             <div className="flex items-center gap-3">
-              {branding.footer.icpNumber && (
+              {footerIcpNumber && (
                 <a
-                  href={branding.footer.icpUrl}
+                  href={footerIcpUrl}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="hover:text-gray-600 transition-colors"
                 >
-                  {branding.footer.icpNumber}
+                  {footerIcpNumber}
                 </a>
               )}
-              {branding.footer.links.map((link, index) => (
-                <a
-                  key={index}
-                  href={link.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="hover:text-gray-600 transition-colors"
-                >
-                  {link.label}
-                </a>
-              ))}
             </div>
           </div>
         </footer>

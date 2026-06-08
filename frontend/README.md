@@ -1,6 +1,6 @@
-# MAC Security Platform - Frontend
+# TerminalAccessManager - Frontend
 
-基于 React + TypeScript 的 MAC Security Platform 现代化前端。
+基于 React + TypeScript 的 TerminalAccessManager 现代化前端。
 
 ---
 
@@ -60,7 +60,7 @@ cd ../backend
 uvicorn app.main:app --reload
 ```
 
-后端应在 `http://localhost:8000` 可访问（Docker 部署时通过 Nginx 代理为 `https://localhost:8443`）。
+后端应在 `http://localhost:8000` 可访问（Docker 部署时通过 Nginx 代理为 `https://<HOST_IP>:8443`）。
 
 ### 启动前端开发服务器
 
@@ -69,13 +69,13 @@ cd frontend
 npm run dev
 ```
 
-前端将在 `http://localhost:3000` 可用（开发模式）。生产环境通过 Nginx 代理访问 `https://localhost:8443`。
+前端将在 `http://localhost:3000` 可用（开发模式）。生产环境通过 Nginx 代理访问 `https://<HOST_IP>:8443`。
 
 ### 登录
 
 使用默认管理员凭据：
 - **用户名**: admin
-- **密码**: admin123
+- **密码**: Admin123
 
 （或后端初始化时设置的密码）
 

@@ -18,9 +18,9 @@ class Settings(BaseSettings):
     DATABASE_URL: str
     DB_HOST: str = "localhost"
     DB_PORT: int = 5432
-    DB_USER: str = "mac_admin"
+    DB_USER: str = "tam_admin"
     DB_PASSWORD: str = ""
-    DB_NAME: str = "mac_security"
+    DB_NAME: str = "tam_db"
 
     # JWT
     SECRET_KEY: str
@@ -59,7 +59,8 @@ class Settings(BaseSettings):
 
     # Account Lockout
     MAX_LOGIN_ATTEMPTS: int = 5
-    LOCKOUT_DURATION_MINUTES: int = 30
+    LOCKOUT_DURATION_MINUTES: int = 15
+    CAPTCHA_THRESHOLD: int = 3
 
     # Registration Control
     ALLOW_REGISTRATION: bool = False

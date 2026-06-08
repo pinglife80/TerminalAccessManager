@@ -69,7 +69,6 @@ async def check_login_attempts(username: str) -> bool:
     Returns True if account is locked."""
     redis_client = await get_redis_client()
     lock_key = f"login_lock:{username}"
-    attempts_key = f"login_attempts:{username}"
 
     # Check if account is locked
     if await redis_client.exists(lock_key):
@@ -78,8 +77,24 @@ async def check_login_attempts(username: str) -> bool:
     return False
 
 
+async def check_captcha_required(username: str) -> bool:
+    """Check if captcha verification is required for this username.
+    Returns True if failed attempts >= CAPTCHA_THRESHOLD.
+    Reads threshold from ConfigService (hot-reloadable)."""
+    redis_client = await get_redis_client()
+    attempts_key = f"login_attempts:{username}"
+    attempts = await redis_client.get(attempts_key)
+    if attempts:
+        from app.services.config_service import get_config_value
+        threshold = await get_config_value("captcha_threshold", settings.CAPTCHA_THRESHOLD)
+        if int(attempts) >= threshold:
+            return True
+    return False
+
+
 async def record_failed_login(username: str) -> None:
-    """Record a failed login attempt and lock account if threshold exceeded"""
+    """Record a failed login attempt and lock account if threshold exceeded.
+    Reads thresholds from ConfigService (hot-reloadable)."""
     redis_client = await get_redis_client()
     attempts_key = f"login_attempts:{username}"
     lock_key = f"login_lock:{username}"
@@ -87,13 +102,18 @@ async def record_failed_login(username: str) -> None:
     # Increment failed attempts
     attempts = await redis_client.incr(attempts_key)
     if attempts == 1:
-        await redis_client.expire(attempts_key, settings.LOCKOUT_DURATION_MINUTES * 60)
+        from app.services.config_service import get_config_value
+        lockout_minutes = await get_config_value("lockout_duration_minutes", settings.LOCKOUT_DURATION_MINUTES)
+        await redis_client.expire(attempts_key, lockout_minutes * 60)
 
     # Lock account if threshold exceeded
-    if attempts >= settings.MAX_LOGIN_ATTEMPTS:
+    from app.services.config_service import get_config_value
+    max_attempts = await get_config_value("max_login_attempts", settings.MAX_LOGIN_ATTEMPTS)
+    lockout_minutes = await get_config_value("lockout_duration_minutes", settings.LOCKOUT_DURATION_MINUTES)
+    if attempts >= max_attempts:
         await redis_client.setex(
             lock_key,
-            settings.LOCKOUT_DURATION_MINUTES * 60,
+            lockout_minutes * 60,
             str(attempts)
         )
 
@@ -117,14 +137,17 @@ def hash_password(password: str) -> str:
     return pwd_context.hash(password)
 
 
-def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
-    """Create a JWT access token"""
+async def create_access_token_async(data: dict, expires_delta: Optional[timedelta] = None) -> str:
+    """Create a JWT access token with hot-reloadable expiration.
+    Reads access_token_expire_minutes from ConfigService."""
     to_encode = data.copy()
 
     if expires_delta:
         expire = datetime.now(timezone.utc) + expires_delta
     else:
-        expire = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+        from app.services.config_service import get_config_value
+        expire_minutes = await get_config_value("access_token_expire_minutes", settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+        expire = datetime.now(timezone.utc) + timedelta(minutes=expire_minutes)
 
     jti = str(uuid.uuid4())
     to_encode.update({"exp": expire, "jti": jti})
@@ -133,10 +156,13 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
     return encoded_jwt
 
 
-def create_refresh_token(data: dict) -> str:
-    """Create a JWT refresh token"""
+async def create_refresh_token_async(data: dict) -> str:
+    """Create a JWT refresh token with hot-reloadable expiration.
+    Reads refresh_token_expire_days from ConfigService."""
     to_encode = data.copy()
-    expire = datetime.now(timezone.utc) + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
+    from app.services.config_service import get_config_value
+    expire_days = await get_config_value("refresh_token_expire_days", settings.REFRESH_TOKEN_EXPIRE_DAYS)
+    expire = datetime.now(timezone.utc) + timedelta(days=expire_days)
     jti = str(uuid.uuid4())
     to_encode.update({"exp": expire, "jti": jti})
     encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)

@@ -1,18 +1,22 @@
-# MAC Security Platform
+# TerminalAccessManager
 
-基于 MAC 地址的网络安全准入管理平台，提供终端监控、黑白名单管控、审计日志等完整功能。
+基于 MAC 地址和 IP 地址的网络终端准入管理平台，提供终端合规监控、数据源管理、黑白名单管控、审计日志等完整功能。
 
 ## 功能特性
 
-- **终端监控** — 实时 MAC 地址状态管理（Active / Inactive / Blocked / Pending / Unblocked / Bypass）
-- **白名单管理** — 可信终端快速放行，支持搜索、过滤、分页
-- **黑名单管理** — 安全威胁终端封禁，支持仅 MAC 地址封禁
+- **终端合规监控** — 4 种合规状态（Normal / Bypass / Blocked / Pending），白名单匹配类型标记（MAC / IP / Both），黑名单来源防火墙 Tag 展示
+- **数据源管理** — 统一管理 ARP 数据源（SSH/API）和合规基准，深信服防火墙集成，数据源绑定路由
+- **合规检查引擎** — 自动合规判定（ComplianceBaseline 基准 + 白名单 + 黑名单），自动封禁/解封，按防火墙 Tag 路由操作
+- **白名单管理** — 可信终端快速放行，支持 MAC/IP/CIDR/连续 IP 段，详情查看，备注必填
+- **黑名单管理** — 安全威胁终端封禁，多防火墙 Tag 筛选，手动/自动刷新
 - **审计日志** — 全操作审计追踪，支持日期范围过滤
-- **仪表板** — 数据概览、快捷操作、系统状态
-- **品牌自定义** — 集中式配置（应用名、Logo、Favicon、登录页、页脚），无需修改组件代码
+- **仪表板** — 合规状态统计概览、快捷操作、系统状态
+- **用户管理** — 管理员专属页面，用户 CRUD 操作
+- **定时任务** — 5 个可配置频率的定时任务（ARP 采集、合规基准同步、防火墙查询、合规检查、自动解封），30 秒 - 1 天可调
+- **品牌自定义** — 集中式配置（应用名、Logo、Favicon、登录页、页脚），后端动态加载，无需修改组件代码
 - **登录安全** — 验证码（3 次失败后）、账户锁定（5 次失败后锁定 15 分钟）
 - **HTTPS** — Nginx 反向代理 + SSL/TLS，HTTP 自动重定向 HTTPS
-- **响应式 UI** — 可折叠侧边栏、可折叠搜索面板、双位置分页
+- **响应式 UI** — 可折叠侧边栏、可折叠搜索面板、双位置分页、数据自动刷新
 
 ## 技术栈
 
@@ -55,17 +59,19 @@
 ### 一键部署（Demo 模式）
 
 ```bash
-git clone <repository-url>
-cd mac_security_web
+git clone https://github.com/pinglife80/TerminalAccessManager.git
+cd TerminalAccessManager
 chmod +x manage.sh
 ./manage.sh deploy --demo
 ```
 
 部署完成后访问：
 
-- **HTTPS**: https://localhost:8443
-- **HTTP**: http://localhost:8080（自动重定向到 HTTPS）
-- **登录**: admin / admin123
+- **HTTPS**: `https://<HOST_IP>:8443`
+- **HTTP**: `http://<HOST_IP>:8080`（自动重定向到 HTTPS）
+- **登录**: admin / Admin123
+
+> `<HOST_IP>` 为实际部署主机 IP 地址，本机部署时使用 `localhost`。
 
 > Demo 模式自动生成配置和演示数据，仅用于评估测试。
 
@@ -82,15 +88,15 @@ chmod +x manage.sh
 ## 项目结构
 
 ```
-mac_security_web/
+TerminalAccessManager/
 ├── backend/                    # FastAPI 后端
 │   ├── app/
-│   │   ├── api/v1/            # API 路由（auth, mac_addresses, whitelist, blacklist, logs）
+│   │   ├── api/v1/            # API 路由（auth, terminals, whitelist, blacklist, data_sources, compliance_baselines, logs, settings, stats）
 │   │   ├── core/              # 核心模块（config, database, security）
 │   │   ├── middleware/         # 中间件（logging, rate_limit）
-│   │   ├── models/            # SQLAlchemy 数据模型
-│   │   ├── schemas/           # Pydantic 数据模式
-│   │   └── services/          # 业务逻辑层
+│   │   ├── models/            # SQLAlchemy 数据模型（terminal, data_source, compliance_baseline, user, log, system_config, whitelist, blacklist）
+│   │   ├── schemas/           # Pydantic 数据模式（terminal, data_source, compliance_baseline, system_config, auth）
+│   │   └── services/          # 业务逻辑层（terminal_service, compliance_service, arp_collector_service, config_service）
 │   ├── cli.py                 # 统一 CLI（setup / mock / validate）
 │   ├── tests/                 # 测试套件
 │   └── Dockerfile
@@ -98,11 +104,11 @@ mac_security_web/
 │   ├── src/
 │   │   ├── components/        # UI 组件（Layout, Sidebar, Pagination, DateRangeFilter...）
 │   │   ├── config/            # 配置文件
-│   │   │   └── branding.ts    # 品牌自定义配置
-│   │   ├── hooks/             # 自定义 Hooks
+│   │   │   └── branding.ts    # 品牌自定义配置（静态默认值）
+│   │   ├── hooks/             # 自定义 Hooks（useTerminalData - 含自动刷新 refetchInterval）
 │   │   ├── lib/               # 工具库（api, constants, utils）
-│   │   ├── pages/             # 页面组件（Dashboard, Login, MacAddresses, Whitelist, Blacklist, AuditLogs）
-│   │   ├── store/             # Zustand 状态管理
+│   │   ├── pages/             # 页面组件（Dashboard, Login, Terminals, Whitelist, Blacklist, DataSources, Users, Profile, AuditLogs）
+│   │   ├── store/             # Zustand 状态管理（auth, branding - useBrandingStore）
 │   │   ├── App.tsx            # 路由配置
 │   │   └── main.tsx           # 入口文件
 │   ├── public/                # 静态资源（favicon.svg, logo 等）
@@ -152,21 +158,43 @@ mac_security_web/
 
 | 服务 | 地址 |
 |------|------|
-| Web 管理界面 | https://localhost:8443 |
-| API 文档 (Swagger) | https://localhost:8443/api/v1/docs |
-| API 文档 (ReDoc) | https://localhost:8443/api/v1/redoc |
-| 健康检查 | https://localhost:8443/api/v1/health |
+| Web 管理界面 | `https://<HOST_IP>:8443` |
+| API 文档 (Swagger) | `https://<HOST_IP>:8443/api/v1/docs` |
+| API 文档 (ReDoc) | `https://<HOST_IP>:8443/api/v1/redoc` |
+| 健康检查 | `https://<HOST_IP>:8443/health` |
 
 > HTTP (8080) 自动重定向到 HTTPS (8443)。其他服务端口不对外暴露。
 
 ## 文档索引
 
+### 设计文档
+
 | 文档 | 说明 |
 |------|------|
-| [部署与运维手册](docs/deployment.md) | 从零部署、命令参考、运维场景、故障排查、架构说明 |
+| [系统架构设计](docs/architecture.md) | 系统架构、业务流程、数据流、缓存架构、安全架构、部署架构 |
+| [数据库设计](docs/database.md) | 表结构、字段定义、索引设计、ER 关系、数据字典、Redis 数据结构 |
+| [API 设计与用例](docs/api.md) | 38 个 API 端点详细说明、请求/响应格式、curl 用例（含合规基准 API） |
+
+### 实现文档
+
+| 文档 | 说明 |
+|------|------|
+| [后端实现](docs/backend.md) | 核心模块、服务层、中间件、定时任务、CLI 详细说明 |
+| [前端实现](frontend/docs/implementation.md) | 前端架构、组件、页面功能详细说明 |
+
+### 运维文档
+
+| 文档 | 说明 |
+|------|------|
+| [部署与运维手册](docs/deployment.md) | 从零部署、命令参考、运维场景、故障排查 |
+| [命令行操作手册](docs/manage-sh-reference.md) | manage.sh 全命令详解、风险等级、应用场景、影响范围 |
 | [品牌自定义指南](docs/branding.md) | Logo、Favicon、登录页、页脚等品牌配置操作指南 |
+
+### 其他
+
+| 文档 | 说明 |
+|------|------|
 | [更新日志](docs/changelog.md) | 版本历史与变更记录 |
-| [前端实现文档](frontend/docs/implementation.md) | 前端架构、组件、页面功能详细说明 |
 | [前端 README](frontend/README.md) | 前端项目概览与开发指南 |
 
 ## 安全特性

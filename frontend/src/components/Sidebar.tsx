@@ -7,34 +7,40 @@ import {
   List,
   ShieldOff,
   FileText,
+  Users,
+  Database,
   LogOut,
+  UserCircle,
   ChevronLeft,
   ChevronRight,
 } from 'lucide-react';
 import { useAuthStore } from '@/store/auth';
-import branding from '@/config/branding';
+import { useBrandingStore } from '@/store/branding';
+import { NAV_ITEMS } from '@/lib/constants';
 
-// Map icon names from branding config to Lucide components
+// Map icon names from NAV_ITEMS to Lucide components
 const iconMap: Record<string, React.ComponentType<{ className?: string }>> = {
-  Shield,
   LayoutDashboard,
   Network,
   List,
   ShieldOff,
   FileText,
+  Database,
+  Users,
 };
 
 const Sidebar: React.FC = () => {
   const { user, logout } = useAuthStore();
+  const { appShortName, appSubtitle } = useBrandingStore();
   const [collapsed, setCollapsed] = useState(false);
 
-  const navItems = [
-    { path: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-    { path: '/mac-addresses', label: 'Terminals', icon: Network },
-    { path: '/whitelist', label: 'Whitelist', icon: List },
-    { path: '/blacklist', label: 'Blocked', icon: ShieldOff },
-    { path: '/audit-logs', label: 'Audit Logs', icon: FileText },
-  ];
+  const navItems = NAV_ITEMS
+    .filter((item) => !item.adminOnly || user?.is_superuser)
+    .map((item) => ({
+      path: item.path,
+      label: item.label,
+      icon: iconMap[item.iconName] || Shield,
+    }));
 
   return (
     <aside
@@ -45,18 +51,11 @@ const Sidebar: React.FC = () => {
       {/* Logo / Brand */}
       <div className={`p-4 border-b border-gray-800 ${collapsed ? 'px-3' : ''}`}>
         <div className={`flex items-center ${collapsed ? 'justify-center' : 'space-x-3'}`}>
-          {branding.logo.type === 'image' ? (
-            <img src={branding.logo.path} alt={branding.appName} className="h-8 w-8 flex-shrink-0" />
-          ) : (
-            (() => {
-              const IconComponent = iconMap[branding.logo.name] || Shield;
-              return <IconComponent className={`h-8 w-8 flex-shrink-0 ${branding.logo.className}`} />;
-            })()
-          )}
+          <Shield className="h-8 w-8 flex-shrink-0 text-blue-500" />
           {!collapsed && (
             <div className="overflow-hidden">
-              <span className="text-lg font-bold whitespace-nowrap">{branding.appShortName}</span>
-              <span className="block text-xs text-gray-400 whitespace-nowrap">{branding.appSubtitle}</span>
+              <span className="text-lg font-bold whitespace-nowrap">{appShortName}</span>
+              <span className="block text-xs text-gray-400 whitespace-nowrap">{appSubtitle}</span>
             </div>
           )}
         </div>
@@ -127,13 +126,22 @@ const Sidebar: React.FC = () => {
             )}
           </div>
           {!collapsed && (
-            <button
-              onClick={logout}
-              className="p-2 text-gray-400 hover:text-white hover:bg-gray-800 rounded-lg transition-colors flex-shrink-0"
-              title="Logout"
-            >
-              <LogOut className="h-4 w-4" />
-            </button>
+            <div className="flex items-center gap-1">
+              <NavLink
+                to="/profile"
+                className="p-2 text-gray-400 hover:text-white hover:bg-gray-800 rounded-lg transition-colors flex-shrink-0"
+                title="Profile"
+              >
+                <UserCircle className="h-4 w-4" />
+              </NavLink>
+              <button
+                onClick={logout}
+                className="p-2 text-gray-400 hover:text-white hover:bg-gray-800 rounded-lg transition-colors flex-shrink-0"
+                title="Logout"
+              >
+                <LogOut className="h-4 w-4" />
+              </button>
+            </div>
           )}
         </div>
         {collapsed && (

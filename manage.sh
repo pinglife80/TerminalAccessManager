@@ -1,6 +1,6 @@
 #!/bin/bash
 ###############################################################################
-# MAC Security Platform - Unified Management Script
+# TerminalAccessManager - Unified Management Script
 #
 # A single, robust, idempotent script for full project lifecycle management.
 #
@@ -18,10 +18,12 @@
 #   restart [service]          Restart all or specific service
 #   status                     Show service status and health
 #   health                     Deep health check of all components
-#   update [--no-git]          Rebuild and restart (after code changes)
+#   update                     Rebuild and restart (local code changes only)
+#   upgrade [version]          Pull remote code and upgrade (with safety checks)
 #
 # Data Commands:
 #   init                       Initialize database + admin user (idempotent)
+#   migrate [revision]         Run database migrations (idempotent)
 #   mock generate              Generate demo/mock data (idempotent)
 #   mock clear                 Clear all mock data (keeps admin)
 #   backup [file]              Backup database to SQL file
@@ -34,7 +36,22 @@
 #   validate                   Run project validation checks
 #
 # Utility Commands:
-#   config [key] [value]       View or set configuration
+#   config                     Show .env file configuration
+#   config list                List all database system settings
+#   config get <key>           Get a specific setting value
+#   config set <key> <value>   Set a specific setting value
+#   config branding [key] [v]  View or set branding configuration
+#   config upload <purpose> <f> Upload branding resource (login_bg|favicon)
+#   redis info                 Show Redis server info
+#   redis keys [pattern]       List Redis keys (default pattern: *)
+#   redis get <key>            Get a Redis key value
+#   redis del <key>            Delete a Redis key
+#   redis flush [db]           Flush Redis database (default: db 0)
+#   scheduler status           Show scheduler task status and intervals
+#   scheduler pause <task>     Pause a scheduler task
+#   scheduler resume <task>    Resume a paused scheduler task
+#   scheduler trigger <task>   Manually trigger a scheduler task
+#   scheduler intervals        Show current scheduler intervals from config
 #   ssl [--force]              Generate SSL certificates (idempotent)
 #   clean                      Remove all containers, volumes, data
 #   version                    Show version information
@@ -50,13 +67,13 @@ readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly ENV_FILE="${SCRIPT_DIR}/.env"
 readonly ENV_EXAMPLE="${SCRIPT_DIR}/.env.example"
 readonly BACKUP_DIR="${SCRIPT_DIR}/backups"
-readonly LOCK_FILE="/tmp/mac_security_manage.lock"
+readonly LOCK_FILE="/tmp/tam_manage.lock"
 readonly STATE_DIR="${SCRIPT_DIR}/.manage"
 readonly STATE_FILE="${STATE_DIR}/state.env"
 readonly VERSION="2.0.0"
 
 # Docker Compose project name (derived from directory name)
-readonly COMPOSE_PROJECT_NAME="mac_security"
+readonly COMPOSE_PROJECT_NAME="tam"
 
 # Colors
 readonly RED='\033[0;31m'
@@ -88,7 +105,7 @@ log_banner()  {
     echo -e "${CYAN}${BOLD}"
     echo "  ╔═══════════════════════════════════════════════════════╗"
     echo "  ║                                                       ║"
-    echo "  ║          MAC Security Platform v${VERSION}                ║"
+    echo "  ║          TerminalAccessManager v${VERSION}                ║"
     echo "  ║          Unified Management Script                    ║"
     echo "  ║                                                       ║"
     echo "  ╚═══════════════════════════════════════════════════════╝"
@@ -320,7 +337,7 @@ auto_backup() {
     fi
     mkdir -p "${BACKUP_DIR}"
     local backup_file="${BACKUP_DIR}/auto_${label}_$(date +%Y%m%d_%H%M%S).sql"
-    if dc exec -T postgres pg_dump -U mac_admin mac_security > "$backup_file" 2>/dev/null; then
+    if dc exec -T postgres pg_dump -U tam_admin tam_db > "$backup_file" 2>/dev/null; then
         log_verbose "Auto-backup saved: ${backup_file}"
     fi
 }
@@ -370,7 +387,7 @@ stop_services_ordered() {
 # Command: version
 ###############################################################################
 cmd_version() {
-    echo -e "${CYAN}${BOLD}MAC Security Platform${NC}"
+    echo -e "${CYAN}${BOLD}TerminalAccessManager${NC}"
     echo ""
     echo -e "  ${BOLD}Version:${NC}     ${VERSION}"
     echo -e "  ${BOLD}Script:${NC}      ${SCRIPT_DIR}/manage.sh"
@@ -446,7 +463,7 @@ cmd_deploy() {
     fi
 
     save_state 'deploy_mode' "$mode"
-    log_step "Deploying MAC Security Platform (${mode} mode)"
+    log_step "Deploying TerminalAccessManager (${mode} mode)"
 
     # ─── Step 2: Prerequisites check ─────────────────────────────────────
     log_step "Step 1/6: Checking Prerequisites"
@@ -610,7 +627,7 @@ cmd_deploy() {
     echo ""
 
     if [ "$mode" = "demo" ]; then
-        echo -e "  ${CYAN}Login:${NC}   admin / admin123"
+        echo -e "  ${CYAN}Login:${NC}   admin / Admin123"
         echo ""
         echo -e "  ${YELLOW}This is a DEMO environment with sample data${NC}"
         echo -e "  ${YELLOW}NOT suitable for production use${NC}"
@@ -999,7 +1016,7 @@ cmd_health() {
     # 3. Database connectivity
     echo ""
     echo -e "${BOLD}3. Database Connectivity${NC}"
-    if dc exec -T postgres pg_isready -U mac_admin -d mac_security &>/dev/null; then
+    if dc exec -T postgres pg_isready -U tam_admin -d tam_db &>/dev/null; then
         log_success "PostgreSQL accepting connections"
     else
         log_error "PostgreSQL not accepting connections"
@@ -1121,31 +1138,11 @@ cmd_logs() {
 # Command: update
 ###############################################################################
 cmd_update() {
-    local no_git=false
-
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-            --no-git) no_git=true ;;
-            *)        log_error "Unknown option: $1"; exit 1 ;;
-        esac
-        shift
-    done
-
     ensure_env
-    log_step "Updating Application"
+    log_step "Rebuilding Application (local code only)"
 
     # Auto-backup before update
     auto_backup "pre_update"
-
-    # Pull latest code if git repo
-    if [ -d "${SCRIPT_DIR}/.git" ] && ! ${no_git}; then
-        log_info "Pulling latest code..."
-        if git -C "${SCRIPT_DIR}" pull; then
-            log_success "Code updated"
-        else
-            log_warn "Git pull failed (continuing with local code)"
-        fi
-    fi
 
     # Rebuild and restart
     log_info "Rebuilding services..."
@@ -1154,9 +1151,255 @@ cmd_update() {
     # Wait for backend
     wait_healthy backend 60 || true
 
-    log_success "Update complete"
+    log_success "Update complete (local code rebuilt)"
     log_info "Check logs: ./manage.sh logs"
     log_info "Run health: ./manage.sh health"
+}
+
+###############################################################################
+# Command: upgrade — Pull remote code and upgrade with safety checks
+###############################################################################
+cmd_upgrade() {
+    local target_version=""
+    local skip_migrate=false
+    local check_only=false
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --skip-migrate) skip_migrate=true ;;
+            --check)        check_only=true ;;
+            --latest)       target_version="" ;;
+            *)
+                if [ -z "$target_version" ]; then
+                    target_version="$1"
+                else
+                    log_error "Unknown option: $1"
+                    echo "Usage: ./manage.sh upgrade [version] [--skip-migrate] [--check]"
+                    exit 1
+                fi
+                ;;
+        esac
+        shift
+    done
+
+    ensure_env
+
+    # ─── Pre-flight checks ────────────────────────────────────────────────
+    log_step "Upgrade Pre-flight Checks"
+
+    # 1. Check git repo
+    if [ ! -d "${SCRIPT_DIR}/.git" ]; then
+        log_error "Not a git repository. Cannot pull remote code."
+        log_error "Use './manage.sh update' to rebuild with local code."
+        exit 1
+    fi
+
+    # 2. Check current service health
+    if services_running; then
+        local unhealthy=0
+        for svc in postgres redis backend; do
+            if ! service_running "$svc"; then
+                log_warn "Service '$svc' is not running"
+                unhealthy=$((unhealthy + 1))
+            fi
+        done
+        if [ $unhealthy -gt 0 ]; then
+            log_warn "Some services are not running — upgrade may fail"
+            if ! confirm "Continue with unhealthy services?"; then
+                log_info "Cancelled"
+                return 0
+            fi
+        else
+            log_success "All critical services are running"
+        fi
+    else
+        log_warn "Services are not running — will start after upgrade"
+    fi
+
+    # 3. Check disk space
+    local free_gb
+    free_gb=$(df -BG "${SCRIPT_DIR}" | tail -1 | awk '{print $4}' | sed 's/G//')
+    if [ "${free_gb:-0}" -lt 2 ]; then
+        log_error "Insufficient disk space: ${free_gb}GB (minimum: 2GB for upgrade)"
+        exit 1
+    fi
+    log_success "Disk space: ${free_gb}GB available"
+
+    # 4. Show current version
+    local current_branch current_commit
+    current_branch=$(git -C "${SCRIPT_DIR}" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
+    current_commit=$(git -C "${SCRIPT_DIR}" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+    echo ""
+    echo -e "  ${BOLD}Current version:${NC}  branch=${current_branch}  commit=${current_commit}"
+
+    # 5. Fetch remote and check for updates
+    log_info "Fetching remote updates..."
+    git -C "${SCRIPT_DIR}" fetch --all 2>/dev/null || true
+
+    local target_ref
+    if [ -n "$target_version" ]; then
+        target_ref="$target_version"
+    else
+        target_ref="origin/${current_branch}"
+    fi
+
+    # Check if target ref exists
+    if ! git -C "${SCRIPT_DIR}" rev-parse --verify "$target_ref" &>/dev/null; then
+        log_error "Target version '${target_version}' not found in repository"
+        log_info "Available tags:"
+        git -C "${SCRIPT_DIR}" tag -l 2>/dev/null | tail -10 || echo "  (none)"
+        exit 1
+    fi
+
+    local target_commit
+    target_commit=$(git -C "${SCRIPT_DIR}" rev-parse --short "$target_ref" 2>/dev/null || echo "unknown")
+
+    # Check if there are changes
+    local local_commit
+    local_commit=$(git -C "${SCRIPT_DIR}" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+    if [ "$local_commit" = "$target_commit" ] && [ -z "$target_version" ]; then
+        log_info "Already up to date (commit ${local_commit})"
+        if ! ${check_only}; then
+            if ! confirm "No remote changes found. Force rebuild anyway?"; then
+                log_info "Cancelled"
+                return 0
+            fi
+        else
+            return 0
+        fi
+    fi
+
+    # Count commits ahead/behind
+    local ahead behind
+    ahead=$(git -C "${SCRIPT_DIR}" rev-list --count HEAD.."${target_ref}" 2>/dev/null || echo "0")
+    behind=$(git -C "${SCRIPT_DIR}" rev-list --count "${target_ref}"..HEAD 2>/dev/null || echo "0")
+
+    echo -e "  ${BOLD}Target version:${NC}   ${target_ref} (commit ${target_commit})"
+    echo -e "  ${BOLD}Commits behind:${NC}   ${ahead}"
+    echo -e "  ${BOLD}Commits ahead:${NC}    ${behind}"
+    echo ""
+
+    # --check mode: only show available updates
+    if ${check_only}; then
+        log_info "Check mode — no changes made"
+        if [ "$ahead" -gt 0 ]; then
+            echo ""
+            echo -e "  ${GREEN}Updates available:${NC} ${ahead} commit(s) behind remote"
+            echo -e "  Run: ./manage.sh upgrade${target_version:+ $target_version}"
+        else
+            echo -e "  Already up to date"
+        fi
+        return 0
+    fi
+
+    # ─── Safety warning ───────────────────────────────────────────────────
+    echo -e "${RED}${BOLD}╔═══════════════════════════════════════════════════════╗${NC}"
+    echo -e "${RED}${BOLD}║              UPGRADE WARNING                         ║${NC}"
+    echo -e "${RED}${BOLD}╚═══════════════════════════════════════════════════════╝${NC}"
+    echo ""
+    echo -e "  ${BOLD}This operation will:${NC}"
+    echo -e "    1. Pull remote code from '${target_ref}'"
+    echo -e "    2. Rebuild and restart all Docker services"
+    if ! ${skip_migrate}; then
+        echo -e "    3. Run database migrations (may be ${RED}irreversible${NC})"
+    fi
+    echo ""
+    echo -e "  ${BOLD}Potential impact:${NC}"
+    echo -e "    • Services will be ${RED}unavailable${NC} during rebuild"
+    echo -e "    • Database schema changes may be ${RED}irreversible${NC}"
+    echo -e "    • Downgrade may not be possible after migration"
+    echo -e "    • Custom .env changes are preserved, but code-level"
+    echo -e "      config changes may override defaults"
+    echo ""
+    echo -e "  ${BOLD}Recommended before upgrade:${NC}"
+    echo -e "    ${GREEN}✓${NC} Backup database:    ./manage.sh backup"
+    echo -e "    ${GREEN}✓${NC} Backup .env file:   cp .env .env.backup"
+    echo -e "    ${GREEN}✓${NC} Check health:       ./manage.sh health"
+    echo -e "    ${DIM}○ Notify users of planned downtime${NC}"
+    echo -e "    ${DIM}○ Test in staging environment first${NC}"
+    echo ""
+
+    if ! confirm "Proceed with upgrade?"; then
+        log_info "Upgrade cancelled"
+        return 0
+    fi
+
+    # ─── Execute upgrade ──────────────────────────────────────────────────
+    log_step "Upgrading Application"
+
+    # Auto-backup (mandatory)
+    auto_backup "pre_upgrade"
+    log_success "Auto-backup completed"
+
+    # Pull code
+    log_info "Pulling code from ${target_ref}..."
+    if [ -n "$target_version" ]; then
+        git -C "${SCRIPT_DIR}" checkout "$target_version" 2>&1 || {
+            log_error "Failed to checkout ${target_version}"
+            log_info "Rollback: git checkout ${current_branch}"
+            exit 1
+        }
+    else
+        git -C "${SCRIPT_DIR}" pull 2>&1 || {
+            log_error "Failed to pull code"
+            log_info "Check network or resolve conflicts manually"
+            exit 1
+        }
+    fi
+    log_success "Code updated"
+
+    # Rebuild and restart
+    log_info "Rebuilding services..."
+    dc up -d --build
+
+    # Wait for backend
+    wait_healthy backend 90 || true
+
+    # Run migrations (unless skipped)
+    if ! ${skip_migrate}; then
+        log_info "Running database migrations..."
+        if dc exec -T backend python -m alembic upgrade head 2>&1; then
+            log_success "Database migrations completed"
+        else
+            log_error "Database migration FAILED!"
+            echo ""
+            echo -e "  ${RED}${BOLD}CRITICAL: Migration failed!${NC}"
+            echo -e "  The application may not function correctly."
+            echo -e "  ${BOLD}Recovery options:${NC}"
+            echo -e "    1. Check migration error: ./manage.sh logs backend"
+            echo -e "    2. Restore database:      ./manage.sh restore <backup>"
+            echo -e "    3. Rollback code:         git checkout ${current_branch}"
+            echo ""
+            exit 1
+        fi
+    else
+        log_warn "Database migration SKIPPED (--skip-migrate)"
+        log_warn "Application may not function if schema changes are required"
+    fi
+
+    # Verify
+    log_step "Verifying Upgrade"
+    local new_commit
+    new_commit=$(git -C "${SCRIPT_DIR}" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+    echo -e "  ${BOLD}Previous commit:${NC}  ${local_commit}"
+    echo -e "  ${BOLD}Current commit:${NC}   ${new_commit}"
+    echo ""
+
+    if services_running; then
+        local http_ok=false
+        if curl -sk -o /dev/null -w "%{http_code}" https://localhost:8443/ 2>/dev/null | grep -q "200"; then
+            http_ok=true
+        fi
+        if ${http_ok}; then
+            log_success "Web interface accessible"
+        else
+            log_warn "Web interface not yet accessible (may need a moment)"
+        fi
+    fi
+
+    log_success "Upgrade complete"
+    log_info "Check health: ./manage.sh health"
+    log_info "Check logs:   ./manage.sh logs"
 }
 
 ###############################################################################
@@ -1178,6 +1421,52 @@ cmd_init() {
     dc exec -T backend python cli.py setup
     save_state 'db_initialized' 'true'
     log_success "Database initialized"
+}
+
+###############################################################################
+# Command: migrate — Run database migrations
+###############################################################################
+cmd_migrate() {
+    local revision="${1:-head}"
+
+    ensure_env
+    log_step "Running Database Migrations (target: ${revision})"
+
+    require_services
+    wait_healthy backend 60 || true
+
+    # Warning for non-idempotent migrations
+    if [ "$revision" = "head" ]; then
+        echo -e "${YELLOW}${BOLD}⚠ Database Migration Notice:${NC}"
+        echo -e "  • Schema changes may be ${RED}irreversible${NC} (no automatic downgrade)"
+        echo -e "  • Recommended: run './manage.sh backup' before migration"
+        echo -e "  • To check current state: './manage.sh shell db'"
+        echo ""
+        if ! confirm "Run database migration to '${revision}'?"; then
+            log_info "Cancelled"
+            return 0
+        fi
+    fi
+
+    # Check current migration state
+    log_info "Current migration state:"
+    dc exec -T backend python -m alembic current 2>&1 || true
+    echo ""
+
+    # Run migration
+    log_info "Running alembic upgrade ${revision}..."
+    if dc exec -T backend python -m alembic upgrade "$revision" 2>&1; then
+        log_success "Migration completed"
+    else
+        log_error "Migration failed. Check error above."
+        log_info "To inspect: ./manage.sh shell db"
+        exit 1
+    fi
+
+    # Show new state
+    echo ""
+    log_info "New migration state:"
+    dc exec -T backend python -m alembic current 2>&1 || true
 }
 
 ###############################################################################
@@ -1224,6 +1513,17 @@ cmd_mock() {
             log_step "Clearing Demo Data"
             require_services
 
+            echo -e "${RED}${BOLD}╔═══════════════════════════════════════════════════════╗${NC}"
+            echo -e "${RED}${BOLD}║              MOCK DATA CLEAR WARNING                 ║${NC}"
+            echo -e "${RED}${BOLD}╚═══════════════════════════════════════════════════════╝${NC}"
+            echo ""
+            echo -e "  ${BOLD}Impact:${NC}"
+            echo -e "    • ${RED}ALL data${NC} will be deleted except the admin user"
+            echo -e "    • Terminals, whitelist, blacklist, audit logs will be cleared"
+            echo -e "    • Data sources and compliance baselines will be removed"
+            echo -e "    • This action is ${RED}irreversible${NC}"
+            echo ""
+
             if ! confirm "This will delete ALL data except the admin user. Continue?"; then
                 log_info "Cancelled"
                 return 0
@@ -1264,7 +1564,7 @@ cmd_backup() {
     fi
 
     log_step "Backing Up Database"
-    dc exec -T postgres pg_dump -U mac_admin mac_security > "$backup_file"
+    dc exec -T postgres pg_dump -U tam_admin tam_db > "$backup_file"
 
     if [ -f "$backup_file" ] && [ -s "$backup_file" ]; then
         local size
@@ -1312,6 +1612,19 @@ cmd_restore() {
     ensure_env
     require_services
 
+    echo -e "${RED}${BOLD}╔═══════════════════════════════════════════════════════╗${NC}"
+    echo -e "${RED}${BOLD}║              DATABASE RESTORE WARNING                 ║${NC}"
+    echo -e "${RED}${BOLD}╚═══════════════════════════════════════════════════════╝${NC}"
+    echo ""
+    echo -e "  ${BOLD}Impact:${NC}"
+    echo -e "    • ${RED}ALL current data will be replaced${NC} with backup data"
+    echo -e "    • Active user sessions will be terminated"
+    echo -e "    • Data created after the backup will be ${RED}permanently lost${NC}"
+    echo -e "    • Services will restart during restore"
+    echo ""
+    echo -e "  ${BOLD}Recovery:${NC} Auto-backup will be created before restore"
+    echo ""
+
     if ! confirm "This will OVERWRITE the current database! Continue?"; then
         log_info "Cancelled"
         return 0
@@ -1325,12 +1638,12 @@ cmd_restore() {
     # Drop and recreate the database to ensure clean restore
     log_info "Recreating database for clean restore..."
     # Terminate all connections to the target database first
-    dc exec -T postgres psql -U mac_admin -d postgres -c \
-        "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'mac_security' AND pid <> pg_backend_pid();" 2>/dev/null || true
-    dc exec -T postgres psql -U mac_admin -d postgres -c "DROP DATABASE IF EXISTS mac_security;" 2>/dev/null || true
-    dc exec -T postgres psql -U mac_admin -d postgres -c "CREATE DATABASE mac_security;" 2>/dev/null || true
+    dc exec -T postgres psql -U tam_admin -d postgres -c \
+        "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'tam_db' AND pid <> pg_backend_pid();" 2>/dev/null || true
+    dc exec -T postgres psql -U tam_admin -d postgres -c "DROP DATABASE IF EXISTS tam_db;" 2>/dev/null || true
+    dc exec -T postgres psql -U tam_admin -d postgres -c "CREATE DATABASE tam_db;" 2>/dev/null || true
 
-    cat "$backup_file" | dc exec -T postgres psql -U mac_admin -d mac_security
+    cat "$backup_file" | dc exec -T postgres psql -U tam_admin -d tam_db
     dc restart backend
     log_success "Database restored from: ${backup_file}"
 }
@@ -1351,7 +1664,7 @@ cmd_shell() {
             ;;
         db|database|postgres|p)
             log_info "Opening database shell..."
-            dc exec postgres psql -U mac_admin -d mac_security
+            dc exec postgres psql -U tam_admin -d tam_db
             ;;
         redis|r)
             log_info "Opening Redis CLI..."
@@ -1404,7 +1717,7 @@ cmd_ssl() {
         -newkey rsa:2048 \
         -keyout "${cert_dir}/key.pem" \
         -out "${cert_dir}/cert.pem" \
-        -subj "/C=CN/ST=Beijing/L=Beijing/O=MAC Security/CN=localhost" \
+        -subj "/C=CN/ST=Beijing/L=Beijing/O=TerminalAccessManager/CN=localhost" \
         -addext "subjectAltName=DNS:localhost,IP:127.0.0.1" \
         2>/dev/null
 
@@ -1425,70 +1738,940 @@ cmd_ssl() {
 ###############################################################################
 # Command: config
 ###############################################################################
-cmd_config() {
+
+# API base URL (use internal network when inside container context)
+_API_BASE_URL="https://localhost:8443/api/v1"
+
+# Get admin token by logging in
+_config_get_admin_token() {
+    local admin_password
+    admin_password=$(get_env "ADMIN_PASSWORD")
+    if [ -z "$admin_password" ]; then
+        admin_password="Admin123"
+    fi
+
+    local response
+    response=$(curl -sk -X POST "${_API_BASE_URL}/auth/login" \
+        -H "Content-Type: application/x-www-form-urlencoded" \
+        -d "username=admin&password=${admin_password}" 2>/dev/null)
+
+    if [ -z "$response" ]; then
+        log_error "Failed to connect to backend API"
+        log_error "Make sure services are running: ./manage.sh start"
+        return 1
+    fi
+
+    local token
+    token=$(echo "$response" | python3 -c "import sys,json; print(json.load(sys.stdin).get('access_token',''))" 2>/dev/null || echo "")
+
+    if [ -z "$token" ]; then
+        log_error "Failed to obtain admin token (check ADMIN_PASSWORD in .env)"
+        return 1
+    fi
+
+    echo "$token"
+}
+
+# Prompt user to restart services after config change
+_config_prompt_restart() {
+    echo ""
+    if confirm "Configuration updated. Restart services to apply changes?" "default_yes"; then
+        cmd_restart
+    else
+        log_info "Restart manually: ./manage.sh restart"
+    fi
+}
+
+# Subcommand: config list — List all database system settings (grouped by category)
+_config_list() {
+    log_step "Database System Configuration"
+
+    local token
+    token=$(_config_get_admin_token) || return 1
+
+    local response
+    response=$(curl -sk -X GET "${_API_BASE_URL}/settings/" \
+        -H "Authorization: Bearer ${token}" 2>/dev/null)
+
+    if [ -z "$response" ]; then
+        log_error "Failed to fetch settings from API"
+        return 1
+    fi
+
+    # Parse and display settings grouped by category
+    echo "$response" | python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    # API returns {category: {key: value, ...}, ...}
+    if isinstance(data, dict):
+        # Check if it's grouped by category (values are dicts)
+        first_val = next(iter(data.values()), None)
+        if isinstance(first_val, dict):
+            # Grouped format: {category: {key: value}}
+            for cat, items in sorted(data.items()):
+                print()
+                cat_title = cat.replace('_', ' ').title()
+                print(f'\033[1m{cat_title}:\033[0m')
+                for key, value in sorted(items.items()):
+                    if any(s in key.upper() for s in ['PASSWORD', 'SECRET', 'TOKEN', 'KEY']):
+                        display_val = '********' if value else '(not set)'
+                    else:
+                        display_val = str(value) if value else '(not set)'
+                    print(f'  {key:35s} = {display_val}')
+        elif isinstance(data, list):
+            # List format: [{key, value, category}, ...]
+            categories = {}
+            for item in data:
+                cat = item.get('category', 'General') or 'General'
+                if cat not in categories:
+                    categories[cat] = []
+                categories[cat].append(item)
+            for cat, items in sorted(categories.items()):
+                print()
+                cat_title = cat.replace('_', ' ').title()
+                print(f'\033[1m{cat_title}:\033[0m')
+                for item in items:
+                    key = item.get('key', 'N/A')
+                    value = item.get('value', '')
+                    desc = item.get('description', '')
+                    if any(s in key.upper() for s in ['PASSWORD', 'SECRET', 'TOKEN', 'KEY']):
+                        display_val = '********' if value else '(not set)'
+                    else:
+                        display_val = value if value else '(not set)'
+                    line = f'  {key:35s} = {display_val}'
+                    if desc:
+                        line += f'  \033[2m({desc})\033[0m'
+                    print(line)
+        else:
+            print('  (no settings found)')
+    else:
+        print('  (no settings found)')
+except json.JSONDecodeError:
+    print('  (failed to parse API response)')
+except Exception as e:
+    print(f'  (error: {e})')
+" 2>/dev/null
+
+    if [ $? -ne 0 ]; then
+        log_error "Failed to parse settings response"
+        return 1
+    fi
+
+    echo ""
+}
+
+# Subcommand: config get <key> — Get a specific setting value
+_config_get() {
+    local key="${1:-}"
+
+    if [ -z "$key" ]; then
+        log_error "Usage: ./manage.sh config get <key>"
+        return 1
+    fi
+
+    local token
+    token=$(_config_get_admin_token) || return 1
+
+    local response
+    response=$(curl -sk -X GET "${_API_BASE_URL}/settings/" \
+        -H "Authorization: Bearer ${token}" 2>/dev/null)
+
+    if [ -z "$response" ]; then
+        log_error "Failed to fetch settings from API"
+        return 1
+    fi
+
+    local result
+    result=$(echo "$response" | python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    # API returns {category: {key: value, ...}, ...}
+    if isinstance(data, dict):
+        found = False
+        for cat, items in data.items():
+            if isinstance(items, dict) and '${key}' in items:
+                value = items['${key}']
+                if any(s in '${key}'.upper() for s in ['PASSWORD', 'SECRET', 'TOKEN', 'KEY']):
+                    display_val = '********' if value else '(not set)'
+                else:
+                    display_val = str(value) if value else '(not set)'
+                print(f'${key} = {display_val}')
+                print(f'\033[2m  Category: {cat.replace(\"_\", \" \").title()}\033[0m')
+                found = True
+                break
+        if not found:
+            print('${key} = (not found)')
+    else:
+        print('${key} = (not found)')
+except Exception:
+    print('${key} = (error fetching value)')
+" 2>/dev/null)
+
+    echo -e "$result"
+}
+
+# Subcommand: config set <key> <value> — Set a specific setting value
+# Security-sensitive config keys that require extra confirmation
+_SECURITY_CONFIG_KEYS="lockout_threshold lockout_duration captcha_required max_login_attempts rate_limit"
+
+_config_set() {
     local key="${1:-}"
     local value="${2:-}"
 
-    ensure_env
+    if [ -z "$key" ]; then
+        log_error "Usage: ./manage.sh config set <key> <value>"
+        return 1
+    fi
+
+    if [ -z "$value" ]; then
+        log_error "Usage: ./manage.sh config set <key> <value>"
+        log_error "Value cannot be empty"
+        return 1
+    fi
+
+    # Get current value for comparison
+    local current_val
+    current_val=$(_config_get "$key" 2>/dev/null | grep -oP '(?<= = ).*' || echo "(not set)")
+
+    # Show change preview
+    echo -e "  ${BOLD}Configuration Change:${NC}"
+    echo -e "    Key:     ${CYAN}${key}${NC}"
+    echo -e "    Current: ${DIM}${current_val}${NC}"
+    echo -e "    New:     ${GREEN}${value}${NC}"
+    echo ""
+
+    # Extra warning for security-sensitive keys
+    local is_security=false
+    for sec_key in $_SECURITY_CONFIG_KEYS; do
+        if [[ "$key" == *"$sec_key"* ]]; then
+            is_security=true
+            break
+        fi
+    done
+
+    if ${is_security}; then
+        echo -e "${YELLOW}${BOLD}⚠ Security Configuration Change:${NC}"
+        echo -e "  • This affects system security policies"
+        echo -e "  • Incorrect values may ${RED}lock out users${NC} or ${RED}weaken security${NC}"
+        echo -e "  • Changes take effect immediately after restart"
+        echo ""
+        if ! confirm "Apply this security configuration change?"; then
+            log_info "Cancelled"
+            return 0
+        fi
+    fi
+
+    local token
+    token=$(_config_get_admin_token) || return 1
+
+    local response
+    response=$(curl -sk -X PUT "${_API_BASE_URL}/settings/update" \
+        -H "Authorization: Bearer ${token}" \
+        -H "Content-Type: application/json" \
+        -d "[{\"key\":\"${key}\",\"value\":\"${value}\"}]" 2>/dev/null)
+
+    if [ -z "$response" ]; then
+        log_error "Failed to update setting via API"
+        return 1
+    fi
+
+    # Check for success
+    local success
+    success=$(echo "$response" | python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    # Check for error indicators
+    if isinstance(data, dict):
+        if data.get('detail') or data.get('error'):
+            print('false')
+        else:
+            print('true')
+    else:
+        print('true')
+except:
+    print('true')
+" 2>/dev/null)
+
+    if [ "$success" = "false" ]; then
+        local detail
+        detail=$(echo "$response" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('detail',d.get('error','Unknown error')))" 2>/dev/null || echo "Unknown error")
+        log_error "Failed to update setting: ${detail}"
+        return 1
+    fi
+
+    # Mask sensitive values in output
+    if [[ "$key" == *"PASSWORD"* ]] || [[ "$key" == *"SECRET"* ]] || [[ "$key" == *"TOKEN"* ]] || [[ "$key" == *"KEY"* ]]; then
+        log_success "Set ${key} = ********"
+    else
+        log_success "Set ${key} = ${value}"
+    fi
+
+    _config_prompt_restart
+}
+
+# Subcommand: config branding — View/set branding configuration
+_config_branding() {
+    local key="${1:-}"
+    local value="${2:-}"
+
+    # Fetch current branding (public endpoint, no auth needed)
+    local branding_response
+    branding_response=$(curl -sk -X GET "${_API_BASE_URL}/settings/branding" 2>/dev/null)
+
+    if [ -z "$branding_response" ]; then
+        log_error "Failed to fetch branding configuration"
+        log_error "Make sure services are running: ./manage.sh start"
+        return 1
+    fi
 
     if [ -z "$key" ]; then
-        # Show all configuration
-        log_step "Current Configuration"
-        echo ""
+        # Display all branding settings
+        log_step "Branding Configuration"
 
-        # Group and display config
-        echo -e "${BOLD}Database:${NC}"
-        echo -e "  DB_USER       = $(get_env DB_USER)"
-        echo -e "  DB_PASSWORD   = $(if [ -n "$(get_env DB_PASSWORD)" ]; then echo '********'; else echo '(not set)'; fi)"
-        echo ""
+        echo "$branding_response" | python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    if isinstance(data, dict) and 'data' in data:
+        data = data['data']
 
-        echo -e "${BOLD}Redis:${NC}"
-        echo -e "  REDIS_PASSWORD = $(if [ -n "$(get_env REDIS_PASSWORD)" ]; then echo '********'; else echo '(not set)'; fi)"
-        echo ""
+    branding_keys = ['app_name', 'app_short_name', 'app_subtitle', 'login_heading',
+                     'login_subheading', 'login_footer_text', 'login_bg_url', 'favicon_url',
+                     'footer_copyright', 'footer_icp_number', 'footer_icp_url']
+    labels = {
+        'app_name': 'Application Name',
+        'app_short_name': 'Application Short Name',
+        'app_subtitle': 'Application Subtitle',
+        'login_heading': 'Login Heading',
+        'login_subheading': 'Login Subheading',
+        'login_footer_text': 'Login Footer Text',
+        'login_bg_url': 'Login Background URL',
+        'favicon_url': 'Favicon URL',
+        'footer_copyright': 'Footer Copyright',
+        'footer_icp_number': 'ICP Number',
+        'footer_icp_url': 'ICP URL',
+    }
 
-        echo -e "${BOLD}Security:${NC}"
-        echo -e "  SECRET_KEY     = $(if [ -n "$(get_env SECRET_KEY)" ]; then echo '********'; else echo '(not set)'; fi)"
-        echo ""
+    for k in branding_keys:
+        v = data.get(k, '(not set)') or '(not set)'
+        label = labels.get(k, k)
+        print(f'  {label:22s} = {v}')
 
-        echo -e "${BOLD}Integrations:${NC}"
-        echo -e "  SANGFOR_BASE_URL  = $(get_env SANGFOR_BASE_URL || echo '(not set)')"
-        echo -e "  SANGFOR_USERNAME  = $(get_env SANGFOR_USERNAME || echo '(not set)')"
-        echo -e "  SWITCH_HOST       = $(get_env SWITCH_HOST || echo '(not set)')"
-        echo -e "  SWITCH_USERNAME   = $(get_env SWITCH_USERNAME || echo '(not set)')"
-        echo ""
+    # Show any extra keys
+    for k, v in data.items():
+        if k not in branding_keys:
+            print(f'  {k:22s} = {v or \"(not set)\"}')
+except json.JSONDecodeError:
+    print('  (failed to parse branding response)')
+except Exception as e:
+    print(f'  (error: {e})')
+" 2>/dev/null
 
-        echo -e "${BOLD}Deployment State:${NC}"
-        echo -e "  Deployed      = $(get_state 'deployed' || echo 'false')"
-        echo -e "  Mode          = $(get_state 'deploy_mode' || echo 'N/A')"
-        echo -e "  DB Initialized = $(get_state 'db_initialized' || echo 'false')"
-        echo -e "  Deploy Time   = $(get_state 'deploy_time' || echo 'N/A')"
+        echo ""
+        log_info "Update branding: ./manage.sh config branding <key> <value>"
+        log_info "Upload assets:   ./manage.sh config upload <purpose> <file>"
         echo ""
         return 0
     fi
 
+    # Set a branding value
     if [ -z "$value" ]; then
-        # Show specific key
-        local current
-        current=$(get_env "$key")
-        if [ -n "$current" ]; then
-            if [[ "$key" == *"PASSWORD"* ]] || [[ "$key" == *"SECRET"* ]]; then
-                echo "${key} = ********"
-            else
-                echo "${key} = ${current}"
-            fi
-        else
-            echo "${key} = (not set)"
-        fi
-    else
-        # Set key=value
-        set_env "$key" "$value"
-        log_success "Set ${key} = $(if [[ "$key" == *"PASSWORD"* ]] || [[ "$key" == *"SECRET"* ]]; then echo '********'; else echo "$value"; fi)"
-
-        # If services are running and this is a runtime config, suggest restart
-        if [[ "$key" == *"PASSWORD"* ]] || [[ "$key" == *"SECRET"* ]]; then
-            log_info "Restart services to apply: ./manage.sh restart"
-        fi
+        # Show specific branding key
+        local current_val
+        current_val=$(echo "$branding_response" | python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    if isinstance(data, dict) and 'data' in data:
+        data = data['data']
+    print(data.get('${key}', '(not found)') or '(not set)')
+except:
+    print('(error)')
+" 2>/dev/null)
+        echo "${key} = ${current_val}"
+        return 0
     fi
+
+    # Update branding via settings/update API
+    local token
+    token=$(_config_get_admin_token) || return 1
+
+    local response
+    response=$(curl -sk -X PUT "${_API_BASE_URL}/settings/update" \
+        -H "Authorization: Bearer ${token}" \
+        -H "Content-Type: application/json" \
+        -d "[{\"key\":\"${key}\",\"value\":\"${value}\"}]" 2>/dev/null)
+
+    if [ -z "$response" ]; then
+        log_error "Failed to update branding via API"
+        return 1
+    fi
+
+    log_success "Branding updated: ${key} = ${value}"
+    _config_prompt_restart
+}
+
+# Subcommand: config upload <purpose> <file> — Upload branding resource
+_config_upload() {
+    local purpose="${1:-}"
+    local file="${2:-}"
+
+    if [ -z "$purpose" ] || [ -z "$file" ]; then
+        log_error "Usage: ./manage.sh config upload <purpose> <file>"
+        echo ""
+        echo -e "  ${BOLD}Purpose options:${NC}"
+        echo -e "    login_bg   - Login page background image"
+        echo -e "    favicon    - Browser favicon"
+        return 1
+    fi
+
+    # Validate purpose
+    case "$purpose" in
+        login_bg|favicon) ;;
+        *)
+            log_error "Invalid purpose: ${purpose}"
+            log_error "Valid options: login_bg, favicon"
+            return 1
+            ;;
+    esac
+
+    # Validate file exists
+    if [ ! -f "$file" ]; then
+        log_error "File not found: ${file}"
+        return 1
+    fi
+
+    local token
+    token=$(_config_get_admin_token) || return 1
+
+    log_info "Uploading ${purpose}: ${file}..."
+
+    local response
+    response=$(curl -sk -X POST "${_API_BASE_URL}/settings/upload?purpose=${purpose}" \
+        -H "Authorization: Bearer ${token}" \
+        -F "file=@${file}" 2>/dev/null)
+
+    if [ -z "$response" ]; then
+        log_error "Failed to upload file via API"
+        return 1
+    fi
+
+    # Check for error
+    local has_error
+    has_error=$(echo "$response" | python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    if isinstance(data, dict) and (data.get('detail') or data.get('error')):
+        print('true')
+    else:
+        print('false')
+except:
+    print('false')
+" 2>/dev/null)
+
+    if [ "$has_error" = "true" ]; then
+        local detail
+        detail=$(echo "$response" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('detail',d.get('error','Unknown error')))" 2>/dev/null || echo "Unknown error")
+        log_error "Upload failed: ${detail}"
+        return 1
+    fi
+
+    log_success "Uploaded ${purpose}: ${file}"
+    _config_prompt_restart
+}
+
+cmd_config() {
+    local subcmd="${1:-}"
+    shift 2>/dev/null || true
+
+    ensure_env
+
+    case "$subcmd" in
+        list)
+            # List all database system settings
+            _config_list
+            ;;
+        get)
+            # Get a specific setting value
+            _config_get "$@"
+            ;;
+        set)
+            # Set a specific setting value
+            _config_set "$@"
+            ;;
+        branding)
+            # View/set branding configuration
+            _config_branding "$@"
+            ;;
+        upload)
+            # Upload branding resource
+            _config_upload "$@"
+            ;;
+        "")
+            # No subcommand: show .env configuration (original behavior)
+            log_step "Current Configuration (.env)"
+            echo ""
+
+            # Group and display config
+            echo -e "${BOLD}Database:${NC}"
+            echo -e "  DB_USER       = $(get_env DB_USER)"
+            echo -e "  DB_PASSWORD   = $(if [ -n "$(get_env DB_PASSWORD)" ]; then echo '********'; else echo '(not set)'; fi)"
+            echo ""
+
+            echo -e "${BOLD}Redis:${NC}"
+            echo -e "  REDIS_PASSWORD = $(if [ -n "$(get_env REDIS_PASSWORD)" ]; then echo '********'; else echo '(not set)'; fi)"
+            echo ""
+
+            echo -e "${BOLD}Security:${NC}"
+            echo -e "  SECRET_KEY     = $(if [ -n "$(get_env SECRET_KEY)" ]; then echo '********'; else echo '(not set)'; fi)"
+            echo ""
+
+            echo -e "${BOLD}Integrations:${NC}"
+            echo -e "  SANGFOR_BASE_URL  = $(get_env SANGFOR_BASE_URL || echo '(not set)')"
+            echo -e "  SANGFOR_USERNAME  = $(get_env SANGFOR_USERNAME || echo '(not set)')"
+            echo -e "  SWITCH_HOST       = $(get_env SWITCH_HOST || echo '(not set)')"
+            echo -e "  SWITCH_USERNAME   = $(get_env SWITCH_USERNAME || echo '(not set)')"
+            echo ""
+
+            echo -e "${BOLD}Deployment State:${NC}"
+            echo -e "  Deployed      = $(get_state 'deployed' || echo 'false')"
+            echo -e "  Mode          = $(get_state 'deploy_mode' || echo 'N/A')"
+            echo -e "  DB Initialized = $(get_state 'db_initialized' || echo 'false')"
+            echo -e "  Deploy Time   = $(get_state 'deploy_time' || echo 'N/A')"
+            echo ""
+
+            echo -e "${DIM}Tip: Use 'config list' to view database system settings${NC}"
+            echo -e "${DIM}     Use 'config branding' to view branding settings${NC}"
+            echo ""
+            ;;
+        --help|-h)
+            # Show config help
+            echo -e "${BOLD}Usage:${NC} ./manage.sh config [subcommand] [args]"
+            echo ""
+            echo -e "${BOLD}Subcommands:${NC}"
+            echo -e "  ${CYAN}(none)${NC}                Show .env file configuration"
+            echo -e "  ${CYAN}list${NC}                  List all database system settings"
+            echo -e "  ${CYAN}get${NC} <key>             Get a specific setting value"
+            echo -e "  ${CYAN}set${NC} <key> <value>      Set a specific setting value"
+            echo -e "  ${CYAN}branding${NC} [key] [val]  View or set branding configuration"
+            echo -e "  ${CYAN}upload${NC} <purpose> <file> Upload branding resource"
+            echo ""
+            echo -e "${BOLD}Legacy (no subcommand):${NC}"
+            echo -e "  ./manage.sh config              Show .env configuration"
+            echo -e "  ./manage.sh config <key>        Show .env value for key"
+            echo -e "  ./manage.sh config <key> <val>  Set .env value for key"
+            echo ""
+            echo -e "${BOLD}Upload purposes:${NC}"
+            echo -e "  login_bg    Login page background image"
+            echo -e "  favicon     Browser favicon"
+            echo ""
+            echo -e "${BOLD}Branding keys:${NC}"
+            echo -e "  app_name, login_heading, login_subheading, footer_copyright"
+            echo ""
+            ;;
+        *)
+            # Legacy behavior: treat as .env key[=value]
+            local key="$subcmd"
+            local value="${1:-}"
+
+            if [ -z "$value" ]; then
+                # Show specific .env key
+                local current
+                current=$(get_env "$key")
+                if [ -n "$current" ]; then
+                    if [[ "$key" == *"PASSWORD"* ]] || [[ "$key" == *"SECRET"* ]]; then
+                        echo "${key} = ********"
+                    else
+                        echo "${key} = ${current}"
+                    fi
+                else
+                    echo "${key} = (not set)"
+                fi
+            else
+                # Set .env key=value
+                set_env "$key" "$value"
+                log_success "Set ${key} = $(if [[ "$key" == *"PASSWORD"* ]] || [[ "$key" == *"SECRET"* ]]; then echo '********'; else echo "$value"; fi)"
+
+                # If services are running and this is a runtime config, suggest restart
+                if [[ "$key" == *"PASSWORD"* ]] || [[ "$key" == *"SECRET"* ]]; then
+                    log_info "Restart services to apply: ./manage.sh restart"
+                fi
+            fi
+            ;;
+    esac
+}
+
+###############################################################################
+# Command: redis — Redis management
+###############################################################################
+cmd_redis() {
+    local subcmd="${1:-info}"
+    shift 2>/dev/null || true
+
+    ensure_env
+    require_services
+
+    local redis_pass
+    redis_pass=$(get_env "REDIS_PASSWORD")
+
+    case "$subcmd" in
+        info)
+            log_step "Redis Server Info"
+            dc exec -T redis redis-cli -a "${redis_pass}" INFO server 2>/dev/null \
+                | grep -E "^(redis_version|redis_mode|os|tcp_port|uptime_in_days|connected_clients|used_memory_human|maxmemory_human|keyspace_hits|keyspace_misses)" || true
+            echo ""
+            echo -e "${BOLD}Memory:${NC}"
+            dc exec -T redis redis-cli -a "${redis_pass}" INFO memory 2>/dev/null \
+                | grep -E "^(used_memory_human|used_memory_peak_human|maxmemory_human|mem_fragmentation_ratio)" || true
+            echo ""
+            echo -e "${BOLD}Keyspace:${NC}"
+            dc exec -T redis redis-cli -a "${redis_pass}" INFO keyspace 2>/dev/null || true
+            ;;
+        keys)
+            local pattern="${1:-*}"
+            log_step "Redis Keys (pattern: ${pattern})"
+            local keys
+            keys=$(dc exec -T redis redis-cli -a "${redis_pass}" KEYS "$pattern" 2>/dev/null)
+            if [ -z "$keys" ]; then
+                log_info "No keys matching pattern: ${pattern}"
+            else
+                local count
+                count=$(echo "$keys" | wc -l)
+                log_info "Found ${count} key(s):"
+                echo "$keys" | while read -r key; do
+                    local ttl
+                    ttl=$(dc exec -T redis redis-cli -a "${redis_pass}" TTL "$key" 2>/dev/null || echo "?")
+                    local type
+                    type=$(dc exec -T redis redis-cli -a "${redis_pass}" TYPE "$key" 2>/dev/null || echo "?")
+                    if [ "$ttl" = "-1" ]; then
+                        ttl_str="no TTL"
+                    elif [ "$ttl" = "-2" ]; then
+                        ttl_str="expired"
+                    else
+                        ttl_str="TTL ${ttl}s"
+                    fi
+                    echo -e "  ${CYAN}${key}${NC}  ${DIM}[${type}] [${ttl_str}]${NC}"
+                done
+            fi
+            ;;
+        get)
+            local key="${1:-}"
+            if [ -z "$key" ]; then
+                log_error "Usage: ./manage.sh redis get <key>"
+                return 1
+            fi
+            local type
+            type=$(dc exec -T redis redis-cli -a "${redis_pass}" TYPE "$key" 2>/dev/null || echo "none")
+            case "$type" in
+                string)
+                    dc exec -T redis redis-cli -a "${redis_pass}" GET "$key" 2>/dev/null
+                    ;;
+                hash)
+                    dc exec -T redis redis-cli -a "${redis_pass}" HGETALL "$key" 2>/dev/null
+                    ;;
+                list)
+                    local len
+                    len=$(dc exec -T redis redis-cli -a "${redis_pass}" LLEN "$key" 2>/dev/null || echo "0")
+                    log_info "List length: ${len}"
+                    dc exec -T redis redis-cli -a "${redis_pass}" LRANGE "$key" 0 19 2>/dev/null
+                    ;;
+                set)
+                    dc exec -T redis redis-cli -a "${redis_pass}" SMEMBERS "$key" 2>/dev/null
+                    ;;
+                zset)
+                    dc exec -T redis redis-cli -a "${redis_pass}" ZRANGE "$key" 0 -1 WITHSCORES 2>/dev/null
+                    ;;
+                none)
+                    log_warn "Key '${key}' does not exist"
+                    ;;
+                *)
+                    log_warn "Unsupported type: ${type}"
+                    dc exec -T redis redis-cli -a "${redis_pass}" DUMP "$key" 2>/dev/null | head -c 200
+                    ;;
+            esac
+            ;;
+        del)
+            local key="${1:-}"
+            if [ -z "$key" ]; then
+                log_error "Usage: ./manage.sh redis del <key>"
+                return 1
+            fi
+            echo -e "${YELLOW}${BOLD}⚠ Redis Key Deletion:${NC}"
+            echo -e "  • Deleting '${key}' may affect running services"
+            echo -e "  • Scheduler control keys (scheduler:ctrl:*) affect task scheduling"
+            echo -e "  • Cache keys will be rebuilt automatically"
+            echo ""
+            if ! confirm "Delete Redis key '${key}'?"; then
+                log_info "Cancelled"
+                return 0
+            fi
+            dc exec -T redis redis-cli -a "${redis_pass}" DEL "$key" 2>/dev/null
+            log_success "Deleted key: ${key}"
+            ;;
+        flush)
+            local db_num="${1:-0}"
+            echo -e "${RED}${BOLD}╔═══════════════════════════════════════════════════════╗${NC}"
+            echo -e "${RED}${BOLD}║              REDIS FLUSH WARNING                     ║${NC}"
+            echo -e "${RED}${BOLD}╚═══════════════════════════════════════════════════════╝${NC}"
+            echo ""
+            echo -e "  ${BOLD}Impact:${NC}"
+            echo -e "    • ${RED}ALL keys${NC} in Redis database ${db_num} will be deleted"
+            echo -e "    • Active user sessions will be terminated (re-login required)"
+            echo -e "    • Login rate limit counters will be reset"
+            echo -e "    • Scheduler pause states will be cleared (all tasks resume)"
+            echo -e "    • Compliance/whitelist caches will be rebuilt on next access"
+            echo ""
+            if ! confirm "Flush Redis database ${db_num}? This deletes ALL keys!"; then
+                log_info "Cancelled"
+                return 0
+            fi
+            dc exec -T redis redis-cli -a "${redis_pass}" -n "$db_num" FLUSHDB 2>/dev/null
+            log_success "Flushed Redis database ${db_num}"
+            ;;
+        *)
+            log_error "Unknown redis subcommand: ${subcmd}"
+            echo ""
+            echo -e "  ${BOLD}Usage:${NC} ./manage.sh redis <subcommand> [args]"
+            echo ""
+            echo -e "  ${CYAN}info${NC}              Show Redis server info"
+            echo -e "  ${CYAN}keys${NC} [pattern]    List keys (default: *)"
+            echo -e "  ${CYAN}get${NC} <key>        Get key value"
+            echo -e "  ${CYAN}del${NC} <key>        Delete a key"
+            echo -e "  ${CYAN}flush${NC} [db]       Flush a Redis database (default: 0)"
+            ;;
+    esac
+}
+
+###############################################################################
+# Command: scheduler — Scheduler task management
+###############################################################################
+
+# Scheduler task name mapping
+_SCHEDULER_TASKS="arp_collection,ipguard_sync,firewall_query,compliance_check,auto_unblock"
+
+# Get scheduler control key for a task
+_sched_ctrl_key() {
+    local task="$1"
+    echo "scheduler:ctrl:${task}"
+}
+
+# Get task display name
+_sched_display_name() {
+    local task="$1"
+    case "$task" in
+        arp_collection)    echo "ARP Data Collection" ;;
+        ipguard_sync)      echo "Compliance Baseline Sync" ;;
+        firewall_query)    echo "Firewall Blacklist Query" ;;
+        compliance_check)  echo "Compliance Check" ;;
+        auto_unblock)      echo "Auto Unblock" ;;
+        *)                 echo "$task" ;;
+    esac
+}
+
+cmd_scheduler() {
+    local subcmd="${1:-status}"
+    shift 2>/dev/null || true
+
+    ensure_env
+    require_services
+
+    local redis_pass
+    redis_pass=$(get_env "REDIS_PASSWORD")
+
+    case "$subcmd" in
+        status)
+            log_step "Scheduler Task Status"
+            echo ""
+
+            # Get intervals from config API
+            local token
+            token=$(_config_get_admin_token) 2>/dev/null || true
+
+            local intervals_response
+            intervals_response=$(curl -sk -X GET "${_API_BASE_URL}/settings/" \
+                -H "Authorization: Bearer ${token}" 2>/dev/null)
+
+            # Display each task
+            echo -e "${BOLD}Task                          Interval    Status${NC}"
+            echo -e "${DIM}─────────────────────────────────────────────────${NC}"
+
+            for task in $(echo "$_SCHEDULER_TASKS" | tr ',' ' '); do
+                local display_name
+                display_name=$(_sched_display_name "$task")
+
+                # Get interval from config
+                local config_key="scheduler_${task}_interval"
+                local interval_val
+                interval_val=$(echo "$intervals_response" | python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    if isinstance(data, dict):
+        for cat, items in data.items():
+            if isinstance(items, dict) and '${config_key}' in items:
+                print(items['${config_key}'])
+                break
+        else:
+            print('?')
+    else:
+        print('?')
+except:
+    print('?')
+" 2>/dev/null || echo "?")
+
+                # Format interval
+                local interval_display
+                if [ "$interval_val" != "?" ] && [ "$interval_val" -eq "$interval_val" ] 2>/dev/null; then
+                    if [ "$interval_val" -ge 3600 ]; then
+                        interval_display="$((interval_val / 3600))h"
+                    elif [ "$interval_val" -ge 60 ]; then
+                        interval_display="$((interval_val / 60))m"
+                    else
+                        interval_display="${interval_val}s"
+                    fi
+                else
+                    interval_display="${interval_val}"
+                fi
+
+                # Check pause state from Redis
+                local ctrl_key
+                ctrl_key=$(_sched_ctrl_key "$task")
+                local is_paused
+                is_paused=$(dc exec -T redis redis-cli -a "${redis_pass}" GET "$ctrl_key" 2>/dev/null || echo "")
+
+                local status_display
+                if [ "$is_paused" = "paused" ]; then
+                    status_display="${YELLOW}PAUSED${NC}"
+                else
+                    status_display="${GREEN}RUNNING${NC}"
+                fi
+
+                printf "  %-28s %-11s " "$display_name" "$interval_display"
+                echo -e "$status_display"
+            done
+
+            echo ""
+            echo -e "${DIM}Pause:   ./manage.sh scheduler pause <task>${NC}"
+            echo -e "${DIM}Resume:  ./manage.sh scheduler resume <task>${NC}"
+            echo -e "${DIM}Trigger: ./manage.sh scheduler trigger <task>${NC}"
+            echo ""
+            echo -e "${DIM}Task names: arp_collection, ipguard_sync, firewall_query, compliance_check, auto_unblock${NC}"
+            echo ""
+            ;;
+        pause)
+            local task="${1:-}"
+            if [ -z "$task" ]; then
+                log_error "Usage: ./manage.sh scheduler pause <task>"
+                echo -e "  Tasks: arp_collection, ipguard_sync, firewall_query, compliance_check, auto_unblock"
+                return 1
+            fi
+            local ctrl_key
+            ctrl_key=$(_sched_ctrl_key "$task")
+            dc exec -T redis redis-cli -a "${redis_pass}" SET "$ctrl_key" "paused" 2>/dev/null >/dev/null
+            log_success "Paused: $(_sched_display_name "$task")"
+            log_info "Resume with: ./manage.sh scheduler resume ${task}"
+            ;;
+        resume)
+            local task="${1:-}"
+            if [ -z "$task" ]; then
+                log_error "Usage: ./manage.sh scheduler resume <task>"
+                echo -e "  Tasks: arp_collection, ipguard_sync, firewall_query, compliance_check, auto_unblock"
+                return 1
+            fi
+            local ctrl_key
+            ctrl_key=$(_sched_ctrl_key "$task")
+            dc exec -T redis redis-cli -a "${redis_pass}" DEL "$ctrl_key" 2>/dev/null >/dev/null
+            log_success "Resumed: $(_sched_display_name "$task")"
+            ;;
+        trigger)
+            local task="${1:-}"
+            if [ -z "$task" ]; then
+                log_error "Usage: ./manage.sh scheduler trigger <task>"
+                echo -e "  Tasks: arp_collection, ipguard_sync, firewall_query, compliance_check, auto_unblock"
+                return 1
+            fi
+            local display_name
+            display_name=$(_sched_display_name "$task")
+            log_info "Triggering: ${display_name}..."
+
+            # Trigger via backend CLI
+            local trigger_result
+            trigger_result=$(dc exec -T backend python cli.py scheduler trigger "$task" 2>&1) || true
+
+            if echo "$trigger_result" | grep -qi "error\|fail\|not found"; then
+                log_error "Trigger failed for ${display_name}"
+                echo "$trigger_result"
+            else
+                log_success "Triggered: ${display_name}"
+                if [ -n "$trigger_result" ]; then
+                    echo "$trigger_result"
+                fi
+            fi
+            ;;
+        intervals)
+            log_step "Scheduler Intervals (from config)"
+            echo ""
+
+            local token
+            token=$(_config_get_admin_token) 2>/dev/null || true
+
+            local response
+            response=$(curl -sk -X GET "${_API_BASE_URL}/settings/" \
+                -H "Authorization: Bearer ${token}" 2>/dev/null)
+
+            echo "$response" | python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    if isinstance(data, dict) and 'scheduler' in data:
+        sched = data['scheduler']
+        task_names = {
+            'scheduler_arp_collection_interval': 'ARP Data Collection',
+            'scheduler_ipguard_sync_interval': 'Compliance Baseline Sync',
+            'scheduler_firewall_query_interval': 'Firewall Blacklist Query',
+            'scheduler_compliance_check_interval': 'Compliance Check',
+            'scheduler_auto_unblock_interval': 'Auto Unblock',
+        }
+        for key, label in sorted(task_names.items()):
+            val = sched.get(key, '?')
+            if isinstance(val, int):
+                if val >= 3600:
+                    display = f'{val}s ({val // 3600}h)'
+                elif val >= 60:
+                    display = f'{val}s ({val // 60}m)'
+                else:
+                    display = f'{val}s'
+            else:
+                display = str(val)
+            print(f'  {label:28s} {display}')
+        print()
+        print('  Modify: ./manage.sh config set <key> <seconds>')
+        print('  Range:  30 - 86400 (30s - 1 day)')
+    else:
+        print('  (scheduler config not found)')
+except Exception as e:
+    print(f'  (error: {e})')
+" 2>/dev/null
+            echo ""
+            ;;
+        *)
+            log_error "Unknown scheduler subcommand: ${subcmd}"
+            echo ""
+            echo -e "  ${BOLD}Usage:${NC} ./manage.sh scheduler <subcommand> [args]"
+            echo ""
+            echo -e "  ${CYAN}status${NC}              Show task status and intervals"
+            echo -e "  ${CYAN}pause${NC} <task>        Pause a scheduler task"
+            echo -e "  ${CYAN}resume${NC} <task>       Resume a paused task"
+            echo -e "  ${CYAN}trigger${NC} <task>      Manually trigger a task"
+            echo -e "  ${CYAN}intervals${NC}           Show configured intervals"
+            echo ""
+            echo -e "  ${BOLD}Tasks:${NC} arp_collection, ipguard_sync, firewall_query, compliance_check, auto_unblock"
+            ;;
+    esac
 }
 
 ###############################################################################
@@ -1618,11 +2801,13 @@ cmd_help() {
     echo -e "  ${GREEN}restart${NC} [service]        Restart all or specific service"
     echo -e "  ${GREEN}status${NC}                    Show service status and health"
     echo -e "  ${GREEN}health${NC}                    Deep health check of all components"
-    echo -e "  ${GREEN}update${NC} [--no-git]         Rebuild and restart (after code changes)"
+    echo -e "  ${GREEN}update${NC}                    Rebuild and restart (local code only)"
+    echo -e "  ${GREEN}upgrade${NC} [version]         Pull remote code and upgrade (with safety checks)"
     echo ""
     echo -e "${BOLD}Data Management:${NC}"
     echo ""
     echo -e "  ${YELLOW}init${NC}                      Initialize database + admin user"
+    echo -e "  ${YELLOW}migrate${NC} [revision]        Run database migrations (idempotent)"
     echo -e "  ${YELLOW}mock generate${NC}            Generate demo/mock data"
     echo -e "  ${YELLOW}mock clear${NC}               Clear all mock data (keeps admin)"
     echo -e "  ${YELLOW}backup${NC} [file]             Backup database to SQL file"
@@ -1637,7 +2822,22 @@ cmd_help() {
     echo ""
     echo -e "${BOLD}Utilities:${NC}"
     echo ""
-    echo -e "  ${CYAN}config${NC} [key] [value]       View or set configuration"
+    echo -e "  ${CYAN}config${NC}                     Show .env file configuration"
+    echo -e "  ${CYAN}config list${NC}               List all database system settings"
+    echo -e "  ${CYAN}config get${NC} <key>          Get a specific setting value"
+    echo -e "  ${CYAN}config set${NC} <key> <value>   Set a specific setting value"
+    echo -e "  ${CYAN}config branding${NC} [key] [val] View/set branding configuration"
+    echo -e "  ${CYAN}config upload${NC} <purpose> <file> Upload branding resource"
+    echo -e "  ${CYAN}redis info${NC}               Show Redis server info"
+    echo -e "  ${CYAN}redis keys${NC} [pattern]     List Redis keys"
+    echo -e "  ${CYAN}redis get${NC} <key>         Get Redis key value"
+    echo -e "  ${CYAN}redis del${NC} <key>         Delete a Redis key"
+    echo -e "  ${CYAN}redis flush${NC} [db]        Flush Redis database"
+    echo -e "  ${CYAN}scheduler status${NC}         Show scheduler task status"
+    echo -e "  ${CYAN}scheduler pause${NC} <task>   Pause a scheduler task"
+    echo -e "  ${CYAN}scheduler resume${NC} <task>  Resume a paused task"
+    echo -e "  ${CYAN}scheduler trigger${NC} <task> Manually trigger a task"
+    echo -e "  ${CYAN}scheduler intervals${NC}      Show configured intervals"
     echo -e "  ${CYAN}ssl${NC} [--force]              Generate SSL certificates (idempotent)"
     echo -e "  ${CYAN}clean${NC}                     Remove ALL containers, volumes, data"
     echo -e "  ${CYAN}version${NC}                   Show version information"
@@ -1657,11 +2857,25 @@ cmd_help() {
     echo ""
     echo -e "  ${DIM}./manage.sh status               # Check service status${NC}"
     echo -e "  ${DIM}./manage.sh health               # Deep health check${NC}"
+    echo -e "  ${DIM}./manage.sh update               # Rebuild with local code${NC}"
+    echo -e "  ${DIM}./manage.sh upgrade              # Pull remote code and upgrade${NC}"
+    echo -e "  ${DIM}./manage.sh upgrade --check      # Check for available updates${NC}"
+    echo -e "  ${DIM}./manage.sh upgrade v2.1.0       # Upgrade to specific version${NC}"
     echo -e "  ${DIM}./manage.sh logs backend -n 50   # Last 50 lines of backend logs${NC}"
     echo -e "  ${DIM}./manage.sh shell db             # Open database shell${NC}"
     echo -e "  ${DIM}./manage.sh backup               # Backup database${NC}"
-    echo -e "  ${DIM}./manage.sh config               # View all configuration${NC}"
-    echo -e "  ${DIM}./manage.sh config DB_PASSWORD x # Set a config value${NC}"
+    echo -e "  ${DIM}./manage.sh config               # View .env configuration${NC}"
+    echo -e "  ${DIM}./manage.sh config list           # List database settings${NC}"
+    echo -e "  ${DIM}./manage.sh config get app_name   # Get a setting value${NC}"
+    echo -e "  ${DIM}./manage.sh config set app_name MyApp  # Set a setting${NC}"
+    echo -e "  ${DIM}./manage.sh config branding       # View branding config${NC}"
+    echo -e "  ${DIM}./manage.sh config upload login_bg bg.png  # Upload asset${NC}"
+    echo -e "  ${DIM}./manage.sh migrate               # Run database migrations${NC}"
+    echo -e "  ${DIM}./manage.sh redis info             # Show Redis info${NC}"
+    echo -e "  ${DIM}./manage.sh redis keys 'ipguard:*' # List IPGuard cache keys${NC}"
+    echo -e "  ${DIM}./manage.sh scheduler status        # Show scheduler status${NC}"
+    echo -e "  ${DIM}./manage.sh scheduler pause arp_collection  # Pause task${NC}"
+    echo -e "  ${DIM}./manage.sh scheduler trigger compliance_check  # Trigger task${NC}"
     echo -e "  ${DIM}./manage.sh ssl --force          # Force regenerate SSL certs${NC}"
     echo -e "  ${DIM}./manage.sh -y clean             # Clean without confirmation${NC}"
     echo ""
@@ -1707,7 +2921,9 @@ main() {
         health)       cmd_health ;;
         logs)         cmd_logs "$@" ;;
         update)       cmd_update "$@" ;;
+        upgrade)      cmd_upgrade "$@" ;;
         init)         cmd_init ;;
+        migrate)      cmd_migrate "$@" ;;
         test)         cmd_test ;;
         mock)         cmd_mock "$@" ;;
         backup)       cmd_backup "$@" ;;
@@ -1715,6 +2931,8 @@ main() {
         shell)        cmd_shell "$@" ;;
         ssl)          cmd_ssl "$@" ;;
         config)       cmd_config "$@" ;;
+        redis)        cmd_redis "$@" ;;
+        scheduler)    cmd_scheduler "$@" ;;
         validate)     cmd_validate ;;
         clean)        cmd_clean ;;
         version)      cmd_version ;;

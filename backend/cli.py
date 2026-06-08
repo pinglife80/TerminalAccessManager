@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Unified CLI for MAC Security Platform backend management.
+Unified CLI for TerminalAccessManager backend management.
 
 Consolidates setup, mock data, validation, and testing into a single interface.
 """
@@ -61,7 +61,7 @@ async def _create_admin_user():
             admin = User(
                 username="admin",
                 email="admin@example.com",
-                hashed_password=hash_password("admin123"),
+                hashed_password=hash_password("Admin123"),
                 is_active=True,
                 is_superuser=True,
             )
@@ -69,7 +69,7 @@ async def _create_admin_user():
             await db.commit()
             print(_green("✓ Admin user created successfully!"))
             print("  Username: admin")
-            print("  Password: admin123 (CHANGE THIS IMMEDIATELY!)")
+            print("  Password: Admin123 (CHANGE THIS IMMEDIATELY!)")
         else:
             print("ℹ Admin user already exists")
 
@@ -79,7 +79,7 @@ async def _run_setup():
     from app.core.database import init_db
 
     print("=" * 60)
-    print("MAC Security Platform - Initial Setup")
+    print("TerminalAccessManager - Initial Setup")
     print("=" * 60)
     print()
 
@@ -136,19 +136,191 @@ def _generate_random_hostname():
     return f"{random.choice(prefixes)}-{random.choice(departments)}-{random.randint(1, 99):02d}"
 
 
+async def _create_mock_data_sources(db):
+    from sqlalchemy import select
+    from app.models.data_source import DataSource
+    from app.models.compliance_baseline import ComplianceBaseline
+
+    print("Creating mock data sources...")
+
+    data_sources = [
+        {
+            "name": "Core Switch (Building A)",
+            "type": "arp_ssh",
+            "tag": "switch-bldg-a",
+            "config": {
+                "host": "10.0.1.1",
+                "port": 22,
+                "username": "netadmin",
+                "password": "encrypted",
+                "command": "show arp",
+            },
+            "enabled": True,
+        },
+        {
+            "name": "Core Switch (Building B)",
+            "type": "arp_ssh",
+            "tag": "switch-bldg-b",
+            "config": {
+                "host": "10.0.2.1",
+                "port": 22,
+                "username": "netadmin",
+                "password": "encrypted",
+                "command": "display arp",
+            },
+            "enabled": True,
+        },
+        {
+            "name": "Network Monitor API",
+            "type": "arp_api",
+            "tag": "netmon-api",
+            "config": {
+                "url": "http://10.0.0.50/api/v1/arp",
+                "method": "GET",
+                "headers": {"Authorization": "Bearer token"},
+                "auth_type": "bearer",
+                "token": "encrypted",
+            },
+            "enabled": False,
+        },
+        {
+            "name": "Sangfor Firewall (Primary)",
+            "type": "sangfor",
+            "tag": "sangfor-primary",
+            "config": {
+                "base_url": "https://10.0.0.200",
+                "username": "api_admin",
+                "password": "encrypted",
+                "verify_ssl": False,
+                "ca_bundle": "",
+            },
+            "enabled": True,
+        },
+        {
+            "name": "Sangfor Firewall (DR)",
+            "type": "sangfor",
+            "tag": "sangfor-dr",
+            "config": {
+                "base_url": "https://10.0.0.201",
+                "username": "api_admin",
+                "password": "encrypted",
+                "verify_ssl": False,
+                "ca_bundle": "",
+            },
+            "enabled": False,
+        },
+    ]
+
+    created_sources = []
+    for ds_data in data_sources:
+        stmt = select(DataSource).where(DataSource.tag == ds_data["tag"])
+        result = await db.execute(stmt)
+        existing = result.scalar_one_or_none()
+
+        if not existing:
+            ds = DataSource(
+                name=ds_data["name"],
+                type=ds_data["type"],
+                tag=ds_data["tag"],
+                config=ds_data["config"],
+                enabled=ds_data["enabled"],
+            )
+            db.add(ds)
+            created_sources.append(ds)
+            print(f"  ✓ Created data source: {ds_data['tag']} ({ds_data['type']})")
+        else:
+            created_sources.append(existing)
+            print(f"  - Data source already exists: {ds_data['tag']}")
+
+    await db.commit()
+
+    # Create compliance baselines
+    print("Creating mock compliance baselines...")
+
+    baselines = [
+        {
+            "name": "IPGuard Database",
+            "type": "ipguard",
+            "tag": "ipguard-main",
+            "config": {
+                "host": "10.0.0.100",
+                "port": 3306,
+                "username": "ipguard_ro",
+                "password": "encrypted",
+                "database": "ipguard",
+            },
+            "enabled": True,
+        },
+    ]
+
+    for bl_data in baselines:
+        stmt = select(ComplianceBaseline).where(ComplianceBaseline.tag == bl_data["tag"])
+        result = await db.execute(stmt)
+        existing = result.scalar_one_or_none()
+
+        if not existing:
+            bl = ComplianceBaseline(
+                name=bl_data["name"],
+                type=bl_data["type"],
+                tag=bl_data["tag"],
+                config=bl_data["config"],
+                enabled=bl_data["enabled"],
+            )
+            db.add(bl)
+            print(f"  ✓ Created compliance baseline: {bl_data['tag']} ({bl_data['type']})")
+        else:
+            print(f"  - Compliance baseline already exists: {bl_data['tag']}")
+
+    await db.commit()
+    return created_sources
+
+
+async def _create_mock_data_source_bindings(db):
+    from sqlalchemy import select
+    from app.models.data_source import DataSourceBinding
+
+    print("\nCreating mock data source bindings...")
+
+    bindings = [
+        {"arp_source_tag": "switch-bldg-a", "firewall_tag": "sangfor-primary"},
+        {"arp_source_tag": "switch-bldg-b", "firewall_tag": "sangfor-dr"},
+        {"arp_source_tag": "netmon-api", "firewall_tag": "sangfor-primary"},
+    ]
+
+    for b_data in bindings:
+        stmt = select(DataSourceBinding).where(
+            DataSourceBinding.arp_source_tag == b_data["arp_source_tag"],
+            DataSourceBinding.firewall_tag == b_data["firewall_tag"],
+        )
+        result = await db.execute(stmt)
+        existing = result.scalar_one_or_none()
+
+        if not existing:
+            binding = DataSourceBinding(
+                arp_source_tag=b_data["arp_source_tag"],
+                firewall_tag=b_data["firewall_tag"],
+            )
+            db.add(binding)
+            print(f"  ✓ Bound: {b_data['arp_source_tag']} → {b_data['firewall_tag']}")
+        else:
+            print(f"  - Binding already exists: {b_data['arp_source_tag']} → {b_data['firewall_tag']}")
+
+    await db.commit()
+
+
 async def _create_mock_users(db):
     from sqlalchemy import select
     from app.core.security import hash_password
     from app.models.user import User
 
-    print("Creating mock users...")
+    print("\nCreating mock users...")
 
     users_data = [
-        {"username": "admin", "email": "admin@company.com", "password": "admin123", "is_superuser": True, "is_active": True},
-        {"username": "john.doe", "email": "john.doe@company.com", "password": "password123", "is_superuser": False, "is_active": True},
-        {"username": "jane.smith", "email": "jane.smith@company.com", "password": "password123", "is_superuser": False, "is_active": True},
-        {"username": "network.admin", "email": "netadmin@company.com", "password": "netpass456", "is_superuser": True, "is_active": True},
-        {"username": "security.officer", "email": "security@company.com", "password": "securepass789", "is_superuser": False, "is_active": True},
+        {"username": "admin", "email": "admin@company.com", "password": "Admin123", "is_superuser": True, "is_active": True},
+        {"username": "john.doe", "email": "john.doe@company.com", "password": "Password123", "is_superuser": False, "is_active": True},
+        {"username": "jane.smith", "email": "jane.smith@company.com", "password": "Password456", "is_superuser": False, "is_active": True},
+        {"username": "network.admin", "email": "netadmin@company.com", "password": "Netpass456", "is_superuser": True, "is_active": True},
+        {"username": "security.officer", "email": "security@company.com", "password": "Securepass789", "is_superuser": False, "is_active": True},
     ]
 
     created_users = []
@@ -176,38 +348,68 @@ async def _create_mock_users(db):
     return created_users
 
 
-async def _create_mock_mac_addresses(db, users):
+async def _create_mock_terminals(db, users):
     from sqlalchemy import select
-    from app.models.mac_address import MacAddress
+    from app.models.terminal import Terminal
 
-    print("\nCreating mock MAC addresses...")
+    print("\nCreating mock terminals...")
 
-    statuses = ['active', 'inactive', 'frozen', 'pending', 'unfrozen']
+    # Realistic distribution: 60% compliant, 15% bypass, 10% non_compliant, 15% unknown
+    source_tags = ['switch-bldg-a', 'switch-bldg-b']
 
     mac_records = []
     for i in range(50):
         mac = _generate_random_mac()
         ip = _generate_random_ip()
 
-        stmt = select(MacAddress).where(MacAddress.mac_address == mac)
+        stmt = select(Terminal).where(Terminal.mac_address == mac)
         result = await db.execute(stmt)
         existing = result.scalar_one_or_none()
 
         if not existing:
             days_ago = random.randint(0, 90)
             created_at = datetime.now(timezone.utc) - timedelta(days=days_ago)
+            source_tag = random.choice(source_tags)
 
-            mac_record = MacAddress(
+            # Realistic compliance distribution
+            rand = random.random()
+            if rand < 0.60:
+                compliance = 'compliant'
+            elif rand < 0.75:
+                compliance = 'bypass'
+            elif rand < 0.85:
+                compliance = 'non_compliant'
+            else:
+                compliance = 'unknown'
+
+            # Set status based on compliance
+            if compliance == 'non_compliant':
+                status = random.choice(['frozen', 'active'])
+            elif compliance == 'bypass':
+                status = 'active'
+            else:
+                status = random.choice(['active', 'inactive'])
+
+            # Set wl_match_type for bypass entries
+            wl_match_type = None
+            if compliance == 'bypass':
+                wl_match_type = random.choice(['mac', 'ip', 'both'])
+
+            mac_record = Terminal(
                 mac_address=_normalize_mac(mac),
                 ip_address=ip,
-                status=random.choice(statuses),
+                status=status,
                 comments=f"Auto-generated mock data #{i + 1}",
                 timestamp=created_at,
-                source=random.choice(['arp', 'ipguard']),
+                source='arp',
+                source_tag=source_tag,
+                compliance_status=compliance,
+                wl_match_type=wl_match_type,
             )
             db.add(mac_record)
             mac_records.append(mac_record)
-            print(f"  ✓ Created MAC: {mac} ({ip})")
+            print(f"  ✓ Created terminal: {mac} ({ip}) [{compliance}]" +
+                  (f" wl={wl_match_type}" if wl_match_type else ""))
         else:
             mac_records.append(existing)
 
@@ -218,13 +420,20 @@ async def _create_mock_mac_addresses(db, users):
 async def _create_mock_whitelist(db, mac_records, users):
     from sqlalchemy import select
     from app.models.whitelist import Whitelist
+    from app.models.terminal import Terminal
 
     print("\nCreating mock whitelist entries...")
 
-    selected_macs = random.sample(mac_records, min(15, len(mac_records)))
+    # Mix of pattern types: single IP, CIDR, IP range, MAC-only
+    whitelist_entries = []
 
-    for mac_record in selected_macs:
-        stmt = select(Whitelist).where(Whitelist.mac_address == mac_record.mac_address)
+    # 10 entries with single IP + MAC (from mac_records)
+    selected_macs = random.sample(mac_records, min(10, len(mac_records)))
+    for idx, mac_record in enumerate(selected_macs):
+        stmt = select(Whitelist).where(
+            Whitelist.mac_address == mac_record.mac_address,
+            Whitelist.ip_pattern == mac_record.ip_address,
+        )
         result = await db.execute(stmt)
         existing = result.scalar_one_or_none()
 
@@ -232,14 +441,109 @@ async def _create_mock_whitelist(db, mac_records, users):
             days_ago = random.randint(0, 60)
             created_at = datetime.now(timezone.utc) - timedelta(days=days_ago)
 
-            whitelist_entry = Whitelist(
+            entry = Whitelist(
                 mac_address=mac_record.mac_address,
-                comments=f"Auto-generated whitelist entry #{len(selected_macs)}",
+                ip_pattern=mac_record.ip_address,
+                pattern_type="single_ip",
+                comments=f"Authorized device - {mac_record.ip_address}",
                 added_by=random.choice(users).username,
                 created_at=created_at,
             )
-            db.add(whitelist_entry)
-            print(f"  ✓ Whitelisted: {mac_record.mac_address}")
+            db.add(entry)
+            whitelist_entries.append(entry)
+            print(f"  ✓ Whitelisted (single_ip): {mac_record.mac_address} → {mac_record.ip_address}")
+
+            # Update corresponding terminal to bypass + both match type
+            mac_record.compliance_status = "bypass"
+            mac_record.wl_match_type = "both"
+
+    # 3 CIDR entries (subnets)
+    cidr_patterns = [
+        ("192.168.1.0/24", "Office LAN - Building A"),
+        ("10.0.1.0/24", "Server Room Network"),
+        ("172.16.0.0/16", "VPN Client Pool"),
+    ]
+    for pattern, desc in cidr_patterns:
+        stmt = select(Whitelist).where(
+            Whitelist.ip_pattern == pattern,
+            Whitelist.pattern_type == "cidr",
+        )
+        result = await db.execute(stmt)
+        existing = result.scalar_one_or_none()
+
+        if not existing:
+            days_ago = random.randint(0, 60)
+            created_at = datetime.now(timezone.utc) - timedelta(days=days_ago)
+
+            entry = Whitelist(
+                mac_address=None,
+                ip_pattern=pattern,
+                pattern_type="cidr",
+                comments=desc,
+                added_by=random.choice(users).username,
+                created_at=created_at,
+            )
+            db.add(entry)
+            whitelist_entries.append(entry)
+            print(f"  ✓ Whitelisted (cidr): {pattern}")
+
+    # 2 IP range entries
+    ip_ranges = [
+        ("10.0.10.1-100", "DHCP Range - Floor 1"),
+        ("10.0.20.1-50", "DHCP Range - Floor 2"),
+    ]
+    for pattern, desc in ip_ranges:
+        stmt = select(Whitelist).where(
+            Whitelist.ip_pattern == pattern,
+            Whitelist.pattern_type == "ip_range",
+        )
+        result = await db.execute(stmt)
+        existing = result.scalar_one_or_none()
+
+        if not existing:
+            days_ago = random.randint(0, 60)
+            created_at = datetime.now(timezone.utc) - timedelta(days=days_ago)
+
+            entry = Whitelist(
+                mac_address=None,
+                ip_pattern=pattern,
+                pattern_type="ip_range",
+                comments=desc,
+                added_by=random.choice(users).username,
+                created_at=created_at,
+            )
+            db.add(entry)
+            whitelist_entries.append(entry)
+            print(f"  ✓ Whitelisted (ip_range): {pattern}")
+
+    # 2 MAC-only entries
+    mac_only_entries = [
+        ("AA-BB-CC-DD-EE-FF", "Company printer - 3rd floor"),
+        ("11-22-33-44-55-66", "Conference room display"),
+    ]
+    for mac_val, desc in mac_only_entries:
+        stmt = select(Whitelist).where(
+            Whitelist.mac_address == mac_val,
+            Whitelist.pattern_type == "mac_only",
+        )
+        result = await db.execute(stmt)
+        existing = result.scalar_one_or_none()
+
+        if not existing:
+            days_ago = random.randint(0, 60)
+            created_at = datetime.now(timezone.utc) - timedelta(days=days_ago)
+
+            entry = Whitelist(
+                mac_address=mac_val,
+                ip_pattern=None,
+                pattern_type="mac_only",
+                comments=desc,
+                added_by=random.choice(users).username,
+                created_at=created_at,
+            )
+            db.add(entry)
+            whitelist_entries.append(entry)
+            print(f"  ✓ Whitelisted (mac_only): {mac_val}")
 
     await db.commit()
 
@@ -257,12 +561,15 @@ async def _create_mock_blacklist(db, mac_records, users):
         'Repeated failed authentication',
     ]
 
+    # Get whitelisted MACs to avoid conflicts
     stmt = select(Whitelist.mac_address)
     result = await db.execute(stmt)
-    whitelisted_macs = {row[0] for row in result.fetchall()}
+    whitelisted_macs = {row[0] for row in result.fetchall() if row[0]}
 
     available_macs = [m for m in mac_records if m.mac_address not in whitelisted_macs]
     selected_macs = random.sample(available_macs, min(10, len(available_macs)))
+
+    firewall_tags = ['sangfor-primary', 'sangfor-dr']
 
     for mac_record in selected_macs:
         stmt = select(Blacklist).where(Blacklist.mac_address == mac_record.mac_address)
@@ -272,6 +579,8 @@ async def _create_mock_blacklist(db, mac_records, users):
         if not existing:
             days_ago = random.randint(0, 30)
             created_at = datetime.now(timezone.utc) - timedelta(days=days_ago)
+            is_auto = random.choice([True, False, False])  # ~33% auto-blocked
+            firewall_tag = random.choice(firewall_tags)
 
             blacklist_entry = Blacklist(
                 mac_address=mac_record.mac_address,
@@ -280,9 +589,19 @@ async def _create_mock_blacklist(db, mac_records, users):
                 blocked_at=created_at,
                 expires_at=datetime.now(timezone.utc) + timedelta(days=random.randint(7, 30)),
                 blocked_by=random.choice(users).username,
+                source_tag="manual" if not is_auto else mac_record.source_tag,
+                firewall_tag=firewall_tag,
+                is_auto_blocked=is_auto,
+                auto_unblocked=False,
             )
             db.add(blacklist_entry)
-            print(f"  ✓ Blacklisted: {mac_record.mac_address}")
+
+            # Update corresponding terminal to non_compliant + frozen
+            mac_record.compliance_status = "non_compliant"
+            mac_record.status = "frozen"
+
+            label = "auto" if is_auto else "manual"
+            print(f"  ✓ Blacklisted ({label}): {mac_record.mac_address} → fw:{firewall_tag}")
 
     await db.commit()
 
@@ -299,13 +618,13 @@ async def _create_mock_audit_logs(db, users, mac_records):
         ('unblock_ip', f'Unblocked IP {_generate_random_ip()}'),
         ('add_whitelist', 'Added device to whitelist'),
         ('remove_whitelist', 'Removed device from whitelist'),
-        ('search_mac', 'Searched for MAC address'),
-        ('update_mac', 'Updated MAC address information'),
+        ('search_terminal', 'Searched for terminal'),
+        ('update_terminal', 'Updated terminal information'),
         ('view_logs', 'Viewed audit logs'),
-        ('export_data', 'Exported MAC address data'),
+        ('export_data', 'Exported terminal data'),
     ]
 
-    resource_types = ['user', 'mac', 'whitelist', 'blacklist', 'system']
+    resource_types = ['user', 'terminal', 'whitelist', 'blacklist', 'system']
 
     for i in range(100):
         days_ago = random.randint(0, 30)
@@ -319,7 +638,7 @@ async def _create_mock_audit_logs(db, users, mac_records):
         action, description = random.choice(actions)
 
         mac_for_action = None
-        if action in ['block_ip', 'unblock_ip', 'search_mac', 'update_mac']:
+        if action in ['block_ip', 'unblock_ip', 'search_terminal', 'update_terminal']:
             mac_for_action = random.choice(mac_records)
             if mac_for_action:
                 description = description.replace('IP', f"{mac_for_action.ip_address}")
@@ -346,9 +665,10 @@ async def _run_mock_generate():
     from app.models.whitelist import Whitelist
     from app.models.blacklist import Blacklist
     from app.models.log import AuditLog
+    from app.models.data_source import DataSource, DataSourceBinding
 
     print("=" * 70)
-    print("MAC Security Platform - Mock Data Generator")
+    print("TerminalAccessManager - Mock Data Generator")
     print("=" * 70)
     print()
     print("This will create sample data for demonstration purposes.")
@@ -362,8 +682,10 @@ async def _run_mock_generate():
 
     async with async_session_maker() as db:
         try:
+            data_sources = await _create_mock_data_sources(db)
+            await _create_mock_data_source_bindings(db)
             users = await _create_mock_users(db)
-            mac_records = await _create_mock_mac_addresses(db, users)
+            mac_records = await _create_mock_terminals(db, users)
             await _create_mock_whitelist(db, mac_records, users)
             await _create_mock_blacklist(db, mac_records, users)
             await _create_mock_audit_logs(db, users, mac_records)
@@ -373,8 +695,19 @@ async def _run_mock_generate():
             print("=" * 70)
             print()
             print("Summary:")
+            print(f"  • Data Sources: {len(data_sources)}")
+
+            stmt = select(func.count()).select_from(DataSourceBinding)
+            result = await db.execute(stmt)
+            print(f"  • Data Source Bindings: {result.scalar()}")
+
+            from app.models.compliance_baseline import ComplianceBaseline
+            stmt = select(func.count()).select_from(ComplianceBaseline)
+            result = await db.execute(stmt)
+            print(f"  • Compliance Baselines: {result.scalar()}")
+
             print(f"  • Users: {len(users)}")
-            print(f"  • MAC Addresses: {len(mac_records)}")
+            print(f"  • Terminals: {len(mac_records)}")
 
             stmt = select(func.count()).select_from(Whitelist)
             result = await db.execute(stmt)
@@ -389,11 +722,11 @@ async def _run_mock_generate():
             print(f"  • Audit Logs: {result.scalar()}")
             print()
             print("Demo accounts:")
-            print("  • admin / admin123 (superuser)")
-            print("  • john.doe / password123")
-            print("  • jane.smith / password123")
-            print("  • network.admin / netpass456 (superuser)")
-            print("  • security.officer / securepass789")
+            print("  • admin / Admin123 (superuser)")
+            print("  • john.doe / Password123")
+            print("  • jane.smith / Password456")
+            print("  • network.admin / Netpass456 (superuser)")
+            print("  • security.officer / Securepass789")
             print()
             print("To clear mock data:")
             print("  python cli.py mock clear")
@@ -417,13 +750,15 @@ async def _run_mock_clear():
     from sqlalchemy import delete, func, select
     from app.core.database import async_session_maker
     from app.models.user import User
-    from app.models.mac_address import MacAddress
+    from app.models.terminal import Terminal
     from app.models.whitelist import Whitelist
     from app.models.blacklist import Blacklist
     from app.models.log import AuditLog
+    from app.models.data_source import DataSource, DataSourceBinding
+    from app.models.compliance_baseline import ComplianceBaseline
 
     print("=" * 70)
-    print("MAC Security Platform - Clear Mock Data")
+    print("TerminalAccessManager - Clear Mock Data")
     print("=" * 70)
     print()
     print("WARNING: This will delete ALL data from the database!")
@@ -434,7 +769,10 @@ async def _run_mock_clear():
         counts = {}
 
         for label, model in [
-            ('MAC Addresses', MacAddress),
+            ('Data Source Bindings', DataSourceBinding),
+            ('Data Sources', DataSource),
+            ('Compliance Baselines', ComplianceBaseline),
+            ('Terminals', Terminal),
             ('Whitelist Entries', Whitelist),
             ('Blacklist Entries', Blacklist),
             ('Audit Logs', AuditLog),
@@ -478,8 +816,17 @@ async def _run_mock_clear():
             await db.execute(Whitelist.__table__.delete())
             print(_green("  ✓ Deleted whitelist entries"))
 
-            await db.execute(MacAddress.__table__.delete())
-            print(_green("  ✓ Deleted MAC addresses"))
+            await db.execute(Terminal.__table__.delete())
+            print(_green("  ✓ Deleted terminals"))
+
+            await db.execute(ComplianceBaseline.__table__.delete())
+            print(_green("  ✓ Deleted compliance baselines"))
+
+            await db.execute(DataSourceBinding.__table__.delete())
+            print(_green("  ✓ Deleted data source bindings"))
+
+            await db.execute(DataSource.__table__.delete())
+            print(_green("  ✓ Deleted data sources"))
 
             stmt = delete(User).where(User.username != 'admin')
             await db.execute(stmt)
@@ -497,6 +844,7 @@ async def _run_mock_clear():
             print("Remaining:")
             print("  • Admin user account (username: admin)")
             print("  • Database schema and tables")
+            print("  • System configuration (system_config table)")
             print()
 
         except Exception as e:
@@ -531,12 +879,14 @@ def _run_validate():
     required_files = [
         'app/main.py', 'app/core/config.py', 'app/core/security.py',
         'app/core/database.py', 'app/models/__init__.py', 'app/models/user.py',
-        'app/models/mac_address.py', 'app/models/whitelist.py',
-        'app/models/blacklist.py', 'app/models/log.py', 'app/schemas/auth.py',
-        'app/schemas/mac_address.py', 'app/api/v1/api.py',
-        'app/api/v1/endpoints/auth.py', 'app/api/v1/endpoints/mac_addresses.py',
+        'app/models/terminal.py', 'app/models/whitelist.py',
+        'app/models/blacklist.py', 'app/models/log.py', 'app/models/compliance_baseline.py',
+        'app/schemas/auth.py', 'app/schemas/terminal.py', 'app/schemas/compliance_baseline.py',
+        'app/api/v1/api.py',
+        'app/api/v1/endpoints/auth.py', 'app/api/v1/endpoints/terminals.py',
         'app/api/v1/endpoints/whitelist.py', 'app/api/v1/endpoints/logs.py',
-        'app/services/sangfor_service.py', 'app/services/mac_service.py',
+        'app/api/v1/endpoints/compliance_baselines.py',
+        'app/services/sangfor_service.py', 'app/services/terminal_service.py',
         'requirements.txt', 'Dockerfile', '.env.example',
     ]
 
@@ -553,12 +903,12 @@ def _run_validate():
 
     python_files = [
         'app/main.py', 'app/core/config.py', 'app/core/security.py',
-        'app/core/database.py', 'app/models/user.py', 'app/models/mac_address.py',
+        'app/core/database.py', 'app/models/user.py', 'app/models/terminal.py',
         'app/models/whitelist.py', 'app/models/blacklist.py', 'app/models/log.py',
-        'app/schemas/auth.py', 'app/schemas/mac_address.py',
-        'app/api/v1/endpoints/auth.py', 'app/api/v1/endpoints/mac_addresses.py',
+        'app/schemas/auth.py', 'app/schemas/terminal.py',
+        'app/api/v1/endpoints/auth.py', 'app/api/v1/endpoints/terminals.py',
         'app/api/v1/endpoints/whitelist.py', 'app/api/v1/endpoints/logs.py',
-        'app/services/sangfor_service.py', 'app/services/mac_service.py',
+        'app/services/sangfor_service.py', 'app/services/terminal_service.py',
     ]
 
     for py_file in python_files:
@@ -674,7 +1024,7 @@ def _run_validate():
 
     endpoint_files = {
         'app/api/v1/endpoints/auth.py': ['login', 'register', 'logout'],
-        'app/api/v1/endpoints/mac_addresses.py': ['block', 'unblock', 'search'],
+        'app/api/v1/endpoints/terminals.py': ['block', 'unblock', 'search'],
         'app/api/v1/endpoints/whitelist.py': ['whitelist'],
         'app/api/v1/endpoints/logs.py': ['logs'],
     }
@@ -764,6 +1114,101 @@ def cmd_validate(_args):
 
 
 # ---------------------------------------------------------------------------
+# Command: scheduler trigger
+# ---------------------------------------------------------------------------
+async def _scheduler_trigger(args):
+    from app.core.database import async_session_maker
+    from app.services.arp_collector_service import ArpCollectorService
+    from app.services.compliance_service import ComplianceService
+    from app.services.terminal_service import TerminalService
+    from app.models.compliance_baseline import ComplianceBaseline
+    from app.models.data_source import DataSource
+    from sqlalchemy import select
+
+    task = args.task_name
+    async with async_session_maker() as db:
+        if task == "arp_collection":
+            service = ArpCollectorService(db)
+            sources = (await db.execute(
+                select(DataSource).where(DataSource.type.in_(["arp_ssh", "arp_api"]), DataSource.enabled == True)
+            )).scalars().all()
+            if not sources:
+                print(_yellow("No enabled ARP data sources found"))
+                return
+            for source in sources:
+                print(f"  Collecting from {source.tag}...")
+                result = await service.collect_arp_data(source.tag)
+                print(f"  {source.tag}: {result.get('message', 'done')}")
+            print(_green(f"ARP collection completed for {len(sources)} source(s)"))
+
+        elif task == "ipguard_sync":
+            service = ComplianceService(db)
+            baselines = (await db.execute(
+                select(ComplianceBaseline).where(ComplianceBaseline.enabled == True)
+            )).scalars().all()
+            if not baselines:
+                print(_yellow("No enabled compliance baselines found"))
+                return
+            for baseline in baselines:
+                print(f"  Syncing baseline {baseline.tag}...")
+                result = await service.sync_ipguard_data(baseline.tag)
+                print(f"  {baseline.tag}: {result.get('message', 'done')}")
+            print(_green(f"Compliance baseline sync completed for {len(baselines)} baseline(s)"))
+
+        elif task == "firewall_query":
+            service = TerminalService(db)
+            sources = (await db.execute(
+                select(DataSource).where(DataSource.type == "sangfor", DataSource.enabled == True)
+            )).scalars().all()
+            if not sources:
+                print(_yellow("No enabled firewall data sources found"))
+                return
+            for source in sources:
+                print(f"  Querying firewall {source.tag}...")
+                sangfor = await service._get_sangfor_service_by_tag(source.tag)
+                if sangfor:
+                    try:
+                        result = await sangfor.get_blocked_ips()
+                        blocked_count = len(result.get("data", [])) if isinstance(result, dict) else 0
+                        print(f"  {source.tag}: found {blocked_count} blocked IPs")
+                        await sangfor.close()
+                    except Exception as e:
+                        print(f"  {source.tag}: error - {str(e)}")
+                else:
+                    print(f"  {source.tag}: not configured or disabled")
+            print(_green(f"Firewall query completed for {len(sources)} firewall(s)"))
+
+        elif task == "compliance_check":
+            service = ComplianceService(db)
+            print("  Running compliance check...")
+            result = await service.batch_check_compliance()
+            print(f"  Total: {result.total_checked}, Compliant: {result.compliant}, "
+                  f"Bypass: {result.bypass}, Non-compliant: {result.non_compliant}, Unknown: {result.unknown}")
+            if result.message:
+                print(f"  {result.message}")
+            print(_green("Compliance check completed"))
+
+        elif task == "auto_unblock":
+            service = ComplianceService(db)
+            print("  Running auto-unblock...")
+            result = await service.auto_unblock_compliant()
+            print(f"  Total auto-blocked: {result.total_auto_blocked}, "
+                  f"Unblocked: {result.unblocked}, Skipped: {result.skipped}")
+            if result.errors:
+                for err in result.errors[:5]:
+                    print(f"  Error: {err}")
+            print(_green("Auto-unblock completed"))
+
+        else:
+            print(_red(f"Unknown task: {task}"))
+            print("Valid tasks: arp_collection, ipguard_sync, firewall_query, compliance_check, auto_unblock")
+
+
+def cmd_scheduler_trigger(args):
+    asyncio.run(_scheduler_trigger(args))
+
+
+# ---------------------------------------------------------------------------
 # test command
 # ---------------------------------------------------------------------------
 def cmd_test(args):
@@ -781,7 +1226,7 @@ def cmd_test(args):
 def build_parser():
     parser = argparse.ArgumentParser(
         prog="cli.py",
-        description="MAC Security Platform - Unified Backend CLI",
+        description="TerminalAccessManager - Unified Backend CLI",
     )
 
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
@@ -808,6 +1253,14 @@ def build_parser():
     sp_test = subparsers.add_parser("test", help="Run pytest test suite")
     sp_test.add_argument("args", nargs="*", help="Additional arguments passed to pytest")
     sp_test.set_defaults(func=cmd_test)
+
+    # scheduler (with sub-subcommands)
+    sp_sched = subparsers.add_parser("scheduler", help="Manage scheduler tasks")
+    sched_sub = sp_sched.add_subparsers(dest="sched_command", help="Scheduler operations")
+
+    sp_sched_trigger = sched_sub.add_parser("trigger", help="Manually trigger a scheduler task")
+    sp_sched_trigger.add_argument("task_name", help="Task to trigger (arp_collection|ipguard_sync|firewall_query|compliance_check|auto_unblock)")
+    sp_sched_trigger.set_defaults(func=cmd_scheduler_trigger)
 
     return parser
 

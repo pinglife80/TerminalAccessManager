@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { Search, Trash2, AlertTriangle, Clock, Server, X, Download, Eye, Shield, RefreshCw, ChevronDown } from 'lucide-react';
-import { useQuery } from '@tanstack/react-query';
+import { useBlacklist, BlacklistEntry, useDataSources } from '@/hooks/useTerminalData';
 import { apiClient } from '@/lib/api';
 import { toast } from 'sonner';
 import { PrimaryButton, IconButton, ButtonGroup } from '@/components/Button';
@@ -9,15 +9,13 @@ import { EmptyState, LoadingState } from '@/components/StateDisplay';
 import { DateRangeFilter } from '@/components/DateRangeFilter';
 import { downloadCSV, formatDate, normalizeMacAddress, isValidMacAddress, isValidCidrOrRange } from '@/lib/utils';
 
-interface BlacklistEntry {
-  id: number;
-  mac_address: string;
-  ip_address: string;
-  reason: string;
-  blocked_at: string;
-  expires_at: string;
-  blocked_by: string;
-}
+const REFRESH_OPTIONS = [
+  { label: 'Off', value: 0 },
+  { label: '30s', value: 30000 },
+  { label: '1m', value: 60000 },
+  { label: '5m', value: 300000 },
+  { label: '10m', value: 600000 },
+];
 
 const Blacklist: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
@@ -30,6 +28,8 @@ const Blacklist: React.FC = () => {
     mac_address: '',
     ip_address: '',
     reason: '',
+    block_time: '30d',
+    firewall_tag: '',
   });
   const [macError, setMacError] = useState('');
   const [ipError, setIpError] = useState('');
@@ -40,33 +40,23 @@ const Blacklist: React.FC = () => {
   const [filterCollapsed, setFilterCollapsed] = useState(false);
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
+  const [autoRefresh, setAutoRefresh] = useState<number>(0);
 
-  const { data: blacklist, isLoading, refetch } = useQuery({
-    queryKey: ['blacklist'],
-    queryFn: async () => {
-      const response = await apiClient.get('/blacklist/');
-      return response.data as BlacklistEntry[];
-    },
+  const { data: blacklist, isLoading, refetch } = useBlacklist({
+    search: searchTerm || undefined,
+    start_date: startDate || undefined,
+    end_date: endDate || undefined,
+    refetchInterval: autoRefresh || undefined,
   });
 
-  const filteredBlacklist = useMemo(() => {
-    return blacklist?.filter((item) => {
-      const matchesSearch =
-        (item.mac_address || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-        (item.ip_address || '').toLowerCase().includes(searchTerm.toLowerCase());
+  const { data: dataSources } = useDataSources();
 
-      const matchesDateRange = (() => {
-        if (!startDate && !endDate) return true;
-        if (startDate && endDate && new Date(endDate) < new Date(startDate)) return true;
-        const itemDate = new Date(item.blocked_at).getTime();
-        const start = startDate ? new Date(startDate).getTime() : 0;
-        const end = endDate ? new Date(endDate).getTime() + 24 * 60 * 60 * 1000 : Date.now();
-        return itemDate >= start && itemDate <= end;
-      })();
+  const firewallOptions = useMemo(
+    () => (dataSources || []).filter((ds) => ds.type === 'sangfor' && ds.enabled),
+    [dataSources],
+  );
 
-      return matchesSearch && matchesDateRange;
-    }) || [];
-  }, [blacklist, searchTerm, startDate, endDate]);
+  const filteredBlacklist = blacklist || [];
 
   const totalPages = Math.ceil(filteredBlacklist.length / pageSize);
   const paginatedBlacklist = useMemo(() => {
@@ -110,13 +100,17 @@ const Blacklist: React.FC = () => {
 
     setIsAdding(true);
     try {
-      const payload: Record<string, string> = { reason: newEntry.reason };
+      const payload: Record<string, string> = {
+        reason: newEntry.reason,
+        block_time: newEntry.block_time,
+      };
       if (newEntry.mac_address) payload['mac_address'] = normalizeMacAddress(newEntry.mac_address);
       if (newEntry.ip_address) payload['ip_address'] = newEntry.ip_address;
+      if (newEntry.firewall_tag) payload['firewall_tag'] = newEntry.firewall_tag;
 
       await apiClient.post('/blacklist/', payload);
       toast.success('Terminal blocked successfully');
-      setNewEntry({ mac_address: '', ip_address: '', reason: '' });
+      setNewEntry({ mac_address: '', ip_address: '', reason: '', block_time: '30d', firewall_tag: '' });
       setShowAddModal(false);
       refetch();
     } catch (error: any) {
@@ -163,12 +157,15 @@ const Blacklist: React.FC = () => {
   };
 
   const handleExport = () => {
-    const headers = ['MAC Address', 'IP Address', 'Reason', 'Blocked By', 'Blocked At', 'Expires At'];
+    const headers = ['MAC Address', 'IP Address', 'Reason', 'Blocked By', 'Firewall Tag', 'Block Type', 'Auto Unblocked', 'Blocked At', 'Expires At'];
     const rows = filteredBlacklist?.map((item) => [
       item.mac_address || '',
       item.ip_address || '',
       item.reason,
       item.blocked_by,
+      item.firewall_tag || '',
+      item.is_auto_blocked ? 'Auto' : 'Manual',
+      item.auto_unblocked ? 'Yes' : 'No',
       formatDate(item.blocked_at),
       formatDate(item.expires_at)
     ]) || [];
@@ -176,7 +173,7 @@ const Blacklist: React.FC = () => {
     downloadCSV(headers, rows, 'blocked-terminals');
   };
 
-  const isExpired = (expiresAt: string) => new Date(expiresAt) < new Date();
+  const isExpired = (expiresAt: string | null) => expiresAt ? new Date(expiresAt) < new Date() : false;
 
   return (
     <div className="min-h-full bg-gray-50 p-4 sm:p-6 lg:p-8">
@@ -191,7 +188,6 @@ const Blacklist: React.FC = () => {
             icon={Download}
             label="Export"
             variant="success"
-            size="sm"
             onClick={handleExport}
           />
           <PrimaryButton
@@ -248,6 +244,29 @@ const Blacklist: React.FC = () => {
                 }}
               />
 
+              {/* Manual Refresh Button */}
+              <IconButton
+                icon={RefreshCw}
+                variant="secondary"
+                size="sm"
+                title="Refresh"
+                onClick={() => refetch()}
+              />
+
+              {/* Auto Refresh Selector */}
+              <div className="flex items-center gap-2 bg-gray-50 rounded-xl px-3 py-1.5">
+                <Clock className="h-4 w-4 text-gray-500 flex-shrink-0" />
+                <select
+                  value={autoRefresh}
+                  onChange={(e) => setAutoRefresh(Number(e.target.value))}
+                  className="bg-transparent py-1.5 text-sm text-gray-700 focus:outline-none focus:ring-0 cursor-pointer font-medium min-w-[4rem]"
+                >
+                  {REFRESH_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                  ))}
+                </select>
+              </div>
+
               {/* Reset Button */}
               <PrimaryButton
                 icon={RefreshCw}
@@ -280,7 +299,7 @@ const Blacklist: React.FC = () => {
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-6">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 mb-6">
         <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
           <div className="p-4 text-center">
             <div className="text-xl sm:text-2xl font-bold text-red-600">{filteredBlacklist.length}</div>
@@ -291,11 +310,29 @@ const Blacklist: React.FC = () => {
         <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
           <div className="p-4 text-center">
             <div className="text-xl sm:text-2xl font-bold text-orange-600">
+              {filteredBlacklist?.filter((b) => b.is_auto_blocked).length || 0}
+            </div>
+            <div className="text-xs sm:text-sm text-gray-600 mt-1">Auto Blocked</div>
+          </div>
+          <div className="h-1 bg-gradient-to-r from-orange-400 to-orange-600" />
+        </div>
+        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+          <div className="p-4 text-center">
+            <div className="text-xl sm:text-2xl font-bold text-blue-600">
+              {filteredBlacklist?.filter((b) => !b.is_auto_blocked).length || 0}
+            </div>
+            <div className="text-xs sm:text-sm text-gray-600 mt-1">Manual Blocked</div>
+          </div>
+          <div className="h-1 bg-gradient-to-r from-blue-400 to-blue-600" />
+        </div>
+        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+          <div className="p-4 text-center">
+            <div className="text-xl sm:text-2xl font-bold text-amber-600">
               {filteredBlacklist?.filter((b) => isExpired(b.expires_at)).length || 0}
             </div>
             <div className="text-xs sm:text-sm text-gray-600 mt-1">Expired Blocks</div>
           </div>
-          <div className="h-1 bg-gradient-to-r from-orange-400 to-orange-600" />
+          <div className="h-1 bg-gradient-to-r from-amber-400 to-amber-600" />
         </div>
         <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
           <div className="p-4 text-center">
@@ -324,7 +361,13 @@ const Blacklist: React.FC = () => {
                   Reason
                 </th>
                 <th className="px-4 sm:px-6 py-3.5 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                  Type
+                </th>
+                <th className="px-4 sm:px-6 py-3.5 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
                   Blocked By
+                </th>
+                <th className="px-4 sm:px-6 py-3.5 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                  Firewall
                 </th>
                 <th className="px-4 sm:px-6 py-3.5 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
                   Blocked At
@@ -340,13 +383,13 @@ const Blacklist: React.FC = () => {
             <tbody className="bg-white divide-y divide-gray-200">
               {isLoading ? (
                 <tr>
-                  <td colSpan={7}>
+                  <td colSpan={9}>
                     <LoadingState message="Loading blocked terminals..." />
                   </td>
                 </tr>
               ) : filteredBlacklist?.length === 0 ? (
                 <tr>
-                  <td colSpan={7}>
+                  <td colSpan={9}>
                     <EmptyState
                       icon={Shield}
                       title="No Blocked Terminals"
@@ -360,7 +403,7 @@ const Blacklist: React.FC = () => {
                     key={item.id}
                     className={`hover:bg-blue-50/30 transition-colors ${
                       isExpired(item.expires_at) ? 'opacity-50' : ''
-                    }`}
+                    } ${item.is_auto_blocked ? 'bg-orange-50/30' : ''}`}
                   >
                     <td className="px-4 sm:px-6 py-4 whitespace-nowrap">
                       <div className="flex items-center">
@@ -379,8 +422,22 @@ const Blacklist: React.FC = () => {
                         <span className="text-sm text-gray-600">{item.reason}</span>
                       </div>
                     </td>
+                    <td className="px-4 sm:px-6 py-4 whitespace-nowrap">
+                      {item.is_auto_blocked ? (
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-orange-100 text-orange-800">
+                          Auto
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                          Manual
+                        </span>
+                      )}
+                    </td>
                     <td className="px-4 sm:px-6 py-4 whitespace-nowrap text-sm text-gray-600">
                       {item.blocked_by}
+                    </td>
+                    <td className="px-4 sm:px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+                      {item.firewall_tag || '-'}
                     </td>
                     <td className="px-4 sm:px-6 py-4 whitespace-nowrap">
                       <div className="flex items-center text-sm text-gray-600">
@@ -494,13 +551,46 @@ const Blacklist: React.FC = () => {
                   <option value="Suspicious activity">Suspicious activity</option>
                 </select>
               </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Block Duration
+                </label>
+                <select
+                  value={newEntry.block_time}
+                  onChange={(e) => setNewEntry({ ...newEntry, block_time: e.target.value })}
+                  className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                >
+                  <option value="30m">30 minutes</option>
+                  <option value="1h">1 hour</option>
+                  <option value="7d">7 days</option>
+                  <option value="15d">15 days</option>
+                  <option value="30d">30 days</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Firewall <span className="text-gray-400 font-normal">(Optional)</span>
+                </label>
+                <select
+                  value={newEntry.firewall_tag}
+                  onChange={(e) => setNewEntry({ ...newEntry, firewall_tag: e.target.value })}
+                  className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                >
+                  <option value="">Default Firewall</option>
+                  {firewallOptions.map((ds) => (
+                    <option key={ds.id} value={ds.tag}>
+                      {ds.tag} ({ds.name})
+                    </option>
+                  ))}
+                </select>
+              </div>
               <div className="flex gap-3 pt-2">
                 <PrimaryButton
                   label="Cancel"
                   variant="secondary"
                   onClick={() => {
                     setShowAddModal(false);
-                    setNewEntry({ mac_address: '', ip_address: '', reason: '' });
+                    setNewEntry({ mac_address: '', ip_address: '', reason: '', block_time: '30d', firewall_tag: '' });
                     setMacError('');
                     setIpError('');
                   }}
@@ -625,6 +715,30 @@ const Blacklist: React.FC = () => {
                   <div className="flex justify-between">
                     <span className="text-gray-500">Blocked By</span>
                     <span className="text-gray-900">{selectedEntry.blocked_by}</span>
+                  </div>
+                  {selectedEntry.source_tag && (
+                    <div className="flex justify-between">
+                      <span className="text-gray-500">Source Tag</span>
+                      <span className="text-gray-900">{selectedEntry.source_tag}</span>
+                    </div>
+                  )}
+                  {selectedEntry.firewall_tag && (
+                    <div className="flex justify-between">
+                      <span className="text-gray-500">Firewall Tag</span>
+                      <span className="text-gray-900">{selectedEntry.firewall_tag}</span>
+                    </div>
+                  )}
+                  <div className="flex justify-between">
+                    <span className="text-gray-500">Block Type</span>
+                    <span className={`px-2.5 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${selectedEntry.is_auto_blocked ? 'bg-orange-100 text-orange-800' : 'bg-blue-100 text-blue-800'}`}>
+                      {selectedEntry.is_auto_blocked ? 'Auto' : 'Manual'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-500">Auto Unblocked</span>
+                    <span className={`px-2.5 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${selectedEntry.auto_unblocked ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'}`}>
+                      {selectedEntry.auto_unblocked ? 'Yes' : 'No'}
+                    </span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-gray-500">Blocked At</span>

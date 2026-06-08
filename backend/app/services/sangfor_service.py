@@ -6,18 +6,38 @@ from app.core.config import settings
 
 
 class SangforService:
-    """Service for interacting with Sangfor AF API"""
+    """Service for interacting with Sangfor AF API.
 
-    def __init__(self):
-        self.base_url = settings.SANGFOR_BASE_URL.rstrip('/') if settings.SANGFOR_BASE_URL else ""
-        self.username = settings.SANGFOR_USERNAME
-        self.password = settings.SANGFOR_PASSWORD
+    Supports both:
+    - Legacy global config mode (no args, reads from settings)
+    - Instance mode (pass base_url, username, password from DataSource config)
+    """
+
+    def __init__(
+        self,
+        base_url: Optional[str] = None,
+        username: Optional[str] = None,
+        password: Optional[str] = None,
+        verify_ssl: bool = True,
+        ca_bundle: str = "",
+    ):
+        # If no explicit config provided, fall back to global settings
+        self.base_url = (base_url or settings.SANGFOR_BASE_URL or "").rstrip("/")
+        self.username = username or settings.SANGFOR_USERNAME or ""
+        self.password = password or settings.SANGFOR_PASSWORD or ""
         self.token = None
         self.session = None
+        self._verify_ssl = verify_ssl
+        self._ca_bundle = ca_bundle
 
     def _get_verify_setting(self) -> bool | str:
         """Get SSL verification setting.
         Returns True for default, or path to CA bundle if configured."""
+        if self._ca_bundle:
+            return self._ca_bundle
+        if not self._verify_ssl:
+            return False
+        # Fall back to global setting
         if settings.SANGFOR_CA_BUNDLE:
             return settings.SANGFOR_CA_BUNDLE
         return True

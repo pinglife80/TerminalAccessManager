@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { Search, Filter, Download, Clock, User, AlertCircle, X, FileText, RefreshCw, ChevronDown } from 'lucide-react';
-import { useQuery } from '@tanstack/react-query';
+import { useAuditLogs, AuditLog as AuditLogType } from '@/hooks/useTerminalData';
 import { apiClient } from '@/lib/api';
 import { toast } from 'sonner';
 import { PrimaryButton, IconButton } from '@/components/Button';
@@ -9,21 +9,10 @@ import { EmptyState, LoadingState } from '@/components/StateDisplay';
 import { DateRangeFilter } from '@/components/DateRangeFilter';
 import { formatDate } from '@/lib/utils';
 
-interface AuditLog {
-  id: number;
-  action: string;
-  resource_type?: string;
-  resource_id?: string;
-  username: string;
-  ip_address?: string;
-  timestamp: string;
-  details?: string;
-}
-
 const AuditLogs: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterAction, setFilterAction] = useState<string>('all');
-  const [selectedLog, setSelectedLog] = useState<AuditLog | null>(null);
+  const [selectedLog, setSelectedLog] = useState<AuditLogType | null>(null);
   const [showModal, setShowModal] = useState(false);
   const [filterCollapsed, setFilterCollapsed] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
@@ -31,12 +20,11 @@ const AuditLogs: React.FC = () => {
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
 
-  const { data: logs, isLoading, refetch } = useQuery({
-    queryKey: ['audit-logs'],
-    queryFn: async () => {
-      const response = await apiClient.get('/logs/?limit=200');
-      return response.data as AuditLog[];
-    },
+  const { data: logs, isLoading, refetch } = useAuditLogs({
+    search: searchTerm || undefined,
+    action: filterAction !== 'all' ? filterAction : undefined,
+    start_date: startDate || undefined,
+    end_date: endDate || undefined,
   });
 
   const actions = [
@@ -66,26 +54,7 @@ const AuditLogs: React.FC = () => {
     update_mac: 'Updated MAC',
   };
 
-  const filteredLogs = useMemo(() => {
-    return logs?.filter((log) => {
-      const matchesSearch =
-        log.username.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        log.action.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        (log.ip_address && log.ip_address.toLowerCase().includes(searchTerm.toLowerCase()));
-      const matchesAction = filterAction === 'all' || log.action === filterAction;
-
-      const matchesDateRange = (() => {
-        if (!startDate && !endDate) return true;
-        if (startDate && endDate && new Date(endDate) < new Date(startDate)) return true;
-        const itemDate = new Date(log.timestamp).getTime();
-        const start = startDate ? new Date(startDate).getTime() : 0;
-        const end = endDate ? new Date(endDate).getTime() + 24 * 60 * 60 * 1000 : Date.now();
-        return itemDate >= start && itemDate <= end;
-      })();
-
-      return matchesSearch && matchesAction && matchesDateRange;
-    }) || [];
-  }, [logs, searchTerm, filterAction, startDate, endDate]);
+  const filteredLogs = logs || [];
 
   const totalPages = Math.ceil(filteredLogs.length / pageSize);
   const paginatedLogs = useMemo(() => {
@@ -105,7 +74,14 @@ const AuditLogs: React.FC = () => {
 
   const handleExport = async () => {
     try {
+      const params: Record<string, string> = {};
+      if (searchTerm) params.search = searchTerm;
+      if (filterAction !== 'all') params.action = filterAction;
+      if (startDate) params.start_date = startDate;
+      if (endDate) params.end_date = endDate;
+
       const response = await apiClient.get('/logs/export', {
+        params,
         responseType: 'blob',
       });
 
@@ -144,7 +120,6 @@ const AuditLogs: React.FC = () => {
           icon={Download}
           label="Export Logs"
           variant="success"
-          size="sm"
           onClick={handleExport}
         />
       </div>

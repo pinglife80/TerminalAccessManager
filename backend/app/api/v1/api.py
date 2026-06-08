@@ -1,12 +1,16 @@
 from fastapi import APIRouter
 
-from app.api.v1.endpoints import auth, mac_addresses, whitelist, logs, blacklist
+from app.api.v1.endpoints import auth, terminals, whitelist, logs, blacklist, stats, settings, data_sources, compliance_baselines
 
 api_router = APIRouter()
 
 # Include all endpoint routers
 api_router.include_router(auth.router)
-api_router.include_router(mac_addresses.router)
+api_router.include_router(terminals.router)
 api_router.include_router(whitelist.router)
 api_router.include_router(blacklist.router)
 api_router.include_router(logs.router)
+api_router.include_router(stats.router)
+api_router.include_router(settings.router)
+api_router.include_router(data_sources.router)
+api_router.include_router(compliance_baselines.router)

@@ -1,0 +1,42 @@
+import enum
+from sqlalchemy import Column, Integer, String, DateTime, Text, Index, Enum
+from datetime import datetime, timezone
+
+from app.core.database import Base
+
+
+class TerminalStatus(str, enum.Enum):
+    """Terminal status enum - unified with frontend STATUS_CONFIG"""
+    ACTIVE = "active"        # Device is online and operating normally
+    INACTIVE = "inactive"    # Device is offline or disconnected
+    FROZEN = "frozen"        # Device has been blocked due to security concerns
+    PENDING = "pending"      # Device is awaiting review or verification
+    UNFROZEN = "unfrozen"    # Previously blocked, now restored
+
+
+class Terminal(Base):
+    """MAC Address model for tracking network devices"""
+
+    __tablename__ = "terminals"
+
+    id = Column(Integer, primary_key=True, index=True)
+    ip_address = Column(String(45), nullable=False, index=True)
+    mac_address = Column(String(17), nullable=False, index=True)
+    status = Column(
+        String(20), default=TerminalStatus.UNFROZEN.value, index=True
+    )  # active, inactive, frozen, pending, unfrozen
+    comments = Column(Text, nullable=True)
+    timestamp = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True)
+    source = Column(String(50), default="arp")  # arp, ipguard, whitelist, manual
+    source_tag = Column(String(50), nullable=True, index=True)  # Data source tag
+    compliance_status = Column(String(20), default="unknown", index=True)  # compliant / bypass / non_compliant / unknown
+    wl_match_type = Column(String(10), nullable=True)  # "mac" / "ip" / "both" / null (whitelist match type)
+
+    # Composite index for efficient queries
+    __table_args__ = (
+        Index('idx_mac_timestamp', 'mac_address', 'timestamp'),
+        Index('idx_ip_status', 'ip_address', 'status'),
+    )
+
+    def __repr__(self):
+        return f"<Terminal(ip='{self.ip_address}', mac='{self.mac_address}', status='{self.status}')>"

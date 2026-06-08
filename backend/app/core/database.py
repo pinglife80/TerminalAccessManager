@@ -23,6 +23,9 @@ async_session_maker = async_sessionmaker(
     autoflush=False
 )
 
+# Alias for use in background tasks (non-dependency injection)
+async_session_factory = async_session_maker
+
 # Base class for models
 class Base(DeclarativeBase):
     pass

@@ -2,9 +2,58 @@
 
 ## 概述
 
-MAC Security Platform 支持全面的品牌自定义，无需修改任何组件代码。所有品牌相关的配置（应用名称、Logo、Favicon、登录页样式、页脚信息等）均集中在单一配置文件中管理。
+TerminalAccessManager 支持全面的品牌自定义，无需修改任何组件代码。品牌配置支持两种方式：
 
-只需修改配置文件和替换静态资源，即可将平台适配为不同公司或部署场景的品牌形象。
+1. **后端动态配置（推荐）**：通过 `manage.sh config branding` 命令或后端 `/settings/` API 修改品牌配置，前端通过 useBrandingStore 动态加载，修改后刷新页面即可生效，无需重新构建
+2. **静态配置文件**：修改 `frontend/src/config/branding.ts` 中的默认值，需要重新构建前端
+
+运行时，前端会先使用 branding.ts 中的静态默认值，登录后从后端 `/settings/` API 加载动态配置并覆盖默认值。
+
+## 配置方式
+
+### 方式一：后端动态配置（推荐）
+
+通过 `manage.sh` 命令管理品牌配置，修改后刷新页面即可生效：
+
+```bash
+# 查看所有品牌配置
+./manage.sh config branding
+
+# 修改应用名称
+./manage.sh config branding app_name "我的安全平台"
+
+# 修改页脚内容
+./manage.sh config branding footer_copyright "© 2026 我的公司"
+
+# 上传自定义登录页背景
+./manage.sh config upload login_bg /path/to/background.jpg
+
+# 上传自定义 Favicon
+./manage.sh config upload favicon /path/to/favicon.ico
+```
+
+**优势**：
+- 无需重新构建前端
+- 修改后刷新页面即可生效
+- 支持上传资源文件（背景图、Favicon）
+- 配置存储在数据库中，Redis 缓存加速读取
+
+### 方式二：静态配置文件
+
+修改 `frontend/src/config/branding.ts` 中的默认值，适用于：
+- 初始默认值定制
+- 后端不可用时的回退值
+- 开发环境快速迭代
+
+修改后需重新构建前端：
+
+```bash
+# Docker 部署
+./manage.sh update
+
+# 开发环境
+cd frontend && npm run build
+```
 
 ## 配置文件位置
 
@@ -79,8 +128,8 @@ interface BrandingConfig {
 | 背景图片路径 | `login.background.imagePath` | string | `/login-bg.jpg` | 背景图片路径 |
 | 按钮渐变色 | `login.buttonGradient` | string | `from-blue-600 to-indigo-600` | 登录按钮渐变 |
 | 头部渐变色 | `login.headerGradient` | string | `from-blue-600 to-indigo-600` | 登录头部渐变 |
-| 版权信息 | `footer.copyright` | string | `© {year} MAC Security Manager` | `{year}` 自动替换 |
-| ICP 备案号 | `footer.icpNumber` | string | `京ICP备XXXXXXXX号` | 留空隐藏 |
+| 版权信息 | `footer.copyright` | string | `© {year} TerminalAccessManager (TAM)` | `{year}` 自动替换 |
+| ICP 备案号 | `footer.icpNumber` | string | `""` | 留空隐藏 |
 | ICP 链接 | `footer.icpUrl` | string | `https://beian.miit.gov.cn/` | 备案链接 |
 | 额外链接 | `footer.links` | array | `[]` | 页脚附加链接 |
 
@@ -472,7 +521,7 @@ npm run build
 使用 Docker 部署时，通过管理脚本重新构建：
 
 ```bash
-./manage.sh update --no-git
+./manage.sh update
 ```
 
 或仅重建前端并重启：
@@ -498,7 +547,7 @@ docker compose up -d --build frontend
 1. 确认修改的是 `frontend/src/config/branding.ts` 文件
 2. 开发环境下检查浏览器控制台是否有编译错误
 3. 生产环境下确认已重新构建（`npm run build`）
-4. Docker 环境下确认已重新构建容器（`./manage.sh update --no-git`）
+4. Docker 环境下确认已重新构建容器（`./manage.sh update`）
 5. 清除浏览器缓存后重试
 
 ### Q: 使用自定义图片 Logo 但不显示？

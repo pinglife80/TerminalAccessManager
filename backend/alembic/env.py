@@ -18,10 +18,13 @@ if config.config_file_name is not None:
 # Import all models here to ensure they are registered with Base.metadata
 from app.core.database import Base
 from app.models.user import User  # noqa
-from app.models.mac_address import MacAddress  # noqa
-from app.models.whitelist import WhitelistEntry  # noqa
-from app.models.blacklist import BlacklistEntry  # noqa
+from app.models.terminal import Terminal  # noqa
+from app.models.whitelist import Whitelist  # noqa
+from app.models.blacklist import Blacklist  # noqa
 from app.models.log import AuditLog  # noqa
+from app.models.system_config import SystemConfig  # noqa
+from app.models.data_source import DataSource, DataSourceBinding  # noqa
+from app.models.compliance_baseline import ComplianceBaseline  # noqa
 
 target_metadata = Base.metadata
 

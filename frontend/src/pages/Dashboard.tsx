@@ -1,7 +1,7 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '@/store/auth';
-import { useStats } from '@/hooks/useMacData';
+import { useStats, useSystemStatus } from '@/hooks/useTerminalData';
 import {
   Server, List, ShieldOff, AlertCircle, Search, FileText,
   Network, Shield, Activity, Wifi, Database, ArrowRight, Clock
@@ -12,7 +12,8 @@ import { PrimaryButton } from '@/components/Button';
 const Dashboard: React.FC = () => {
   const navigate = useNavigate();
   const { user } = useAuthStore();
-  const { data: stats, isLoading, error } = useStats();
+  const { data: stats, isLoading, error, dataUpdatedAt } = useStats();
+  const { data: systemStatus } = useSystemStatus();
 
   if (error) {
     return (
@@ -41,7 +42,7 @@ const Dashboard: React.FC = () => {
       icon: Search,
       label: 'Search Terminals',
       description: 'Find and manage network terminals',
-      path: '/mac-addresses',
+      path: '/terminals',
       color: 'blue',
       bgClass: 'bg-blue-50',
       iconBgClass: 'bg-blue-100',
@@ -86,30 +87,56 @@ const Dashboard: React.FC = () => {
   const systemStatusItems = [
     {
       name: 'Backend API',
-      status: 'connected' as const,
+      status: (systemStatus?.backend_api === 'connected' ? 'connected' : 'disconnected') as 'connected' | 'pending',
       icon: Activity,
-      detail: 'Running',
+      detail: systemStatus?.backend_api === 'connected' ? 'Running' : 'Disconnected',
     },
     {
       name: 'Database',
-      status: 'connected' as const,
+      status: (systemStatus?.database === 'connected' ? 'connected' : 'pending') as 'connected' | 'pending',
       icon: Database,
-      detail: 'Active',
+      detail: systemStatus?.database === 'connected' ? 'Active' : 'Unavailable',
+    },
+    {
+      name: 'Sangfor AF',
+      status: (systemStatus?.sangfor?.connected ? 'connected' : 'pending') as 'connected' | 'pending',
+      icon: Shield,
+      detail: systemStatus?.sangfor?.connected
+        ? `CPU: ${systemStatus.sangfor.cpu ?? '-'}% | Mem: ${systemStatus.sangfor.memory ?? '-'}%`
+        : (systemStatus?.sangfor?.error || 'Not configured'),
     },
     {
       name: 'Network Scanner',
-      status: 'pending' as const,
+      status: (systemStatus?.network_scanner === 'connected' ? 'connected' : 'pending') as 'connected' | 'pending',
       icon: Wifi,
-      detail: 'Pending configuration',
+      detail: systemStatus?.network_scanner === 'connected' ? 'Running' : 'Pending configuration',
     },
   ];
 
   return (
     <div className="min-h-full bg-gray-50 p-4 sm:p-6 lg:p-8">
       {/* Page Header */}
-      <div className="mb-8">
-        <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Dashboard</h1>
-        <p className="text-gray-600 mt-1">Welcome back, {user?.username}</p>
+      <div className="mb-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Dashboard</h1>
+            <p className="text-gray-600 mt-1">Welcome back, {user?.username}</p>
+          </div>
+        </div>
+      </div>
+
+      {/* Overview Section */}
+      <div className="mb-6 bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+        <div className="px-6 py-5 border-b border-gray-100">
+          <h2 className="text-lg font-semibold text-gray-900">Dashboard Overview</h2>
+        </div>
+        <div className="p-6">
+          <p className="text-gray-600 text-sm leading-relaxed">
+            Welcome to the Terminal Network Access Manager. This dashboard provides real-time monitoring
+            and management of network terminals, access control, and security controls. Use the quick actions
+            below to navigate to key features, or check the system status to ensure all services are running properly.
+          </p>
+        </div>
       </div>
 
       {/* Stats Cards */}
@@ -254,25 +281,11 @@ const Dashboard: React.FC = () => {
               <div className="mt-6 pt-4 border-t border-gray-100">
                 <div className="flex items-center gap-2 text-xs text-gray-400">
                   <Clock className="h-3.5 w-3.5" />
-                  <span>Last updated: just now</span>
+                  <span>Last updated: {dataUpdatedAt ? new Date(dataUpdatedAt).toLocaleTimeString() : '—'}</span>
                 </div>
               </div>
             </div>
           </div>
-        </div>
-      </div>
-
-      {/* Overview Section */}
-      <div className="mt-6 bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
-        <div className="px-6 py-5 border-b border-gray-100">
-          <h2 className="text-lg font-semibold text-gray-900">Dashboard Overview</h2>
-        </div>
-        <div className="p-6">
-          <p className="text-gray-600 text-sm leading-relaxed">
-            Welcome to the Terminal Network Access Manager. This dashboard provides real-time monitoring
-            and management of network terminals, access control, and security controls. Use the quick actions
-            above to navigate to key features, or check the system status to ensure all services are running properly.
-          </p>
         </div>
       </div>
     </div>

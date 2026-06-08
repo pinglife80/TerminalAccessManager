@@ -35,13 +35,21 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             return forwarded.split(",")[0].strip()
         return request.client.host if request.client else "unknown"
 
-    def _get_rate_limit(self, path: str) -> int:
-        """Get rate limit for a given path"""
+    async def _get_rate_limit(self, path: str) -> int:
+        """Get rate limit for a given path. Reads from ConfigService (hot-reloadable)."""
         auth_paths = ["/auth/login", "/auth/register", "/auth/refresh"]
         for auth_path in auth_paths:
             if auth_path in path:
-                return settings.AUTH_RATE_LIMIT_PER_MINUTE
-        return settings.RATE_LIMIT_PER_MINUTE
+                try:
+                    from app.services.config_service import get_config_value
+                    return await get_config_value("auth_rate_limit_per_minute", settings.AUTH_RATE_LIMIT_PER_MINUTE)
+                except Exception:
+                    return settings.AUTH_RATE_LIMIT_PER_MINUTE
+        try:
+            from app.services.config_service import get_config_value
+            return await get_config_value("rate_limit_per_minute", settings.RATE_LIMIT_PER_MINUTE)
+        except Exception:
+            return settings.RATE_LIMIT_PER_MINUTE
 
     async def _check_rate_limit(self, client_id: str, path: str, rate_limit: int) -> tuple[bool, int]:
         """Check rate limit using sliding window algorithm with Redis Sorted Set.
@@ -88,7 +96,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         client_id = self._get_client_id(request)
-        rate_limit = self._get_rate_limit(request.url.path)
+        rate_limit = await self._get_rate_limit(request.url.path)
 
         try:
             is_allowed, retry_after = await self._check_rate_limit(client_id, request.url.path, rate_limit)

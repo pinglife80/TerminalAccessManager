@@ -4,10 +4,13 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Toaster } from 'sonner';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
-import MacAddresses from './pages/MacAddresses';
+import Terminals from './pages/Terminals';
 import Whitelist from './pages/Whitelist';
 import Blacklist from './pages/Blacklist';
+import DataSources from './pages/DataSources';
 import AuditLogs from './pages/AuditLogs';
+import Profile from './pages/Profile';
+import Users from './pages/Users';
 import ProtectedRoute from './components/ProtectedRoute';
 import Layout from './components/Layout';
 import ErrorBoundary from './components/ErrorBoundary';
@@ -37,9 +40,9 @@ const App: React.FC = () => {
     const token = sessionStorage.getItem('access_token');
     if (token) {
       queryClient.prefetchQuery({
-        queryKey: ['macAddresses'],
+        queryKey: ['terminals'],
         queryFn: async () => {
-          const response = await apiClient.get('/mac/search');
+          const response = await apiClient.get('/terminals/search');
           return response.data;
         },
       });
@@ -70,10 +73,13 @@ const App: React.FC = () => {
             >
               <Route index element={<Navigate to="/dashboard" replace />} />
               <Route path="dashboard" element={<Dashboard />} />
-              <Route path="mac-addresses" element={<MacAddresses />} />
+              <Route path="terminals" element={<Terminals />} />
               <Route path="whitelist" element={<Whitelist />} />
               <Route path="blacklist" element={<Blacklist />} />
+              <Route path="data-sources" element={<DataSources />} />
               <Route path="audit-logs" element={<AuditLogs />} />
+              <Route path="profile" element={<Profile />} />
+              <Route path="users" element={<Users />} />
             </Route>
           </Routes>
         </BrowserRouter>

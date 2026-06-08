@@ -4,7 +4,7 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { useMutation } from '@tanstack/react-query';
 import { apiClient } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
-import { Shield, Lock, User, AlertCircle, AlertTriangle, X } from 'lucide-react';
+import { Shield, Lock, User, AlertCircle, AlertTriangle, X, Eye, EyeOff } from 'lucide-react';
 import branding from '@/config/branding';
 
 // Map icon names from branding config to Lucide components
@@ -19,26 +19,6 @@ interface LoginFormData {
   password: string;
   captcha?: string;
 }
-
-const LOCK_DURATION = 15 * 60 * 1000; // 15 minutes
-const CAPTCHA_THRESHOLD = 3;
-const LOCK_THRESHOLD = 5;
-
-const getFailCount = (): number => {
-  return parseInt(sessionStorage.getItem('login_fail_count') || '0', 10);
-};
-
-const setFailCount = (count: number) => {
-  sessionStorage.setItem('login_fail_count', String(count));
-};
-
-const getLockUntil = (): number => {
-  return parseInt(sessionStorage.getItem('login_lock_until') || '0', 10);
-};
-
-const setLockUntil = (timestamp: number) => {
-  sessionStorage.setItem('login_lock_until', String(timestamp));
-};
 
 const generateCaptcha = (): { question: string; answer: number } => {
   const a = Math.floor(Math.random() * 20) + 1;
@@ -57,50 +37,92 @@ const Login: React.FC = () => {
 
   const [backendError, setBackendError] = useState('');
   const [captcha, setCaptcha] = useState<{ question: string; answer: number } | null>(null);
+  const [captchaRequired, setCaptchaRequired] = useState(false);
   const [isLocked, setIsLocked] = useState(false);
   const [lockRemaining, setLockRemaining] = useState(0);
   const [showError, setShowError] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const [loginBgUrl, setLoginBgUrl] = useState('');
   const errorTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const { register, handleSubmit, formState: { errors } } = useForm<LoginFormData>();
+  const { register, handleSubmit, formState: { errors }, watch } = useForm<LoginFormData>();
+  const usernameValue = watch('username');
 
-  // Check lock status on mount and periodically
+  // Load branding config (background image, favicon) on mount
   useEffect(() => {
-    const checkLock = () => {
-      const lockUntil = getLockUntil();
-      const now = Date.now();
-      if (lockUntil > now) {
-        setIsLocked(true);
-        setLockRemaining(Math.ceil((lockUntil - now) / 1000));
-      } else {
-        setIsLocked(false);
-        const failCount = getFailCount();
-        if (failCount >= CAPTCHA_THRESHOLD && !captcha) {
-          setCaptcha(generateCaptcha());
+    const loadBranding = async () => {
+      try {
+        const response = await apiClient.get('/settings/branding');
+        const cfg = response.data;
+        if (cfg.login_bg_url) {
+          setLoginBgUrl(cfg.login_bg_url);
         }
+        if (cfg.favicon_url) {
+          let link = document.querySelector("link[rel~='icon']") as HTMLLinkElement;
+          if (!link) {
+            link = document.createElement('link');
+            link.rel = 'icon';
+            document.head.appendChild(link);
+          }
+          link.href = cfg.favicon_url;
+        }
+      } catch {
+        // Silently use defaults
       }
     };
-
-    checkLock();
-    const interval = setInterval(checkLock, 1000);
-    return () => clearInterval(interval);
+    loadBranding();
   }, []);
 
-  // Countdown timer
+  // Check login status from backend when username changes
+  useEffect(() => {
+    if (!usernameValue || usernameValue.length < 2) {
+      setCaptchaRequired(false);
+      setIsLocked(false);
+      setCaptcha(null);
+      return;
+    }
+
+    const timer = setTimeout(async () => {
+      try {
+        const response = await apiClient.get('/auth/login-status', {
+          params: { username: usernameValue },
+        });
+        const { captcha_required, locked, lock_remaining_seconds } = response.data;
+
+        setCaptchaRequired(captcha_required);
+        if (captcha_required && !captcha) {
+          setCaptcha(generateCaptcha());
+        } else if (!captcha_required) {
+          setCaptcha(null);
+        }
+
+        if (locked) {
+          setIsLocked(true);
+          setLockRemaining(lock_remaining_seconds || 900);
+        } else {
+          setIsLocked(false);
+        }
+      } catch {
+        // Silently ignore - login-status is optional
+      }
+    }, 500);
+
+    return () => clearTimeout(timer);
+  }, [usernameValue]);
+
+  // Countdown timer for lock
   useEffect(() => {
     if (!isLocked) return;
     const timer = setInterval(() => {
-      const lockUntil = getLockUntil();
-      const remaining = Math.ceil((lockUntil - Date.now()) / 1000);
-      if (remaining <= 0) {
-        setIsLocked(false);
-        setFailCount(0);
-        setCaptcha(null);
-        setLockRemaining(0);
-        clearInterval(timer);
-      } else {
-        setLockRemaining(remaining);
-      }
+      setLockRemaining((prev) => {
+        if (prev <= 1) {
+          setIsLocked(false);
+          setCaptchaRequired(false);
+          setCaptcha(null);
+          return 0;
+        }
+        return prev - 1;
+      });
     }, 1000);
     return () => clearInterval(timer);
   }, [isLocked]);
@@ -117,8 +139,15 @@ const Login: React.FC = () => {
       formData.append('username', data.username);
       formData.append('password', data.password);
 
+      // Pass captcha answer to backend if required
+      const params: Record<string, string> = {};
+      if (captcha && data.captcha) {
+        params.captcha = data.captcha;
+      }
+
       const response = await apiClient.post('/auth/login', formData.toString(), {
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        params,
       });
 
       const { access_token, refresh_token } = response.data;
@@ -137,33 +166,79 @@ const Login: React.FC = () => {
       };
     },
     onSuccess: (data) => {
-      // Reset fail count on success
-      setFailCount(0);
-      sessionStorage.removeItem('login_lock_until');
+      // Reset captcha and lock state on success
+      setCaptchaRequired(false);
+      setCaptcha(null);
+      setIsLocked(false);
       login(data.user, data.access_token, data.refresh_token);
 
       const from = (location.state as any)?.from?.pathname || '/dashboard';
       navigate(from, { replace: true });
     },
     onError: (error: any) => {
-      const newFailCount = getFailCount() + 1;
-      setFailCount(newFailCount);
+      const response = error.response;
+      const statusCode = response?.status;
+      const serverMessage = response?.data?.detail || '';
 
-      const message = error.response?.data?.detail || 'Login failed. Please check your credentials.';
-      setBackendError(message);
-      setShowError(true);
-
-      // Show captcha after 3 failures
-      if (newFailCount >= CAPTCHA_THRESHOLD && !captcha) {
-        setCaptcha(generateCaptcha());
+      // Map backend error details to user-friendly messages
+      let friendlyMessage: string;
+      if (statusCode === 401) {
+        // Distinguish between username not found and wrong password
+        if (serverMessage === 'Username does not exist') {
+          friendlyMessage = 'Username does not exist';
+        } else if (serverMessage === 'Incorrect password') {
+          friendlyMessage = 'Incorrect password';
+        } else {
+          friendlyMessage = serverMessage || 'Authentication failed';
+        }
+      } else if (statusCode === 423) {
+        friendlyMessage = serverMessage || 'Account is temporarily locked';
+      } else if (statusCode === 400) {
+        friendlyMessage = serverMessage || 'Invalid request';
+      } else if (statusCode === 403) {
+        friendlyMessage = 'Account is disabled';
+      } else if (statusCode === 429) {
+        friendlyMessage = 'Too many requests, please try again later';
+      } else {
+        friendlyMessage = serverMessage || 'Login failed';
       }
 
-      // Lock after 5 failures
-      if (newFailCount >= LOCK_THRESHOLD) {
-        const lockUntil = Date.now() + LOCK_DURATION;
-        setLockUntil(lockUntil);
+      setBackendError(friendlyMessage);
+      setShowError(true);
+
+      // Update captcha/lock state from backend response headers
+      const headers = response?.headers || {};
+      const captchaRequiredHeader = headers['x-captcha-required'];
+      const lockedHeader = headers['x-account-locked'];
+      const lockRemainingHeader = headers['x-lock-remaining'];
+
+      if (captchaRequiredHeader === 'true') {
+        setCaptchaRequired(true);
+        if (!captcha) {
+          setCaptcha(generateCaptcha());
+        } else {
+          // Refresh captcha on failure
+          setCaptcha(generateCaptcha());
+        }
+      }
+
+      if (lockedHeader === 'true') {
         setIsLocked(true);
-        setLockRemaining(Math.ceil(LOCK_DURATION / 1000));
+        setLockRemaining(parseInt(lockRemainingHeader || '900', 10));
+      }
+
+      // Handle 423 locked status
+      if (response?.status === 423) {
+        setIsLocked(true);
+        setLockRemaining(parseInt(lockRemainingHeader || '900', 10));
+      }
+
+      // Handle 400 captcha required
+      if (response?.status === 400) {
+        setCaptchaRequired(true);
+        if (!captcha) {
+          setCaptcha(generateCaptcha());
+        }
       }
     },
   });
@@ -178,13 +253,14 @@ const Login: React.FC = () => {
   }, []);
 
   const onSubmit = (data: LoginFormData) => {
+    // Only clear previous error when user submits again
     setBackendError('');
     setShowError(false);
 
     if (isLocked) return;
 
-    // Validate captcha if required
-    if (captcha) {
+    // Validate captcha locally before sending to backend
+    if (captcha && captchaRequired) {
       const userAnswer = parseInt(data.captcha || '', 10);
       if (isNaN(userAnswer) || userAnswer !== captcha.answer) {
         setBackendError('Incorrect captcha answer. Please try again.');
@@ -197,15 +273,13 @@ const Login: React.FC = () => {
     loginMutation.mutate(data);
   };
 
-  const failCount = getFailCount();
-
   return (
     <div className={`min-h-screen flex items-center justify-center p-4 ${
-      branding.login.background.type === 'image'
-        ? 'bg-cover bg-center bg-no-repeat'
-        : branding.login.background.gradientClass
+      loginBgUrl ? 'bg-cover bg-center bg-no-repeat' : branding.login.background.gradientClass
     }`}
-    style={branding.login.background.type === 'image' ? {
+    style={loginBgUrl ? {
+      backgroundImage: `url(${loginBgUrl})`,
+    } : branding.login.background.type === 'image' ? {
       backgroundImage: `url(${branding.login.background.imagePath})`,
     } : undefined}
     >
@@ -245,7 +319,7 @@ const Login: React.FC = () => {
                       <div className="flex-1 h-2 bg-orange-200 rounded-full overflow-hidden">
                         <div
                           className="h-full bg-orange-500 rounded-full transition-all duration-1000"
-                          style={{ width: `${Math.max(0, (lockRemaining / (LOCK_DURATION / 1000)) * 100)}%` }}
+                          style={{ width: `${Math.max(0, (lockRemaining / 900) * 100)}%` }}
                         />
                       </div>
                       <span className="text-sm font-mono font-semibold text-orange-900 whitespace-nowrap">
@@ -323,16 +397,22 @@ const Login: React.FC = () => {
                   <input
                     {...register('password', {
                       required: 'Password is required',
-                      minLength: { value: 6, message: 'Password must be at least 6 characters' },
-                      maxLength: { value: 128, message: 'Password must be at most 128 characters' },
                     })}
-                    type="password"
+                    type={showPassword ? 'text' : 'password'}
                     disabled={isLocked}
-                    className={`w-full pl-10 pr-4 py-3 border-2 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all text-gray-900 placeholder-gray-400 ${
+                    className={`w-full pl-10 pr-12 py-3 border-2 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all text-gray-900 placeholder-gray-400 ${
                       errors.password ? 'border-red-400 bg-red-50' : 'border-gray-200 bg-gray-50 focus:bg-white'
                     } ${isLocked ? 'bg-gray-100 cursor-not-allowed opacity-60' : ''}`}
                     placeholder="Enter your password"
                   />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute inset-y-0 right-0 pr-3 flex items-center text-gray-400 hover:text-gray-600 transition-colors"
+                    tabIndex={-1}
+                  >
+                    {showPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
+                  </button>
                 </div>
                 {errors.password && (
                   <div className="flex items-center gap-1.5 mt-2">
@@ -342,8 +422,8 @@ const Login: React.FC = () => {
                 )}
               </div>
 
-              {/* Captcha Field - Only shown after multiple failed attempts */}
-              {captcha && !isLocked && (
+              {/* Captcha Field - Only shown when backend requires it */}
+              {captcha && captchaRequired && !isLocked && (
                 <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border-2 border-blue-200 rounded-xl p-5">
                   <label className="block text-sm font-semibold text-blue-900 mb-3 flex items-center gap-2">
                     <Shield className="h-4 w-4" />
@@ -354,7 +434,7 @@ const Login: React.FC = () => {
                       {captcha.question} = ?
                     </div>
                     <input
-                      {...register('captcha', { required: captcha ? 'Please answer' : false })}
+                      {...register('captcha', { required: captchaRequired ? 'Please answer' : false })}
                       type="number"
                       className="w-24 px-4 py-3 border-2 border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none text-center text-xl font-mono bg-gray-50 focus:bg-white transition-all"
                       placeholder="?"
@@ -398,34 +478,13 @@ const Login: React.FC = () => {
               </button>
             </form>
 
-            {/* Failed attempts indicator - Shows current attempt count */}
-            {failCount > 0 && !isLocked && (
-              <div className="mt-6 bg-gray-50 border border-gray-200 rounded-lg p-3">
-                <div className="flex items-center justify-between text-xs">
-                  <span className="text-gray-600">
-                    Failed attempts
-                  </span>
-                  <div className="flex items-center gap-3">
-                    <div className="flex gap-1">
-                      {Array.from({ length: LOCK_THRESHOLD }).map((_, i) => (
-                        <div
-                          key={i}
-                          className={`w-2 h-2 rounded-full transition-colors ${
-                            i < failCount ? 'bg-red-400' : 'bg-gray-200'
-                          }`}
-                        />
-                      ))}
-                    </div>
-                    <span className="font-mono text-gray-700 font-semibold">
-                      {failCount}/{LOCK_THRESHOLD}
-                    </span>
-                  </div>
+            {/* Captcha/Lock status indicator */}
+            {captchaRequired && !isLocked && (
+              <div className="mt-6 bg-blue-50 border border-blue-200 rounded-lg p-3">
+                <div className="flex items-center gap-2 text-xs text-blue-700">
+                  <Shield className="h-3.5 w-3.5" />
+                  <span>Security verification is active for this account</span>
                 </div>
-                {failCount >= LOCK_THRESHOLD - 1 && (
-                  <p className="text-xs text-orange-600 mt-2 text-center">
-                    {LOCK_THRESHOLD - failCount} more failed attempt{LOCK_THRESHOLD - failCount > 1 ? 's' : ''} will lock your account.
-                  </p>
-                )}
               </div>
             )}
           </div>
