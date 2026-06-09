@@ -293,32 +293,26 @@ git commit -m "refactor(search): replace func.replace with mac_address_normalize
 
 **GitHub 设置方法**：
 
-> **重要**：GitHub 分支保护默认已禁止 force push 和删除。
-> 页面上的 "Allow force pushes" 和 "Allow deletions" 是**允许**的意思，不要勾选！
-> Private 仓库（GitHub Free）部分高级功能（如 Restrict who can push）不可用，但不影响以下设置。
+> **原则**：只勾选下面列出的项，其余全部不勾（包括默认勾选的也取消）。
 
 **设置路径**：Settings → Code and automation → Branches → Add rule
 
 **main 分支规则**：
 1. Branch name pattern: `main`
 2. ☑ **Require a pull request before merging**
-   - ☐ Require approvals（不勾，单人无需审批）
 3. ☑ **Require status checks to pass before merging**
    - ☑ Require branches to be up to date before merging
    - 搜索并勾选: `backend-lint`、`backend-test`、`frontend-lint`、`frontend-test`
-4. ☐ Allow force pushes（不勾！默认已禁止）
-5. ☐ Allow deletions（不勾！默认已禁止）
-6. 点击 **Create**
+4. 其余所有选项均不勾选
+5. 点击 **Create**
 
 > 注意：status checks 列表需要 CI 至少运行过一次后才会出现。如果搜不到，
 > 先推送一次触发 CI 运行，再回来编辑规则勾选。
 
 **develop 分支规则**：
 1. Branch name pattern: `develop`
-2. ☐ Require a pull request before merging（不勾，允许直接 push）
-3. ☐ Allow force pushes（不勾！默认已禁止）
-4. ☐ Allow deletions（不勾！默认已禁止）
-5. 点击 **Create**
+2. 其余所有选项均不勾选（默认已禁止 force push 和删除，无需额外操作）
+3. 点击 **Create**
 
 ### 5.2 PR 工作流
 
