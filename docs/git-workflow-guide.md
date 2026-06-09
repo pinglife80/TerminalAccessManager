@@ -267,20 +267,58 @@ git commit -m "refactor(search): replace func.replace with mac_address_normalize
 
 ## 5. GitHub 最佳实践
 
-### 5.1 仓库设置
+### 5.1 分支保护规则
 
-**Branch Protection Rules**（Settings → Branches → Add rule）：
+**main 分支（严格保护）**：生产发布基线，任何代码进入都须经过 CI 验证。
 
-| 规则 | main | develop |
-|------|:----:|:-------:|
-| Require a pull request before merging | ✅ | ✅ |
-| Require approvals | ❌ (单人) | ❌ (单人) |
-| Require status checks to pass | ✅ | ✅ |
-| Require branches to be up to date | ✅ | ✅ |
-| Do not allow force pushes | ✅ | ✅ |
-| Do not allow deletions | ✅ | ✅ |
+**develop 分支（轻度保护）**：日常开发分支，小改动直接 push 减少摩擦，仅保留安全网。
 
-> 单人开发时，PR 的主要价值是触发 CI 检查和代码自审，而非等待他人审批。
+| 保护规则 | main | develop | 理由 |
+|---------|:----:|:-------:|------|
+| 禁止 force push | ✅ | ✅ | 防止误操作覆盖历史，两个分支都应保护 |
+| 禁止删除 | ✅ | ✅ | 核心分支不可删除 |
+| PR 合并前 CI 通过 | ✅ | ❌ | main 是生产基线必须过 CI；develop 日常开发直接推，减少摩擦 |
+| PR 合并前要求审批 | ❌ | ❌ | 单人开发无意义 |
+| 要求分支最新 | ✅ | ❌ | main 合并前确保与目标分支同步 |
+
+**main 强制 PR 的价值**（即使单人开发）：
+- 触发 CI 自动检查（lint + test + build）
+- PR 页面查看 diff 更清晰，相当于代码自审
+- 防止误操作（force push / 直接 push 未验证代码）
+
+**develop 不强制 PR 的理由**：
+- 日常开发小改动频繁，每次走 PR 效率太低
+- 小改动直接 push，大改动自觉走 PR 即可
+- 只保留 force push 和删除保护作为安全网
+
+**GitHub 设置方法**：
+
+> **重要**：GitHub 分支保护默认已禁止 force push 和删除。
+> 页面上的 "Allow force pushes" 和 "Allow deletions" 是**允许**的意思，不要勾选！
+> Private 仓库（GitHub Free）部分高级功能（如 Restrict who can push）不可用，但不影响以下设置。
+
+**设置路径**：Settings → Code and automation → Branches → Add rule
+
+**main 分支规则**：
+1. Branch name pattern: `main`
+2. ☑ **Require a pull request before merging**
+   - ☐ Require approvals（不勾，单人无需审批）
+3. ☑ **Require status checks to pass before merging**
+   - ☑ Require branches to be up to date before merging
+   - 搜索并勾选: `backend-lint`、`backend-test`、`frontend-lint`、`frontend-test`
+4. ☐ Allow force pushes（不勾！默认已禁止）
+5. ☐ Allow deletions（不勾！默认已禁止）
+6. 点击 **Create**
+
+> 注意：status checks 列表需要 CI 至少运行过一次后才会出现。如果搜不到，
+> 先推送一次触发 CI 运行，再回来编辑规则勾选。
+
+**develop 分支规则**：
+1. Branch name pattern: `develop`
+2. ☐ Require a pull request before merging（不勾，允许直接 push）
+3. ☐ Allow force pushes（不勾！默认已禁止）
+4. ☐ Allow deletions（不勾！默认已禁止）
+5. 点击 **Create**
 
 ### 5.2 PR 工作流
 
