@@ -68,6 +68,7 @@ class Settings(BaseSettings):
 
     # Logging
     LOG_LEVEL: str = "INFO"
+    TZ: str = "Asia/Shanghai"
 
     class Config:
         env_file = ".env"
