@@ -1,6 +1,6 @@
 # TerminalAccessManager 系统架构设计文档
 
-> 文档版本：v3.1.0 | 更新日期：2026-06-09
+> 文档版本：v3.2.0 | 更新日期：2026-06-10
 
 ## 1. 系统概述
 
@@ -63,7 +63,8 @@ TerminalAccessManager 是基于 MAC 地址和 IP 地址的网络终端准入管�
 │  │  - Zustand 状态   │  │   │  │  - JWT 认证中间件               │  │
 │  │  - React Router   │  │   │  │  - 速率限制中间件               │  │
 │  │  - useBranding    │  │   │  │  - 请求日志中间件               │  │
-│  │    Store 动态品牌  │  │   │  │  - CORS 中间件                  │  │
+│  │    Store 动态品牌  │  │   │  │  - 请求ID中间件                 │  │
+│  │  - i18next i18n   │  │   │  │  - CORS 中间件                  │  │
 │  │  - i18next i18n   │  │   │  │  - Prometheus 指标 (可选)       │  │
 │  │    zh/en/ja       │  │   │  │  - WebSocket 就绪               │  │
 │  │  - HeaderControls │  │   │  └─────────────────────────────────┘  │
@@ -100,6 +101,29 @@ TerminalAccessManager 是基于 MAC 地址和 IP 地址的网络终端准入管�
 │  └─────────────┘   └──────────────────┘   └─────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────────┘
 ```
+
+### 2.1 请求处理流程
+
+请求从客户端到达 FastAPI 路由，依次经过以下中间件链：
+
+```
+Nginx → RateLimitMiddleware → RequestLoggingMiddleware → RequestIDMiddleware → FastAPI Route
+```
+
+**中间件职责：**
+
+| 中间件 | 职责 |
+|--------|------|
+| RateLimitMiddleware | Redis Sorted Set 滑动窗口限流，超限返回 429 + `Retry-After` |
+| RequestLoggingMiddleware | 记录请求方法、路径、状态码、响应时间 |
+| RequestIDMiddleware | 为每个请求分配 12 位 hex `request_id`，通过 `ContextVar` 在请求生命周期内共享 |
+
+**RequestIDMiddleware 机制：**
+
+- 为每个入站请求生成 12 位十六进制 `request_id`（`os.urandom(6).hex()`）
+- 通过 Python `ContextVar` 存储，在整个请求生命周期内可被任意层访问
+- 响应头注入 `X-Request-ID` 和 `X-Response-Time`，便于客户端追踪与调试
+- 日志系统通过 `_log_format()` 动态格式函数从 `ContextVar` 读取 `request_id`，实现日志自动关联
 
 ---
 
@@ -863,3 +887,66 @@ Sidebar 菜单项在鼠标 hover 时预加载对应页面的数据（通过 Reac
 ### 16.2 Redis fail-open 降级
 
 所有 Redis 交互函数采用 try/except + fail-open 策略，异常时记录 `logger.warning` 并按策略降级（详见 7.7 Redis 故障降级）。
+
+---
+
+## 17. 日志架构
+
+### 17.1 日志库与配置
+
+- **日志库**：loguru，集中式配置于 `logging_config.py`
+- **初始化入口**：`setup_logging()` 函数，在 FastAPI lifespan 启动时调用
+
+### 17.2 日志格式
+
+```
+YYYY-MM-DD HH:mm:ss.SSS ZZ | LEVEL | request_id | 模块:函数:行号 - 消息
+```
+
+示例：
+
+```
+2026-06-10 14:30:00.123 +08:00 | INFO | a1b2c3d4e5f6 | auth:login:42 - User login successful
+2026-06-10 14:30:01.456 +08:00 | WARNING | - | scheduler:arp_collect:88 - Redis unavailable, fail-open
+```
+
+### 17.3 request_id 自动注入
+
+- 通过 `_log_format()` 动态格式函数从 `ContextVar` 读取当前请求的 `request_id`
+- 请求上下文中：`request_id` 为 RequestIDMiddleware 分配的 12 位 hex 值
+- 非请求上下文（定时任务、启动日志）：`request_id` 显示为 `-`
+
+### 17.4 时区控制
+
+- `config.py` 中 `TZ` 配置项设定目标时区
+- `setup_logging()` 调用 `time.tzset()` 使进程时区生效
+- loguru 格式中 `ZZ` 占位符显示正确的时区偏移（如 `+08:00`）
+
+---
+
+## 18. 时区控制架构
+
+系统各层时区控制机制如下：
+
+```
+.env TZ=Asia/Shanghai
+      │
+      ▼ docker-compose.yml TZ 环境变量
+      │
+      ├─→ 所有容器系统时间
+      │
+      ├─→ 后端：config.py TZ → setup_logging() time.tzset() → loguru ZZ
+      │
+      ├─→ PostgreSQL：log_timezone / timezone 参数
+      │
+      └─→ 前端：logger.ts new Date() 本地时区
+```
+
+**各层时区策略：**
+
+| 层次 | 时区来源 | 说明 |
+|------|----------|------|
+| 容器系统 | `.env TZ` → `docker-compose.yml` 环境变量 | 所有容器共享同一 TZ 设置，系统时间一致 |
+| 后端 Python | `config.py TZ` → `setup_logging()` `time.tzset()` | 进程启动时设置时区，loguru `ZZ` 显示正确偏移 |
+| PostgreSQL | `log_timezone` / `timezone` 参数 | 数据库日志和查询时间使用配置的时区 |
+| 前端 | `logger.ts` `new Date()` 本地时区 | 浏览器端日志使用客户端本地时区 |

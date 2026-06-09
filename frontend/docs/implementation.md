@@ -1,6 +1,6 @@
 # 前端实现总结
 
-> 文档版本：v3.1.0 | 更新日期：2026-06-09
+> 文档版本：v3.2.0 | 更新日期：2026-06-10
 
 ## 概述
 
@@ -46,6 +46,7 @@ frontend/
 │   │   ├── api.ts               # 带拦截器的 Axios 客户端
 │   │   ├── constants.ts         # 常量定义（状态、导航、API 端点等）
 │   │   ├── utils.ts             # 工具函数（日期格式化、CSV 导出、MAC/IP 验证等）
+│   │   ├── logger.ts            # 统一前端日志工具（debug/info/warn/error 四级，内存缓冲 + localStorage 持久化）
 │   │   └── __tests__/    # 工具函数测试
 │   │       └── utils.test.ts        # 工具函数测试（42 用例）
 │   ├── pages/            # 页面组件
@@ -104,6 +105,7 @@ frontend/
 - `initializeAuth` timeout 10s：网络异常时 10 秒后超时降级，避免页面永久加载
 - `isInitializing` 状态：恢复期间为 `true`，页面显示加载状态，避免未认证闪烁
 - App.tsx 启动时自动调用 `initializeAuth()`
+- 全局错误监听：App.tsx useEffect 注册 `window.error` 和 `window.unhandledrejection` 事件监听，使用 `logger.error` 记录未捕获错误
 
 #### API 集成
 - 配置好的 Axios HTTP 客户端
@@ -134,7 +136,7 @@ frontend/
 - 空状态和加载状态组件
 - 骨架屏加载占位
 - 统一 Modal 组件（ESC 关闭、焦点 trap、ARIA 属性、点击遮罩关闭、body 滚动锁定）
-- 错误边界组件
+- 错误边界组件（使用 `logger.error` 记录捕获的错误，替代 `console.error`）
 - Toast 通知（成功/错误消息）
 - 确认对话框
 
@@ -278,6 +280,32 @@ apiClient.interceptors.request.use((config) => {
 });
 ```
 
+### 6. 统一日志工具（lib/logger.ts）
+
+前端日志工具 `logger` 提供统一的日志记录接口，支持 debug/info/warn/error 四个级别：
+
+- **环境分级输出**：开发环境输出所有级别日志，生产环境仅输出 warn/error
+- **内存缓冲区**：保留最近 100 条日志记录，可通过 `logger.getBuffer()` 获取
+- **localStorage 持久化**：自动持久化 warn/error 级别日志（最多 50 条），可通过 `logger.getStored()` 获取
+- **日志导出与清理**：`logger.exportLogs()` 导出全部日志（含缓冲区和持久化），`logger.clearLogs()` 清除所有日志
+
+```typescript
+// API 概览
+logger.debug('调试信息', { data });
+logger.info('常规信息');
+logger.warn('警告信息');
+logger.error('错误信息', error);
+
+logger.getBuffer();    // 获取内存缓冲区日志（最近 100 条）
+logger.getStored();    // 获取 localStorage 持久化日志（warn/error，最多 50 条）
+logger.exportLogs();   // 导出全部日志
+logger.clearLogs();    // 清除所有日志
+```
+
+**日志时区本地化**：`formatTimestamp()` 使用本地时区 + 偏移量格式（如 `2026-06-10T14:30:00.123+08:00`），与后端日志时区保持一致（后端通过 TZ 配置项控制）。
+
+**渐进式接入策略**：当前仅在 App.tsx（全局错误监听）和 ErrorBoundary 中使用，后续将逐步扩展到其他模块。
+
 ---
 
 ## 当前页面
@@ -415,7 +443,7 @@ apiClient.interceptors.request.use((config) => {
 2. `Dockerfile` - Docker 构建
 3. `nginx.conf` - Nginx 配置
 
-### 源代码文件（34）
+### 源代码文件（37）
 1. `src/main.tsx` - React 入口点
 2. `src/App.tsx` - 带路由的主应用
 3. `src/index.css` - 带 Tailwind 的全局样式
@@ -423,35 +451,36 @@ apiClient.interceptors.request.use((config) => {
 5. `src/lib/api.ts` - Axios 客户端设置
 6. `src/lib/constants.ts` - 常量定义（已移除 `AUTH_LOGIN_STATUS` 常量，新增 `AUTH_CAPTCHA` 常量指向 `/auth/captcha`）
 7. `src/lib/utils.ts` - 工具函数
-8. `src/config/branding.ts` - 品牌自定义配置
-9. `src/store/auth.ts` - 认证 store（登录错误处理改为解析结构化 JSON detail，而非响应头；错误响应体格式：`{"detail": {"message": "...", "captcha_required": true, "locked": false}}`）
-10. `src/store/branding.ts` - 品牌动态配置 store（useBrandingStore）
-11. `src/store/theme.ts` - 主题状态管理（Light/Dark/System + localStorage 持久化）
-12. `src/hooks/useTerminalData.ts` - 数据查询 Hooks
-13. `src/hooks/useNetworkStatus.ts` - 网络状态检测 Hook
-14. `src/i18n/index.ts` - i18n 配置（i18next + browser-languagedetector）
-15. `src/i18n/locales/zh.ts` - 中文翻译
-16. `src/i18n/locales/en.ts` - 英文翻译
-17. `src/i18n/locales/ja.ts` - 日语翻译
-18. `src/components/Layout.tsx` - 主布局组件（顶栏 + 侧边栏 + 内容区 + 页脚）
-19. `src/components/Sidebar.tsx` - 侧边栏导航（hover 预加载）
-20. `src/components/HeaderControls.tsx` - 顶栏控件（主题切换 + 语言选择）
-21. `src/components/Modal.tsx` - 统一模态框组件
-22. `src/components/Pagination.tsx` - 分页组件
-23. `src/components/DateRangeFilter.tsx` - 日期范围过滤器
-24. `src/components/Button.tsx` - 按钮组件
-25. `src/components/StateDisplay.tsx` - 状态显示组件
-26. `src/components/Skeleton.tsx` - 骨架屏组件
-27. `src/components/ProtectedRoute.tsx` - 路由守卫
-28. `src/components/ErrorBoundary.tsx` - 错误边界
-29. `src/components/datasources/DataSourcesTab.tsx` - 数据源 Tab 组件
-30. `src/components/datasources/ComplianceBaselinesTab.tsx` - 合规基准 Tab 组件
-31. `src/components/datasources/BindingsTab.tsx` - 绑定关系 Tab 组件
-32. `src/components/datasources/shared.ts` - 数据源共享类型和配置
-33. `src/test/setup.ts` - 测试环境配置
-34. `src/lib/__tests__/utils.test.ts` - 工具函数测试
-35. `src/store/__tests__/theme.test.ts` - 主题 store 测试
-36. `src/store/__tests__/auth.test.ts` - 认证 store 测试
+8. `src/lib/logger.ts` - 统一前端日志工具（debug/info/warn/error 四级，内存缓冲 + localStorage 持久化）
+9. `src/config/branding.ts` - 品牌自定义配置
+10. `src/store/auth.ts` - 认证 store（登录错误处理改为解析结构化 JSON detail，而非响应头；错误响应体格式：`{"detail": {"message": "...", "captcha_required": true, "locked": false}}`）
+11. `src/store/branding.ts` - 品牌动态配置 store（useBrandingStore）
+12. `src/store/theme.ts` - 主题状态管理（Light/Dark/System + localStorage 持久化）
+13. `src/hooks/useTerminalData.ts` - 数据查询 Hooks
+14. `src/hooks/useNetworkStatus.ts` - 网络状态检测 Hook
+15. `src/i18n/index.ts` - i18n 配置（i18next + browser-languagedetector）
+16. `src/i18n/locales/zh.ts` - 中文翻译
+17. `src/i18n/locales/en.ts` - 英文翻译
+18. `src/i18n/locales/ja.ts` - 日语翻译
+19. `src/components/Layout.tsx` - 主布局组件（顶栏 + 侧边栏 + 内容区 + 页脚）
+20. `src/components/Sidebar.tsx` - 侧边栏导航（hover 预加载）
+21. `src/components/HeaderControls.tsx` - 顶栏控件（主题切换 + 语言选择）
+22. `src/components/Modal.tsx` - 统一模态框组件
+23. `src/components/Pagination.tsx` - 分页组件
+24. `src/components/DateRangeFilter.tsx` - 日期范围过滤器
+25. `src/components/Button.tsx` - 按钮组件
+26. `src/components/StateDisplay.tsx` - 状态显示组件
+27. `src/components/Skeleton.tsx` - 骨架屏组件
+28. `src/components/ProtectedRoute.tsx` - 路由守卫
+29. `src/components/ErrorBoundary.tsx` - 错误边界（使用 logger.error 记录捕获的错误）
+30. `src/components/datasources/DataSourcesTab.tsx` - 数据源 Tab 组件
+31. `src/components/datasources/ComplianceBaselinesTab.tsx` - 合规基准 Tab 组件
+32. `src/components/datasources/BindingsTab.tsx` - 绑定关系 Tab 组件
+33. `src/components/datasources/shared.ts` - 数据源共享类型和配置
+34. `src/test/setup.ts` - 测试环境配置
+35. `src/lib/__tests__/utils.test.ts` - 工具函数测试
+36. `src/store/__tests__/theme.test.ts` - 主题 store 测试
+37. `src/store/__tests__/auth.test.ts` - 认证 store 测试
 
 ### 页面文件（9）
 1. `src/pages/Login.tsx` - 登录页面
@@ -618,7 +647,7 @@ apiClient.interceptors.request.use((config) => {
 - 受保护路由（需要认证）
 - 验证码机制（后端验证码，防止暴力破解）
 - 账户锁定机制（连续失败后锁定）
-- 错误边界（防止 UI 崩溃）
+- 错误边界（防止 UI 崩溃，使用 logger.error 记录错误）
 
 ### 生产建议
 - 启用 CSP 头
@@ -718,6 +747,7 @@ npm run build
 - 审计日志分类体系（8 类分类过滤 + 彩色 badge + JSON details 解析）
 - MAC 地址格式无关搜索 + keepPreviousData 防闪烁
 - 前端请求可靠性增强（refresh token Body 传递、_retry 防循环、401 不重试）
+- 统一日志工具（lib/logger.ts，四级日志、内存缓冲 + localStorage 持久化、全局错误监听）
 - 页面闪烁修复（Suspense 位置调整、staleTime 30s、hover 预加载）
 - 前端测试基础设施（Vitest + 58 个测试用例）
 - ESLint 代码质量检查

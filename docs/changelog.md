@@ -7,6 +7,23 @@
 
 ---
 
+## [3.2.0] - 2026-06-10
+
+### 新增
+
+- Request-ID 链路追踪：新增 `RequestIDMiddleware` + `ContextVar`，每个 HTTP 请求自动分配 12 位 hex request_id（优先读取客户端 `X-Request-ID` 请求头），响应头返回 `X-Request-ID`，日志格式自动注入 request_id 字段
+- 时区全局控制：`config.py` 新增 `TZ` 配置项（默认 `Asia/Shanghai`），`docker-compose.yml` 5 个服务统一添加 `TZ` 环境变量，PostgreSQL 添加 `log_timezone`/`timezone` 参数，后端启动时调用 `time.tzset()` 使 loguru `ZZ` 显示正确时区偏移
+- 前端日志本地时区：`logger.ts` 的 `formatTimestamp()` 从 UTC ISO 格式（`Z` 后缀）改为本地时区+偏移量格式（如 `+08:00`），日志时间与用户本地时间一致
+
+### 改进
+
+- 日志格式函数化：`logging_config.py` 从静态 `LOG_FORMAT` 字符串改为 `_log_format()` 动态函数，运行时自动从 ContextVar 注入 request_id，非请求上下文显示 `-`
+- 请求日志增强：`RequestLoggingMiddleware` 日志消息增加 `req_id=` 字段，与格式字段中的 request_id 一致
+- Docker 安全加固注释化：`security_opt`/`cap_drop`/`read_only` 等生产加固项改为注释（标注 `Production hardening`），开发环境直接运行，生产环境取消注释即可启用
+- 日志文档补全：`logging-guide.md` 新增 7 个章节（文档版本历史、日志监控与告警、紧急处理流程、性能影响说明、日志分析常用命令、日志配置变更指南、Request-ID 链路追踪）+ 3 项修正（审计归档 cron 示例、前端日志渐进式接入标注、Request-ID 与 error_id 关联说明）
+
+---
+
 ## [3.1.0] - 2026-06-09
 
 ### 新增

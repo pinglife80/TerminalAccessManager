@@ -1,6 +1,6 @@
 # TerminalAccessManager 后端实现文档
 
-> 文档版本：v3.1.0 | 更新日期：2026-06-09
+> 文档版本：v3.2.0 | 更新日期：2026-06-10
 
 ## 1. 概述
 
@@ -29,10 +29,12 @@ backend/
 │   │   ├── database.py                  # 数据库引擎与会话
 │   │   ├── security.py                  # 安全模块 (JWT/密码/登录防护)
 │   │   ├── crypto.py                    # 字段级加密 (Fernet + ENC: 前缀 + 独立 ENCRYPTION_KEY)
+│   │   └── logging_config.py            # 集中式日志配置 (loguru + InterceptHandler + request_id 注入 + 时区控制)
 │   ├── middleware/
 │   │   ├── __init__.py
 │   │   ├── rate_limit.py                # 限流中间件
 │   │   ├── logging.py                   # 请求日志中间件
+│   │   ├── request_id.py                # Request-ID 链路追踪中间件 (ContextVar + X-Request-ID)
 │   │   └── error_handler.py             # 全局异常处理中间件
 │   ├── models/
 │   │   ├── __init__.py
@@ -171,9 +173,14 @@ async def _is_task_paused(task_name: str) -> bool:
 
 按 Starlette 中间件洋葱模型，注册顺序（先注册的在外层）：
 
-1. **RateLimitMiddleware** — 限流（最外层，最先拦截）
+1. **RateLimitMiddleware** — 限流
 2. **RequestLoggingMiddleware** — 请求日志
-3. **CORSMiddleware** — 跨域
+3. **RequestIDMiddleware** — Request-ID 链路追踪
+4. **CORSMiddleware** — 跨域
+
+中间件执行顺序（Starlette 反序，后注册的先执行）：
+
+**RequestIDMiddleware**（最先执行）→ **RequestLoggingMiddleware** → **RateLimitMiddleware**
 
 #### CORS 安全校验
 
@@ -250,6 +257,7 @@ async def _is_task_paused(task_name: str) -> bool:
 | | `CAPTCHA_THRESHOLD` | int | `3` | 触发验证码的失败次数 |
 | 注册 | `ALLOW_REGISTRATION` | bool | `False` | 是否允许公开注册 |
 | 日志 | `LOG_LEVEL` | str | `"INFO"` | 日志级别 |
+| 时区 | `TZ` | str | `"Asia/Shanghai"` | 系统时区，影响日志时间戳和数据库时间 |
 
 #### 生产环境安全验证
 
@@ -383,6 +391,36 @@ async_session_factory = async_session_maker  # 别名，供后台任务使用
 
 ---
 
+### 2.5 日志配置 (core/logging_config.py)
+
+#### 日志库
+
+- **loguru** — 统一管理所有后端日志输出。
+
+#### 配置文件
+
+- `backend/app/core/logging_config.py`
+
+#### 初始化入口
+
+- `backend/app/main.py` → `setup_logging()`
+
+#### 日志格式
+
+```
+时间戳 +0800 | 级别 | request_id | 模块:函数:行号 - 消息
+```
+
+#### 时区控制
+
+- `setup_logging()` 启动时读取 `settings.TZ`，调用 `time.tzset()` 设置系统时区，确保日志时间戳与配置时区一致。
+
+#### 标准库拦截
+
+- **InterceptHandler** — 将 `logging.getLogger(__name__)` 等标准库日志转发到 loguru，实现统一输出。
+
+---
+
 ## 3. 中间件
 
 ### 3.1 限流中间件 (middleware/rate_limit.py)
@@ -429,7 +467,16 @@ Redis Sorted Set 滑动窗口算法：
 
 ---
 
-### 3.3 全局异常处理中间件 (middleware/error_handler.py)
+### 3.3 Request-ID 链路追踪中间件 (middleware/request_id.py)
+
+- 为每个请求分配 12 位 hex `request_id`。
+- 优先读取 `X-Request-ID` 请求头，若无则自动生成。
+- 通过 `ContextVar` 在请求上下文中共享 `request_id`，供日志和业务代码访问。
+- 响应头返回 `X-Request-ID`，便于客户端链路追踪。
+
+---
+
+### 3.4 全局异常处理中间件 (middleware/error_handler.py)
 
 统一错误响应格式，确保未捕获异常返回结构化 JSON 而非 Starlette 默认纯文本。
 

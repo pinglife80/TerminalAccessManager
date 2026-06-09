@@ -1,6 +1,6 @@
 # TerminalAccessManager - 部署与运维手册
 
-> 文档版本：v3.1.0 | 更新日期：2026-06-09
+> 文档版本：v3.2.0 | 更新日期：2026-06-10
 
 ## 目录
 
@@ -122,6 +122,7 @@ vim .env                          # 编辑配置
 | `SWITCH_HOST` | 否 | 网络交换机 IP |
 | `SWITCH_USERNAME` | 否 | 交换机用户名 |
 | `SWITCH_PASSWORD` | 否 | 交换机密码 |
+| `TZ` | 否 | 系统时区（默认 `Asia/Shanghai`），影响所有容器系统时间、后端日志时间戳、PostgreSQL 日志和查询时间。修改后需重启所有服务：`docker compose down && docker compose up -d` |
 
 ### 3.5 docker-compose.yml 安全配置
 
@@ -131,11 +132,29 @@ vim .env                          # 编辑配置
 
 **容器安全加固：**
 
+docker-compose.yml 中包含生产环境安全加固项（标注 `Production hardening`），默认以注释形式提供：
+
+- 开发环境直接运行即可，无需额外配置
+- 生产环境取消注释即可启用以下加固措施：
+
 | 措施 | 适用服务 | 说明 |
 |------|---------|------|
+| `security_opt: no-new-privileges:true` | 所有服务 | 禁止容器内提权 |
 | `cap_drop: [ALL]` | 所有 5 个服务 | 移除所有 Linux capabilities，最小权限原则 |
 | `cap_add: [NET_BIND_SERVICE]` | nginx | 需要绑定 80/443 低位端口 |
+| `read_only: true` | backend、nginx | 文件系统只读，防止运行时篡改 |
 | `restart: unless-stopped` | postgres、redis | 容器异常退出后自动重启 |
+
+### 3.6 PostgreSQL 时区配置
+
+docker-compose.yml 中 PostgreSQL 服务的 `command` 新增了以下时区参数，与全局 `TZ` 环境变量联动：
+
+| 参数 | 值 | 说明 |
+|------|------|------|
+| `log_timezone` | `${TZ:-Asia/Shanghai}` | PostgreSQL 日志时间戳时区 |
+| `timezone` | `${TZ:-Asia/Shanghai}` | PostgreSQL 查询和事务时区 |
+
+> 这两个参数默认读取 `.env` 中的 `TZ` 变量，若未设置则回退到 `Asia/Shanghai`。修改 `TZ` 后需重启所有服务使配置生效。
 
 ---
 

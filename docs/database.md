@@ -1,6 +1,6 @@
 # TerminalAccessManager 数据库设计文档
 
-> 文档版本：v3.1.0 | 更新日期：2026-06-09
+> 文档版本：v3.2.0 | 更新日期：2026-06-10
 
 ## 1. 概述
 
@@ -22,6 +22,27 @@
 | pool_timeout | 30 | 获取连接超时时间（秒），SQLAlchemy 默认值 |
 | pool_recycle | 3600 | 连接回收时间（秒） |
 | pool_pre_ping | true | 使用前检测连接可用性 |
+
+### 1.3 PostgreSQL 配置参数
+
+docker-compose.yml 中 PostgreSQL 的 `command` 参数列表如下：
+
+| 参数 | 值 | 说明 |
+|---|---|---|
+| shared_buffers | 256MB | 共享缓冲区大小 |
+| work_mem | 4MB | 排序/哈希操作内存 |
+| effective_cache_size | 768MB | 查询规划器可用缓存估计 |
+| wal_level | replica | WAL 日志级别 |
+| max_connections | 100 | 最大连接数 |
+| random_page_cost | 1.1 | 随机页面访问成本（SSD 优化） |
+| log_min_duration_statement | 1000 | 慢查询阈值（ms） |
+| log_connections | on | 记录连接日志 |
+| log_disconnections | on | 记录断开连接日志 |
+| log_line_prefix | `%t [%p] %u@%d ` | 日志行前缀格式 |
+| log_timezone | `${TZ:-Asia/Shanghai}` | 数据库日志时间戳时区 |
+| timezone | `${TZ:-Asia/Shanghai}` | 数据库查询时间时区 |
+
+> **时区参数说明：** `log_timezone` 和 `timezone` 的实际值从 `.env` 文件中的 `TZ` 变量读取，默认为 `Asia/Shanghai`。修改 `.env` 中的 `TZ` 值后，重启容器即可同时更新数据库日志时区和查询时区，确保日志时间戳与业务时间一致。
 
 ---
 
