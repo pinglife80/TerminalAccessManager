@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.security import get_current_user
+from app.core.security import require_permission
 from app.models.user import User
 from app.models.terminal import Terminal
 from app.schemas.terminal import (
@@ -22,7 +22,7 @@ async def get_invalid_mac_addresses(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_permission("terminal:read"))
 ):
     """Get invalid (unfrozen) MAC addresses with pagination"""
     service = TerminalService(db)
@@ -41,7 +41,7 @@ async def search_mac_addresses(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_permission("terminal:read"))
 ):
     """Search MAC addresses by various criteria with date range filtering"""
     query = TerminalQuery(
@@ -68,7 +68,7 @@ async def block_ip_address(
     block_time: str = Query("30d", description="Block duration (e.g. 30d, 15d, 7d, 1h)"),
     firewall_tag: Optional[str] = Query(None, description="Firewall tag to route block operation"),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_permission("terminal:write"))
 ):
     """Block an IP address via Sangfor API"""
     service = TerminalService(db)
@@ -89,7 +89,7 @@ async def unblock_ip_address(
     ip_address: str,
     firewall_tag: Optional[str] = Query(None, description="Firewall tag to route unblock operation"),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_permission("terminal:write"))
 ):
     """Unblock an IP address via Sangfor API"""
     service = TerminalService(db)
@@ -108,7 +108,7 @@ async def unblock_ip_address(
 async def get_mac_address_by_id(
     mac_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_permission("terminal:read"))
 ):
     """Get a specific terminal record by ID"""
     from sqlalchemy import select

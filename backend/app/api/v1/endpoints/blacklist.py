@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.security import get_current_user
+from app.core.security import require_permission
 from app.models.user import User
 from app.schemas.terminal import (
     BlacklistCreate,
@@ -25,7 +25,7 @@ async def get_blacklist(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_permission("blacklist:read"))
 ):
     """Get all blacklisted terminals with search and date filtering"""
     query = None
@@ -48,7 +48,7 @@ async def get_blacklist(
 async def add_to_blacklist(
     blacklist_data: BlacklistCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_permission("blacklist:write"))
 ):
     """Add to blacklist by IP address, MAC address, or both.
     Also blocks the IP on Sangfor AF firewall if configured."""
@@ -81,7 +81,7 @@ async def add_to_blacklist(
 async def delete_from_blacklist(
     identifier: str,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_permission("blacklist:write"))
 ):
     """Remove from blacklist by MAC address or IP address.
     Also unblocks the IP on Sangfor AF firewall if configured."""

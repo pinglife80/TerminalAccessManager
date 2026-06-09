@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.security import get_current_user, get_current_active_superuser
+from app.core.security import get_current_user, require_permission
 from app.models.user import User
 from app.models.compliance_baseline import ComplianceBaseline
 from app.schemas.compliance_baseline import (
@@ -23,7 +23,7 @@ async def list_baselines(
     type: Optional[str] = Query(None, description="Filter by type (ipguard)"),
     enabled: Optional[bool] = Query(None, description="Filter by enabled status"),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("baseline:read")),
 ):
     """List all compliance baselines"""
     from sqlalchemy import select
@@ -41,9 +41,9 @@ async def create_baseline(
     data: ComplianceBaselineCreate,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_superuser),
+    current_user: User = Depends(require_permission("baseline:write")),
 ):
-    """Create a new compliance baseline (superuser only)"""
+    """Create a new compliance baseline (requires baseline:write permission)"""
     # Check unique constraints
     from sqlalchemy import select
     if await db.execute(select(ComplianceBaseline).where(ComplianceBaseline.name == data.name)):
@@ -73,7 +73,7 @@ async def create_baseline(
 async def get_baseline(
     baseline_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("baseline:read")),
 ):
     """Get compliance baseline details by ID"""
     from sqlalchemy import select
@@ -91,9 +91,9 @@ async def update_baseline(
     data: ComplianceBaselineUpdate,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_superuser),
+    current_user: User = Depends(require_permission("baseline:write")),
 ):
-    """Update a compliance baseline (superuser only)"""
+    """Update a compliance baseline (requires baseline:write permission)"""
     from sqlalchemy import select
     stmt = select(ComplianceBaseline).where(ComplianceBaseline.id == baseline_id)
     result = await db.execute(stmt)
@@ -122,9 +122,9 @@ async def delete_baseline(
     baseline_id: int,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_superuser),
+    current_user: User = Depends(require_permission("baseline:write")),
 ):
-    """Delete a compliance baseline (superuser only)"""
+    """Delete a compliance baseline (requires baseline:write permission)"""
     from sqlalchemy import select
     stmt = select(ComplianceBaseline).where(ComplianceBaseline.id == baseline_id)
     result = await db.execute(stmt)
@@ -149,9 +149,9 @@ async def delete_baseline(
 async def test_baseline_connection(
     baseline_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_superuser),
+    current_user: User = Depends(require_permission("baseline:test")),
 ):
-    """Test connection to a compliance baseline (superuser only)"""
+    """Test connection to a compliance baseline (requires baseline:test permission)"""
     from sqlalchemy import select
     stmt = select(ComplianceBaseline).where(ComplianceBaseline.id == baseline_id)
     result = await db.execute(stmt)
@@ -184,9 +184,9 @@ async def test_baseline_connection(
 async def sync_baseline(
     baseline_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_superuser),
+    current_user: User = Depends(require_permission("baseline:sync")),
 ):
-    """Manually trigger sync for a compliance baseline (superuser only)"""
+    """Manually trigger sync for a compliance baseline (requires baseline:sync permission)"""
     from sqlalchemy import select
     stmt = select(ComplianceBaseline).where(ComplianceBaseline.id == baseline_id)
     result = await db.execute(stmt)

@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.security import get_current_user, get_current_active_superuser
+from app.core.security import get_current_user, require_permission
 from app.models.user import User
 from app.models.data_source import DataSource, DataSourceBinding
 from app.schemas.data_source import (
@@ -36,7 +36,7 @@ async def list_data_sources(
     type: Optional[str] = Query(None, description="Filter by type (arp_ssh, arp_api, sangfor)"),
     enabled: Optional[bool] = Query(None, description="Filter by enabled status"),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("datasource:read")),
 ):
     """List all data sources with optional filtering"""
     service = DataSourceService(db)
@@ -49,9 +49,9 @@ async def create_data_source(
     data: DataSourceCreate,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_superuser),
+    current_user: User = Depends(require_permission("datasource:write")),
 ):
-    """Create a new data source (superuser only)"""
+    """Create a new data source (requires datasource:write permission)"""
     service = DataSourceService(db)
     try:
         source = await service.create_data_source(data)
@@ -76,7 +76,7 @@ async def create_data_source(
 async def get_data_source(
     source_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("datasource:read")),
 ):
     """Get data source details by ID"""
     service = DataSourceService(db)
@@ -95,9 +95,9 @@ async def update_data_source(
     data: DataSourceUpdate,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_superuser),
+    current_user: User = Depends(require_permission("datasource:write")),
 ):
-    """Update a data source (superuser only)"""
+    """Update a data source (requires datasource:write permission)"""
     service = DataSourceService(db)
     try:
         source = await service.update_data_source(source_id, data)
@@ -127,9 +127,9 @@ async def delete_data_source(
     source_id: int,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_superuser),
+    current_user: User = Depends(require_permission("datasource:write")),
 ):
-    """Delete a data source (superuser only)"""
+    """Delete a data source (requires datasource:write permission)"""
     service = DataSourceService(db)
     source = await service.get_data_source_by_id(source_id)
     if not source:
@@ -160,9 +160,9 @@ async def test_data_source_connection(
     source_id: int,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_superuser),
+    current_user: User = Depends(require_permission("datasource:test")),
 ):
-    """Test connection to a data source (superuser only)"""
+    """Test connection to a data source (requires datasource:test permission)"""
     service = DataSourceService(db)
     source = await service.get_data_source_by_id(source_id)
     if not source:
@@ -189,9 +189,9 @@ async def sync_data_source(
     source_id: int,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_superuser),
+    current_user: User = Depends(require_permission("datasource:sync")),
 ):
-    """Manually trigger data sync for a data source (superuser only)"""
+    """Manually trigger data sync for a data source (requires datasource:sync permission)"""
     service = DataSourceService(db)
     source = await service.get_data_source_by_id(source_id)
     if not source:
@@ -242,7 +242,7 @@ async def sync_data_source(
 async def list_bindings(
     arp_source_tag: Optional[str] = Query(None, description="Filter by ARP source tag"),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("datasource:read")),
 ):
     """List all data source bindings"""
     service = DataSourceService(db)
@@ -255,9 +255,9 @@ async def create_binding(
     data: DataSourceBindingCreate,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_superuser),
+    current_user: User = Depends(require_permission("datasource:write")),
 ):
-    """Create a binding between an ARP source and a firewall (superuser only)"""
+    """Create a binding between an ARP source and a firewall (requires datasource:write permission)"""
     service = DataSourceService(db)
     try:
         binding = await service.create_binding(data.arp_source_tag, data.firewall_tag)
@@ -283,9 +283,9 @@ async def delete_binding(
     binding_id: int,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_superuser),
+    current_user: User = Depends(require_permission("datasource:write")),
 ):
-    """Delete a data source binding (superuser only)"""
+    """Delete a data source binding (requires datasource:write permission)"""
     service = DataSourceService(db)
     deleted = await service.delete_binding(binding_id)
     if not deleted:
@@ -309,9 +309,9 @@ async def delete_binding(
 async def compliance_check(
     request: ComplianceCheckRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_superuser),
+    current_user: User = Depends(require_permission("datasource:compliance")),
 ):
-    """Manually trigger compliance check (superuser only)"""
+    """Manually trigger compliance check (requires datasource:compliance permission)"""
     from sqlalchemy import select, and_
     from app.models.terminal import Terminal
 
@@ -382,9 +382,9 @@ async def compliance_check(
 async def auto_block(
     request: AutoBlockRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_superuser),
+    current_user: User = Depends(require_permission("datasource:compliance")),
 ):
-    """Manually trigger auto-block of non-compliant terminals (superuser only)"""
+    """Manually trigger auto-block of non-compliant terminals (requires datasource:compliance permission)"""
     compliance_service = ComplianceService(db)
     result = await compliance_service.auto_block_non_compliant(
         arp_source_tag=request.arp_source_tag,
@@ -397,9 +397,9 @@ async def auto_block(
 @router.post("/compliance/auto-unblock", response_model=AutoUnblockResult)
 async def auto_unblock(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_superuser),
+    current_user: User = Depends(require_permission("datasource:compliance")),
 ):
-    """Manually trigger auto-unblock of compliant terminals (superuser only)"""
+    """Manually trigger auto-unblock of compliant terminals (requires datasource:compliance permission)"""
     compliance_service = ComplianceService(db)
     result = await compliance_service.auto_unblock_compliant()
     return result

@@ -6,7 +6,7 @@ import uuid
 import shutil
 
 from app.core.database import get_db
-from app.core.security import get_current_active_superuser
+from app.core.security import require_permission
 from app.models.user import User
 from app.schemas.system_config import (
     SystemConfigResponse, SystemConfigUpdate, ConfigUpdateResult,
@@ -40,10 +40,10 @@ async def get_public_branding(
 
 @router.get("/", response_model=AllConfigsResponse)
 async def get_all_configs(
-    current_user: User = Depends(get_current_active_superuser),
+    current_user: User = Depends(require_permission("settings:read")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get all system configurations grouped by category (superuser only)"""
+    """Get all system configurations grouped by category (requires settings:read permission)"""
     service = ConfigService(db)
     return await service.get_all_grouped()
 
@@ -51,10 +51,10 @@ async def get_all_configs(
 @router.get("/list", response_model=List[SystemConfigResponse])
 async def list_configs(
     category: Optional[str] = Query(None, description="Filter by category"),
-    current_user: User = Depends(get_current_active_superuser),
+    current_user: User = Depends(require_permission("settings:read")),
     db: AsyncSession = Depends(get_db),
 ):
-    """List all config entries with metadata (superuser only)"""
+    """List all config entries with metadata (requires settings:read permission)"""
     service = ConfigService(db)
     return await service.list_all(category)
 
@@ -63,10 +63,10 @@ async def list_configs(
 async def update_configs(
     updates: List[SystemConfigUpdate],
     request: Request,
-    current_user: User = Depends(get_current_active_superuser),
+    current_user: User = Depends(require_permission("settings:write")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Update one or more config values (superuser only).
+    """Update one or more config values (requires settings:write permission).
     Read-only configs cannot be changed through this endpoint.
     Changes take effect immediately via cache invalidation."""
     service = ConfigService(db)
@@ -88,10 +88,10 @@ async def update_single_config(
     key: str,
     update: SystemConfigUpdate,
     request: Request,
-    current_user: User = Depends(get_current_active_superuser),
+    current_user: User = Depends(require_permission("settings:write")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Update a single config value by key (superuser only)"""
+    """Update a single config value by key (requires settings:write permission)"""
     service = ConfigService(db)
     result = await service.set(key, update.value, updated_by=current_user.username)
     if not result.success:
@@ -112,7 +112,7 @@ async def update_single_config(
 
 @router.post("/seed", response_model=dict)
 async def seed_default_configs(
-    current_user: User = Depends(get_current_active_superuser),
+    current_user: User = Depends(require_permission("settings:write")),
     db: AsyncSession = Depends(get_db),
 ):
     """Seed default configs into the database. Idempotent - skips existing keys."""
@@ -123,7 +123,7 @@ async def seed_default_configs(
 
 @router.post("/invalidate-cache", response_model=dict)
 async def invalidate_config_cache(
-    current_user: User = Depends(get_current_active_superuser),
+    current_user: User = Depends(require_permission("settings:write")),
     db: AsyncSession = Depends(get_db),
 ):
     """Invalidate all config cache entries in Redis.
@@ -137,7 +137,7 @@ async def invalidate_config_cache(
 async def upload_branding_asset(
     file: UploadFile = File(...),
     purpose: str = Query(..., description="Purpose: 'login_bg' or 'favicon'"),
-    current_user: User = Depends(get_current_active_superuser),
+    current_user: User = Depends(require_permission("settings:upload")),
     db: AsyncSession = Depends(get_db),
 ):
     """Upload a branding asset (login background image or favicon).

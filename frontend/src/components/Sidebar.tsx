@@ -29,6 +29,7 @@ const iconMap: Record<string, React.ComponentType<{ className?: string }>> = {
   FileText,
   Database,
   Users,
+  Shield,
 };
 
 // Map NAV_ITEMS label to i18n key
@@ -40,6 +41,7 @@ const navLabelKeyMap: Record<string, string> = {
   'Audit Logs': 'nav.auditLogs',
   'Data Sources': 'nav.dataSources',
   'Users': 'nav.users',
+  'Roles': 'nav.roles',
 };
 
 const Sidebar: React.FC = () => {
@@ -49,7 +51,17 @@ const Sidebar: React.FC = () => {
   const [collapsed, setCollapsed] = useState(false);
 
   const navItems = NAV_ITEMS
-    .filter((item) => !item.adminOnly || user?.is_superuser)
+    .filter((item) => {
+      // If requiredPermission is set, always check it (unified permission-based access)
+      if (item.requiredPermission) {
+        return user?.is_superuser || user?.permissions?.includes(item.requiredPermission);
+      }
+      // No requiredPermission: if adminOnly, check is_superuser
+      if (item.adminOnly) {
+        return !!user?.is_superuser;
+      }
+      return true;
+    })
     .map((item) => ({
       path: item.path,
       label: navLabelKeyMap[item.label] ? t(navLabelKeyMap[item.label]) : item.label,
@@ -139,7 +151,9 @@ const Sidebar: React.FC = () => {
               <div className="overflow-hidden">
                 <p className="text-sm font-medium truncate">{user?.username}</p>
                 <p className="text-xs text-gray-400 truncate">
-                  {user?.is_superuser ? t('users.administrator') : t('users.userRole')}
+                  {user?.roles && user.roles.length > 0
+                    ? user.roles.map((r) => t(`roles.${r}`, r)).join(', ')
+                    : user?.is_superuser ? t('users.administrator') : t('users.userRole')}
                 </p>
               </div>
             )}

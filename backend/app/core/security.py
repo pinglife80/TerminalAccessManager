@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 import redis.asyncio as aioredis
 import uuid
+import json
 import random
 from loguru import logger
 
@@ -67,8 +68,8 @@ async def is_token_blacklisted(jti: str) -> bool:
         redis_client = await get_redis_client()
         return await redis_client.exists(f"token_blacklist:{jti}") > 0
     except Exception as e:
-        logger.warning(f"Redis unavailable, allowing token (fail-open): {e}")
-        return False
+        logger.warning(f"Redis unavailable, treating token as blacklisted (fail-closed): {e}")
+        return True
 
 
 # ==================== Token Version Functions ====================
@@ -243,7 +244,7 @@ async def verify_captcha(captcha_id: str, user_answer: str) -> bool:
         except (ValueError, TypeError):
             return False
     except Exception as e:
-        logger.warning(f"Redis unavailable, captcha verification failed (fail-open): {e}")
+        logger.warning(f"Redis unavailable, captcha verification failed (fail-closed): {e}")
         return False
 
 
@@ -379,3 +380,62 @@ async def get_current_active_superuser(
         )
 
     return current_user
+
+
+async def get_user_permissions(db: AsyncSession, user_id: int) -> set[str]:
+    """Get all permission codes for a user via their roles (with Redis cache)"""
+    try:
+        redis_client = await get_redis_client()
+        cache_key = f"user_perms:{user_id}"
+        cached = await redis_client.get(cache_key)
+        if cached:
+            return set(json.loads(cached))
+    except Exception as e:
+        logger.warning(f"Redis unavailable for permission cache: {e}")
+
+    from sqlalchemy import select
+    from app.models.role import Permission, RolePermission, UserRole
+
+    result = await db.execute(
+        select(Permission.code)
+        .join(RolePermission, RolePermission.permission_id == Permission.id)
+        .join(UserRole, UserRole.role_id == RolePermission.role_id)
+        .where(UserRole.user_id == user_id)
+    )
+    perms = set(result.scalars().all())
+
+    try:
+        redis_client = await get_redis_client()
+        await redis_client.setex(f"user_perms:{user_id}", 300, json.dumps(list(perms)))
+    except Exception as e:
+        logger.warning(f"Redis unavailable for permission cache write: {e}")
+
+    return perms
+
+
+async def invalidate_user_permissions(user_id: int) -> None:
+    """Invalidate cached permissions for a user"""
+    try:
+        redis_client = await get_redis_client()
+        await redis_client.delete(f"user_perms:{user_id}")
+    except Exception as e:
+        logger.warning(f"Redis unavailable for permission cache invalidation: {e}")
+
+
+def require_permission(permission_code: str):
+    """Dependency factory for permission-based access control.
+    Superusers always pass. Other users must have the specified permission."""
+    async def permission_checker(
+        current_user: User = Depends(get_current_user),
+        db: AsyncSession = Depends(get_db)
+    ) -> User:
+        if current_user.is_superuser:
+            return current_user
+        perms = await get_user_permissions(db, current_user.id)
+        if permission_code not in perms:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Permission denied: {permission_code}"
+            )
+        return current_user
+    return permission_checker

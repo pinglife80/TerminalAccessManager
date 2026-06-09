@@ -11,6 +11,7 @@ import { EmptyState } from '@/components/StateDisplay';
 import { PageSkeleton } from '@/components/Skeleton';
 import { DateRangeFilter } from '@/components/DateRangeFilter';
 import { formatDate, useDebounce, getErrorMessage } from '@/lib/utils';
+import { usePermission } from '@/hooks/usePermission';
 
 const ACTION_CATEGORIES = [
   {
@@ -154,6 +155,7 @@ const parseDetails = (details: string | null | undefined) => {
 
 const AuditLogs: React.FC = () => {
   const { t } = useTranslation();
+  const { hasPermission } = usePermission();
   const [searchTerm, setSearchTerm] = useState('');
   const [filterCategory, setFilterCategory] = useState<string>('all');
   const [filterAction, setFilterAction] = useState<string>('all');
@@ -322,12 +324,14 @@ const AuditLogs: React.FC = () => {
           <h1 className="text-2xl sm:text-3xl font-bold text-foreground">{t('auditLogs.title')}</h1>
           <p className="text-muted-foreground mt-1">{t('auditLogs.trackAllActivities')}</p>
         </div>
-        <PrimaryButton
-          icon={Download}
-          label={t('auditLogs.exportLogs')}
-          variant="success"
-          onClick={handleExport}
-        />
+        {hasPermission('audit:export') && (
+          <PrimaryButton
+            icon={Download}
+            label={t('auditLogs.exportLogs')}
+            variant="success"
+            onClick={handleExport}
+          />
+        )}
       </div>
 
       {/* Search and Filters */}

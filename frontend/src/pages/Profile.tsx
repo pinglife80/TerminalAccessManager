@@ -109,7 +109,11 @@ const Profile: React.FC = () => {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <p className="text-sm text-muted-foreground">{t('profile.role')}</p>
-                  <p className="font-medium text-foreground">{user?.is_superuser ? t('profile.administrator') : t('profile.user')}</p>
+                  <p className="font-medium text-foreground">
+                    {user?.roles && user.roles.length > 0
+                      ? user.roles.map((r) => t(`roles.${r}`, r)).join(', ')
+                      : user?.is_superuser ? t('profile.administrator') : t('profile.user')}
+                  </p>
                 </div>
                 <div>
                   <p className="text-sm text-muted-foreground">{t('profile.status')}</p>

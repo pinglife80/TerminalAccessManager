@@ -22,9 +22,13 @@ from app.core.security import (
     reset_login_attempts,
     generate_captcha,
     verify_captcha,
+    require_permission,
+    invalidate_user_permissions,
+    get_user_permissions,
 )
 from app.core.config import settings
 from app.models.user import User
+from app.models.role import Role, UserRole, RolePermission, Permission
 from app.schemas.auth import (
     Token, UserCreate, UserResponse, UserDetailResponse,
     UserUpdate, AdminUserCreate, PasswordChange, AdminPasswordReset, ProfileUpdate,
@@ -34,6 +38,34 @@ from app.schemas.terminal import ResponseMessage
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.API_V1_STR}/auth/login")
+
+
+async def _get_superadmin_role_id(db: AsyncSession) -> int:
+    """Get the superadmin role ID dynamically from the database.
+    Falls back to 1 if the superadmin role is not found."""
+    result = await db.execute(select(Role.id).where(Role.name == "superadmin"))
+    role_id = result.scalar_one_or_none()
+    return role_id or 1
+
+
+async def _build_user_detail_response(db: AsyncSession, user: User) -> UserDetailResponse:
+    """Build UserDetailResponse from User ORM object, querying roles from DB
+    to avoid DetachedInstanceError when accessing the roles relationship."""
+    role_result = await db.execute(
+        select(Role.name).join(UserRole, UserRole.role_id == Role.id).where(UserRole.user_id == user.id)
+    )
+    role_names = list(role_result.scalars().all())
+    return UserDetailResponse(
+        id=user.id,
+        username=user.username,
+        email=user.email,
+        is_active=user.is_active,
+        is_superuser=user.is_superuser,
+        roles=role_names,
+        permissions=[],
+        created_at=user.created_at,
+        updated_at=user.updated_at,
+    )
 
 
 @router.post("/login", response_model=Token)
@@ -230,15 +262,54 @@ async def register(
     await db.commit()
     await db.refresh(new_user)
 
-    return new_user
+    # Assign default role (operator) to newly registered user
+    default_role = await db.execute(select(Role).where(Role.is_default == True))
+    role = default_role.scalar_one_or_none()
+    role_names = []
+    if role:
+        db.add(UserRole(user_id=new_user.id, role_id=role.id))
+        await db.commit()
+        role_names = [role.name]
+
+    return UserResponse(
+        id=new_user.id,
+        username=new_user.username,
+        email=new_user.email,
+        is_active=new_user.is_active,
+        is_superuser=new_user.is_superuser,
+        roles=role_names,
+        permissions=[],
+    )
 
 
 @router.get("/me", response_model=UserResponse)
 async def get_current_user_info(
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
-    """Get current user information"""
-    return current_user
+    """Get current user information with roles and permissions"""
+    # Get role names
+    role_result = await db.execute(
+        select(Role.name).join(UserRole, UserRole.role_id == Role.id).where(UserRole.user_id == current_user.id)
+    )
+    role_names = list(role_result.scalars().all())
+
+    # Get permission codes
+    if current_user.is_superuser:
+        perm_result = await db.execute(select(Permission.code))
+        perm_codes = list(perm_result.scalars().all())
+    else:
+        perm_codes = list(await get_user_permissions(db, current_user.id))
+
+    return UserResponse(
+        id=current_user.id,
+        username=current_user.username,
+        email=current_user.email,
+        is_active=current_user.is_active,
+        is_superuser=current_user.is_superuser,
+        roles=role_names,
+        permissions=perm_codes,
+    )
 
 
 @router.post("/refresh", response_model=Token)
@@ -371,7 +442,22 @@ async def update_profile(
         current_user.email = profile.email
         await db.commit()
         await db.refresh(current_user)
-    return current_user
+
+    # Query roles to avoid DetachedInstanceError
+    role_result = await db.execute(
+        select(Role.name).join(UserRole, UserRole.role_id == Role.id).where(UserRole.user_id == current_user.id)
+    )
+    role_names = list(role_result.scalars().all())
+
+    return UserResponse(
+        id=current_user.id,
+        username=current_user.username,
+        email=current_user.email,
+        is_active=current_user.is_active,
+        is_superuser=current_user.is_superuser,
+        roles=role_names,
+        permissions=[],
+    )
 
 
 @router.put("/me/password", response_model=ResponseMessage)
@@ -406,25 +492,17 @@ async def change_password(
 
 # ==================== Admin User Management APIs ====================
 
-async def get_current_active_superuser(current_user: User = Depends(get_current_user)) -> User:
-    """Dependency: ensure current user is a superuser"""
-    if not current_user.is_superuser:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Superuser access required",
-        )
-    return current_user
-
 
 @router.get("/users", response_model=list[UserDetailResponse])
 async def list_users(
     search: Optional[str] = None,
     is_active: Optional[bool] = None,
-    current_user: User = Depends(get_current_active_superuser),
+    current_user: User = Depends(require_permission("user:read")),
     db: AsyncSession = Depends(get_db),
 ):
-    """List all users with optional search and filter (superuser only)"""
-    stmt = select(User).order_by(User.id)
+    """List all users with optional search and filter (requires user:read permission)"""
+    from sqlalchemy.orm import selectinload
+    stmt = select(User).options(selectinload(User.roles)).order_by(User.id)
     if search:
         escaped_search = search.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
         stmt = stmt.where(
@@ -433,17 +511,28 @@ async def list_users(
     if is_active is not None:
         stmt = stmt.where(User.is_active == is_active)
     result = await db.execute(stmt)
-    return result.scalars().all()
+    users = result.scalars().all()
+    # Build response with role names
+    response = []
+    for u in users:
+        role_names = [r.name for r in u.roles] if u.roles else []
+        response.append(UserDetailResponse(
+            id=u.id, username=u.username, email=u.email,
+            is_active=u.is_active, is_superuser=u.is_superuser,
+            roles=role_names, permissions=[],
+            created_at=u.created_at, updated_at=u.updated_at,
+        ))
+    return response
 
 
 @router.post("/users", response_model=UserDetailResponse, status_code=status.HTTP_201_CREATED)
 async def admin_create_user(
     user_data: AdminUserCreate,
     request: Request,
-    current_user: User = Depends(get_current_active_superuser),
+    current_user: User = Depends(require_permission("user:write")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Create a new user (superuser only)"""
+    """Create a new user (requires user:write permission)"""
     # Check username uniqueness
     result = await db.execute(select(User).where(User.username == user_data.username))
     if result.scalar_one_or_none():
@@ -466,6 +555,24 @@ async def admin_create_user(
     await db.commit()
     await db.refresh(new_user)
 
+    # Assign roles if provided
+    if user_data.role_ids:
+        for rid in user_data.role_ids:
+            db.add(UserRole(user_id=new_user.id, role_id=rid))
+    elif not user_data.is_superuser:
+        # Assign default role (operator) if no roles specified and not superuser
+        default_role = await db.execute(select(Role).where(Role.is_default == True))
+        role = default_role.scalar_one_or_none()
+        if role:
+            db.add(UserRole(user_id=new_user.id, role_id=role.id))
+
+    # Assign superadmin role if is_superuser
+    if new_user.is_superuser:
+        superadmin_role_id = await _get_superadmin_role_id(db)
+        db.add(UserRole(user_id=new_user.id, role_id=superadmin_role_id))
+
+    await db.commit()
+
     # Audit log
     from app.services.terminal_service import TerminalService
     ts = TerminalService(db)
@@ -474,21 +581,21 @@ async def admin_create_user(
                          "role": "superuser" if new_user.is_superuser else "user"},
                         ip_address=request.client.host if request.client else None)
 
-    return new_user
+    return await _build_user_detail_response(db, new_user)
 
 
 @router.get("/users/{user_id}", response_model=UserDetailResponse)
 async def get_user(
     user_id: int,
-    current_user: User = Depends(get_current_active_superuser),
+    current_user: User = Depends(require_permission("user:read")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get user details by ID (superuser only)"""
+    """Get user details by ID (requires user:read permission)"""
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    return user
+    return await _build_user_detail_response(db, user)
 
 
 @router.put("/users/{user_id}", response_model=UserDetailResponse)
@@ -496,10 +603,10 @@ async def admin_update_user(
     user_id: int,
     user_data: UserUpdate,
     request: Request,
-    current_user: User = Depends(get_current_active_superuser),
+    current_user: User = Depends(require_permission("user:write")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Update user info (superuser only)"""
+    """Update user info (requires user:write permission)"""
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
     if not user:
@@ -522,11 +629,54 @@ async def admin_update_user(
             raise HTTPException(status_code=400, detail="Cannot deactivate your own account")
         user.is_active = user_data.is_active
 
-    if user_data.is_superuser is not None:
+    if user_data.is_superuser is not None and user_data.is_superuser != user.is_superuser:
+        old_role = "superuser" if user.is_superuser else "user"
+        new_role = "superuser" if user_data.is_superuser else "user"
         user.is_superuser = user_data.is_superuser
+
+        # Sync superadmin role
+        superadmin_role_id = await _get_superadmin_role_id(db)
+        if user_data.is_superuser:
+            existing_sa = await db.execute(
+                select(UserRole).where(UserRole.user_id == user.id, UserRole.role_id == superadmin_role_id)
+            )
+            if not existing_sa.scalar_one_or_none():
+                db.add(UserRole(user_id=user.id, role_id=superadmin_role_id))
+        else:
+            await db.execute(
+                UserRole.__table__.delete().where(
+                    UserRole.user_id == user.id, UserRole.role_id == superadmin_role_id
+                )
+            )
+
+        # Invalidate permission cache
+        await invalidate_user_permissions(user.id)
+
+        # Dedicated audit log for role change
+        from app.services.terminal_service import TerminalService
+        ts = TerminalService(db)
+        await ts.log_action(current_user.username, "role_change", "user", str(user.id),
+                            {"message": f"User role changed from {old_role} to {new_role}",
+                             "target_user": user.username, "old_role": old_role, "new_role": new_role},
+                            ip_address=request.client.host if request.client else None)
 
     await db.commit()
     await db.refresh(user)
+
+    # Handle role assignment
+    if user_data.role_ids is not None:
+        await db.execute(UserRole.__table__.delete().where(UserRole.user_id == user.id))
+        for rid in user_data.role_ids:
+            db.add(UserRole(user_id=user.id, role_id=rid))
+        # Sync is_superuser
+        superadmin_role_id = await _get_superadmin_role_id(db)
+        sa_result = await db.execute(
+            select(UserRole).where(UserRole.user_id == user.id, UserRole.role_id == superadmin_role_id)
+        )
+        user.is_superuser = sa_result.scalar_one_or_none() is not None
+        await db.commit()
+        await db.refresh(user)
+        await invalidate_user_permissions(user.id)
 
     # Audit log
     from app.services.terminal_service import TerminalService
@@ -535,17 +685,17 @@ async def admin_update_user(
                         {"message": "Updated user", "username": user.username},
                         ip_address=request.client.host if request.client else None)
 
-    return user
+    return await _build_user_detail_response(db, user)
 
 
 @router.delete("/users/{user_id}", response_model=ResponseMessage)
 async def admin_delete_user(
     user_id: int,
     request: Request,
-    current_user: User = Depends(get_current_active_superuser),
+    current_user: User = Depends(require_permission("user:delete")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Delete a user (superuser only). Cannot delete self."""
+    """Delete a user (requires user:delete permission). Cannot delete self."""
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
     if not user:
@@ -573,10 +723,10 @@ async def admin_reset_password(
     user_id: int,
     data: AdminPasswordReset,
     request: Request,
-    current_user: User = Depends(get_current_active_superuser),
+    current_user: User = Depends(require_permission("user:password")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Reset a user's password (superuser only)"""
+    """Reset a user's password (requires user:password permission)"""
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
     if not user:
@@ -603,10 +753,10 @@ async def admin_reset_password(
 async def admin_unlock_user(
     user_id: int,
     request: Request,
-    current_user: User = Depends(get_current_active_superuser),
+    current_user: User = Depends(require_permission("user:unlock")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Unlock a locked user account (superuser only)"""
+    """Unlock a locked user account (requires user:unlock permission)"""
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
     if not user:

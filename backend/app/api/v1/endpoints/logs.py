@@ -6,7 +6,7 @@ import csv
 from io import StringIO
 
 from app.core.database import get_db
-from app.core.security import get_current_user, get_current_active_superuser
+from app.core.security import get_current_user, require_permission
 from app.models.user import User
 from app.models.log import AuditLog
 from app.schemas.terminal import AuditLogResponse, AuditLogQuery, PaginatedResponse
@@ -25,9 +25,9 @@ async def export_audit_logs(
     end_date: str = Query(None, description="Filter by end date (YYYY-MM-DD)"),
     limit: int = Query(10000, ge=1, le=50000, description="Maximum number of records to export"),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_superuser)
+    current_user: User = Depends(require_permission("audit:export"))
 ):
-    """Export audit logs as CSV with filtering support (superuser only)"""
+    """Export audit logs as CSV with filtering support (requires audit:export permission)"""
     conditions = []
 
     if username:
@@ -35,7 +35,8 @@ async def export_audit_logs(
     if action:
         conditions.append(AuditLog.action == action)
     if search:
-        search_term = f"%{search}%"
+        escaped_search = search.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
+        search_term = f"%{escaped_search}%"
         conditions.append(
             or_(
                 AuditLog.ip_address.ilike(search_term),
@@ -98,7 +99,7 @@ async def get_audit_logs(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_permission("audit:read"))
 ):
     """Get audit logs with pagination"""
     stmt = (
@@ -124,7 +125,7 @@ async def search_audit_logs(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_permission("audit:read"))
 ):
     """Search audit logs by various criteria with date range and keyword filtering"""
     query = AuditLogQuery(

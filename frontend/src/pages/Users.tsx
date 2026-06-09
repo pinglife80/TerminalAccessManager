@@ -4,6 +4,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { useUsers, UserItem } from '@/hooks/useTerminalData';
 import { useAuthStore } from '@/store/auth';
+import { usePermission } from '@/hooks/usePermission';
 import { apiClient } from '@/lib/api';
 import { API_ENDPOINTS } from '@/lib/constants';
 import { getErrorMessage } from '@/lib/utils';
@@ -27,6 +28,7 @@ const Users: React.FC = () => {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const { user: currentUser } = useAuthStore();
+  const { hasPermission } = usePermission();
   const [searchTerm, setSearchTerm] = useState('');
   const { data: users, isLoading } = useUsers(searchTerm || undefined);
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -142,12 +144,14 @@ const Users: React.FC = () => {
           <h1 className="text-2xl sm:text-3xl font-bold text-foreground">{t('users.title')}</h1>
           <p className="text-muted-foreground mt-1">{t('users.manageAccounts')}</p>
         </div>
+        {hasPermission('user:write') && (
         <PrimaryButton
           icon={Plus}
           label={t('users.newUser')}
           variant="primary"
           onClick={() => { reset({ username: '', email: '', password: '', is_active: true, is_superuser: false }); setShowCreateModal(true); }}
         />
+        )}
       </div>
 
       {/* Search and Filter */}
@@ -284,8 +288,8 @@ const Users: React.FC = () => {
                     </td>
                     <td className="px-4 sm:px-6 py-4 whitespace-nowrap text-center">
                       <button
-                        onClick={() => !isSelf(user) && handleToggleActive(user)}
-                        disabled={isSelf(user)}
+                        onClick={() => !isSelf(user) && hasPermission('user:write') && handleToggleActive(user)}
+                        disabled={isSelf(user) || !hasPermission('user:write')}
                         className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium cursor-pointer disabled:cursor-not-allowed ${
                           user.is_active ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
                         }`}
@@ -299,6 +303,7 @@ const Users: React.FC = () => {
                     <td className="px-4 sm:px-6 py-4 whitespace-nowrap">
                       <div className="flex items-center justify-center">
                         <ButtonGroup>
+                          {hasPermission('user:unlock') && (
                           <IconButton
                             icon={Unlock}
                             variant="success"
@@ -306,6 +311,8 @@ const Users: React.FC = () => {
                             title={t('users.unlockAccount')}
                             onClick={() => handleUnlock(user)}
                           />
+                          )}
+                          {hasPermission('user:password') && (
                           <IconButton
                             icon={KeyRound}
                             variant="primary"
@@ -313,6 +320,8 @@ const Users: React.FC = () => {
                             title={t('users.resetPassword')}
                             onClick={() => setResetPasswordUser(user)}
                           />
+                          )}
+                          {hasPermission('user:write') && (
                           <IconButton
                             icon={Edit2}
                             variant="primary"
@@ -320,7 +329,8 @@ const Users: React.FC = () => {
                             title={t('users.editUser')}
                             onClick={() => setEditingUser(user)}
                           />
-                          {!isSelf(user) && (
+                          )}
+                          {!isSelf(user) && hasPermission('user:delete') && (
                             <IconButton
                               icon={Trash2}
                               variant="danger"

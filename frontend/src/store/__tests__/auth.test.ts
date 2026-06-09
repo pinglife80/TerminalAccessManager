@@ -26,6 +26,8 @@ describe('AuthStore', () => {
       email: 'test@example.com',
       is_active: true,
       is_superuser: false,
+      roles: ['operator'],
+      permissions: ['terminal:read'],
     }
     const { login } = useAuthStore.getState()
     login(mockUser, 'access-token-123', 'refresh-token-456')
@@ -42,6 +44,8 @@ describe('AuthStore', () => {
       email: null,
       is_active: true,
       is_superuser: false,
+      roles: [] as string[],
+      permissions: [] as string[],
     }
     const { login } = useAuthStore.getState()
     login(mockUser, 'access-token-123', 'refresh-token-456')
@@ -57,6 +61,8 @@ describe('AuthStore', () => {
       email: 'test@example.com',
       is_active: true,
       is_superuser: false,
+      roles: [] as string[],
+      permissions: [] as string[],
     }
     const { login } = useAuthStore.getState()
     login(mockUser, 'access-token-123', 'refresh-token-456')
@@ -78,6 +84,8 @@ describe('AuthStore', () => {
       email: 'test@example.com',
       is_active: true,
       is_superuser: false,
+      roles: [] as string[],
+      permissions: [] as string[],
     }
     useAuthStore.setState({ user: mockUser, isAuthenticated: true })
 
@@ -106,6 +114,8 @@ describe('AuthStore', () => {
         email: 'test@example.com',
         is_active: true,
         is_superuser: false,
+        roles: [] as string[],
+        permissions: [] as string[],
       }
 
       // Mock axios

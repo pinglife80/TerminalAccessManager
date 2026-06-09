@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.security import get_current_user
+from app.core.security import require_permission
 from app.models.user import User
 from app.schemas.terminal import (
     WhitelistCreate,
@@ -25,7 +25,7 @@ async def get_whitelist(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_permission("whitelist:read"))
 ):
     """Get all whitelisted MAC addresses with search and date filtering"""
     query = None
@@ -48,7 +48,7 @@ async def get_whitelist(
 async def add_to_whitelist(
     whitelist_data: WhitelistCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_permission("whitelist:write"))
 ):
     """Add to whitelist by MAC address, IP address, CIDR subnet, or IP range"""
     service = TerminalService(db)
@@ -72,7 +72,7 @@ async def add_to_whitelist(
 async def delete_from_whitelist(
     identifier: str,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_permission("whitelist:write"))
 ):
     """Remove a MAC address or IP pattern from whitelist"""
     service = TerminalService(db)
