@@ -21,6 +21,11 @@ def _escape_like(value: str) -> str:
     return value.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
 
 
+def _normalize_mac(mac: str) -> str:
+    """Normalize MAC address by removing all separators and uppercasing"""
+    return mac.replace(':', '').replace('-', '').replace('.', '').upper()
+
+
 def _parse_date_range(start_date: Optional[str], end_date: Optional[str]):
     """Parse date range strings into datetime objects for filtering"""
     conditions = []
@@ -291,10 +296,8 @@ class TerminalService:
                 ip_mac_conditions.append(Terminal.ip_address.ilike(f"%{_escape_like(query.ip)}%"))
             if query.mac:
                 # Strip all separators for format-agnostic MAC matching
-                mac_clean = query.mac.replace('-', '').replace(':', '').replace('.', '').upper()
-                # Use func.replace to strip separators from DB column too
-                mac_col_stripped = func.replace(func.replace(func.replace(Terminal.mac_address, ':', ''), '-', ''), '.', '')
-                ip_mac_conditions.append(mac_col_stripped.ilike(f"%{_escape_like(mac_clean)}%"))
+                mac_clean = _normalize_mac(query.mac)
+                ip_mac_conditions.append(Terminal.mac_address_normalized.ilike(f"{_escape_like(mac_clean)}%"))
 
             if ip_mac_conditions:
                 conditions.append(or_(*ip_mac_conditions))
@@ -336,9 +339,8 @@ class TerminalService:
                 ip_mac_conditions.append(Terminal.ip_address.ilike(f"%{_escape_like(query.ip)}%"))
             if query.mac:
                 # Strip all separators for format-agnostic MAC matching
-                mac_clean = query.mac.replace('-', '').replace(':', '').replace('.', '').upper()
-                mac_col_stripped = func.replace(func.replace(func.replace(Terminal.mac_address, ':', ''), '-', ''), '.', '')
-                ip_mac_conditions.append(mac_col_stripped.ilike(f"%{_escape_like(mac_clean)}%"))
+                mac_clean = _normalize_mac(query.mac)
+                ip_mac_conditions.append(Terminal.mac_address_normalized.ilike(f"{_escape_like(mac_clean)}%"))
 
             if ip_mac_conditions:
                 conditions.append(or_(*ip_mac_conditions))
@@ -416,6 +418,7 @@ class TerminalService:
                 blacklist_entry = Blacklist(
                     ip_address=ip_address,
                     mac_address=mac_address,
+                    mac_address_normalized=_normalize_mac(mac_address),
                     blocked_by=username,
                     expires_at=expires_at,
                     source_tag="manual",
@@ -528,13 +531,11 @@ class TerminalService:
             # Search by MAC, IP pattern, or comments
             if query.search:
                 search_term = f"%{query.search}%"
-                # Format-agnostic MAC matching: strip separators from both
-                # the search term and the DB column before comparing
-                mac_clean = query.search.replace('-', '').replace(':', '').replace('.', '').upper()
-                mac_col_stripped = func.replace(func.replace(func.replace(Whitelist.mac_address, ':', ''), '-', ''), '.', '')
+                # Format-agnostic MAC matching using normalized column
+                mac_clean = _normalize_mac(query.search)
                 conditions.append(
                     or_(
-                        mac_col_stripped.ilike(f"%{_escape_like(mac_clean)}%"),
+                        Whitelist.mac_address_normalized.ilike(f"{_escape_like(mac_clean)}%"),
                         Whitelist.ip_pattern.ilike(f"%{_escape_like(search_term)}%"),
                         Whitelist.comments.ilike(f"%{_escape_like(search_term)}%"),
                     )
@@ -567,11 +568,10 @@ class TerminalService:
             # Search by MAC, IP pattern, or comments
             if query.search:
                 search_term = f"%{query.search}%"
-                mac_clean = query.search.replace('-', '').replace(':', '').replace('.', '').upper()
-                mac_col_stripped = func.replace(func.replace(func.replace(Whitelist.mac_address, ':', ''), '-', ''), '.', '')
+                mac_clean = _normalize_mac(query.search)
                 conditions.append(
                     or_(
-                        mac_col_stripped.ilike(f"%{_escape_like(mac_clean)}%"),
+                        Whitelist.mac_address_normalized.ilike(f"{_escape_like(mac_clean)}%"),
                         Whitelist.ip_pattern.ilike(f"%{_escape_like(search_term)}%"),
                         Whitelist.comments.ilike(f"%{_escape_like(search_term)}%"),
                     )
@@ -643,12 +643,14 @@ class TerminalService:
                 existing.comments = comments
                 if normalized_mac:
                     existing.mac_address = normalized_mac
+                    existing.mac_address_normalized = _normalize_mac(normalized_mac)
                 if ip_pattern:
                     existing.ip_pattern = ip_pattern
                     existing.pattern_type = pattern_type
             else:
                 whitelist_entry = Whitelist(
                     mac_address=normalized_mac,
+                    mac_address_normalized=_normalize_mac(normalized_mac) if normalized_mac else None,
                     ip_pattern=ip_pattern,
                     pattern_type=pattern_type,
                     comments=comments,
@@ -771,13 +773,11 @@ class TerminalService:
             # Search by MAC or IP
             if query.search:
                 search_term = f"%{query.search}%"
-                # Format-agnostic MAC matching: strip separators from both
-                # the search term and the DB column before comparing
-                mac_clean = query.search.replace('-', '').replace(':', '').replace('.', '').upper()
-                mac_col_stripped = func.replace(func.replace(func.replace(Blacklist.mac_address, ':', ''), '-', ''), '.', '')
+                # Format-agnostic MAC matching using normalized column
+                mac_clean = _normalize_mac(query.search)
                 conditions.append(
                     or_(
-                        mac_col_stripped.ilike(f"%{_escape_like(mac_clean)}%"),
+                        Blacklist.mac_address_normalized.ilike(f"{_escape_like(mac_clean)}%"),
                         Blacklist.ip_address.ilike(f"%{_escape_like(search_term)}%"),
                     )
                 )
@@ -809,11 +809,10 @@ class TerminalService:
             # Search by MAC or IP
             if query.search:
                 search_term = f"%{query.search}%"
-                mac_clean = query.search.replace('-', '').replace(':', '').replace('.', '').upper()
-                mac_col_stripped = func.replace(func.replace(func.replace(Blacklist.mac_address, ':', ''), '-', ''), '.', '')
+                mac_clean = _normalize_mac(query.search)
                 conditions.append(
                     or_(
-                        mac_col_stripped.ilike(f"%{_escape_like(mac_clean)}%"),
+                        Blacklist.mac_address_normalized.ilike(f"{_escape_like(mac_clean)}%"),
                         Blacklist.ip_address.ilike(f"%{_escape_like(search_term)}%"),
                     )
                 )
@@ -888,6 +887,7 @@ class TerminalService:
             blacklist_entry = Blacklist(
                 ip_address=ip_address or None,
                 mac_address=normalized_mac,
+                mac_address_normalized=_normalize_mac(normalized_mac) if normalized_mac else None,
                 reason=reason,
                 expires_at=expires_at,
                 blocked_by=username,

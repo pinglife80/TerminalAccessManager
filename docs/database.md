@@ -1,6 +1,6 @@
 # TerminalAccessManager 数据库设计文档
 
-> 文档版本：v3.0.0 | 更新日期：2026-06-09
+> 文档版本：v3.1.0 | 更新日期：2026-06-09
 
 ## 1. 概述
 
@@ -37,26 +37,26 @@
 │ hashed_pass  │       │ status            │       │ pattern_type     │
 │ is_active    │       │ comments          │       │ comments         │
 │ is_superuser │       │ timestamp         │       │ added_by         │
-│ created_at   │       │ source            │       │ created_at       │
-│ updated_at   │       │ source_tag        │       └──────────────────┘
-└──────┬───────┘       │ compliance_status │
-       │               │ wl_match_type     │       ┌──────────────────┐
-       │ 1:N           └───────────────────┘       │    blacklist     │
-       ├──────────────┐                            ├──────────────────┤
-       │              │                            │ id            PK │
-┌──────┴──────────┐   │                            │ ip_address       │
-│   audit_logs    │   │                            │ mac_address      │
-├─────────────────┤   │                            │ reason           │
-│ id           PK │   │                            │ blocked_at       │
-│ user_id     FK ─┘   │                            │ expires_at       │
-│ username          │   │                            │ blocked_by       │
-│ action            │   │                            │ source_tag       │
-│ resource_type     │   │                            │ firewall_tag     │
-│ resource_id       │   │                            │ is_auto_blocked  │
-│ details           │   │                            │ auto_unblocked   │
-│ ip_address        │   │                            └──────────────────┘
-│ timestamp         │   │
-└───────────────────┘   │
+│ created_at   │       │ source            │       │ mac_address_norm │
+│ updated_at   │       │ source_tag        │       │ created_at       │
+└──────┬───────┘       │ compliance_status │       └──────────────────┘
+       │               │ wl_match_type     │
+       │ 1:N           │ mac_address_norm  │       ┌──────────────────┐
+       ├──────────────┐ └───────────────────┘       │    blacklist     │
+       │              │                            ├──────────────────┤
+┌──────┴──────────┐   │                            │ id            PK │
+│   audit_logs    │   │                            │ ip_address       │
+├─────────────────┤   │                            │ mac_address      │
+│ id           PK │   │                            │ reason           │
+│ user_id     FK ─┘   │                            │ blocked_at       │
+│ username          │   │                            │ expires_at       │
+│ action            │   │                            │ blocked_by       │
+│ resource_type     │   │                            │ source_tag       │
+│ resource_id       │   │                            │ firewall_tag     │
+│ details           │   │                            │ is_auto_blocked  │
+│ ip_address        │   │                            │ auto_unblocked   │
+│ timestamp         │   │                            │ mac_address_norm │
+└───────────────────┘   │                            └──────────────────┘
                         │
 ┌───────────────────┐   │       ┌──────────────────────┐
 │  system_config    │   │       │  data_source_bindings │
@@ -150,6 +150,7 @@
 | source_tag | VARCHAR(50) | INDEX | NULL | 数据源标签，关联 data_sources.tag |
 | compliance_status | VARCHAR(20) | INDEX | 'unknown' | 合规状态 |
 | wl_match_type | VARCHAR(10) | | NULL | 白名单匹配类型 |
+| mac_address_normalized | VARCHAR(12) | INDEX | NULL | MAC 地址标准化（去除分隔符的大写 12 位字符串，如 AABBCCDDEEFF） |
 
 **索引：**
 
@@ -157,6 +158,7 @@
 |---|---|---|
 | idx_terminal_timestamp | COMPOSITE | (mac_address, timestamp) |
 | idx_ip_status | COMPOSITE | (ip_address, status) |
+| idx_terminal_mac_normalized | SINGLE | mac_address_normalized | MAC 标准化列索引，加速格式无关搜索 |
 
 **约束：**
 
@@ -215,6 +217,7 @@
 | pattern_type | VARCHAR(20) | | 'single_ip' | 模式类型 |
 | comments | TEXT | | NULL | 备注 |
 | added_by | VARCHAR(50) | NOT NULL | — | 添加人用户名 |
+| mac_address_normalized | VARCHAR(12) | INDEX | NULL | MAC 地址标准化（去除分隔符的大写 12 位字符串） |
 | created_at | TIMESTAMP WITH TZ | INDEX | utcnow | 创建时间 |
 
 **索引：**
@@ -222,6 +225,7 @@
 | 索引名 | 类型 | 字段 |
 |---|---|---|
 | idx_whitelist_created_at | SINGLE | created_at |
+| idx_whitelist_mac_normalized | SINGLE | mac_address_normalized | MAC 标准化列索引 |
 
 **数据字典 — pattern_type：**
 
@@ -251,6 +255,7 @@
 | firewall_tag | VARCHAR(50) | INDEX | NULL | 防火墙标签 |
 | is_auto_blocked | BOOLEAN | | FALSE | 是否由合规检查自动阻断 |
 | auto_unblocked | BOOLEAN | | FALSE | 是否已自动解封（合规后） |
+| mac_address_normalized | VARCHAR(12) | INDEX | NULL | MAC 地址标准化（去除分隔符的大写 12 位字符串） |
 
 **索引：**
 
@@ -261,6 +266,7 @@
 | idx_blacklist_auto | COMPOSITE | (is_auto_blocked, auto_unblocked) |
 | idx_blacklist_blocked_at | SINGLE | blocked_at |
 | idx_blacklist_expires_at | SINGLE | expires_at |
+| idx_blacklist_mac_normalized | SINGLE | mac_address_normalized | MAC 标准化列索引 |
 
 ---
 
@@ -607,6 +613,23 @@
 - `_is_task_paused()` 函数在定时任务循环中检查该键，值为 `"paused"` 时跳过当轮执行
 - 可用任务名：`arp_collection`、`ipguard_sync`、`firewall_query`、`compliance_check`、`auto_unblock`
 
+### 5.9 Redis fail-open 降级策略
+
+所有 Redis 交互函数统一添加 try/except 异常处理，Redis 不可用时按策略降级：
+
+| 函数 | Redis Key | 降级行为 |
+|------|-----------|---------|
+| `is_token_blacklisted` | `token_blacklist:{jti}` | 返回 `False`（放行） |
+| `get_token_version` | `token_version:{user_id}` | 返回 `0` |
+| `increment_token_version` | `token_version:{user_id}` | 返回 `0` |
+| `check_login_attempts` | `login_lock:{username}` | 返回 `False` |
+| `check_captcha_required` | `login_attempts:{username}` | 返回 `False` |
+| `record_failed_login` | `login_attempts:{username}` | 静默忽略 |
+| `reset_login_attempts` | `login_attempts:{username}` / `login_lock:{username}` | 静默忽略 |
+| `verify_captcha` | `captcha:{captcha_id}` | 返回 `False` |
+| `generate_captcha` | `captcha:{captcha_id}` | 抛出异常（必须依赖 Redis） |
+| `add_token_to_blacklist` | `token_blacklist:{jti}` | 静默忽略 |
+
 ---
 
 ## 6. 数据库迁移脚本
@@ -617,6 +640,7 @@
 | 002_terminal_baseline.py | Terminal 重命名 + ComplianceBaseline 分离 |
 | 003_search_indexes.py | 搜索优化索引：whitelist.created_at、blacklist.blocked_at、blacklist.expires_at、audit_logs.ip_address |
 | 004_terminal_unique_constraint.py | terminals 表联合唯一约束 uq_terminal_ip_mac + 迁移前去重 |
+| 005_mac_normalized_column.py | terminals/whitelist/blacklist 三张表添加 mac_address_normalized 列，回填历史数据，创建索引 |
 
 ### 003_search_indexes.py 详情
 
@@ -634,6 +658,20 @@
 - 添加 `uq_terminal_ip_mac` 联合唯一约束
 - 迁移前自动去重：删除重复 (ip_address, mac_address) 记录，仅保留最新一条（MAX id）
 - 不可逆迁移（downgrade 仅移除约束，不恢复已删除的重复记录）
+
+### 005_mac_normalized_column.py 详情
+
+为 MAC 地址格式无关搜索添加标准化列和索引，替代 `func.replace()` 全表扫描：
+
+| 操作 | 表 | 说明 |
+|---|---|---|
+| ADD COLUMN | terminals | `mac_address_normalized VARCHAR(12)` |
+| ADD COLUMN | whitelist | `mac_address_normalized VARCHAR(12)` |
+| ADD COLUMN | blacklist | `mac_address_normalized VARCHAR(12)` |
+| 数据回填 | 三张表 | `UPDATE ... SET mac_address_normalized = UPPER(REPLACE(REPLACE(REPLACE(mac_address, '-', ''), ':', ''), '.', ''))` |
+| CREATE INDEX | terminals | `idx_terminal_mac_normalized` |
+| CREATE INDEX | whitelist | `idx_whitelist_mac_normalized` |
+| CREATE INDEX | blacklist | `idx_blacklist_mac_normalized` |
 
 ### Alembic 配置说明
 

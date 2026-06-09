@@ -11,6 +11,7 @@ class Whitelist(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     mac_address = Column(String(17), unique=False, nullable=True, index=True)
+    mac_address_normalized = Column(String(12), nullable=True, index=True)
     ip_pattern = Column(String(100), nullable=True, index=True)  # IP, CIDR, or IP range pattern
     pattern_type = Column(String(20), default="single_ip")  # single_ip / cidr / ip_range / mac_only
     comments = Column(Text, nullable=True)

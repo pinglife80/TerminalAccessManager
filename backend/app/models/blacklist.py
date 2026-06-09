@@ -12,6 +12,7 @@ class Blacklist(Base):
     id = Column(Integer, primary_key=True, index=True)
     ip_address = Column(String(45), nullable=True, index=True)
     mac_address = Column(String(17), nullable=True, index=True)
+    mac_address_normalized = Column(String(12), nullable=True, index=True)
     reason = Column(Text, nullable=True)
     blocked_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True)
     expires_at = Column(DateTime(timezone=True), nullable=True, index=True)

@@ -359,9 +359,11 @@ class ComplianceService:
                         td = timedelta(minutes=value)
 
                 for fw_tag in firewall_tags:
+                    mac_norm = entry.mac_address.replace('-', '').replace(':', '').replace('.', '').upper() if entry.mac_address else None
                     blacklist_entry = Blacklist(
                         ip_address=entry.ip_address,
                         mac_address=entry.mac_address,
+                        mac_address_normalized=mac_norm,
                         reason=f"Auto-blocked: non-compliant (source={arp_source_tag})",
                         blocked_by="system",
                         expires_at=datetime.now(timezone.utc) + td,

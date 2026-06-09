@@ -22,6 +22,7 @@ class Terminal(Base):
     id = Column(Integer, primary_key=True, index=True)
     ip_address = Column(String(45), nullable=False, index=True)
     mac_address = Column(String(17), nullable=False, index=True)
+    mac_address_normalized = Column(String(12), nullable=True, index=True)
     status = Column(
         String(20), default=TerminalStatus.UNFROZEN.value, index=True
     )  # active, inactive, frozen, pending, unfrozen

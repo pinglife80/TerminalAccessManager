@@ -222,6 +222,7 @@ class ArpCollectorService:
                     mac_record = Terminal(
                         ip_address=ip_addr,
                         mac_address=mac_normalized,
+                        mac_address_normalized=mac_normalized.replace('-', '').replace(':', '').replace('.', '').upper(),
                         status=TerminalStatus.UNFROZEN.value,
                         source="arp",
                         source_tag=source_tag,

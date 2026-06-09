@@ -120,6 +120,11 @@ def _normalize_mac(mac: str) -> str:
     return '-'.join(mac_clean[i:i + 2] for i in range(0, len(mac_clean), 2))
 
 
+def _normalize_mac_raw(mac: str) -> str:
+    """Normalize MAC address by removing all separators and uppercasing (for mac_address_normalized column)"""
+    return mac.replace('-', '').replace(':', '').replace('.', '').upper()
+
+
 def _generate_random_ip():
     ranges = [
         (192, 168, 1, 1, 192, 168, 1, 254),
@@ -397,6 +402,7 @@ async def _create_mock_terminals(db, users):
 
             mac_record = Terminal(
                 mac_address=_normalize_mac(mac),
+                mac_address_normalized=_normalize_mac_raw(mac),
                 ip_address=ip,
                 status=status,
                 comments=f"Auto-generated mock data #{i + 1}",
@@ -443,6 +449,7 @@ async def _create_mock_whitelist(db, mac_records, users):
 
             entry = Whitelist(
                 mac_address=mac_record.mac_address,
+                mac_address_normalized=_normalize_mac_raw(mac_record.mac_address),
                 ip_pattern=mac_record.ip_address,
                 pattern_type="single_ip",
                 comments=f"Authorized device - {mac_record.ip_address}",
@@ -535,6 +542,7 @@ async def _create_mock_whitelist(db, mac_records, users):
 
             entry = Whitelist(
                 mac_address=mac_val,
+                mac_address_normalized=_normalize_mac_raw(mac_val),
                 ip_pattern=None,
                 pattern_type="mac_only",
                 comments=desc,
@@ -584,6 +592,7 @@ async def _create_mock_blacklist(db, mac_records, users):
 
             blacklist_entry = Blacklist(
                 mac_address=mac_record.mac_address,
+                mac_address_normalized=_normalize_mac_raw(mac_record.mac_address),
                 ip_address=mac_record.ip_address,
                 reason=random.choice(reasons),
                 blocked_at=created_at,

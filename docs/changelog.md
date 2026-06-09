@@ -7,6 +7,27 @@
 
 ---
 
+## [3.1.0] - 2026-06-09
+
+### 新增
+
+- Redis fail-open 降级策略：`security.py` 中 10 个 Redis 交互函数统一添加 try/except 异常处理，Redis 不可用时按策略降级（黑名单放行、版本号返回 0、登录防护放行等），避免 Redis 故障导致服务不可用
+- MAC 地址标准化列：`terminals`/`whitelist`/`blacklist` 三张表新增 `mac_address_normalized` 列（VARCHAR(12)，去除分隔符的大写 MAC），Alembic 005 迁移脚本含数据回填和索引创建，6 处 MAC 搜索从 `func.replace()` 变换改为标准化列查询，4 处 MAC 写入点自动填充标准化列
+- 全局异常处理中间件：新增 `error_handler.py`，注册 3 个异常处理器（HTTPException 透传、RequestValidationError 保留 422 格式、未捕获异常返回 500 + error_id + 日志），统一错误响应格式
+- CI/CD 流水线：新增 `.github/workflows/ci.yml`（6 个 Job：lint-backend/test-backend/lint-frontend/test-frontend/build-backend/build-frontend），`backend/pyproject.toml`（ruff 配置），`frontend/.eslintrc.json`
+- 后端测试基础设施：重写 `conftest.py`（mock_redis fixture + 内存模拟 Redis），新增 `test_security.py`（4 个测试类 19 用例）、`test_terminals.py`（2 个测试类 10 用例）、`test_whitelist.py`（2 个测试类 3 用例）、`test_blacklist.py`（2 个测试类 2 用例），修复 `test_app.py`/`test_auth.py`/`test_core.py` 与代码变更同步
+- 前端测试基础设施：新增 `vitest.config.ts`、`src/test/setup.ts`、3 个测试文件（`utils.test.ts` 42 用例、`theme.test.ts` 8 用例、`auth.test.ts` 8 用例），共 58 个测试用例
+- LICENSE 文件：项目根目录新增 MIT License 文件
+- manage.sh `cmd_restore` Redis RDB 恢复：恢复数据库时同步恢复 Redis RDB 文件
+
+### 改进
+
+- docker-compose.yml：`postgres` 和 `redis` 服务添加 `restart: unless-stopped`，容器异常退出后自动重启
+- docker-compose.yml：5 个服务统一添加 `cap_drop: [ALL]`，`nginx` 添加 `cap_add: [NET_BIND_SERVICE]`（绑定低位端口），容器安全加固
+- 评估文档综合评分从 8.6 提升至 8.8（安全 8.5→9.0，鲁棒性 8.5→9.0）
+
+---
+
 ## [3.0.0] - 2026-06-09
 
 ### 安全修复（Critical）

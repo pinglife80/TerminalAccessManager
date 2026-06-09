@@ -47,22 +47,29 @@ async def close_redis_client():
 
 async def add_token_to_blacklist(jti: str, exp: datetime) -> None:
     """Add a JWT token to the blacklist in Redis"""
-    redis_client = await get_redis_client()
-    now = datetime.now(timezone.utc)
-    ttl = int((exp - now).total_seconds())
+    try:
+        redis_client = await get_redis_client()
+        now = datetime.now(timezone.utc)
+        ttl = int((exp - now).total_seconds())
 
-    if ttl > 0:
-        await redis_client.setex(
-            f"token_blacklist:{jti}",
-            ttl,
-            "1"
-        )
+        if ttl > 0:
+            await redis_client.setex(
+                f"token_blacklist:{jti}",
+                ttl,
+                "1"
+            )
+    except Exception as e:
+        logger.warning(f"Redis unavailable, skipping token blacklist: {e}")
 
 
 async def is_token_blacklisted(jti: str) -> bool:
     """Check if a JWT token is in the blacklist"""
-    redis_client = await get_redis_client()
-    return await redis_client.exists(f"token_blacklist:{jti}") > 0
+    try:
+        redis_client = await get_redis_client()
+        return await redis_client.exists(f"token_blacklist:{jti}") > 0
+    except Exception as e:
+        logger.warning(f"Redis unavailable, allowing token (fail-open): {e}")
+        return False
 
 
 # ==================== Token Version Functions ====================
@@ -72,9 +79,13 @@ async def get_token_version(user_id: int) -> int:
 
     Returns 0 if no version is set (default for new users).
     """
-    redis_client = await get_redis_client()
-    version = await redis_client.get(f"token_version:{user_id}")
-    return int(version) if version else 0
+    try:
+        redis_client = await get_redis_client()
+        version = await redis_client.get(f"token_version:{user_id}")
+        return int(version) if version else 0
+    except Exception as e:
+        logger.warning(f"Redis unavailable, returning token version 0 (fail-open): {e}")
+        return 0
 
 
 async def increment_token_version(user_id: int) -> int:
@@ -82,73 +93,91 @@ async def increment_token_version(user_id: int) -> int:
 
     Returns the new version number.
     """
-    redis_client = await get_redis_client()
-    new_version = await redis_client.incr(f"token_version:{user_id}")
-    logger.info(f"Token version incremented for user_id={user_id}: now at {new_version}")
-    return new_version
+    try:
+        redis_client = await get_redis_client()
+        new_version = await redis_client.incr(f"token_version:{user_id}")
+        logger.info(f"Token version incremented for user_id={user_id}: now at {new_version}")
+        return new_version
+    except Exception as e:
+        logger.warning(f"Redis unavailable, returning token version 0 (fail-open): {e}")
+        return 0
 
 
 async def check_login_attempts(username: str) -> bool:
     """Check if account is locked due to too many failed login attempts.
     Returns True if account is locked."""
-    redis_client = await get_redis_client()
-    lock_key = f"login_lock:{username}"
+    try:
+        redis_client = await get_redis_client()
+        lock_key = f"login_lock:{username}"
 
-    # Check if account is locked
-    if await redis_client.exists(lock_key):
-        return True
+        # Check if account is locked
+        if await redis_client.exists(lock_key):
+            return True
 
-    return False
+        return False
+    except Exception as e:
+        logger.warning(f"Redis unavailable, allowing login (fail-open): {e}")
+        return False
 
 
 async def check_captcha_required(username: str) -> bool:
     """Check if captcha verification is required for this username.
     Returns True if failed attempts >= CAPTCHA_THRESHOLD.
     Reads threshold from ConfigService (hot-reloadable)."""
-    redis_client = await get_redis_client()
-    attempts_key = f"login_attempts:{username}"
-    attempts = await redis_client.get(attempts_key)
-    if attempts:
-        from app.services.config_service import get_config_value
-        threshold = await get_config_value("captcha_threshold", settings.CAPTCHA_THRESHOLD)
-        if int(attempts) >= threshold:
-            return True
-    return False
+    try:
+        redis_client = await get_redis_client()
+        attempts_key = f"login_attempts:{username}"
+        attempts = await redis_client.get(attempts_key)
+        if attempts:
+            from app.services.config_service import get_config_value
+            threshold = await get_config_value("captcha_threshold", settings.CAPTCHA_THRESHOLD)
+            if int(attempts) >= threshold:
+                return True
+        return False
+    except Exception as e:
+        logger.warning(f"Redis unavailable, skipping captcha check (fail-open): {e}")
+        return False
 
 
 async def record_failed_login(username: str) -> None:
     """Record a failed login attempt and lock account if threshold exceeded.
     Reads thresholds from ConfigService (hot-reloadable)."""
-    redis_client = await get_redis_client()
-    attempts_key = f"login_attempts:{username}"
-    lock_key = f"login_lock:{username}"
+    try:
+        redis_client = await get_redis_client()
+        attempts_key = f"login_attempts:{username}"
+        lock_key = f"login_lock:{username}"
 
-    # Increment failed attempts
-    attempts = await redis_client.incr(attempts_key)
-    if attempts == 1:
+        # Increment failed attempts
+        attempts = await redis_client.incr(attempts_key)
+        if attempts == 1:
+            from app.services.config_service import get_config_value
+            lockout_minutes = await get_config_value("lockout_duration_minutes", settings.LOCKOUT_DURATION_MINUTES)
+            await redis_client.expire(attempts_key, lockout_minutes * 60)
+
+        # Lock account if threshold exceeded
         from app.services.config_service import get_config_value
+        max_attempts = await get_config_value("max_login_attempts", settings.MAX_LOGIN_ATTEMPTS)
         lockout_minutes = await get_config_value("lockout_duration_minutes", settings.LOCKOUT_DURATION_MINUTES)
-        await redis_client.expire(attempts_key, lockout_minutes * 60)
-
-    # Lock account if threshold exceeded
-    from app.services.config_service import get_config_value
-    max_attempts = await get_config_value("max_login_attempts", settings.MAX_LOGIN_ATTEMPTS)
-    lockout_minutes = await get_config_value("lockout_duration_minutes", settings.LOCKOUT_DURATION_MINUTES)
-    if attempts >= max_attempts:
-        await redis_client.setex(
-            lock_key,
-            lockout_minutes * 60,
-            str(attempts)
-        )
+        if attempts >= max_attempts:
+            await redis_client.setex(
+                lock_key,
+                lockout_minutes * 60,
+                str(attempts)
+            )
+    except Exception as e:
+        logger.warning(f"Redis unavailable, skipping failed login record: {e}")
 
 
 async def reset_login_attempts(username: str) -> None:
     """Reset failed login attempts after successful login"""
-    redis_client = await get_redis_client()
-    attempts_key = f"login_attempts:{username}"
-    lock_key = f"login_lock:{username}"
+    try:
+        redis_client = await get_redis_client()
+        attempts_key = f"login_attempts:{username}"
+        lock_key = f"login_lock:{username}"
 
-    await redis_client.delete(attempts_key, lock_key)
+        await redis_client.delete(attempts_key, lock_key)
+    except Exception as e:
+        logger.warning(f"Redis unavailable, skipping login attempts reset: {e}")
 
 
 # ==================== Captcha Functions ====================
@@ -173,8 +202,12 @@ async def generate_captcha() -> Tuple[str, str]:
         answer = x - y
 
     captcha_id = str(uuid.uuid4())
-    redis_client = await get_redis_client()
-    await redis_client.setex(f"captcha:{captcha_id}", CAPTCHA_TTL_SECONDS, str(answer))
+    try:
+        redis_client = await get_redis_client()
+        await redis_client.setex(f"captcha:{captcha_id}", CAPTCHA_TTL_SECONDS, str(answer))
+    except Exception as e:
+        logger.error(f"Redis unavailable, cannot generate captcha: {e}")
+        raise
 
     return captcha_id, question
 
@@ -191,23 +224,27 @@ async def verify_captcha(captcha_id: str, user_answer: str) -> bool:
         Also returns False if the captcha_id is not found or expired.
         The captcha is always deleted after verification (one-time use).
     """
-    redis_client = await get_redis_client()
-    captcha_key = f"captcha:{captcha_id}"
-
-    # Get and delete in a pipeline for atomicity
-    async with redis_client.pipeline(transaction=True) as pipe:
-        pipe.get(captcha_key)
-        pipe.delete(captcha_key)
-        results = await pipe.execute()
-
-    stored_answer = results[0]
-    if stored_answer is None:
-        # Captcha not found or expired
-        return False
-
     try:
-        return int(user_answer) == int(stored_answer)
-    except (ValueError, TypeError):
+        redis_client = await get_redis_client()
+        captcha_key = f"captcha:{captcha_id}"
+
+        # Get and delete in a pipeline for atomicity
+        async with redis_client.pipeline(transaction=True) as pipe:
+            pipe.get(captcha_key)
+            pipe.delete(captcha_key)
+            results = await pipe.execute()
+
+        stored_answer = results[0]
+        if stored_answer is None:
+            # Captcha not found or expired
+            return False
+
+        try:
+            return int(user_answer) == int(stored_answer)
+        except (ValueError, TypeError):
+            return False
+    except Exception as e:
+        logger.warning(f"Redis unavailable, captcha verification failed (fail-open): {e}")
         return False
 
 

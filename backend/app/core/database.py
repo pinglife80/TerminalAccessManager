@@ -5,13 +5,19 @@ from sqlalchemy import text
 from app.core.config import settings
 
 # Create async engine
+# SQLite does not support pool_size/max_overflow, so conditionally exclude them
+_engine_kwargs = {
+    "echo": settings.DEBUG,
+    "pool_pre_ping": True,
+    "pool_recycle": 3600,
+}
+if not settings.DATABASE_URL.startswith("sqlite"):
+    _engine_kwargs["pool_size"] = 10
+    _engine_kwargs["max_overflow"] = 20
+
 engine = create_async_engine(
     settings.DATABASE_URL,
-    echo=settings.DEBUG,
-    pool_pre_ping=True,
-    pool_size=10,
-    max_overflow=20,
-    pool_recycle=3600,
+    **_engine_kwargs,
 )
 
 # Create async session factory

@@ -1,6 +1,6 @@
 # TerminalAccessManager 后端实现文档
 
-> 文档版本：v3.0.0 | 更新日期：2026-06-09
+> 文档版本：v3.1.0 | 更新日期：2026-06-09
 
 ## 1. 概述
 
@@ -32,7 +32,8 @@ backend/
 │   ├── middleware/
 │   │   ├── __init__.py
 │   │   ├── rate_limit.py                # 限流中间件
-│   │   └── logging.py                   # 请求日志中间件
+│   │   ├── logging.py                   # 请求日志中间件
+│   │   └── error_handler.py             # 全局异常处理中间件
 │   ├── models/
 │   │   ├── __init__.py
 │   │   ├── user.py                      # 用户模型
@@ -75,6 +76,14 @@ backend/
 │               └── compliance_baselines.py  # 合规基准端点
 ├── alembic/                             # 数据库迁移
 ├── tests/                               # 测试
+│   ├── conftest.py                      # 测试配置（mock_redis fixture）
+│   ├── test_app.py                      # 应用启动 + 异常处理器测试
+│   ├── test_auth.py                     # 认证端点测试
+│   ├── test_core.py                     # 核心模块测试
+│   ├── test_security.py                 # 安全模块测试（fail-open/escape_like/normalize_mac）
+│   ├── test_terminals.py                # 终端模型和搜索测试
+│   ├── test_whitelist.py                # 白名单模型和验证测试
+│   └── test_blacklist.py                # 黑名单模型测试
 ├── cli.py                               # 统一 CLI 工具
 └── requirements.txt
 ```
@@ -348,6 +357,23 @@ async_session_factory = async_session_maker  # 别名，供后台任务使用
 | `get_token_version(user_id)` | 获取用户当前 Token 版本号（Redis key: `token_version:{user_id}`） |
 | `increment_token_version(user_id)` | 递增用户 Token 版本号（密码变更时调用） |
 
+#### Redis fail-open 降级策略
+
+所有 Redis 交互函数统一添加 try/except 异常处理，Redis 不可用时按策略降级，避免 Redis 故障导致服务完全不可用：
+
+| 函数 | 降级行为 | 说明 |
+|------|---------|------|
+| `is_token_blacklisted(jti)` | 返回 `False` | 黑名单不可用时放行（fail-open） |
+| `get_token_version(user_id)` | 返回 `0` | 版本号不可用时视为初始版本 |
+| `increment_token_version(user_id)` | 返回 `0` | 递增失败静默降级 |
+| `check_login_attempts(username)` | 返回 `False` | 锁定状态不可用时允许登录 |
+| `check_captcha_required(username)` | 返回 `False` | 验证码要求不可用时跳过 |
+| `record_failed_login(username)` | 静默忽略 | 记录失败不影响登录流程 |
+| `reset_login_attempts(username)` | 静默忽略 | 重置失败不影响登录流程 |
+| `verify_captcha(captcha_id, answer)` | 返回 `False` | 验证码不可用时校验失败 |
+| `generate_captcha()` | 抛出异常 | 验证码生成必须依赖 Redis |
+| `add_token_to_blacklist(jti, exp)` | 静默忽略 | 黑名单写入失败不影响登出 |
+
 #### 鉴权依赖
 
 | 依赖函数 | 说明 |
@@ -403,6 +429,34 @@ Redis Sorted Set 滑动窗口算法：
 
 ---
 
+### 3.3 全局异常处理中间件 (middleware/error_handler.py)
+
+统一错误响应格式，确保未捕获异常返回结构化 JSON 而非 Starlette 默认纯文本。
+
+#### 异常处理器
+
+| 处理器 | 异常类型 | HTTP 状态码 | 行为 |
+|--------|---------|------------|------|
+| `http_exception_handler` | `StarletteHTTPException` | 原始状态码 | 透传 detail（保持现有格式，不修改） |
+| `validation_exception_handler` | `RequestValidationError` | 422 | 保留 FastAPI 默认校验错误格式 |
+| `unhandled_exception_handler` | `Exception` | 500 | 统一格式 + error_id + logger.error |
+
+#### 未捕获异常响应格式
+
+```json
+{
+  "detail": {
+    "message": "Internal server error",
+    "error_id": "a1b2c3d4"
+  }
+}
+```
+
+- `error_id`：8 位 UUID 前缀，用于关联服务端日志定位具体异常
+- 异常信息记录到 `logger.error`，包含 error_id、异常类型、请求方法和路径
+
+---
+
 ## 4. 服务层
 
 ### 4.1 TerminalService (services/terminal_service.py)
@@ -453,18 +507,19 @@ class PaginatedResponse(Generic[T]):
 
 - `_escape_like(value)` — 转义 LIKE 通配符 `%` 和 `_`，防止通配符注入，21 处 ilike 查询统一使用
 
-**Whitelist/Blacklist MAC 格式无关搜索逻辑：**
+**MAC 地址标准化搜索：**
 
-白名单和黑名单的搜索使用 `func.replace` 去除 MAC 地址分隔符后进行 ILIKE 匹配，用户无论输入哪种 MAC 格式均可命中：
+`terminals`/`whitelist`/`blacklist` 三张表新增 `mac_address_normalized` 列（VARCHAR(12)，存储去除分隔符的大写 MAC），搜索时直接使用标准化列进行 ILIKE 匹配，避免 `func.replace()` 全表扫描：
 
 ```python
-# 去除 MAC 地址中的分隔符（-、:、.）后进行 ILIKE 匹配
-mac_clean = func.replace(
-    func.replace(func.replace(model.mac_address, '-', ''), ':', ''), '.', ''
-)
-search_clean = search.replace('-', '').replace(':', '').replace('.', '')
-mac_clean.ilike(f'%{search_clean}%')
+# 搜索时使用标准化列（已建索引）
+mac_clean = search.replace('-', '').replace(':', '').replace('.', '').upper()
+model.mac_address_normalized.ilike(f'{_escape_like(mac_clean)}%')
 ```
+
+- `_normalize_mac(mac)` — 去除 MAC 分隔符并转大写，返回 12 位字符串
+- 写入时自动填充 `mac_address_normalized`（arp_collector_service / compliance_service / cli.py）
+- Alembic 005 迁移脚本回填历史数据并创建索引
 
 #### Count 方法
 
@@ -571,7 +626,7 @@ mac_clean.ilike(f'%{search_clean}%')
 
 #### MAC 地址标准化
 
-格式：**XX-XX-XX-XX-XX-XX**（大写，短横线分隔）。
+**显示格式**：**XX-XX-XX-XX-XX-XX**（大写，短横线分隔）。
 
 ```python
 @staticmethod
@@ -579,6 +634,14 @@ def _normalize_mac(mac: str) -> str:
     mac_clean = mac.replace('-', '').replace(':', '').replace('.', '').upper()
     formatted = '-'.join(mac_clean[i:i+2] for i in range(0, len(mac_clean), 2))
     return formatted
+```
+
+**存储格式**：`mac_address_normalized` 列存储去除分隔符的大写 12 位字符串（如 `AABBCCDDEEFF`），用于搜索匹配。
+
+```python
+@staticmethod
+def _normalize_mac_raw(mac: str) -> str:
+    return mac.replace('-', '').replace(':', '').replace('.', '').upper()
 ```
 
 ---
@@ -876,11 +939,56 @@ def _normalize_mac(mac: str) -> str:
 
 ---
 
-## 7. API 端点审计记录
+## 7. 测试
+
+### 7.1 测试基础设施
+
+**后端测试配置** (`tests/conftest.py`)：
+
+| fixture | 说明 |
+|---------|------|
+| `mock_redis` | 内存模拟 Redis 客户端（dict + set + expire），支持 get/set/delete/exists/keys 等操作 |
+| `mock_redis_patch` | 通过 `monkeypatch` 将 `app.core.security.get_redis_client` 替换为 `mock_redis` |
+| `event_loop` | 统一事件循环 fixture |
+
+**测试环境变量**：`ENVIRONMENT=test`、`SECRET_KEY`/`ENCRYPTION_KEY` 使用测试值、`DATABASE_URL` 使用 SQLite 内存数据库。
+
+### 7.2 测试文件清单
+
+| 文件 | 测试类 | 用例数 | 覆盖范围 |
+|------|--------|:------:|---------|
+| test_security.py | TestEscapeLike | 5 | LIKE 通配符转义 |
+| | TestNormalizeMac | 5 | MAC 地址标准化 |
+| | TestRedisFailOpen | 9 | Redis 不可用时降级行为 |
+| | TestRedisNormalOperation | 5 | Redis 正常操作 |
+| test_terminals.py | TestTerminalSearch | 7 | 终端搜索逻辑 |
+| | TestTerminalModel | 3 | 终端模型字段 |
+| test_whitelist.py | TestWhitelistModel | 2 | 白名单模型字段 |
+| | TestWhitelistValidation | 1 | 白名单输入验证 |
+| test_blacklist.py | TestBlacklistModel | 2 | 黑名单模型字段 |
+| test_app.py | TestGlobalExceptionHandler | 4 | 全局异常处理器 |
+| **合计** | | **43+** | |
+
+### 7.3 运行测试
+
+```bash
+# 通过 manage.sh
+./manage.sh test
+
+# 直接运行
+cd backend && python -m pytest tests/ -v
+
+# 运行指定测试文件
+python -m pytest tests/test_security.py -v
+```
+
+---
+
+## 8. API 端点审计记录
 
 各端点模块在执行关键操作时通过 `log_action` 公共函数记录审计日志，包含操作来源 IP 地址。
 
-### 7.1 认证端点 (auth.py)
+### 8.1 认证端点 (auth.py)
 
 | 端点 | 审计 action | 说明 |
 |------|-------------|------|
@@ -893,7 +1001,7 @@ def _normalize_mac(mac: str) -> str:
 |------|------|------|
 | `POST /auth/refresh` | `refresh_token` 参数从 Query 改为 Body | 原先 refresh_token 通过 URL Query 参数传递，存在安全风险（日志泄露、浏览器历史记录），现改为通过请求 Body 传递 |
 
-### 7.2 数据源端点 (data_sources.py)
+### 8.2 数据源端点 (data_sources.py)
 
 | 端点 | 审计 action | 说明 |
 |------|-------------|------|
@@ -903,7 +1011,7 @@ def _normalize_mac(mac: str) -> str:
 | `POST /data-sources/{id}/test` | `test_datasource` | 测试数据源连接 |
 | `POST /data-sources/{id}/sync` | `sync_datasource` | 同步数据源 |
 
-### 7.3 用户管理端点 (users.py)
+### 8.3 用户管理端点 (users.py)
 
 | 端点 | 审计 action | 说明 |
 |------|-------------|------|
@@ -913,7 +1021,7 @@ def _normalize_mac(mac: str) -> str:
 | `POST /users/{id}/reset-password` | `reset_password` | 重置用户密码 |
 | `POST /users/{id}/unlock` | `unlock_user` | 解锁用户账户 |
 
-### 7.4 系统配置端点 (settings.py)
+### 8.4 系统配置端点 (settings.py)
 
 | 端点 | 审计 action | 说明 |
 |------|-------------|------|

@@ -1,6 +1,6 @@
 # 前端实现总结
 
-> 文档版本：v3.0.0 | 更新日期：2026-06-09
+> 文档版本：v3.1.0 | 更新日期：2026-06-09
 
 ## 概述
 
@@ -45,7 +45,9 @@ frontend/
 │   ├── lib/              # 工具和 API 客户端
 │   │   ├── api.ts               # 带拦截器的 Axios 客户端
 │   │   ├── constants.ts         # 常量定义（状态、导航、API 端点等）
-│   │   └── utils.ts             # 工具函数（日期格式化、CSV 导出、MAC/IP 验证等）
+│   │   ├── utils.ts             # 工具函数（日期格式化、CSV 导出、MAC/IP 验证等）
+│   │   └── __tests__/    # 工具函数测试
+│   │       └── utils.test.ts        # 工具函数测试（42 用例）
 │   ├── pages/            # 页面组件
 │   │   ├── Login.tsx            # 登录页（验证码、账户锁定、深色主题、i18n）
 │   │   ├── Dashboard.tsx        # 主仪表板
@@ -59,17 +61,24 @@ frontend/
 │   ├── store/            # 状态管理
 │   │   ├── auth.ts              # 认证状态管理（initializeAuth timeout 10s）
 │   │   ├── branding.ts         # 品牌动态配置 store（useBrandingStore）
-│   │   └── theme.ts            # 主题状态管理（Light/Dark/System + localStorage 持久化）
+│   │   ├── theme.ts            # 主题状态管理（Light/Dark/System + localStorage 持久化）
+│   │   └── __tests__/  # 状态管理测试
+│   │       ├── theme.test.ts        # 主题 store 测试（8 用例）
+│   │       └── auth.test.ts         # 认证 store 测试（8 用例）
 │   ├── App.tsx           # 带路由的主应用（Suspense 在 Layout Outlet 外层）
 │   ├── main.tsx          # 入口点
 │   ├── index.css         # TailwindCSS 全局样式
 │   └── vite-env.d.ts     # Vite 类型声明
+│   ├── test/             # 测试
+│   │   └── setup.ts             # 测试环境配置（jest-dom + matchMedia mock）
 ├── public/               # 静态资源
 │   └── favicon.svg              # 网站图标
 ├── package.json          # 依赖和脚本
 ├── tsconfig.json         # TypeScript 配置
 ├── tsconfig.node.json    # Node 特定 TS 配置
 ├── vite.config.ts        # Vite 构建配置
+├── vitest.config.ts      # Vitest 测试配置
+├── .eslintrc.json        # ESLint 配置
 ├── tailwind.config.js    # TailwindCSS 配置
 ├── postcss.config.js     # PostCSS 配置
 ├── index.html            # HTML 入口点
@@ -141,6 +150,8 @@ frontend/
 - 热模块替换（Vite）
 - ESLint 配置
 - 全面的文档
+- Vitest 测试框架（58 个测试用例）
+- ESLint 代码质量检查（.eslintrc.json）
 
 ---
 
@@ -387,7 +398,7 @@ apiClient.interceptors.request.use((config) => {
 
 ## 创建的文件
 
-### 配置文件（8）
+### 配置文件（10）
 1. `package.json` - 依赖和脚本
 2. `tsconfig.json` - TypeScript 配置
 3. `tsconfig.node.json` - Node 特定 TS 配置
@@ -396,13 +407,15 @@ apiClient.interceptors.request.use((config) => {
 6. `postcss.config.js` - PostCSS 插件
 7. `.env.production` - 生产环境变量
 8. `.gitignore` - Git 忽略规则
+9. `vitest.config.ts` - Vitest 测试配置
+10. `.eslintrc.json` - ESLint 配置
 
 ### 基础设施文件（3）
 1. `index.html` - HTML 入口点
 2. `Dockerfile` - Docker 构建
 3. `nginx.conf` - Nginx 配置
 
-### 源代码文件（30）
+### 源代码文件（34）
 1. `src/main.tsx` - React 入口点
 2. `src/App.tsx` - 带路由的主应用
 3. `src/index.css` - 带 Tailwind 的全局样式
@@ -435,6 +448,10 @@ apiClient.interceptors.request.use((config) => {
 30. `src/components/datasources/ComplianceBaselinesTab.tsx` - 合规基准 Tab 组件
 31. `src/components/datasources/BindingsTab.tsx` - 绑定关系 Tab 组件
 32. `src/components/datasources/shared.ts` - 数据源共享类型和配置
+33. `src/test/setup.ts` - 测试环境配置
+34. `src/lib/__tests__/utils.test.ts` - 工具函数测试
+35. `src/store/__tests__/theme.test.ts` - 主题 store 测试
+36. `src/store/__tests__/auth.test.ts` - 认证 store 测试
 
 ### 页面文件（9）
 1. `src/pages/Login.tsx` - 登录页面
@@ -611,28 +628,49 @@ apiClient.interceptors.request.use((config) => {
 
 ---
 
-## 测试策略（待实现）
+## 测试策略
 
-### 单元测试
-- 组件渲染
-- 表单验证
-- 状态管理
-- 工具函数
+### 已实现
 
-### 集成测试
+**测试框架：** Vitest + @testing-library/react + @testing-library/jest-dom
+
+**测试配置：**
+
+| 文件 | 说明 |
+|------|------|
+| `vitest.config.ts` | Vitest 配置（React 插件、jsdom 环境、路径别名、setup 文件） |
+| `src/test/setup.ts` | 测试环境配置（引入 jest-dom matchers、window.matchMedia mock） |
+
+**测试文件清单：**
+
+| 文件 | 用例数 | 覆盖范围 |
+|------|:------:|---------|
+| `src/lib/__tests__/utils.test.ts` | 42 | 日期格式化、CSV 导出、MAC/IP 验证、状态映射等工具函数 |
+| `src/store/__tests__/theme.test.ts` | 8 | 主题切换（Light/Dark/System）、localStorage 持久化 |
+| `src/store/__tests__/auth.test.ts` | 8 | 登录/登出、token 存储、认证状态管理 |
+| **合计** | **58** | |
+
+**运行测试：**
+
+```bash
+npm test           # 运行所有测试
+npm run test:watch # 监听模式
+```
+
+### 待实现
+
+#### 集成测试
 - 登录流程
 - API 集成
 - 路由导航
 - 令牌刷新
 
-### E2E 测试
+#### E2E 测试
 - 完整用户工作流
 - 跨浏览器测试
 - 移动响应性
 
 **推荐工具：**
-- Vitest（单元测试）
-- React Testing Library
 - Playwright 或 Cypress（E2E）
 
 ---
@@ -681,6 +719,8 @@ npm run build
 - MAC 地址格式无关搜索 + keepPreviousData 防闪烁
 - 前端请求可靠性增强（refresh token Body 传递、_retry 防循环、401 不重试）
 - 页面闪烁修复（Suspense 位置调整、staleTime 30s、hover 预加载）
+- 前端测试基础设施（Vitest + 58 个测试用例）
+- ESLint 代码质量检查
 - 所有后端 API 已连接
 - 响应式设计
 - 开发者友好的设置

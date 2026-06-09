@@ -1,6 +1,8 @@
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.exceptions import RequestValidationError
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from contextlib import asynccontextmanager
 from loguru import logger
 import sys
@@ -12,6 +14,11 @@ from app.api.v1.api import api_router
 from app.core.security import close_redis_client
 from app.middleware.rate_limit import RateLimitMiddleware
 from app.middleware.logging import RequestLoggingMiddleware
+from app.middleware.error_handler import (
+    http_exception_handler,
+    validation_exception_handler,
+    unhandled_exception_handler,
+)
 
 
 # Configure logging
@@ -332,6 +339,11 @@ app = FastAPI(
     redoc_url=redoc_url,
     lifespan=lifespan
 )
+
+# Register global exception handlers
+app.add_exception_handler(StarletteHTTPException, http_exception_handler)
+app.add_exception_handler(RequestValidationError, validation_exception_handler)
+app.add_exception_handler(Exception, unhandled_exception_handler)
 
 # Add rate limiting middleware
 app.add_middleware(RateLimitMiddleware)

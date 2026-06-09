@@ -30,7 +30,8 @@ loguru==0.7.2
 pytest==7.4.3
 pytest-asyncio==0.21.1
 pytest-cov==4.1.0
-httpx==0.25.2
+aiosqlite==0.20.0
+fakeredis[lua]==2.23.2
 
 # Network Operations
 netmiko==4.1.2

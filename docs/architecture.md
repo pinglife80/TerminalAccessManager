@@ -1,6 +1,6 @@
 # TerminalAccessManager 系统架构设计文档
 
-> 文档版本：v3.0.0 | 更新日期：2026-06-09
+> 文档版本：v3.1.0 | 更新日期：2026-06-09
 
 ## 1. 系统概述
 
@@ -350,6 +350,7 @@ ARP 数据采集          合规判定              准入执行
 | 登录计数 | `login_attempts:{username}` | 锁定时长 | 递增计数 | 首次设置时指定过期时间 |
 | 登录锁定 | `login_lock:{username}` | 锁定时长 | 超过阈值时写入 | 值为失败次数 |
 | 暂停控制 | `scheduler:ctrl:{task_name}` | 无（手动管理） | `manage.sh scheduler pause` 写入、`resume` 删除 | 标记定时任务暂停状态，值为 `"paused"`，`_is_task_paused()` 在任务循环中检查 |
+| fail-open 降级 | 所有 Redis 交互 | — | try/except 异常捕获 | Redis 不可用时按策略降级（黑名单放行、版本号返回 0、登录防护放行等），避免 Redis 故障导致服务完全不可用 |
 
 **速率限制算法（Sorted Set 滑动窗口）：**
 
@@ -403,6 +404,20 @@ ARP 数据采集          合规判定              准入执行
 - `get_current_active_superuser` 依赖守卫超管专用端点（用户管理、系统配置等）
 - `get_current_user` 依赖守卫常规认证端点
 
+### 7.7 Redis 故障降级
+
+系统采用 fail-open 策略处理 Redis 不可用场景，10 个 Redis 交互函数统一添加 try/except 异常处理：
+
+| 场景 | 降级行为 | 安全影响 |
+|------|---------|---------|
+| 令牌黑名单不可用 | 放行请求（`is_token_blacklisted` 返回 `False`） | 已注销的 token 短暂可用，但 token 本身仍有有效期限制 |
+| Token 版本号不可用 | 视为初始版本（`get_token_version` 返回 `0`） | 密码变更后旧 token 短暂可用 |
+| 登录防护不可用 | 放行登录（`check_login_attempts`/`check_captcha_required` 返回 `False`） | 暴力破解防护短暂失效 |
+| 验证码生成不可用 | 抛出异常（`generate_captcha` 必须 Redis） | 需要验证码的登录暂时不可用 |
+| 限流不可用 | 放行请求（`RateLimitMiddleware` 降级） | API 限流短暂失效 |
+
+设计原则：**可用性优先于安全性** — Redis 故障时系统保持可用，安全防护降级而非阻断服务。所有降级行为均记录 `logger.warning` 日志，便于运维发现和排查。
+
 ---
 
 ## 8. 部署架构
@@ -451,7 +466,15 @@ ARP 数据采集          合规判定              准入执行
 | 前端构建 | `frontend` 容器执行构建，产物写入 `frontend_dist` Volume，Nginx 挂载该 Volume 提供服务 |
 | 健康检查 | PostgreSQL 和 Redis 均配置 healthcheck，backend 通过 `depends_on` 确保依赖就绪 |
 | 环境变量 | 通过 `.env` 文件注入，包含数据库密码、Redis 密码、JWT 密钥等敏感配置 |
-| 重启策略 | backend 和 nginx 设置 `unless-stopped`，frontend 设置 `"no"`（一次性构建） |
+| 重启策略 | 所有服务设置 `restart: unless-stopped`（frontend 除外，为一次性构建），容器异常退出后自动重启 |
+
+**容器安全加固：**
+
+| 措施 | 说明 |
+|------|------|
+| `cap_drop: [ALL]` | 5 个服务统一移除所有 Linux capabilities |
+| `cap_add: [NET_BIND_SERVICE]` | nginx 需要绑定 80/443 低位端口 |
+| `security_opt: no-new-privileges:true` | 所有服务禁止权限提升 |
 
 ---
 
@@ -480,15 +503,15 @@ PaginatedResponse[T]
 | 前端 keepPreviousData | React Query 使用 `keepPreviousData: true`（或 `placeholderData: keepPreviousData`），搜索切换时保留上一页数据直到新数据返回，防止页面闪烁 |
 | 数据库索引 | 对高频搜索字段（IP、MAC 等）建立索引，加速 ILIKE 前缀匹配查询 |
 
-**MAC 地址格式无关搜索原理：**
+**MAC 地址标准化搜索原理：**
 
 ```sql
--- 白名单/黑名单搜索时，去除 MAC 地址中的分隔符后进行 ILIKE 匹配
-WHERE func.replace(func.replace(func.replace(Whitelist.mac_address, '-', ''), ':', ''), '.', '')
-      ILIKE func.replace(func.replace(func.replace('%{search}%', '-', ''), ':', ''), '.', '')
+-- 使用 mac_address_normalized 列（已建索引）进行搜索
+-- 写入时自动填充：mac_address_normalized = UPPER(REPLACE(REPLACE(REPLACE(mac_address, '-', ''), ':', ''), '.', ''))
+WHERE mac_address_normalized ILIKE 'AABBCCDDEEFF%'
 ```
 
-用户无论输入 `AA-BB-CC-DD-EE-FF`、`AA:BB:CC:DD:EE:FF`、`AABBCCDDEEFF` 中的哪种格式，均可匹配到目标记录。
+用户无论输入 `AA-BB-CC-DD-EE-FF`、`AA:BB:CC:DD:EE:FF`、`AABBCCDDEEFF` 中的哪种格式，后端统一去除分隔符后使用标准化列前缀匹配，命中索引，避免全表扫描。
 
 **搜索流程：**
 
@@ -502,7 +525,7 @@ WHERE func.replace(func.replace(func.replace(Whitelist.mac_address, '-', ''), ':
       │
       ▼ 后端查询
       │  ├─ 终端: ILIKE 模糊搜索
-      │  └─ 白名单/黑名单: MAC 格式无关搜索 (func.replace + ILIKE)
+      │  └─ 白名单/黑名单: MAC 标准化列搜索 (mac_address_normalized + ILIKE)
       │
       ▼ 返回 PaginatedResponse
       │
@@ -808,3 +831,35 @@ Sidebar 菜单项在鼠标 hover 时预加载对应页面的数据（通过 Reac
       │
       ▼ 数据已缓存，页面即时渲染（无闪烁）
 ```
+
+---
+
+## 16. 异常处理架构
+
+### 16.1 全局异常处理器
+
+系统通过 FastAPI 的 `add_exception_handler` 注册 3 个全局异常处理器，统一错误响应格式：
+
+```
+请求 → FastAPI 路由
+          │
+          ├─ 正常处理 → 返回业务响应
+          │
+          ├─ HTTPException → http_exception_handler → 透传 detail
+          │
+          ├─ RequestValidationError → validation_exception_handler → 422 校验错误
+          │
+          └─ 其他未捕获异常 → unhandled_exception_handler → 500 + error_id
+```
+
+| 处理器 | 异常类型 | 状态码 | 响应格式 |
+|--------|---------|--------|---------|
+| `http_exception_handler` | `StarletteHTTPException` | 原始状态码 | `{"detail": ...}`（透传，保持业务端点现有格式） |
+| `validation_exception_handler` | `RequestValidationError` | 422 | FastAPI 默认校验错误格式 |
+| `unhandled_exception_handler` | `Exception` | 500 | `{"detail": {"message": "Internal server error", "error_id": "..."}}` |
+
+**error_id 机制：** 未捕获异常生成 8 位 UUID 前缀作为 error_id，同时写入 `logger.error` 日志和响应体，运维可通过 error_id 在日志中快速定位具体异常。
+
+### 16.2 Redis fail-open 降级
+
+所有 Redis 交互函数采用 try/except + fail-open 策略，异常时记录 `logger.warning` 并按策略降级（详见 7.7 Redis 故障降级）。

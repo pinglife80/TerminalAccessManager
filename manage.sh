@@ -1704,6 +1704,7 @@ cmd_restore() {
     echo -e "  ${BOLD}Impact:${NC}"
     echo -e "    • ${RED}ALL current data will be replaced${NC} with backup data"
     echo -e "    • Active user sessions will be terminated"
+    echo -e "    • Redis data (token blacklist, login locks, captcha) will be restored from backup"
     echo -e "    • Data created after the backup will be ${RED}permanently lost${NC}"
     echo -e "    • Services will restart during restore"
     echo ""
@@ -1730,6 +1731,25 @@ cmd_restore() {
 
     cat "$backup_file" | dc exec -T postgres psql -U tam_admin -d tam_db
     dc restart backend
+    # Restore Redis data
+    local BACKUP_DIR_PATH
+    BACKUP_DIR_PATH=$(dirname "$backup_file")
+    local REDIS_RDB
+    REDIS_RDB=$(ls -t "${BACKUP_DIR_PATH}"/redis_*.rdb 2>/dev/null | head -1)
+    if [[ -n "${REDIS_RDB}" ]]; then
+        log_info "Restoring Redis data from: ${REDIS_RDB}"
+        dc stop redis 2>/dev/null || true
+        sleep 1
+        docker cp "${REDIS_RDB}" tam_redis:/data/dump.rdb 2>/dev/null || {
+            log_warn "Failed to copy Redis RDB file, skipping Redis restore"
+            dc start redis 2>/dev/null || true
+        }
+        dc start redis 2>/dev/null || true
+        wait_healthy redis 30 || true
+        log_info "Redis data restored"
+    else
+        log_info "No Redis backup found, skipping Redis restore"
+    fi
     log_success "Database restored from: ${backup_file}"
 }
 

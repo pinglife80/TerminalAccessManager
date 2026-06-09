@@ -1,6 +1,6 @@
 # TerminalAccessManager - 部署与运维手册
 
-> 文档版本：v3.0.0 | 更新日期：2026-06-09
+> 文档版本：v3.1.0 | 更新日期：2026-06-09
 
 ## 目录
 
@@ -128,6 +128,14 @@ vim .env                          # 编辑配置
 - 所有敏感配置不再有默认值回退
 - 使用 `:?` 语法确保必需变量已设置
 - 未配置必需变量时 `docker compose up` 将报错并拒绝启动
+
+**容器安全加固：**
+
+| 措施 | 适用服务 | 说明 |
+|------|---------|------|
+| `cap_drop: [ALL]` | 所有 5 个服务 | 移除所有 Linux capabilities，最小权限原则 |
+| `cap_add: [NET_BIND_SERVICE]` | nginx | 需要绑定 80/443 低位端口 |
+| `restart: unless-stopped` | postgres、redis | 容器异常退出后自动重启 |
 
 ---
 
@@ -387,6 +395,12 @@ Deployment:
 ```
 
 > 恢复前会自动备份当前数据库。恢复过程会先清空目标数据库再导入。执行前会显示数据库恢复警告框：
+
+> **Redis 数据恢复：** restore 命令同时检查备份目录中是否存在 Redis RDB 文件（`redis_*.rdb`），若存在则自动恢复 Redis 数据：
+> 1. 停止 Redis 容器
+> 2. 将 RDB 文件复制到 Redis 数据目录
+> 3. 启动 Redis 容器
+> 4. 等待 Redis 健康检查通过
 >
 > ```
 > ⚠️ 数据库恢复警告
@@ -716,6 +730,19 @@ ls -lh backups/
 ./manage.sh health                 # 健康检查
 ```
 
+### 场景 10：CI/CD 自动化测试
+
+项目已配置 GitHub Actions CI 流水线（`.github/workflows/ci.yml`），每次 push/PR 自动执行：
+
+| Job | 说明 |
+|-----|------|
+| lint-backend | ruff 检查后端代码质量 |
+| test-backend | pytest 运行后端测试 |
+| lint-frontend | eslint 检查前端代码质量 |
+| test-frontend | vitest 运行前端测试 |
+| build-backend | Docker 构建后端镜像 |
+| build-frontend | Docker 构建前端镜像 |
+
 ---
 
 ## 6. 故障排查
@@ -836,6 +863,7 @@ ss -tlnp | grep -E '8080|8443'
 | REDIS_PASSWORD | 强密码，非默认值 |
 | BACKEND_CORS_ORIGINS | 仅包含实际域名，不含 `*` |
 | SSL 证书 | 非自签名证书（生产环境） |
+| LICENSE | MIT License 文件存在于项目根目录 |
 
 ### Nginx 安全配置
 

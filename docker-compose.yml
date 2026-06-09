@@ -30,9 +30,12 @@ services:
           cpus: '1.0'
     security_opt:
       - no-new-privileges:true
+    cap_drop:
+      - ALL
     read_only: false
     tmpfs:
       - /var/run/postgresql
+    restart: unless-stopped
     networks:
       - tam_network
 
@@ -55,6 +58,9 @@ services:
           cpus: '0.25'
     security_opt:
       - no-new-privileges:true
+    cap_drop:
+      - ALL
+    restart: unless-stopped
     networks:
       - tam_network
 
@@ -89,6 +95,8 @@ services:
           cpus: '0.5'
     security_opt:
       - no-new-privileges:true
+    cap_drop:
+      - ALL
     read_only: true
     tmpfs:
       - /tmp
@@ -109,6 +117,8 @@ services:
           cpus: '0.5'
     security_opt:
       - no-new-privileges:true
+    cap_drop:
+      - ALL
 
   nginx:
     image: nginx:alpine
@@ -133,6 +143,10 @@ services:
           cpus: '0.25'
     security_opt:
       - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
     read_only: true
     tmpfs:
       - /var/cache/nginx
