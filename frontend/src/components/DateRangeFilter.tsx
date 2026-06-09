@@ -39,28 +39,28 @@ export const DateRangeFilter: React.FC<DateRangeFilterProps> = ({
 
   return (
     <div className="flex items-center gap-2">
-      <div className="flex items-center gap-1.5 bg-gray-50 rounded-xl px-3 py-1.5">
-        <Calendar className="h-4 w-4 text-gray-500 flex-shrink-0" />
+      <div className="flex items-center gap-1.5 bg-background rounded-xl px-3 py-1.5">
+        <Calendar className="h-4 w-4 text-muted-foreground flex-shrink-0" />
         <input
           type="date"
           value={startDate}
           onChange={(e) => handleStartDateChange(e.target.value)}
-          className="bg-transparent border-0 text-sm text-gray-700 focus:outline-none focus:ring-0 cursor-pointer font-medium w-[7.5rem]"
+          className="bg-transparent border-0 text-sm text-muted-foreground focus:outline-none focus:ring-0 cursor-pointer font-medium w-[7.5rem]"
         />
-        <span className="text-gray-400 text-xs font-medium">to</span>
+        <span className="text-muted-foreground text-xs font-medium">to</span>
         <input
           type="date"
           value={endDate}
           onChange={(e) => handleEndDateChange(e.target.value)}
           className={`bg-transparent border-0 text-sm focus:outline-none focus:ring-0 cursor-pointer font-medium w-[7.5rem] ${
-            error ? 'text-red-500' : 'text-gray-700'
+            error ? 'text-red-500' : 'text-muted-foreground'
           }`}
         />
       </div>
       {(startDate || endDate) && (
         <button
           onClick={handleClear}
-          className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+          className="p-1.5 text-muted-foreground hover:text-muted-foreground hover:bg-muted rounded-lg transition-colors"
           title="Clear dates"
         >
           <X className="h-4 w-4" />

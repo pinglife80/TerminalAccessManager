@@ -1,14 +1,19 @@
 import React, { useState, useMemo } from 'react';
 import { useForm } from 'react-hook-form';
 import { useQueryClient } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
 import { useUsers, UserItem } from '@/hooks/useTerminalData';
 import { useAuthStore } from '@/store/auth';
 import { apiClient } from '@/lib/api';
-import { Search, Plus, Edit2, Trash2, Unlock, Shield, ShieldCheck, Eye, EyeOff, X, KeyRound, Users as UsersIcon, RefreshCw, ChevronDown } from 'lucide-react';
+import { API_ENDPOINTS } from '@/lib/constants';
+import { getErrorMessage } from '@/lib/utils';
+import { Search, Plus, Edit2, Trash2, Unlock, Shield, ShieldCheck, Eye, EyeOff, KeyRound, Users as UsersIcon, RefreshCw, ChevronDown } from 'lucide-react';
 import { toast } from 'sonner';
 import { PrimaryButton, IconButton, ButtonGroup } from '@/components/Button';
 import { Pagination } from '@/components/Pagination';
-import { EmptyState, LoadingState } from '@/components/StateDisplay';
+import { EmptyState } from '@/components/StateDisplay';
+import { PageSkeleton } from '@/components/Skeleton';
+import { Modal } from '@/components/Modal';
 
 interface UserFormData {
   username: string;
@@ -19,6 +24,7 @@ interface UserFormData {
 }
 
 const Users: React.FC = () => {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const { user: currentUser } = useAuthStore();
   const [searchTerm, setSearchTerm] = useState('');
@@ -61,97 +67,101 @@ const Users: React.FC = () => {
   // Create user
   const onCreateSubmit = async (data: UserFormData) => {
     try {
-      await apiClient.post('/auth/users', data);
-      toast.success(`User '${data.username}' created successfully`);
+      await apiClient.post(API_ENDPOINTS.AUTH_USERS, data);
+      toast.success(t('users.userCreated', { username: data.username }));
       setShowCreateModal(false);
       reset();
       queryClient.invalidateQueries({ queryKey: ['users'] });
-    } catch (err: any) {
-      toast.error(err.response?.data?.detail || 'Failed to create user');
+    } catch (err: unknown) {
+      toast.error(getErrorMessage(err, t('users.failedToCreateUser')));
     }
   };
 
   // Update user
   const handleUpdateUser = async (userId: number, updates: Partial<UserItem>) => {
     try {
-      await apiClient.put(`/auth/users/${userId}`, updates);
-      toast.success('User updated successfully');
+      await apiClient.put(`${API_ENDPOINTS.AUTH_USERS}${userId}`, updates);
+      toast.success(t('users.userUpdated'));
       setEditingUser(null);
       queryClient.invalidateQueries({ queryKey: ['users'] });
-    } catch (err: any) {
-      toast.error(err.response?.data?.detail || 'Failed to update user');
+    } catch (err: unknown) {
+      toast.error(getErrorMessage(err, t('users.failedToUpdateUser')));
     }
   };
 
   // Delete user
   const handleDeleteUser = async (user: UserItem) => {
-    if (!confirm(`Are you sure you want to delete user '${user.username}'? This action cannot be undone.`)) return;
+    if (!confirm(t('users.areYouSureDeleteUser'))) return;
     try {
-      await apiClient.delete(`/auth/users/${user.id}`);
-      toast.success(`User '${user.username}' deleted`);
+      await apiClient.delete(`${API_ENDPOINTS.AUTH_USERS}${user.id}`);
+      toast.success(t('users.userDeleted', { username: user.username }));
       queryClient.invalidateQueries({ queryKey: ['users'] });
-    } catch (err: any) {
-      toast.error(err.response?.data?.detail || 'Failed to delete user');
+    } catch (err: unknown) {
+      toast.error(getErrorMessage(err, t('users.failedToDeleteUser')));
     }
   };
 
   // Toggle active status
   const handleToggleActive = async (user: UserItem) => {
-    await handleUpdateUser(user.id, { is_active: !user.is_active } as any);
+    await handleUpdateUser(user.id, { is_active: !user.is_active });
   };
 
   // Unlock user
   const handleUnlock = async (user: UserItem) => {
     try {
-      await apiClient.post(`/auth/users/${user.id}/unlock`);
-      toast.success(`Account '${user.username}' unlocked`);
-    } catch (err: any) {
-      toast.error(err.response?.data?.detail || 'Failed to unlock user');
+      await apiClient.post(`${API_ENDPOINTS.AUTH_USERS}${user.id}/unlock`);
+      toast.success(t('users.accountUnlocked', { username: user.username }));
+    } catch (err: unknown) {
+      toast.error(getErrorMessage(err, t('users.failedToUnlock')));
     }
   };
 
   // Reset password
   const handleResetPassword = async (userId: number, newPassword: string) => {
     try {
-      await apiClient.put(`/auth/users/${userId}/password`, { new_password: newPassword });
-      toast.success('Password reset successfully');
+      await apiClient.put(`${API_ENDPOINTS.AUTH_USERS}${userId}/password`, { new_password: newPassword });
+      toast.success(t('users.passwordResetSuccess'));
       setResetPasswordUser(null);
       setShowPassword(false);
-    } catch (err: any) {
-      toast.error(err.response?.data?.detail || 'Failed to reset password');
+    } catch (err: unknown) {
+      toast.error(getErrorMessage(err, t('users.failedToResetPassword')));
     }
   };
 
   const isSelf = (user: UserItem) => currentUser?.id === user.id;
 
   return (
-    <div className="min-h-full bg-gray-50 p-4 sm:p-6 lg:p-8">
+    <div className="min-h-full bg-background p-4 sm:p-6 lg:p-8">
+      {isLoading && !users ? (
+        <PageSkeleton />
+      ) : (
+      <>
       {/* Page Header */}
       <div className="mb-6 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div>
-          <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">User Management</h1>
-          <p className="text-gray-600 mt-1">Manage user accounts, roles, and access</p>
+          <h1 className="text-2xl sm:text-3xl font-bold text-foreground">{t('users.title')}</h1>
+          <p className="text-muted-foreground mt-1">{t('users.manageAccounts')}</p>
         </div>
         <PrimaryButton
           icon={Plus}
-          label="New User"
+          label={t('users.newUser')}
           variant="primary"
           onClick={() => { reset({ username: '', email: '', password: '', is_active: true, is_superuser: false }); setShowCreateModal(true); }}
         />
       </div>
 
       {/* Search and Filter */}
-      <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden mb-6">
+      <div className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden mb-6">
         {/* Section Header - Clickable */}
         <button
           onClick={() => setFilterCollapsed(!filterCollapsed)}
-          className={`w-full px-5 py-4 flex items-center justify-between hover:bg-gray-50/50 transition-colors ${!filterCollapsed ? 'border-b border-gray-100' : ''}`}
+          className={`w-full px-5 py-4 flex items-center justify-between hover:bg-background/50 transition-colors ${!filterCollapsed ? 'border-b border-border' : ''}`}
         >
           <div className="flex items-center gap-2">
-            <Search className="h-5 w-5 text-gray-500" />
-            <h2 className="text-base font-semibold text-gray-900">Search & Filter</h2>
+            <Search className="h-5 w-5 text-muted-foreground" />
+            <h2 className="text-base font-semibold text-foreground">{t('terminal.searchAndFilter')}</h2>
           </div>
-          <ChevronDown className={`h-4 w-4 text-gray-500 transition-transform duration-200 ${filterCollapsed ? '' : 'rotate-180'}`} />
+          <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform duration-200 ${filterCollapsed ? '' : 'rotate-180'}`} />
         </button>
         {!filterCollapsed && (
         <>
@@ -159,16 +169,16 @@ const Users: React.FC = () => {
           <div className="flex flex-col xl:flex-row gap-4">
             {/* Search Input */}
             <div className="flex-1 relative">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-5 w-5 text-gray-400" />
+              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-5 w-5 text-muted-foreground" />
               <input
                 type="text"
-                placeholder="Search by username or email..."
+                placeholder={t('users.searchByUsernameOrEmail')}
                 value={searchTerm}
                 onChange={(e) => {
                   setSearchTerm(e.target.value);
                   setCurrentPage(1);
                 }}
-                className="w-full pl-10 pr-4 py-2.5 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm transition-all"
+                className="w-full pl-10 pr-4 py-2.5 border border-border rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm transition-all"
               />
             </div>
 
@@ -177,7 +187,7 @@ const Users: React.FC = () => {
               {/* Reset Button */}
               <PrimaryButton
                 icon={RefreshCw}
-                label="Reset"
+                label={t('common.reset')}
                 variant="secondary"
                 size="sm"
                 onClick={handleReset}
@@ -188,7 +198,7 @@ const Users: React.FC = () => {
 
         {/* Top Pagination - Info Row */}
         {totalPages > 1 && (
-          <div className="px-4 sm:px-5 py-3 bg-gray-50 border-t border-gray-200">
+          <div className="px-4 sm:px-5 py-3 bg-background border-t border-border">
             <Pagination
               currentPage={currentPage}
               totalPages={totalPages}
@@ -206,47 +216,41 @@ const Users: React.FC = () => {
       </div>
 
       {/* Table */}
-      <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+      <div className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="min-w-full divide-y divide-gray-200">
-            <thead className="bg-gray-50">
+          <table className="min-w-full divide-y divide-border">
+            <thead className="bg-background">
               <tr>
-                <th className="px-4 sm:px-6 py-3.5 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                  User
+                <th className="px-4 sm:px-6 py-3.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                  {t('auditLogs.user')}
                 </th>
-                <th className="px-4 sm:px-6 py-3.5 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                  Email
+                <th className="px-4 sm:px-6 py-3.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                  {t('users.email')}
                 </th>
-                <th className="px-4 sm:px-6 py-3.5 text-center text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                  Role
+                <th className="px-4 sm:px-6 py-3.5 text-center text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                  {t('users.role')}
                 </th>
-                <th className="px-4 sm:px-6 py-3.5 text-center text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                  Status
+                <th className="px-4 sm:px-6 py-3.5 text-center text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                  {t('common.status')}
                 </th>
-                <th className="px-4 sm:px-6 py-3.5 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                  Created
+                <th className="px-4 sm:px-6 py-3.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                  {t('users.created')}
                 </th>
-                <th className="px-4 sm:px-6 py-3.5 text-center text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                  Actions
+                <th className="px-4 sm:px-6 py-3.5 text-center text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                  {t('common.actions')}
                 </th>
               </tr>
             </thead>
-            <tbody className="bg-white divide-y divide-gray-200">
-              {isLoading ? (
-                <tr>
-                  <td colSpan={6}>
-                    <LoadingState message="Loading users..." />
-                  </td>
-                </tr>
-              ) : filteredUsers.length === 0 ? (
+            <tbody className="bg-card divide-y divide-border">
+              {filteredUsers.length === 0 ? (
                 <tr>
                   <td colSpan={6}>
                     <EmptyState
                       icon={UsersIcon}
-                      title="No Users Found"
-                      description="Create a new user to get started"
+                      title={t('users.noUsersFound')}
+                      description={t('users.createNewUserDescription')}
                       action={{
-                        label: "New User",
+                        label: t('users.newUser'),
                         onClick: () => { reset({ username: '', email: '', password: '', is_active: true, is_superuser: false }); setShowCreateModal(true); }
                       }}
                     />
@@ -261,20 +265,20 @@ const Users: React.FC = () => {
                           <span className="text-sm font-medium text-white">{user.username.charAt(0).toUpperCase()}</span>
                         </div>
                         <div>
-                          <p className="font-medium text-gray-900">{user.username}</p>
-                          {isSelf(user) && <span className="text-xs text-blue-600">(you)</span>}
+                          <p className="font-medium text-foreground">{user.username}</p>
+                          {isSelf(user) && <span className="text-xs text-blue-600">({t('users.you')})</span>}
                         </div>
                       </div>
                     </td>
-                    <td className="px-4 sm:px-6 py-4 whitespace-nowrap text-sm text-gray-600">{user.email || '—'}</td>
+                    <td className="px-4 sm:px-6 py-4 whitespace-nowrap text-sm text-muted-foreground">{user.email || '—'}</td>
                     <td className="px-4 sm:px-6 py-4 whitespace-nowrap text-center">
                       {user.is_superuser ? (
                         <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800">
-                          <ShieldCheck className="h-3 w-3" /> Admin
+                          <ShieldCheck className="h-3 w-3" /> {t('users.admin')}
                         </span>
                       ) : (
-                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
-                          <Shield className="h-3 w-3" /> User
+                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-muted text-foreground">
+                          <Shield className="h-3 w-3" /> {t('users.userRole')}
                         </span>
                       )}
                     </td>
@@ -286,10 +290,10 @@ const Users: React.FC = () => {
                           user.is_active ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
                         }`}
                       >
-                        {user.is_active ? 'Active' : 'Inactive'}
+                        {user.is_active ? t('common.active') : t('common.inactive')}
                       </button>
                     </td>
-                    <td className="px-4 sm:px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                    <td className="px-4 sm:px-6 py-4 whitespace-nowrap text-sm text-muted-foreground">
                       {user.created_at ? new Date(user.created_at).toLocaleDateString() : '—'}
                     </td>
                     <td className="px-4 sm:px-6 py-4 whitespace-nowrap">
@@ -299,21 +303,21 @@ const Users: React.FC = () => {
                             icon={Unlock}
                             variant="success"
                             size="md"
-                            title="Unlock account"
+                            title={t('users.unlockAccount')}
                             onClick={() => handleUnlock(user)}
                           />
                           <IconButton
                             icon={KeyRound}
                             variant="primary"
                             size="md"
-                            title="Reset password"
+                            title={t('users.resetPassword')}
                             onClick={() => setResetPasswordUser(user)}
                           />
                           <IconButton
                             icon={Edit2}
                             variant="primary"
                             size="md"
-                            title="Edit user"
+                            title={t('users.editUser')}
                             onClick={() => setEditingUser(user)}
                           />
                           {!isSelf(user) && (
@@ -321,7 +325,7 @@ const Users: React.FC = () => {
                               icon={Trash2}
                               variant="danger"
                               size="md"
-                              title="Delete user"
+                              title={t('users.deleteUser')}
                               onClick={() => handleDeleteUser(user)}
                             />
                           )}
@@ -348,84 +352,71 @@ const Users: React.FC = () => {
       </div>
 
       {/* Create User Modal */}
-      {showCreateModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl shadow-xl max-w-md w-full p-6">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-semibold">Create New User</h3>
-              <IconButton
-                icon={X}
-                variant="ghost"
-                size="md"
-                onClick={() => setShowCreateModal(false)}
-              />
-            </div>
-            <form onSubmit={handleSubmit(onCreateSubmit)} className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Username</label>
-                <input
-                  {...register('username', {
-                    required: 'Required',
-                    minLength: { value: 3, message: 'Min 3 characters' },
-                    pattern: { value: /^[a-zA-Z0-9_]+$/, message: 'Letters, numbers, underscores only' },
-                  })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
-                  placeholder="e.g. john_doe"
-                />
-                {errors.username && <p className="text-xs text-red-600 mt-1">{errors.username.message}</p>}
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
-                <input
-                  {...register('email', { pattern: { value: /^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$/i, message: 'Invalid email' } })}
-                  type="email"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
-                  placeholder="john@example.com"
-                />
-                {errors.email && <p className="text-xs text-red-600 mt-1">{errors.email.message}</p>}
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Password</label>
-                <input
-                  {...register('password', {
-                    required: 'Required',
-                    minLength: { value: 8, message: 'Min 8 characters' },
-                    pattern: { value: /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$/, message: 'Must have uppercase, lowercase, and number' },
-                  })}
-                  type="password"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
-                  placeholder="Min 8 chars, upper+lower+digit"
-                />
-                {errors.password && <p className="text-xs text-red-600 mt-1">{errors.password.message}</p>}
-              </div>
-              <div className="flex items-center gap-6">
-                <label className="flex items-center gap-2 text-sm">
-                  <input type="checkbox" {...register('is_active')} className="rounded" />
-                  Active
-                </label>
-                <label className="flex items-center gap-2 text-sm">
-                  <input type="checkbox" {...register('is_superuser')} className="rounded" />
-                  Administrator
-                </label>
-              </div>
-              <div className="flex gap-3 pt-2">
-                <PrimaryButton
-                  label="Cancel"
-                  variant="secondary"
-                  onClick={() => setShowCreateModal(false)}
-                  className="flex-1"
-                />
-                <PrimaryButton
-                  label="Create"
-                  variant="primary"
-                  type="submit"
-                  className="flex-1"
-                />
-              </div>
-            </form>
+      <Modal isOpen={showCreateModal} onClose={() => setShowCreateModal(false)} title={t('users.createNewUser')} size="md">
+        <form onSubmit={handleSubmit(onCreateSubmit)} className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-muted-foreground mb-1">{t('users.username')}</label>
+            <input
+              {...register('username', {
+                required: t('users.required'),
+                minLength: { value: 3, message: t('users.min3Characters') },
+                pattern: { value: /^[a-zA-Z0-9_]+$/, message: t('users.lettersNumbersUnderscores') },
+              })}
+              className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+              placeholder="e.g. john_doe"
+            />
+            {errors.username && <p className="text-xs text-red-600 mt-1">{errors.username.message}</p>}
           </div>
-        </div>
-      )}
+          <div>
+            <label className="block text-sm font-medium text-muted-foreground mb-1">{t('users.email')}</label>
+            <input
+              {...register('email', { pattern: { value: /^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$/i, message: t('users.invalidEmail') } })}
+              type="email"
+              className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+              placeholder="john@example.com"
+            />
+            {errors.email && <p className="text-xs text-red-600 mt-1">{errors.email.message}</p>}
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-muted-foreground mb-1">{t('users.passwordLabel')}</label>
+            <input
+              {...register('password', {
+                required: t('users.required'),
+                minLength: { value: 8, message: t('users.min8Characters') },
+                pattern: { value: /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$/, message: t('users.mustContainUpperLowerDigit') },
+              })}
+              type="password"
+              className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+              placeholder={t('users.min8CharsUpperLowerDigit')}
+            />
+            {errors.password && <p className="text-xs text-red-600 mt-1">{errors.password.message}</p>}
+          </div>
+          <div className="flex items-center gap-6">
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" {...register('is_active')} className="rounded" />
+              {t('users.activeLabel')}
+            </label>
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" {...register('is_superuser')} className="rounded" />
+              {t('users.administrator')}
+            </label>
+          </div>
+          <div className="flex gap-3 pt-2">
+            <PrimaryButton
+              label={t('common.cancel')}
+              variant="secondary"
+              onClick={() => setShowCreateModal(false)}
+              className="flex-1"
+            />
+            <PrimaryButton
+              label={t('common.create')}
+              variant="primary"
+              type="submit"
+              className="flex-1"
+            />
+          </div>
+        </form>
+      </Modal>
 
       {/* Edit User Modal */}
       {editingUser && (
@@ -447,6 +438,8 @@ const Users: React.FC = () => {
           setShowPassword={setShowPassword}
         />
       )}
+      </>
+      )}
     </div>
   );
 };
@@ -458,6 +451,7 @@ const EditUserModal: React.FC<{
   onSave: (userId: number, updates: Partial<UserItem>) => Promise<void>;
   onClose: () => void;
 }> = ({ user, isSelf, onSave, onClose }) => {
+  const { t } = useTranslation();
   const [email, setEmail] = useState(user.email || '');
   const [isActive, setIsActive] = useState(user.is_active);
   const [isSuperuser, setIsSuperuser] = useState(user.is_superuser);
@@ -465,61 +459,50 @@ const EditUserModal: React.FC<{
 
   const handleSave = async () => {
     setSaving(true);
-    await onSave(user.id, { email, is_active: isActive, is_superuser: isSuperuser } as any);
+    await onSave(user.id, { email, is_active: isActive, is_superuser: isSuperuser });
     setSaving(false);
   };
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-xl shadow-xl max-w-md w-full p-6">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-lg font-semibold">Edit User: {user.username}</h3>
-          <IconButton
-            icon={X}
-            variant="ghost"
-            size="md"
-            onClick={onClose}
+    <Modal isOpen={true} onClose={onClose} title={`${t('users.editUser')}: ${user.username}`} size="md">
+      <div className="space-y-4">
+        <div>
+          <label className="block text-sm font-medium text-muted-foreground mb-1">{t('users.email')}</label>
+          <input
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
           />
         </div>
-        <div className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
-            />
-          </div>
-          <div className="flex items-center gap-6">
-            <label className="flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={isActive} onChange={(e) => setIsActive(e.target.checked)} disabled={isSelf} className="rounded" />
-              Active
-            </label>
-            <label className="flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={isSuperuser} onChange={(e) => setIsSuperuser(e.target.checked)} disabled={isSelf} className="rounded" />
-              Administrator
-            </label>
-          </div>
-          {isSelf && <p className="text-xs text-amber-600">You cannot modify your own role or status.</p>}
-          <div className="flex gap-3 pt-2">
-            <PrimaryButton
-              label="Cancel"
-              variant="secondary"
-              onClick={onClose}
-              className="flex-1"
-            />
-            <PrimaryButton
-              label="Save"
-              variant="primary"
-              onClick={handleSave}
-              loading={saving}
-              className="flex-1"
-            />
-          </div>
+        <div className="flex items-center gap-6">
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={isActive} onChange={(e) => setIsActive(e.target.checked)} disabled={isSelf} className="rounded" />
+            {t('users.activeLabel')}
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={isSuperuser} onChange={(e) => setIsSuperuser(e.target.checked)} disabled={isSelf} className="rounded" />
+            {t('users.administrator')}
+          </label>
+        </div>
+        {isSelf && <p className="text-xs text-amber-600">{t('users.cannotModifyOwnRole')}</p>}
+        <div className="flex gap-3 pt-2">
+          <PrimaryButton
+            label={t('common.cancel')}
+            variant="secondary"
+            onClick={onClose}
+            className="flex-1"
+          />
+          <PrimaryButton
+            label={t('common.save')}
+            variant="primary"
+            onClick={handleSave}
+            loading={saving}
+            className="flex-1"
+          />
         </div>
       </div>
-    </div>
+    </Modal>
   );
 };
 
@@ -531,15 +514,16 @@ const ResetPasswordModal: React.FC<{
   showPassword: boolean;
   setShowPassword: (v: boolean) => void;
 }> = ({ user, onSave, onClose, showPassword, setShowPassword }) => {
+  const { t } = useTranslation();
   const [newPassword, setNewPassword] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
   const handleSave = async () => {
-    if (newPassword.length < 8) { setError('Min 8 characters'); return; }
-    if (!/[A-Z]/.test(newPassword)) { setError('Must contain uppercase'); return; }
-    if (!/[a-z]/.test(newPassword)) { setError('Must contain lowercase'); return; }
-    if (!/\d/.test(newPassword)) { setError('Must contain a number'); return; }
+    if (newPassword.length < 8) { setError(t('users.min8Characters')); return; }
+    if (!/[A-Z]/.test(newPassword)) { setError(t('users.mustContainUppercase')); return; }
+    if (!/[a-z]/.test(newPassword)) { setError(t('users.mustContainLowercase')); return; }
+    if (!/\d/.test(newPassword)) { setError(t('users.mustContainNumber')); return; }
     setError('');
     setSaving(true);
     await onSave(user.id, newPassword);
@@ -547,56 +531,45 @@ const ResetPasswordModal: React.FC<{
   };
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-xl shadow-xl max-w-md w-full p-6">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-lg font-semibold">Reset Password: {user.username}</h3>
-          <IconButton
-            icon={X}
-            variant="ghost"
-            size="md"
+    <Modal isOpen={true} onClose={onClose} title={`${t('users.resetPasswordTitle')}: ${user.username}`} size="md">
+      <div className="space-y-4">
+        <div>
+          <label className="block text-sm font-medium text-muted-foreground mb-1">{t('users.newPassword')}</label>
+          <div className="relative">
+            <input
+              type={showPassword ? 'text' : 'password'}
+              value={newPassword}
+              onChange={(e) => { setNewPassword(e.target.value); setError(''); }}
+              className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm pr-10"
+              placeholder={t('users.min8CharsUpperLowerDigit')}
+            />
+            <button
+              type="button"
+              onClick={() => setShowPassword(!showPassword)}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-muted-foreground"
+            >
+              {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+            </button>
+          </div>
+          {error && <p className="text-xs text-red-600 mt-1">{error}</p>}
+        </div>
+        <div className="flex gap-3 pt-2">
+          <PrimaryButton
+            label={t('common.cancel')}
+            variant="secondary"
             onClick={onClose}
+            className="flex-1"
+          />
+          <PrimaryButton
+            label={t('users.resetPassword')}
+            variant="primary"
+            onClick={handleSave}
+            loading={saving}
+            className="flex-1"
           />
         </div>
-        <div className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">New Password</label>
-            <div className="relative">
-              <input
-                type={showPassword ? 'text' : 'password'}
-                value={newPassword}
-                onChange={(e) => { setNewPassword(e.target.value); setError(''); }}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm pr-10"
-                placeholder="Min 8 chars, upper+lower+digit"
-              />
-              <button
-                type="button"
-                onClick={() => setShowPassword(!showPassword)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
-              >
-                {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-              </button>
-            </div>
-            {error && <p className="text-xs text-red-600 mt-1">{error}</p>}
-          </div>
-          <div className="flex gap-3 pt-2">
-            <PrimaryButton
-              label="Cancel"
-              variant="secondary"
-              onClick={onClose}
-              className="flex-1"
-            />
-            <PrimaryButton
-              label="Reset Password"
-              variant="primary"
-              onClick={handleSave}
-              loading={saving}
-              className="flex-1"
-            />
-          </div>
-        </div>
       </div>
-    </div>
+    </Modal>
   );
 };
 

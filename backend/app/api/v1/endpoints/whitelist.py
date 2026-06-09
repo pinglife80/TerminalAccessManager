@@ -9,6 +9,7 @@ from app.schemas.terminal import (
     WhitelistCreate,
     WhitelistResponse,
     WhitelistQuery,
+    PaginatedResponse,
     ResponseMessage
 )
 from app.services.terminal_service import TerminalService
@@ -16,7 +17,7 @@ from app.services.terminal_service import TerminalService
 router = APIRouter(prefix="/whitelist", tags=["Whitelist"])
 
 
-@router.get("/", response_model=List[WhitelistResponse])
+@router.get("/", response_model=PaginatedResponse[WhitelistResponse])
 async def get_whitelist(
     search: str = Query(None, description="Search by MAC, IP, or comments"),
     start_date: str = Query(None, description="Filter by start date (YYYY-MM-DD)"),
@@ -39,7 +40,8 @@ async def get_whitelist(
 
     service = TerminalService(db)
     whitelist = await service.get_whitelist(query=query, skip=skip, limit=limit)
-    return whitelist
+    total = await service.get_whitelist_count(query=query)
+    return {"items": whitelist, "total": total, "skip": skip, "limit": limit}
 
 
 @router.post("/", status_code=status.HTTP_201_CREATED)

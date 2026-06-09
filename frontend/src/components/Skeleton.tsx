@@ -6,7 +6,7 @@ const SkeletonLine: React.FC<{ width?: string; height?: string; className?: stri
   className = '',
 }) => (
   <div
-    className={`bg-gray-200 rounded animate-pulse ${className}`}
+    className={`bg-muted rounded animate-pulse ${className}`}
     style={{ width, height }}
   />
 );
@@ -16,13 +16,13 @@ const SkeletonCircle: React.FC<{ size?: string; className?: string }> = ({
   className = '',
 }) => (
   <div
-    className={`bg-gray-200 rounded-full animate-pulse ${className}`}
+    className={`bg-muted rounded-full animate-pulse ${className}`}
     style={{ width: size, height: size }}
   />
 );
 
 export const CardSkeleton: React.FC = () => (
-  <div className="bg-white shadow rounded-lg p-6">
+  <div className="bg-card shadow rounded-lg p-6">
     <div className="flex items-center mb-4">
       <SkeletonCircle size="4rem" className="mr-4" />
       <div className="flex-1">
@@ -39,7 +39,7 @@ export const CardSkeleton: React.FC = () => (
 );
 
 export const StatsCardSkeleton: React.FC = () => (
-  <div className="bg-white shadow rounded-lg p-5">
+  <div className="bg-card shadow rounded-lg p-5">
     <div className="flex items-center">
       <div className="flex-shrink-0">
         <SkeletonCircle size="2.5rem" />
@@ -62,24 +62,24 @@ export const TableSkeleton: React.FC<{ rows?: number; columns?: number }> = ({
   rows = 5,
   columns = 6,
 }) => (
-  <div className="bg-white shadow rounded-lg overflow-hidden">
+  <div className="bg-card shadow rounded-lg overflow-hidden">
     <div className="overflow-x-auto">
-      <table className="min-w-full divide-y divide-gray-200">
-        <thead className="bg-gray-50">
+      <table className="min-w-full divide-y divide-border">
+        <thead className="bg-background">
           <tr>
             {Array.from({ length: columns }).map((_, i) => (
               <th
                 key={i}
-                className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+                className="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider"
               >
                 <SkeletonLine width="80%" height="0.75rem" />
               </th>
             ))}
           </tr>
         </thead>
-        <tbody className="bg-white divide-y divide-gray-200">
+        <tbody className="bg-card divide-y divide-border">
           {Array.from({ length: rows }).map((_, rowIndex) => (
-            <tr key={rowIndex} className="hover:bg-gray-50 transition-colors">
+            <tr key={rowIndex} className="hover:bg-background transition-colors">
               {Array.from({ length: columns }).map((_, colIndex) => (
                 <td key={colIndex} className="px-6 py-4 whitespace-nowrap">
                   {colIndex === 0 ? (
@@ -101,7 +101,7 @@ export const TableSkeleton: React.FC<{ rows?: number; columns?: number }> = ({
 );
 
 export const DashboardSkeleton: React.FC = () => (
-  <div className="min-h-full bg-gray-50 p-8">
+  <div className="min-h-full bg-background p-8">
     <div className="mb-8">
       <SkeletonLine width="30%" height="2rem" className="mb-2" />
       <SkeletonLine width="20%" height="1rem" />
@@ -118,7 +118,7 @@ export const DashboardSkeleton: React.FC = () => (
 );
 
 export const PageSkeleton: React.FC = () => (
-  <div className="min-h-full bg-gray-50 p-8">
+  <div className="min-h-full bg-background p-8">
     <div className="mb-8 flex flex-col md:flex-row md:items-center md:justify-between">
       <div>
         <SkeletonLine width="40%" height="2rem" className="mb-2" />
@@ -129,7 +129,7 @@ export const PageSkeleton: React.FC = () => (
       </div>
     </div>
 
-    <div className="bg-white shadow rounded-lg p-4 mb-6">
+    <div className="bg-card shadow rounded-lg p-4 mb-6">
       <div className="flex flex-col md:flex-row gap-4">
         <div className="flex-1">
           <SkeletonLine width="100%" height="2.5rem" />

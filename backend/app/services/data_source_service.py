@@ -16,6 +16,7 @@ from app.models.data_source import DataSource, DataSourceBinding
 from app.schemas.data_source import (
     DataSourceCreate, DataSourceUpdate, ConnectionTestResult,
 )
+from app.core.crypto import encrypt_config, decrypt_config
 
 
 class DataSourceService:
@@ -46,7 +47,7 @@ class DataSourceService:
             name=data.name,
             type=data.type,
             tag=data.tag,
-            config=data.config,
+            config=encrypt_config(data.config),
             enabled=data.enabled,
         )
         self.db.add(source)
@@ -80,7 +81,7 @@ class DataSourceService:
         if data.type is not None:
             source.type = data.type
         if data.config is not None:
-            source.config = data.config
+            source.config = encrypt_config(data.config)
         if data.enabled is not None:
             source.enabled = data.enabled
 
@@ -112,13 +113,19 @@ class DataSourceService:
         """Get a data source by ID"""
         stmt = select(DataSource).where(DataSource.id == source_id)
         result = await self.db.execute(stmt)
-        return result.scalar_one_or_none()
+        source = result.scalar_one_or_none()
+        if source and source.config:
+            source.config = decrypt_config(source.config)
+        return source
 
     async def get_data_source_by_tag(self, tag: str) -> Optional[DataSource]:
         """Get a data source by tag"""
         stmt = select(DataSource).where(DataSource.tag == tag)
         result = await self.db.execute(stmt)
-        return result.scalar_one_or_none()
+        source = result.scalar_one_or_none()
+        if source and source.config:
+            source.config = decrypt_config(source.config)
+        return source
 
     async def list_data_sources(
         self,
@@ -133,7 +140,11 @@ class DataSourceService:
             stmt = stmt.where(DataSource.enabled == enabled)
 
         result = await self.db.execute(stmt)
-        return result.scalars().all()
+        sources = result.scalars().all()
+        for source in sources:
+            if source.config:
+                source.config = decrypt_config(source.config)
+        return sources
 
     async def update_sync_status(
         self, source_id: int, status: str, error: Optional[str] = None

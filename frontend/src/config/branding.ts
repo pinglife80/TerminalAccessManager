@@ -43,7 +43,7 @@ interface BrandingConfig {
 
 const branding: BrandingConfig = {
   /** Application name displayed in sidebar, login page, and browser title */
-  appName: 'Terminal Access Platform',
+  appName: 'Terminal Access Manager',
 
   /** Short name used in sidebar when expanded */
   appShortName: 'Terminal Access',
@@ -55,7 +55,7 @@ const branding: BrandingConfig = {
   version: 'v2.0.0',
 
   /** Browser tab title (used in index.html and dynamic title updates) */
-  title: 'Terminal Access Platform',
+  title: 'Terminal Access Manager',
 
   /** Favicon path - place your favicon file in the `public/` directory */
   favicon: '/favicon.svg',
@@ -75,7 +75,7 @@ const branding: BrandingConfig = {
   /** Login page configuration */
   login: {
     /** Heading text on the login page */
-    heading: 'Terminal Access Platform',
+    heading: 'Terminal Access Manager',
     /** Subheading text below the heading */
     subheading: 'Sign in to your account',
     /** Footer text at the bottom of the login card */

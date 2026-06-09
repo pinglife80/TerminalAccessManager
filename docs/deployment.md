@@ -204,7 +204,7 @@ Deployment:
 
 检查项目：
 1. Docker 守护进程
-2. 服务容器状态
+2. 服务容器状态（注意：frontend 容器 exited(0) 为正常状态，表示构建已完成；仅 exited(非0) 才表示构建失败）
 3. 数据库连接
 4. Redis 连接
 5. 后端 API 可用性
@@ -290,6 +290,8 @@ Deployment:
 4. 重启服务
 5. 自动执行数据库迁移
 6. 迁移失败时自动回滚代码并重启（恢复到升级前状态）
+
+> **自动数据迁移说明**：升级后后端启动时会自动迁移 `audit_logs` 表中的旧 action 值（如 `block_ip` → `block_terminal` 等统一命名）和 `system_config` 表中的旧品牌值（如 `Terminal Access Platform` → `Terminal Access Manager`），无需手动干预。
 
 ### 4.2 数据管理命令
 

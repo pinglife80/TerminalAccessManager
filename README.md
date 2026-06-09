@@ -7,9 +7,9 @@
 - **终端合规监控** — 4 种合规状态（Normal / Bypass / Blocked / Pending），白名单匹配类型标记（MAC / IP / Both），黑名单来源防火墙 Tag 展示
 - **数据源管理** — 统一管理 ARP 数据源（SSH/API）和合规基准，深信服防火墙集成，数据源绑定路由
 - **合规检查引擎** — 自动合规判定（ComplianceBaseline 基准 + 白名单 + 黑名单），自动封禁/解封，按防火墙 Tag 路由操作
-- **白名单管理** — 可信终端快速放行，支持 MAC/IP/CIDR/连续 IP 段，详情查看，备注必填
-- **黑名单管理** — 安全威胁终端封禁，多防火墙 Tag 筛选，手动/自动刷新
-- **审计日志** — 全操作审计追踪，支持日期范围过滤
+- **白名单管理** — 可信终端快速放行，支持 MAC/IP/CIDR/连续 IP 段，详情查看，备注必填，MAC 地址格式无关搜索
+- **黑名单管理** — 安全威胁终端封禁，多防火墙 Tag 筛选，手动/自动刷新，MAC 地址格式无关搜索
+- **审计日志** — 全操作审计追踪，支持日期范围过滤，8 类操作分类过滤、彩色 badge、JSON 详情解析
 - **仪表板** — 合规状态统计概览、快捷操作、系统状态
 - **用户管理** — 管理员专属页面，用户 CRUD 操作
 - **定时任务** — 5 个可配置频率的定时任务（ARP 采集、合规基准同步、防火墙查询、合规检查、自动解封），30 秒 - 1 天可调
@@ -17,6 +17,8 @@
 - **登录安全** — 验证码（3 次失败后）、账户锁定（5 次失败后锁定 15 分钟）
 - **HTTPS** — Nginx 反向代理 + SSL/TLS，HTTP 自动重定向 HTTPS
 - **响应式 UI** — 可折叠侧边栏、可折叠搜索面板、双位置分页、数据自动刷新
+- **国际化(i18n)** — 支持中文/英文/日语三种语言，自动检测浏览器语言，手动切换
+- **深色主题** — 浅色/深色/跟随系统三选项，HeaderControls 组件一键切换
 
 ## 技术栈
 
@@ -46,6 +48,7 @@
 | React Hook Form 7 | 表单验证 |
 | Lucide React | 图标库 |
 | Recharts | 图表 |
+| i18next + react-i18next + i18next-browser-languagedetector | 国际化(i18n) |
 
 ## 快速开始
 
@@ -102,13 +105,14 @@ TerminalAccessManager/
 │   └── Dockerfile
 ├── frontend/                   # React 前端
 │   ├── src/
-│   │   ├── components/        # UI 组件（Layout, Sidebar, Pagination, DateRangeFilter...）
+│   │   ├── components/        # UI 组件（Layout, Sidebar, HeaderControls, Pagination, DateRangeFilter...）
 │   │   ├── config/            # 配置文件
 │   │   │   └── branding.ts    # 品牌自定义配置（静态默认值）
 │   │   ├── hooks/             # 自定义 Hooks（useTerminalData - 含自动刷新 refetchInterval）
+│   │   ├── i18n/              # 国际化配置（index.ts、locales/en.ts、locales/zh.ts、locales/ja.ts）
 │   │   ├── lib/               # 工具库（api, constants, utils）
 │   │   ├── pages/             # 页面组件（Dashboard, Login, Terminals, Whitelist, Blacklist, DataSources, Users, Profile, AuditLogs）
-│   │   ├── store/             # Zustand 状态管理（auth, branding - useBrandingStore）
+│   │   ├── store/             # Zustand 状态管理（auth, branding - useBrandingStore, theme）
 │   │   ├── App.tsx            # 路由配置
 │   │   └── main.tsx           # 入口文件
 │   ├── public/                # 静态资源（favicon.svg, logo 等）

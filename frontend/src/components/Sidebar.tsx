@@ -14,9 +14,11 @@ import {
   ChevronLeft,
   ChevronRight,
 } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { useAuthStore } from '@/store/auth';
 import { useBrandingStore } from '@/store/branding';
 import { NAV_ITEMS } from '@/lib/constants';
+import { pagePreloadMap } from '@/App';
 
 // Map icon names from NAV_ITEMS to Lucide components
 const iconMap: Record<string, React.ComponentType<{ className?: string }>> = {
@@ -29,7 +31,19 @@ const iconMap: Record<string, React.ComponentType<{ className?: string }>> = {
   Users,
 };
 
+// Map NAV_ITEMS label to i18n key
+const navLabelKeyMap: Record<string, string> = {
+  'Dashboard': 'nav.dashboard',
+  'Terminals': 'nav.terminals',
+  'Whitelist': 'nav.whitelist',
+  'Blocked': 'nav.blacklist',
+  'Audit Logs': 'nav.auditLogs',
+  'Data Sources': 'nav.dataSources',
+  'Users': 'nav.users',
+};
+
 const Sidebar: React.FC = () => {
+  const { t } = useTranslation();
   const { user, logout } = useAuthStore();
   const { appShortName, appSubtitle } = useBrandingStore();
   const [collapsed, setCollapsed] = useState(false);
@@ -38,9 +52,13 @@ const Sidebar: React.FC = () => {
     .filter((item) => !item.adminOnly || user?.is_superuser)
     .map((item) => ({
       path: item.path,
-      label: item.label,
+      label: navLabelKeyMap[item.label] ? t(navLabelKeyMap[item.label]) : item.label,
       icon: iconMap[item.iconName] || Shield,
     }));
+
+  const handleNavHover = (path: string) => {
+    pagePreloadMap[path]?.();
+  };
 
   return (
     <aside
@@ -50,7 +68,7 @@ const Sidebar: React.FC = () => {
     >
       {/* Logo / Brand */}
       <div className={`p-4 border-b border-gray-800 ${collapsed ? 'px-3' : ''}`}>
-        <div className={`flex items-center ${collapsed ? 'justify-center' : 'space-x-3'}`}>
+        <div className={`flex items-center h-10 ${collapsed ? 'justify-center' : 'space-x-3'}`}>
           <Shield className="h-8 w-8 flex-shrink-0 text-blue-500" />
           {!collapsed && (
             <div className="overflow-hidden">
@@ -65,8 +83,8 @@ const Sidebar: React.FC = () => {
       <button
         onClick={() => setCollapsed(!collapsed)}
         className="absolute -right-3 top-20 z-10 w-6 h-6 bg-gray-700 hover:bg-gray-600 border border-gray-600 rounded-full flex items-center justify-center text-gray-300 hover:text-white shadow-md transition-colors"
-        title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-        aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+        title={collapsed ? t('sidebar.expandSidebar') : t('sidebar.collapseSidebar')}
+        aria-label={collapsed ? t('sidebar.expandSidebar') : t('sidebar.collapseSidebar')}
       >
         {collapsed ? (
           <ChevronRight className="h-3.5 w-3.5" />
@@ -82,6 +100,7 @@ const Sidebar: React.FC = () => {
             <li key={item.path}>
               <NavLink
                 to={item.path}
+                onMouseEnter={() => handleNavHover(item.path)}
                 className={({ isActive }) =>
                   `flex items-center ${collapsed ? 'justify-center' : 'space-x-3'} px-3 py-2.5 rounded-lg transition-colors group ${
                     isActive
@@ -120,7 +139,7 @@ const Sidebar: React.FC = () => {
               <div className="overflow-hidden">
                 <p className="text-sm font-medium truncate">{user?.username}</p>
                 <p className="text-xs text-gray-400 truncate">
-                  {user?.is_superuser ? 'Administrator' : 'User'}
+                  {user?.is_superuser ? t('users.administrator') : t('users.userRole')}
                 </p>
               </div>
             )}
@@ -130,14 +149,14 @@ const Sidebar: React.FC = () => {
               <NavLink
                 to="/profile"
                 className="p-2 text-gray-400 hover:text-white hover:bg-gray-800 rounded-lg transition-colors flex-shrink-0"
-                title="Profile"
+                title={t('sidebar.profile')}
               >
                 <UserCircle className="h-4 w-4" />
               </NavLink>
               <button
                 onClick={logout}
                 className="p-2 text-gray-400 hover:text-white hover:bg-gray-800 rounded-lg transition-colors flex-shrink-0"
-                title="Logout"
+                title={t('nav.logout')}
               >
                 <LogOut className="h-4 w-4" />
               </button>
@@ -145,13 +164,15 @@ const Sidebar: React.FC = () => {
           )}
         </div>
         {collapsed && (
-          <button
-            onClick={logout}
-            className="mt-2 p-2 text-gray-400 hover:text-white hover:bg-gray-800 rounded-lg transition-colors w-full flex items-center justify-center"
-            title="Logout"
-          >
-            <LogOut className="h-4 w-4" />
-          </button>
+          <div className="mt-2 flex items-center justify-center gap-1">
+            <button
+              onClick={logout}
+              className="p-2 text-gray-400 hover:text-white hover:bg-gray-800 rounded-lg transition-colors"
+              title={t('nav.logout')}
+            >
+              <LogOut className="h-4 w-4" />
+            </button>
+          </div>
         )}
       </div>
     </aside>

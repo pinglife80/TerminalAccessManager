@@ -97,10 +97,12 @@ Authorization: Bearer <access_token>
 
 1. 检查账户是否锁定 -> 锁定则返回 423
 2. 检查是否需要验证码 -> 需要但未提供则返回 400
-3. 验证用户名是否存在 -> 不存在返回 401
+3. 验证用户名是否存在 -> 不存在返回 401（并记录失败次数）
 4. 验证密码 -> 错误返回 401（并记录失败次数）
 5. 检查账户是否禁用 -> 禁用返回 403
 6. 登录成功，重置失败计数，返回令牌
+
+> **审计日志**：登录成功时记录 `login` 操作，登录失败时记录 `login_failed` 操作，均包含客户端 IP 地址。
 
 **成功响应** `200`
 
@@ -292,6 +294,8 @@ curl -X POST https://<HOST_IP>:8443/api/v1/auth/refresh \
 
 - **认证要求**：需认证
 
+> **审计日志**：登出成功时记录 `logout` 操作，包含客户端 IP 地址。
+
 **成功响应** `200`
 
 ```json
@@ -396,6 +400,8 @@ curl -X PUT https://<HOST_IP>:8443/api/v1/auth/me/password \
 ## 2. 用户管理 /auth/users
 
 以下端点均为超管专用。
+
+> **审计日志**：用户管理操作均记录审计日志，action 值包括 `create_user`、`update_user`、`delete_user`、`reset_password`、`unlock_user`，details 包含操作对象及变更内容。
 
 ### 2.1 GET /auth/users
 
@@ -764,22 +770,45 @@ curl "https://<HOST_IP>:8443/api/v1/terminals/?skip=0&limit=20" \
 
 | 参数 | 位置 | 类型 | 必填 | 说明 |
 |------|------|------|------|------|
-| ip | Query | string | 否 | 按 IP 地址过滤 |
-| mac | Query | string | 否 | 按 MAC 地址过滤 |
+| ip | Query | string | 否 | 按 IP 地址模糊搜索（ILIKE） |
+| mac | Query | string | 否 | 按 MAC 地址模糊搜索（ILIKE） |
+| compliance_status | Query | string | 否 | 按合规状态过滤（compliant/bypass/non_compliant/unknown） |
 | status | Query | string | 否 | 按状态过滤（active/inactive/frozen/pending/unfrozen） |
 | start_date | Query | string | 否 | 起始日期（YYYY-MM-DD） |
 | end_date | Query | string | 否 | 截止日期（YYYY-MM-DD） |
 | skip | Query | int | 0 | 跳过记录数 |
 | limit | Query | int | 50 | 每页记录数（1-200） |
 
+> IP 和 MAC 参数使用 ILIKE 模糊搜索，同时提供时使用 OR 逻辑（任一匹配即返回）。
+
 **成功响应** `200`
 
-返回格式同 [3.1 GET /terminals/](#31-get-terminals)。
+```json
+{
+  "items": [
+    {
+      "id": 1,
+      "ip_address": "192.168.1.100",
+      "mac_address": "AA:BB:CC:DD:EE:FF",
+      "status": "unfrozen",
+      "timestamp": "2025-06-01T10:00:00Z",
+      "source": "arp",
+      "source_tag": "switch-1f",
+      "compliance_status": "unknown",
+      "wl_match_type": null,
+      "comments": null
+    }
+  ],
+  "total": 150,
+  "skip": 0,
+  "limit": 50
+}
+```
 
 **用例**
 
 ```bash
-curl "https://<HOST_IP>:8443/api/v1/terminals/search?ip=192.168.1&status=unfrozen&start_date=2025-06-01&end_date=2025-06-08" \
+curl "https://<HOST_IP>:8443/api/v1/terminals/search?ip=192.168.1&compliance_status=non_compliant&start_date=2025-06-01&end_date=2025-06-08" \
   -H "Authorization: Bearer <access_token>"
 ```
 
@@ -923,20 +952,27 @@ curl https://<HOST_IP>:8443/api/v1/terminals/1 \
 | skip | Query | int | 0 | 跳过记录数 |
 | limit | Query | int | 50 | 每页记录数（1-200） |
 
+> **MAC 地址格式无关搜索**：搜索 MAC 地址时，后端使用 `func.replace` 去除分隔符（`:`、`-`、`.`）后进行 ILIKE 匹配，因此输入 `AABBCCDDEEFF`、`AA:BB:CC:DD:EE:FF`、`AA-BB-CC-DD-EE-FF` 均可匹配同一条记录。
+
 **成功响应** `200`
 
 ```json
-[
-  {
-    "id": 1,
-    "mac_address": "AA:BB:CC:DD:EE:FF",
-    "ip_pattern": "192.168.1.0/24",
-    "pattern_type": "cidr",
-    "comments": "办公网段",
-    "added_by": "admin",
-    "created_at": "2025-06-01T10:00:00Z"
-  }
-]
+{
+  "items": [
+    {
+      "id": 1,
+      "mac_address": "AA:BB:CC:DD:EE:FF",
+      "ip_pattern": "192.168.1.0/24",
+      "pattern_type": "cidr",
+      "comments": "办公网段",
+      "added_by": "admin",
+      "created_at": "2025-06-01T10:00:00Z"
+    }
+  ],
+  "total": 30,
+  "skip": 0,
+  "limit": 50
+}
 ```
 
 **用例**
@@ -1060,24 +1096,31 @@ curl -X DELETE https://<HOST_IP>:8443/api/v1/whitelist/192.168.1.0/24 \
 | skip | Query | int | 0 | 跳过记录数 |
 | limit | Query | int | 50 | 每页记录数（1-200） |
 
+> **MAC 地址格式无关搜索**：搜索 MAC 地址时，后端使用 `func.replace` 去除分隔符（`:`、`-`、`.`）后进行 ILIKE 匹配，因此输入 `AABBCCDDEEFF`、`AA:BB:CC:DD:EE:FF`、`AA-BB-CC-DD-EE-FF` 均可匹配同一条记录。
+
 **成功响应** `200`
 
 ```json
-[
-  {
-    "id": 1,
-    "ip_address": "192.168.1.200",
-    "mac_address": "11:22:33:44:55:66",
-    "reason": "未合规终端",
-    "blocked_at": "2025-06-01T10:00:00Z",
-    "expires_at": "2025-07-01T10:00:00Z",
-    "blocked_by": "admin",
-    "source_tag": "switch-1f",
-    "firewall_tag": "sangfor-af1",
-    "is_auto_blocked": false,
-    "auto_unblocked": false
-  }
-]
+{
+  "items": [
+    {
+      "id": 1,
+      "ip_address": "192.168.1.200",
+      "mac_address": "11:22:33:44:55:66",
+      "reason": "未合规终端",
+      "blocked_at": "2025-06-01T10:00:00Z",
+      "expires_at": "2025-07-01T10:00:00Z",
+      "blocked_by": "admin",
+      "source_tag": "switch-1f",
+      "firewall_tag": "sangfor-af1",
+      "is_auto_blocked": false,
+      "auto_unblocked": false
+    }
+  ],
+  "total": 10,
+  "skip": 0,
+  "limit": 50
+}
 ```
 
 **用例**
@@ -1176,6 +1219,8 @@ curl -X DELETE https://<HOST_IP>:8443/api/v1/blacklist/192.168.1.200 \
 ---
 
 ## 6. 数据源管理 /data-sources
+
+> **审计日志**：数据源管理操作均记录审计日志，action 值包括 `create_datasource`、`update_datasource`、`delete_datasource`、`test_datasource`、`sync_datasource`，details 包含数据源名称、标签及变更内容。
 
 ### 6.1 GET /data-sources/
 
@@ -1987,10 +2032,10 @@ curl -X POST https://<HOST_IP>:8443/api/v1/compliance-baselines/1/sync \
   {
     "id": 1,
     "username": "admin",
-    "action": "block_ip",
-    "resource_type": "mac",
+    "action": "block_terminal",
+    "resource_type": "terminal",
     "resource_id": "192.168.1.100",
-    "details": "Blocked IP 192.168.1.100 for 30d",
+    "details": "{\"ip\": \"192.168.1.100\", \"mac\": \"AA:BB:CC:DD:EE:FF\", \"block_time\": \"30d\", \"firewall_tag\": \"sangfor-af1\"}",
     "ip_address": "10.0.0.50",
     "timestamp": "2025-06-08T10:00:00Z"
   }
@@ -2017,21 +2062,71 @@ curl "https://<HOST_IP>:8443/api/v1/logs/?skip=0&limit=20" \
 | 参数 | 位置 | 类型 | 必填 | 说明 |
 |------|------|------|------|------|
 | username | Query | string | 否 | 按用户名过滤 |
-| action | Query | string | 否 | 按操作类型过滤 |
+| action | Query | string | 否 | 按操作类型过滤（见下方 action 值列表） |
 | search | Query | string | 否 | 关键词搜索（匹配 IP、用户名、详情） |
 | start_date | Query | string | 否 | 起始日期（YYYY-MM-DD） |
 | end_date | Query | string | 否 | 截止日期（YYYY-MM-DD） |
 | skip | Query | int | 0 | 跳过记录数 |
 | limit | Query | int | 50 | 每页记录数（1-200） |
 
+**action 值列表**
+
+| 分类 | action 值 | 说明 |
+|------|----------|------|
+| 认证 | `login` | 登录成功 |
+| 认证 | `login_failed` | 登录失败 |
+| 认证 | `logout` | 登出 |
+| 终端操作 | `block_terminal` | 封锁终端 |
+| 终端操作 | `unblock_terminal` | 解封终端 |
+| 白名单 | `add_whitelist` | 添加白名单 |
+| 白名单 | `remove_whitelist` | 移除白名单 |
+| 黑名单 | `add_blacklist` | 添加黑名单 |
+| 黑名单 | `remove_blacklist` | 移除黑名单 |
+| 用户管理 | `create_user` | 创建用户 |
+| 用户管理 | `update_user` | 更新用户 |
+| 用户管理 | `delete_user` | 删除用户 |
+| 用户管理 | `reset_password` | 重置密码 |
+| 用户管理 | `unlock_user` | 解锁用户 |
+| 数据源 | `create_datasource` | 创建数据源 |
+| 数据源 | `update_datasource` | 更新数据源 |
+| 数据源 | `delete_datasource` | 删除数据源 |
+| 数据源 | `test_datasource` | 测试数据源连接 |
+| 数据源 | `sync_datasource` | 同步数据源 |
+| 合规 | `compliance_check` | 合规检查 |
+| 合规 | `auto_block` | 自动封禁 |
+| 合规 | `auto_unblock` | 自动解封 |
+| 配置变更 | `update_config` | 更新系统配置 |
+
+> 后端启动时自动迁移旧版 action 值（如 `block_ip` → `block_terminal`、`add_to_whitelist` → `add_whitelist` 等），确保历史数据与新命名一致。
+
 **成功响应** `200`
 
-返回格式同 [10.1 GET /logs/](#101-get-logs)。
+```json
+{
+  "items": [
+    {
+      "id": 1,
+      "username": "admin",
+      "action": "block_terminal",
+      "resource_type": "terminal",
+      "resource_id": "192.168.1.100",
+      "details": "{\"ip\": \"192.168.1.100\", \"mac\": \"AA:BB:CC:DD:EE:FF\", \"block_time\": \"30d\", \"firewall_tag\": \"sangfor-af1\"}",
+      "ip_address": "10.0.0.50",
+      "timestamp": "2025-06-08T10:00:00Z"
+    }
+  ],
+  "total": 200,
+  "skip": 0,
+  "limit": 50
+}
+```
+
+> **details 字段**：存储为 JSON 格式字符串，包含操作相关的结构化信息（如 IP 地址、MAC 地址、封锁时长、变更内容等），前端可解析后以格式化方式展示。
 
 **用例**
 
 ```bash
-curl "https://<HOST_IP>:8443/api/v1/logs/search?username=admin&action=block_ip&start_date=2025-06-01&end_date=2025-06-08" \
+curl "https://<HOST_IP>:8443/api/v1/logs/search?username=admin&action=block_terminal&start_date=2025-06-01&end_date=2025-06-08" \
   -H "Authorization: Bearer <access_token>"
 ```
 
@@ -2045,13 +2140,14 @@ curl "https://<HOST_IP>:8443/api/v1/logs/search?username=admin&action=block_ip&s
 
 **请求参数**
 
-| 参数 | 位置 | 类型 | 必填 | 说明 |
-|------|------|------|------|------|
-| username | Query | string | 否 | 按用户名过滤 |
-| action | Query | string | 否 | 按操作类型过滤 |
-| search | Query | string | 否 | 关键词搜索 |
-| start_date | Query | string | 否 | 起始日期（YYYY-MM-DD） |
-| end_date | Query | string | 否 | 截止日期（YYYY-MM-DD） |
+| 参数 | 位置 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|------|--------|------|
+| username | Query | string | 否 | — | 按用户名过滤 |
+| action | Query | string | 否 | — | 按操作类型过滤 |
+| search | Query | string | 否 | — | 关键词搜索 |
+| start_date | Query | string | 否 | — | 起始日期（YYYY-MM-DD） |
+| end_date | Query | string | 否 | — | 截止日期（YYYY-MM-DD） |
+| limit | Query | int | 否 | 10000 | 导出记录数上限（最大 50000） |
 
 **成功响应** `200`
 
@@ -2147,10 +2243,10 @@ curl https://<HOST_IP>:8443/api/v1/stats/system-status \
 
 ```json
 {
-  "app_name": "Terminal Access Platform",
+  "app_name": "Terminal Access Manager",
   "app_short_name": "Terminal Access",
   "app_subtitle": "Manager",
-  "login_heading": "Terminal Access Platform",
+  "login_heading": "Terminal Access Manager",
   "login_subheading": "Sign in to your account",
   "login_footer_text": "Secure authentication · Session-based access control",
   "login_bg_url": "",
@@ -2214,10 +2310,10 @@ curl https://<HOST_IP>:8443/api/v1/settings/branding
     "log_level": "INFO"
   },
   "branding": {
-    "app_name": "Terminal Access Platform",
+    "app_name": "Terminal Access Manager",
     "app_short_name": "Terminal Access",
     "app_subtitle": "Manager",
-    "login_heading": "Terminal Access Platform",
+    "login_heading": "Terminal Access Manager",
     "login_subheading": "Sign in to your account",
     "login_footer_text": "Secure authentication · Session-based access control",
     "login_bg_url": "",
@@ -2284,6 +2380,8 @@ curl "https://<HOST_IP>:8443/api/v1/settings/list?category=security" \
 
 - **认证要求**：超管专用
 
+> **审计日志**：配置更新成功时记录 `update_config` 操作，details 包含变更的配置键名、旧值和新值。
+
 **请求体**
 
 ```json
@@ -2332,6 +2430,8 @@ curl -X PUT https://<HOST_IP>:8443/api/v1/settings/update \
 更新单个配置项。
 
 - **认证要求**：超管专用
+
+> **审计日志**：配置更新成功时记录 `update_config` 操作，details 包含变更的配置键名、旧值和新值。
 
 **请求参数**
 

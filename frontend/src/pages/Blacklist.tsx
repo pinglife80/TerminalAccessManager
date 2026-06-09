@@ -1,16 +1,20 @@
 import React, { useState, useMemo } from 'react';
-import { Search, Trash2, AlertTriangle, Clock, Server, X, Download, Eye, Shield, RefreshCw, ChevronDown } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
+import { Search, Trash2, AlertTriangle, Clock, Server, Download, Eye, Shield, RefreshCw, ChevronDown } from 'lucide-react';
 import { useBlacklist, BlacklistEntry, useDataSources } from '@/hooks/useTerminalData';
 import { apiClient } from '@/lib/api';
 import { toast } from 'sonner';
+import { API_ENDPOINTS } from '@/lib/constants';
 import { PrimaryButton, IconButton, ButtonGroup } from '@/components/Button';
 import { Pagination } from '@/components/Pagination';
-import { EmptyState, LoadingState } from '@/components/StateDisplay';
+import { EmptyState } from '@/components/StateDisplay';
+import { PageSkeleton } from '@/components/Skeleton';
+import { Modal } from '@/components/Modal';
 import { DateRangeFilter } from '@/components/DateRangeFilter';
-import { downloadCSV, formatDate, normalizeMacAddress, isValidMacAddress, isValidCidrOrRange } from '@/lib/utils';
+import { downloadCSV, formatDate, normalizeMacAddress, isValidMacAddress, isValidCidrOrRange, useDebounce, getErrorMessage } from '@/lib/utils';
 
 const REFRESH_OPTIONS = [
-  { label: 'Off', value: 0 },
+  { labelKey: 'common.off', label: 'Off', value: 0 },
   { label: '30s', value: 30000 },
   { label: '1m', value: 60000 },
   { label: '5m', value: 300000 },
@@ -18,6 +22,7 @@ const REFRESH_OPTIONS = [
 ];
 
 const Blacklist: React.FC = () => {
+  const { t } = useTranslation();
   const [searchTerm, setSearchTerm] = useState('');
   const [showAddModal, setShowAddModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
@@ -42,10 +47,15 @@ const Blacklist: React.FC = () => {
   const [endDate, setEndDate] = useState('');
   const [autoRefresh, setAutoRefresh] = useState<number>(0);
 
-  const { data: blacklist, isLoading, refetch } = useBlacklist({
-    search: searchTerm || undefined,
+  // Debounce search term
+  const debouncedSearch = useDebounce(searchTerm, 300);
+
+  const { data: blacklistData, isLoading, refetch } = useBlacklist({
+    search: debouncedSearch || undefined,
     start_date: startDate || undefined,
     end_date: endDate || undefined,
+    skip: (currentPage - 1) * pageSize,
+    limit: pageSize,
     refetchInterval: autoRefresh || undefined,
   });
 
@@ -56,14 +66,11 @@ const Blacklist: React.FC = () => {
     [dataSources],
   );
 
-  const filteredBlacklist = blacklist || [];
+  // Extract items and total from paginated response
+  const filteredBlacklist = blacklistData?.items ?? [];
+  const totalFromServer = blacklistData?.total ?? 0;
 
-  const totalPages = Math.ceil(filteredBlacklist.length / pageSize);
-  const paginatedBlacklist = useMemo(() => {
-    const start = (currentPage - 1) * pageSize;
-    const end = start + pageSize;
-    return filteredBlacklist.slice(start, end);
-  }, [filteredBlacklist, currentPage, pageSize]);
+  const totalPages = Math.ceil(totalFromServer / pageSize);
 
   const handlePageChange = (page: number) => {
     setCurrentPage(page);
@@ -76,24 +83,24 @@ const Blacklist: React.FC = () => {
 
   const handleAddBlacklist = async () => {
     if (!newEntry.mac_address && !newEntry.ip_address) {
-      toast.error('Please enter at least a MAC address or IP address');
+      toast.error(t('blacklist.pleaseEnterMacOrIp'));
       return;
     }
     if (!newEntry.reason) {
-      toast.error('Please select a reason for blocking');
+      toast.error(t('blacklist.pleaseSelectReason'));
       return;
     }
 
     // Validate MAC address format
     if (newEntry.mac_address && !isValidMacAddress(newEntry.mac_address)) {
-      setMacError('Invalid MAC address format. Supported: AA:BB:CC:DD:EE:FF, AA-BB-CC-DD-EE-FF, AABBCCDDEEFF');
+      setMacError(t('blacklist.invalidMacFormat'));
       return;
     }
     setMacError('');
 
     // Validate IP address format
     if (newEntry.ip_address && !isValidCidrOrRange(newEntry.ip_address)) {
-      setIpError('Invalid IP address format. Supported: 192.168.1.100, 192.168.1.0/24, 192.168.1.1-100');
+      setIpError(t('blacklist.invalidIpFormat'));
       return;
     }
     setIpError('');
@@ -108,13 +115,13 @@ const Blacklist: React.FC = () => {
       if (newEntry.ip_address) payload['ip_address'] = newEntry.ip_address;
       if (newEntry.firewall_tag) payload['firewall_tag'] = newEntry.firewall_tag;
 
-      await apiClient.post('/blacklist/', payload);
-      toast.success('Terminal blocked successfully');
+      await apiClient.post(API_ENDPOINTS.BLACKLIST, payload);
+      toast.success(t('blacklist.terminalBlockedSuccessfully'));
       setNewEntry({ mac_address: '', ip_address: '', reason: '', block_time: '30d', firewall_tag: '' });
       setShowAddModal(false);
       refetch();
-    } catch (error: any) {
-      toast.error(error.response?.data?.detail || 'Failed to block terminal');
+    } catch (error: unknown) {
+      toast.error(getErrorMessage(error, t('blacklist.failedToBlock')));
     } finally {
       setIsAdding(false);
     }
@@ -131,11 +138,11 @@ const Blacklist: React.FC = () => {
     setIsUnblocking(true);
     try {
       const identifier = deleteEntry.mac_address || deleteEntry.ip_address;
-      await apiClient.delete(`/blacklist/${identifier}`);
-      toast.success(`Unblocked ${identifier}`);
+      await apiClient.delete(`${API_ENDPOINTS.BLACKLIST}${identifier}`);
+      toast.success(t('blacklist.unblockedSuccessfully'));
       refetch();
-    } catch (error: any) {
-      toast.error(error.response?.data?.detail || 'Failed to unblock terminal');
+    } catch (error: unknown) {
+      toast.error(getErrorMessage(error, t('blacklist.failedToUnblock')));
     } finally {
       setIsUnblocking(false);
       setShowDeleteModal(false);
@@ -157,15 +164,15 @@ const Blacklist: React.FC = () => {
   };
 
   const handleExport = () => {
-    const headers = ['MAC Address', 'IP Address', 'Reason', 'Blocked By', 'Firewall Tag', 'Block Type', 'Auto Unblocked', 'Blocked At', 'Expires At'];
+    const headers = [t('terminal.mac'), t('blacklist.ip'), t('blacklist.reason'), t('blacklist.blockedBy'), t('blacklist.firewall'), t('whitelist.type'), t('blacklist.autoUnblocked'), t('blacklist.blockedAt'), t('blacklist.expiresAt')];
     const rows = filteredBlacklist?.map((item) => [
       item.mac_address || '',
       item.ip_address || '',
       item.reason,
       item.blocked_by,
       item.firewall_tag || '',
-      item.is_auto_blocked ? 'Auto' : 'Manual',
-      item.auto_unblocked ? 'Yes' : 'No',
+      item.is_auto_blocked ? t('blacklist.auto') : t('blacklist.manual'),
+      item.auto_unblocked ? t('common.yes') : t('common.no'),
       formatDate(item.blocked_at),
       formatDate(item.expires_at)
     ]) || [];
@@ -176,23 +183,27 @@ const Blacklist: React.FC = () => {
   const isExpired = (expiresAt: string | null) => expiresAt ? new Date(expiresAt) < new Date() : false;
 
   return (
-    <div className="min-h-full bg-gray-50 p-4 sm:p-6 lg:p-8">
+    <div className="min-h-full bg-background p-4 sm:p-6 lg:p-8">
+      {isLoading && !blacklistData ? (
+        <PageSkeleton />
+      ) : (
+      <>
       {/* Page Header */}
       <div className="mb-6 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div>
-          <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Blocked Terminals</h1>
-          <p className="text-gray-600 mt-1">Manage blocked network terminals</p>
+          <h1 className="text-2xl sm:text-3xl font-bold text-foreground">{t('blacklist.blockedTerminals')}</h1>
+          <p className="text-muted-foreground mt-1">{t('blacklist.manageBlocked')}</p>
         </div>
         <ButtonGroup>
           <PrimaryButton
             icon={Download}
-            label="Export"
+            label={t('common.export')}
             variant="success"
             onClick={handleExport}
           />
           <PrimaryButton
             icon={Shield}
-            label="Block Terminal"
+            label={t('blacklist.blockTerminal')}
             variant="danger"
             onClick={() => setShowAddModal(true)}
           />
@@ -200,17 +211,17 @@ const Blacklist: React.FC = () => {
       </div>
 
       {/* Search and Filter */}
-      <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden mb-6">
+      <div className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden mb-6">
         {/* Section Header - Clickable */}
         <button
           onClick={() => setFilterCollapsed(!filterCollapsed)}
-          className={`w-full px-5 py-4 flex items-center justify-between hover:bg-gray-50/50 transition-colors ${!filterCollapsed ? 'border-b border-gray-100' : ''}`}
+          className={`w-full px-5 py-4 flex items-center justify-between hover:bg-background/50 transition-colors ${!filterCollapsed ? 'border-b border-border' : ''}`}
         >
           <div className="flex items-center gap-2">
-            <Search className="h-5 w-5 text-gray-500" />
-            <h2 className="text-base font-semibold text-gray-900">Search & Filter</h2>
+            <Search className="h-5 w-5 text-muted-foreground" />
+            <h2 className="text-base font-semibold text-foreground">{t('terminal.searchAndFilter')}</h2>
           </div>
-          <ChevronDown className={`h-4 w-4 text-gray-500 transition-transform duration-200 ${filterCollapsed ? '' : 'rotate-180'}`} />
+          <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform duration-200 ${filterCollapsed ? '' : 'rotate-180'}`} />
         </button>
         {!filterCollapsed && (
         <>
@@ -218,16 +229,16 @@ const Blacklist: React.FC = () => {
           <div className="flex flex-col xl:flex-row gap-4">
             {/* Search Input */}
             <div className="flex-1 relative">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-5 w-5 text-gray-400" />
+              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-5 w-5 text-muted-foreground" />
               <input
                 type="text"
-                placeholder="Search by MAC or IP address..."
+                placeholder={t('blacklist.searchByMacOrIp')}
                 value={searchTerm}
                 onChange={(e) => {
                   setSearchTerm(e.target.value);
                   setCurrentPage(1);
                 }}
-                className="w-full pl-10 pr-4 py-2.5 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm transition-all"
+                className="w-full pl-10 pr-4 py-2.5 border border-border rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm transition-all"
               />
             </div>
 
@@ -249,20 +260,20 @@ const Blacklist: React.FC = () => {
                 icon={RefreshCw}
                 variant="secondary"
                 size="sm"
-                title="Refresh"
+                title={t('common.refresh')}
                 onClick={() => refetch()}
               />
 
               {/* Auto Refresh Selector */}
-              <div className="flex items-center gap-2 bg-gray-50 rounded-xl px-3 py-1.5">
-                <Clock className="h-4 w-4 text-gray-500 flex-shrink-0" />
+              <div className="flex items-center gap-2 bg-background rounded-xl px-3 py-1.5">
+                <Clock className="h-4 w-4 text-muted-foreground flex-shrink-0" />
                 <select
                   value={autoRefresh}
                   onChange={(e) => setAutoRefresh(Number(e.target.value))}
-                  className="bg-transparent py-1.5 text-sm text-gray-700 focus:outline-none focus:ring-0 cursor-pointer font-medium min-w-[4rem]"
+                  className="bg-transparent py-1.5 text-sm text-muted-foreground focus:outline-none focus:ring-0 cursor-pointer font-medium min-w-[4rem]"
                 >
                   {REFRESH_OPTIONS.map((opt) => (
-                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                    <option key={opt.value} value={opt.value}>{opt.labelKey ? t(opt.labelKey) : opt.label}</option>
                   ))}
                 </select>
               </div>
@@ -270,7 +281,7 @@ const Blacklist: React.FC = () => {
               {/* Reset Button */}
               <PrimaryButton
                 icon={RefreshCw}
-                label="Reset"
+                label={t('common.reset')}
                 variant="secondary"
                 size="sm"
                 onClick={handleReset}
@@ -281,14 +292,14 @@ const Blacklist: React.FC = () => {
 
         {/* Top Pagination - Info Row */}
         {totalPages > 1 && (
-          <div className="px-4 sm:px-5 py-3 bg-gray-50 border-t border-gray-200">
+          <div className="px-4 sm:px-5 py-3 bg-background border-t border-border">
             <Pagination
               currentPage={currentPage}
               totalPages={totalPages}
               onPageChange={handlePageChange}
               pageSize={pageSize}
               onPageSizeChange={handlePageSizeChange}
-              totalItems={filteredBlacklist.length}
+              totalItems={totalFromServer}
               variant="top"
               showPageSizeSelector={false}
             />
@@ -300,105 +311,99 @@ const Blacklist: React.FC = () => {
 
       {/* Stats */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 mb-6">
-        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+        <div className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden">
           <div className="p-4 text-center">
-            <div className="text-xl sm:text-2xl font-bold text-red-600">{filteredBlacklist.length}</div>
-            <div className="text-xs sm:text-sm text-gray-600 mt-1">Blocked Devices</div>
+            <div className="text-xl sm:text-2xl font-bold text-red-600">{totalFromServer}</div>
+            <div className="text-xs sm:text-sm text-muted-foreground mt-1">{t('blacklist.blockedDevices')}</div>
           </div>
           <div className="h-1 bg-gradient-to-r from-red-400 to-red-600" />
         </div>
-        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+        <div className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden">
           <div className="p-4 text-center">
             <div className="text-xl sm:text-2xl font-bold text-orange-600">
               {filteredBlacklist?.filter((b) => b.is_auto_blocked).length || 0}
             </div>
-            <div className="text-xs sm:text-sm text-gray-600 mt-1">Auto Blocked</div>
+            <div className="text-xs sm:text-sm text-muted-foreground mt-1">{t('blacklist.autoBlocked')}</div>
           </div>
           <div className="h-1 bg-gradient-to-r from-orange-400 to-orange-600" />
         </div>
-        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+        <div className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden">
           <div className="p-4 text-center">
             <div className="text-xl sm:text-2xl font-bold text-blue-600">
               {filteredBlacklist?.filter((b) => !b.is_auto_blocked).length || 0}
             </div>
-            <div className="text-xs sm:text-sm text-gray-600 mt-1">Manual Blocked</div>
+            <div className="text-xs sm:text-sm text-muted-foreground mt-1">{t('blacklist.manualBlocked')}</div>
           </div>
           <div className="h-1 bg-gradient-to-r from-blue-400 to-blue-600" />
         </div>
-        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+        <div className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden">
           <div className="p-4 text-center">
             <div className="text-xl sm:text-2xl font-bold text-amber-600">
               {filteredBlacklist?.filter((b) => isExpired(b.expires_at)).length || 0}
             </div>
-            <div className="text-xs sm:text-sm text-gray-600 mt-1">Expired Blocks</div>
+            <div className="text-xs sm:text-sm text-muted-foreground mt-1">{t('blacklist.expiredBlocks')}</div>
           </div>
           <div className="h-1 bg-gradient-to-r from-amber-400 to-amber-600" />
         </div>
-        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+        <div className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden">
           <div className="p-4 text-center">
-            <div className="text-xl sm:text-2xl font-bold text-gray-600">
+            <div className="text-xl sm:text-2xl font-bold text-muted-foreground">
               {filteredBlacklist?.filter((b) => !isExpired(b.expires_at)).length || 0}
             </div>
-            <div className="text-xs sm:text-sm text-gray-600 mt-1">Active Blocks</div>
+            <div className="text-xs sm:text-sm text-muted-foreground mt-1">{t('blacklist.activeBlocks')}</div>
           </div>
           <div className="h-1 bg-gradient-to-r from-gray-400 to-gray-600" />
         </div>
       </div>
 
       {/* Table */}
-      <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+      <div className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="min-w-full divide-y divide-gray-200">
-            <thead className="bg-gray-50">
+          <table className="min-w-full divide-y divide-border">
+            <thead className="bg-background">
               <tr>
-                <th className="px-4 sm:px-6 py-3.5 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                  MAC Address
+                <th className="px-4 sm:px-6 py-3.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                  {t('terminal.mac')}
                 </th>
-                <th className="px-4 sm:px-6 py-3.5 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                  IP Address
+                <th className="px-4 sm:px-6 py-3.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                  {t('blacklist.ip')}
                 </th>
-                <th className="px-4 sm:px-6 py-3.5 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                  Reason
+                <th className="px-4 sm:px-6 py-3.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                  {t('blacklist.reason')}
                 </th>
-                <th className="px-4 sm:px-6 py-3.5 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                  Type
+                <th className="px-4 sm:px-6 py-3.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                  {t('whitelist.type')}
                 </th>
-                <th className="px-4 sm:px-6 py-3.5 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                  Blocked By
+                <th className="px-4 sm:px-6 py-3.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                  {t('blacklist.blockedBy')}
                 </th>
-                <th className="px-4 sm:px-6 py-3.5 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                  Firewall
+                <th className="px-4 sm:px-6 py-3.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                  {t('blacklist.firewall')}
                 </th>
-                <th className="px-4 sm:px-6 py-3.5 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                  Blocked At
+                <th className="px-4 sm:px-6 py-3.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                  {t('blacklist.blockedAt')}
                 </th>
-                <th className="px-4 sm:px-6 py-3.5 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                  Expires
+                <th className="px-4 sm:px-6 py-3.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                  {t('blacklist.expiresAt')}
                 </th>
-                <th className="px-4 sm:px-6 py-3.5 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                  Actions
+                <th className="px-4 sm:px-6 py-3.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                  {t('common.actions')}
                 </th>
               </tr>
             </thead>
-            <tbody className="bg-white divide-y divide-gray-200">
-              {isLoading ? (
-                <tr>
-                  <td colSpan={9}>
-                    <LoadingState message="Loading blocked terminals..." />
-                  </td>
-                </tr>
-              ) : filteredBlacklist?.length === 0 ? (
+            <tbody className="bg-card divide-y divide-border">
+              {filteredBlacklist?.length === 0 ? (
                 <tr>
                   <td colSpan={9}>
                     <EmptyState
                       icon={Shield}
-                      title="No Blocked Terminals"
-                      description="No terminals are currently blocked"
+                      title={t('blacklist.noBlockedTerminals')}
+                      description={t('blacklist.noBlockedDescription')}
                     />
                   </td>
                 </tr>
               ) : (
-                (paginatedBlacklist || []).map((item) => (
+                (filteredBlacklist || []).map((item) => (
                   <tr
                     key={item.id}
                     className={`hover:bg-blue-50/30 transition-colors ${
@@ -407,48 +412,48 @@ const Blacklist: React.FC = () => {
                   >
                     <td className="px-4 sm:px-6 py-4 whitespace-nowrap">
                       <div className="flex items-center">
-                        <Server className="h-4 w-4 text-gray-400 mr-2 flex-shrink-0" />
-                        <span className="font-mono text-sm font-medium text-gray-900">
+                        <Server className="h-4 w-4 text-muted-foreground mr-2 flex-shrink-0" />
+                        <span className="font-mono text-sm font-medium text-foreground">
                           {item.mac_address}
                         </span>
                       </div>
                     </td>
-                    <td className="px-4 sm:px-6 py-4 whitespace-nowrap font-mono text-sm text-gray-600">
+                    <td className="px-4 sm:px-6 py-4 whitespace-nowrap font-mono text-sm text-muted-foreground">
                       {item.ip_address}
                     </td>
                     <td className="px-4 sm:px-6 py-4">
                       <div className="flex items-center">
                         <AlertTriangle className="h-4 w-4 text-red-400 mr-2 flex-shrink-0" />
-                        <span className="text-sm text-gray-600">{item.reason}</span>
+                        <span className="text-sm text-muted-foreground">{item.reason}</span>
                       </div>
                     </td>
                     <td className="px-4 sm:px-6 py-4 whitespace-nowrap">
                       {item.is_auto_blocked ? (
                         <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-orange-100 text-orange-800">
-                          Auto
+                          {t('blacklist.auto')}
                         </span>
                       ) : (
                         <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
-                          Manual
+                          {t('blacklist.manual')}
                         </span>
                       )}
                     </td>
-                    <td className="px-4 sm:px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+                    <td className="px-4 sm:px-6 py-4 whitespace-nowrap text-sm text-muted-foreground">
                       {item.blocked_by}
                     </td>
-                    <td className="px-4 sm:px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+                    <td className="px-4 sm:px-6 py-4 whitespace-nowrap text-sm text-muted-foreground">
                       {item.firewall_tag || '-'}
                     </td>
                     <td className="px-4 sm:px-6 py-4 whitespace-nowrap">
-                      <div className="flex items-center text-sm text-gray-600">
-                        <Clock className="h-4 w-4 mr-1.5 text-gray-400" />
+                      <div className="flex items-center text-sm text-muted-foreground">
+                        <Clock className="h-4 w-4 mr-1.5 text-muted-foreground" />
                         {formatDate(item.blocked_at)}
                       </div>
                     </td>
                     <td className="px-4 sm:px-6 py-4 whitespace-nowrap">
                       <span
                         className={`inline-flex items-center text-sm ${
-                          isExpired(item.expires_at) ? 'text-gray-400 line-through' : 'text-gray-600'
+                          isExpired(item.expires_at) ? 'text-muted-foreground line-through' : 'text-muted-foreground'
                         }`}
                       >
                         {formatDate(item.expires_at)}
@@ -460,14 +465,14 @@ const Blacklist: React.FC = () => {
                           icon={Eye}
                           variant="primary"
                           size="md"
-                          title="View Details"
+                          title={t('terminal.viewDetails')}
                           onClick={() => handleViewDetails(item)}
                         />
                         <IconButton
                           icon={Trash2}
                           variant="success"
                           size="md"
-                          title="Unblock Terminal"
+                          title={t('terminal.unblockTerminal')}
                           onClick={() => handleRemoveBlacklist(item)}
                         />
                       </ButtonGroup>
@@ -492,287 +497,261 @@ const Blacklist: React.FC = () => {
       </div>
 
       {/* Add Modal */}
-      {showAddModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-md">
-            <h2 className="text-xl font-semibold text-gray-900 mb-2">Block Terminal</h2>
-            <p className="text-sm text-gray-500 mb-6">Enter MAC address, IP address, or both</p>
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  MAC Address <span className="text-gray-400 font-normal">(Optional)</span>
-                </label>
-                <input
-                  type="text"
-                  placeholder="00:11:22:33:44:55"
-                  value={newEntry.mac_address}
-                  onChange={(e) => {
-                    setNewEntry({ ...newEntry, mac_address: e.target.value });
-                    setMacError('');
-                  }}
-                  className={`w-full px-4 py-2.5 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono text-sm ${
-                    macError ? 'border-red-500' : 'border-gray-300'
-                  }`}
-                />
-                {macError && <p className="text-red-600 text-xs mt-1">{macError}</p>}
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  IP Address <span className="text-gray-400 font-normal">(Optional)</span>
-                </label>
-                <input
-                  type="text"
-                  placeholder="192.168.1.100 or 192.168.1.0/24"
-                  value={newEntry.ip_address}
-                  onChange={(e) => {
-                    setNewEntry({ ...newEntry, ip_address: e.target.value });
-                    setIpError('');
-                  }}
-                  className={`w-full px-4 py-2.5 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono text-sm ${
-                    ipError ? 'border-red-500' : 'border-gray-300'
-                  }`}
-                />
-                {ipError && <p className="text-red-600 text-xs mt-1">{ipError}</p>}
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Reason
-                </label>
-                <select
-                  value={newEntry.reason}
-                  onChange={(e) => setNewEntry({ ...newEntry, reason: e.target.value })}
-                  className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
-                >
-                  <option value="">Select reason</option>
-                  <option value="Unauthorized access attempt">Unauthorized access attempt</option>
-                  <option value="Security violation">Security violation</option>
-                  <option value="Malware detected">Malware detected</option>
-                  <option value="Policy violation">Policy violation</option>
-                  <option value="Suspicious activity">Suspicious activity</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Block Duration
-                </label>
-                <select
-                  value={newEntry.block_time}
-                  onChange={(e) => setNewEntry({ ...newEntry, block_time: e.target.value })}
-                  className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
-                >
-                  <option value="30m">30 minutes</option>
-                  <option value="1h">1 hour</option>
-                  <option value="7d">7 days</option>
-                  <option value="15d">15 days</option>
-                  <option value="30d">30 days</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Firewall <span className="text-gray-400 font-normal">(Optional)</span>
-                </label>
-                <select
-                  value={newEntry.firewall_tag}
-                  onChange={(e) => setNewEntry({ ...newEntry, firewall_tag: e.target.value })}
-                  className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
-                >
-                  <option value="">Default Firewall</option>
-                  {firewallOptions.map((ds) => (
-                    <option key={ds.id} value={ds.tag}>
-                      {ds.tag} ({ds.name})
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="flex gap-3 pt-2">
-                <PrimaryButton
-                  label="Cancel"
-                  variant="secondary"
-                  onClick={() => {
-                    setShowAddModal(false);
-                    setNewEntry({ mac_address: '', ip_address: '', reason: '', block_time: '30d', firewall_tag: '' });
-                    setMacError('');
-                    setIpError('');
-                  }}
-                  className="flex-1"
-                />
-                <PrimaryButton
-                  icon={Shield}
-                  label="Block"
-                  variant="danger"
-                  onClick={handleAddBlacklist}
-                  loading={isAdding}
-                  className="flex-1"
-                />
-              </div>
-            </div>
+      <Modal isOpen={showAddModal} onClose={() => { setShowAddModal(false); setNewEntry({ mac_address: '', ip_address: '', reason: '', block_time: '30d', firewall_tag: '' }); setMacError(''); setIpError(''); }} title={t('blacklist.blockTerminal')} size="md">
+        <p className="text-sm text-muted-foreground mb-6">{t('blacklist.enterMacIpOrBoth')}</p>
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-muted-foreground mb-1">
+              {t('terminal.mac')} <span className="text-muted-foreground font-normal">({t('common.optional')})</span>
+            </label>
+            <input
+              type="text"
+              placeholder="00:11:22:33:44:55"
+              value={newEntry.mac_address}
+              onChange={(e) => {
+                setNewEntry({ ...newEntry, mac_address: e.target.value });
+                setMacError('');
+              }}
+              className={`w-full px-4 py-2.5 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono text-sm ${
+                macError ? 'border-red-500' : 'border-border'
+              }`}
+            />
+            {macError && <p className="text-red-600 text-xs mt-1">{macError}</p>}
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-muted-foreground mb-1">
+              {t('blacklist.ip')} <span className="text-muted-foreground font-normal">({t('common.optional')})</span>
+            </label>
+            <input
+              type="text"
+              placeholder="192.168.1.100 or 192.168.1.0/24"
+              value={newEntry.ip_address}
+              onChange={(e) => {
+                setNewEntry({ ...newEntry, ip_address: e.target.value });
+                setIpError('');
+              }}
+              className={`w-full px-4 py-2.5 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono text-sm ${
+                ipError ? 'border-red-500' : 'border-border'
+              }`}
+            />
+            {ipError && <p className="text-red-600 text-xs mt-1">{ipError}</p>}
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-muted-foreground mb-1">
+              {t('blacklist.reason')}
+            </label>
+            <select
+              value={newEntry.reason}
+              onChange={(e) => setNewEntry({ ...newEntry, reason: e.target.value })}
+              className="w-full px-4 py-2.5 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+            >
+              <option value="">{t('blacklist.selectReason')}</option>
+              <option value="Unauthorized access attempt">{t('blacklist.unauthorizedAccess')}</option>
+              <option value="Security violation">{t('blacklist.securityViolation')}</option>
+              <option value="Malware detected">{t('blacklist.malwareDetected')}</option>
+              <option value="Policy violation">{t('blacklist.policyViolation')}</option>
+              <option value="Suspicious activity">{t('blacklist.suspiciousActivity')}</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-muted-foreground mb-1">
+              {t('blacklist.blockDuration')}
+            </label>
+            <select
+              value={newEntry.block_time}
+              onChange={(e) => setNewEntry({ ...newEntry, block_time: e.target.value })}
+              className="w-full px-4 py-2.5 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+            >
+              <option value="30m">{t('blacklist.minutes30')}</option>
+              <option value="1h">{t('blacklist.hour1')}</option>
+              <option value="7d">{t('blacklist.days7')}</option>
+              <option value="15d">{t('blacklist.days15')}</option>
+              <option value="30d">{t('blacklist.days30')}</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-muted-foreground mb-1">
+              {t('blacklist.firewall')} <span className="text-muted-foreground font-normal">({t('common.optional')})</span>
+            </label>
+            <select
+              value={newEntry.firewall_tag}
+              onChange={(e) => setNewEntry({ ...newEntry, firewall_tag: e.target.value })}
+              className="w-full px-4 py-2.5 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+            >
+              <option value="">{t('blacklist.defaultFirewall')}</option>
+              {firewallOptions.map((ds) => (
+                <option key={ds.id} value={ds.tag}>
+                  {ds.tag} ({ds.name})
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="flex gap-3 pt-2">
+            <PrimaryButton
+              label={t('common.cancel')}
+              variant="secondary"
+              onClick={() => {
+                setShowAddModal(false);
+                setNewEntry({ mac_address: '', ip_address: '', reason: '', block_time: '30d', firewall_tag: '' });
+                setMacError('');
+                setIpError('');
+              }}
+              className="flex-1"
+            />
+            <PrimaryButton
+              icon={Shield}
+              label={t('common.block')}
+              variant="danger"
+              onClick={handleAddBlacklist}
+              loading={isAdding}
+              className="flex-1"
+            />
           </div>
         </div>
-      )}
+      </Modal>
 
       {/* Delete Confirmation Modal */}
-      {showDeleteModal && deleteEntry && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-md">
-            <div className="flex items-center gap-4 mb-4">
-              <div className="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center">
-                <Trash2 className="h-6 w-6 text-green-600" />
-              </div>
-              <div>
-                <h2 className="text-lg font-semibold text-gray-900">Confirm Unblock</h2>
-                <p className="text-sm text-gray-500">Are you sure you want to unblock this terminal?</p>
-              </div>
-            </div>
+      <Modal isOpen={showDeleteModal && !!deleteEntry} onClose={() => { setShowDeleteModal(false); setDeleteEntry(null); }} title={t('blacklist.confirmUnblock')} size="sm">
+        <div className="flex items-center gap-4 mb-4">
+          <div className="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center">
+            <Trash2 className="h-6 w-6 text-green-600" />
+          </div>
+          <div>
+            <p className="text-sm text-muted-foreground">{t('blacklist.areYouSureUnblock')}</p>
+          </div>
+        </div>
 
-            <div className="bg-gray-50 rounded-lg p-4 mb-6">
-              <div className="space-y-2 text-sm">
-                {deleteEntry.mac_address && (
-                  <div className="flex justify-between">
-                    <span className="text-gray-500">MAC Address:</span>
-                    <span className="font-mono text-gray-900">{deleteEntry.mac_address}</span>
-                  </div>
-                )}
-                {deleteEntry.ip_address && (
-                  <div className="flex justify-between">
-                    <span className="text-gray-500">IP Address:</span>
-                    <span className="font-mono text-gray-900">{deleteEntry.ip_address}</span>
-                  </div>
-                )}
-                <div className="flex justify-between">
-                  <span className="text-gray-500">Reason:</span>
-                  <span className="text-gray-900">{deleteEntry.reason}</span>
-                </div>
+        <div className="bg-background rounded-lg p-4 mb-6">
+          <div className="space-y-2 text-sm">
+            {deleteEntry?.mac_address && (
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">{t('terminal.mac')}:</span>
+                <span className="font-mono text-foreground">{deleteEntry.mac_address}</span>
               </div>
-            </div>
-
-            <div className="flex gap-3">
-              <PrimaryButton
-                label="Cancel"
-                variant="secondary"
-                onClick={() => {
-                  setShowDeleteModal(false);
-                  setDeleteEntry(null);
-                }}
-                className="flex-1"
-              />
-              <PrimaryButton
-                icon={Trash2}
-                label="Unblock"
-                variant="success"
-                onClick={confirmUnblock}
-                loading={isUnblocking}
-                className="flex-1"
-              />
+            )}
+            {deleteEntry?.ip_address && (
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">{t('blacklist.ip')}:</span>
+                <span className="font-mono text-foreground">{deleteEntry.ip_address}</span>
+              </div>
+            )}
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">{t('blacklist.reason')}:</span>
+              <span className="text-foreground">{deleteEntry?.reason}</span>
             </div>
           </div>
         </div>
-      )}
+
+        <div className="flex gap-3">
+          <PrimaryButton
+            label="Cancel"
+            variant="secondary"
+            onClick={() => {
+              setShowDeleteModal(false);
+              setDeleteEntry(null);
+            }}
+            className="flex-1"
+          />
+          <PrimaryButton
+            icon={Trash2}
+            label={t('common.unblock')}
+            variant="success"
+            onClick={confirmUnblock}
+            loading={isUnblocking}
+            className="flex-1"
+          />
+        </div>
+      </Modal>
 
       {/* Details Modal */}
-      {showDetailsModal && selectedEntry && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-md">
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-3">
-                <div className="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center">
-                  <AlertTriangle className="h-6 w-6 text-red-600" />
-                </div>
-                <div>
-                  <h2 className="text-xl font-semibold text-gray-900">Blocked Terminal Details</h2>
-                  <p className="text-sm text-gray-500">ID: {selectedEntry.id}</p>
-                </div>
-              </div>
-              <IconButton
-                icon={X}
-                variant="ghost"
-                size="md"
-                onClick={() => {
-                  setShowDetailsModal(false);
-                  setSelectedEntry(null);
-                }}
-              />
+      <Modal isOpen={showDetailsModal && !!selectedEntry} onClose={() => { setShowDetailsModal(false); setSelectedEntry(null); }} title={t('blacklist.blockedTerminalDetails')} size="md">
+        <div className="space-y-4">
+          <div className="flex items-center gap-3 mb-2">
+            <div className="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center">
+              <AlertTriangle className="h-6 w-6 text-red-600" />
             </div>
+            <p className="text-sm text-muted-foreground">ID: {selectedEntry?.id}</p>
+          </div>
 
-            <div className="space-y-4">
-              <div className="bg-gray-50 rounded-lg p-4">
-                <div className="space-y-3">
-                  {selectedEntry.mac_address && (
-                    <div className="flex justify-between">
-                      <span className="text-gray-500">MAC Address</span>
-                      <span className="font-mono text-gray-900">{selectedEntry.mac_address}</span>
-                    </div>
-                  )}
-                  {selectedEntry.ip_address && (
-                    <div className="flex justify-between">
-                      <span className="text-gray-500">IP Address</span>
-                      <span className="font-mono text-gray-900">{selectedEntry.ip_address}</span>
-                    </div>
-                  )}
-                  <div className="flex justify-between">
-                    <span className="text-gray-500">Reason</span>
-                    <span className="text-gray-900">{selectedEntry.reason}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-500">Blocked By</span>
-                    <span className="text-gray-900">{selectedEntry.blocked_by}</span>
-                  </div>
-                  {selectedEntry.source_tag && (
-                    <div className="flex justify-between">
-                      <span className="text-gray-500">Source Tag</span>
-                      <span className="text-gray-900">{selectedEntry.source_tag}</span>
-                    </div>
-                  )}
-                  {selectedEntry.firewall_tag && (
-                    <div className="flex justify-between">
-                      <span className="text-gray-500">Firewall Tag</span>
-                      <span className="text-gray-900">{selectedEntry.firewall_tag}</span>
-                    </div>
-                  )}
-                  <div className="flex justify-between">
-                    <span className="text-gray-500">Block Type</span>
-                    <span className={`px-2.5 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${selectedEntry.is_auto_blocked ? 'bg-orange-100 text-orange-800' : 'bg-blue-100 text-blue-800'}`}>
-                      {selectedEntry.is_auto_blocked ? 'Auto' : 'Manual'}
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-500">Auto Unblocked</span>
-                    <span className={`px-2.5 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${selectedEntry.auto_unblocked ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'}`}>
-                      {selectedEntry.auto_unblocked ? 'Yes' : 'No'}
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-500">Blocked At</span>
-                    <span className="text-gray-900">{formatDate(selectedEntry.blocked_at)}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-500">Expires</span>
-                    <span className={`${isExpired(selectedEntry.expires_at) ? 'text-gray-400 line-through' : 'text-gray-900'}`}>
-                      {formatDate(selectedEntry.expires_at)}
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-500">Status</span>
-                    <span className={`px-2.5 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${isExpired(selectedEntry.expires_at) ? 'bg-gray-100 text-gray-800' : 'bg-red-100 text-red-800'}`}>
-                      {isExpired(selectedEntry.expires_at) ? 'Expired' : 'Active'}
-                    </span>
-                  </div>
+          <div className="bg-background rounded-lg p-4">
+            <div className="space-y-3">
+              {selectedEntry?.mac_address && (
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">{t('terminal.mac')}</span>
+                  <span className="font-mono text-foreground">{selectedEntry.mac_address}</span>
                 </div>
+              )}
+              {selectedEntry?.ip_address && (
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">{t('blacklist.ip')}</span>
+                  <span className="font-mono text-foreground">{selectedEntry.ip_address}</span>
+                </div>
+              )}
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">{t('blacklist.reason')}</span>
+                <span className="text-foreground">{selectedEntry?.reason}</span>
               </div>
-
-              <PrimaryButton
-                icon={Trash2}
-                label="Unblock Terminal"
-                variant="success"
-                onClick={() => {
-                  handleRemoveBlacklist(selectedEntry);
-                  setShowDetailsModal(false);
-                  setSelectedEntry(null);
-                }}
-                className="w-full"
-              />
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">{t('blacklist.blockedBy')}</span>
+                <span className="text-foreground">{selectedEntry?.blocked_by}</span>
+              </div>
+              {selectedEntry?.source_tag && (
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">{t('terminal.sourceTag')}</span>
+                  <span className="text-foreground">{selectedEntry.source_tag}</span>
+                </div>
+              )}
+              {selectedEntry?.firewall_tag && (
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">{t('blacklist.firewall')}</span>
+                  <span className="text-foreground">{selectedEntry.firewall_tag}</span>
+                </div>
+              )}
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">{t('blacklist.blockType')}</span>
+                <span className={`px-2.5 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${selectedEntry?.is_auto_blocked ? 'bg-orange-100 text-orange-800' : 'bg-blue-100 text-blue-800'}`}>
+                  {selectedEntry?.is_auto_blocked ? t('blacklist.auto') : t('blacklist.manual')}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">{t('blacklist.autoUnblocked')}</span>
+                <span className={`px-2.5 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${selectedEntry?.auto_unblocked ? 'bg-green-100 text-green-800' : 'bg-muted text-foreground'}`}>
+                  {selectedEntry?.auto_unblocked ? t('common.yes') : t('common.no')}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">{t('blacklist.blockedAt')}</span>
+                <span className="text-foreground">{formatDate(selectedEntry?.blocked_at)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">{t('blacklist.expires')}</span>
+                <span className={`${isExpired(selectedEntry?.expires_at || null) ? 'text-muted-foreground line-through' : 'text-foreground'}`}>
+                  {formatDate(selectedEntry?.expires_at)}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">{t('common.status')}</span>
+                <span className={`px-2.5 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${isExpired(selectedEntry?.expires_at || null) ? 'bg-muted text-foreground' : 'bg-red-100 text-red-800'}`}>
+                  {isExpired(selectedEntry?.expires_at || null) ? t('common.expired') : t('common.active')}
+                </span>
+              </div>
             </div>
           </div>
+
+          <PrimaryButton
+            icon={Trash2}
+            label={t('terminal.unblockTerminal')}
+            variant="success"
+            onClick={() => {
+              if (selectedEntry) handleRemoveBlacklist(selectedEntry);
+              setShowDetailsModal(false);
+              setSelectedEntry(null);
+            }}
+            className="w-full"
+          />
         </div>
+      </Modal>
+      </>
       )}
     </div>
   );

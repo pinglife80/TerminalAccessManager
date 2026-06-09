@@ -1,5 +1,5 @@
 from typing import Optional, List
-from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 import os
 import uuid
@@ -60,6 +60,7 @@ async def list_configs(
 @router.put("/update", response_model=List[ConfigUpdateResult])
 async def update_configs(
     updates: List[SystemConfigUpdate],
+    request: Request,
     current_user: User = Depends(get_current_active_superuser),
     db: AsyncSession = Depends(get_db),
 ):
@@ -68,6 +69,15 @@ async def update_configs(
     Changes take effect immediately via cache invalidation."""
     service = ConfigService(db)
     results = await service.batch_update(updates, updated_by=current_user.username)
+
+    # Audit log for each updated config
+    from app.services.terminal_service import TerminalService
+    ts = TerminalService(db)
+    for update in updates:
+        await ts.log_action(current_user.username, "update_config", "system", update.key,
+                            {"message": "Updated system configuration", "key": update.key},
+                            ip_address=request.client.host if request.client else None)
+
     return results
 
 
@@ -75,6 +85,7 @@ async def update_configs(
 async def update_single_config(
     key: str,
     update: SystemConfigUpdate,
+    request: Request,
     current_user: User = Depends(get_current_active_superuser),
     db: AsyncSession = Depends(get_db),
 ):
@@ -86,6 +97,14 @@ async def update_single_config(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=result.message,
         )
+
+    # Audit log
+    from app.services.terminal_service import TerminalService
+    ts = TerminalService(db)
+    await ts.log_action(current_user.username, "update_config", "system", key,
+                        {"message": "Updated system configuration", "key": key},
+                        ip_address=request.client.host if request.client else None)
+
     return result
 
 

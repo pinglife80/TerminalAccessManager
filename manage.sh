@@ -1007,6 +1007,17 @@ cmd_health() {
             else
                 log_success "${svc}: running"
             fi
+        elif [ "$svc" = "frontend" ]; then
+            # Frontend is a build-only container (restart: "no") — exited(0) is normal
+            local exit_code
+            exit_code=$(dc ps -a "$svc" --format json 2>/dev/null \
+                | grep -o '"ExitCode":[0-9]*' | head -1 | cut -d: -f2 || echo "")
+            if [ "$exit_code" = "0" ]; then
+                log_success "${svc}: build complete (exited)"
+            else
+                log_error "${svc}: build failed (exit code: ${exit_code:-unknown})"
+                issues=$((issues + 1))
+            fi
         else
             log_error "${svc}: not running"
             issues=$((issues + 1))
@@ -1576,6 +1587,13 @@ cmd_backup() {
         exit 1
     fi
 
+    # Backup Redis
+    local TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+    echo "  Backing up Redis..."
+    docker exec tam_redis redis-cli --no-auth-warning -a "${REDIS_PASSWORD:-redis_password}" BGSAVE
+    sleep 2
+    docker cp tam_redis:/data/dump.rdb "${BACKUP_DIR}/redis_${TIMESTAMP}.rdb" 2>/dev/null || echo "  [WARN] Redis backup failed (data may be empty)"
+
     # Clean old backups (keep last 10)
     local count
     count=$(find "${BACKUP_DIR}" -name "backup_*.sql" | wc -l)
@@ -1646,6 +1664,58 @@ cmd_restore() {
     cat "$backup_file" | dc exec -T postgres psql -U tam_admin -d tam_db
     dc restart backend
     log_success "Database restored from: ${backup_file}"
+}
+
+###############################################################################
+# Command: backup-schedule - Configure automatic backup schedule
+# =============================================================================
+cmd_backup_schedule() {
+    local action="${1:-}"
+    local schedule="${2:-daily}"
+
+    local cron_marker="# TAM_AUTO_BACKUP"
+    local script_path="$(cd "$(dirname "$0")" && pwd)/manage.sh"
+
+    case "$action" in
+        enable)
+            local cron_expr=""
+            case "$schedule" in
+                hourly)  cron_expr="0 * * * *" ;;
+                daily)   cron_expr="0 2 * * *" ;;
+                weekly)  cron_expr="0 2 * * 0" ;;
+                *)       echo "Invalid schedule: $schedule (use: hourly/daily/weekly)"; exit 1 ;;
+            esac
+
+            # Remove existing TAM backup cron
+            (crontab -l 2>/dev/null | grep -v "$cron_marker" || true) | { cat; echo "$cron_expr $script_path backup $cron_marker"; } | crontab -
+            echo "✓ Auto backup enabled: $schedule ($cron_expr)"
+            echo "  Command: $script_path backup"
+            crontab -l | grep "$cron_marker" || true
+            ;;
+        disable)
+            crontab -l 2>/dev/null | grep -v "$cron_marker" || true | crontab -
+            echo "✓ Auto backup disabled"
+            ;;
+        status)
+            local existing=$(crontab -l 2>/dev/null | grep "$cron_marker" || true)
+            if [ -n "$existing" ]; then
+                echo "Auto backup: ENABLED"
+                echo "  $existing"
+            else
+                echo "Auto backup: DISABLED"
+            fi
+            ;;
+        *)
+            echo "Usage: $0 backup-schedule <enable|disable|status> [hourly|daily|weekly]"
+            echo ""
+            echo "Examples:"
+            echo "  $0 backup-schedule enable daily    # Daily at 2:00 AM"
+            echo "  $0 backup-schedule enable hourly   # Every hour"
+            echo "  $0 backup-schedule enable weekly   # Every Sunday at 2:00 AM"
+            echo "  $0 backup-schedule disable         # Disable auto backup"
+            echo "  $0 backup-schedule status          # Check current schedule"
+            ;;
+    esac
 }
 
 ###############################################################################
@@ -2811,6 +2881,7 @@ cmd_help() {
     echo -e "  ${YELLOW}mock generate${NC}            Generate demo/mock data"
     echo -e "  ${YELLOW}mock clear${NC}               Clear all mock data (keeps admin)"
     echo -e "  ${YELLOW}backup${NC} [file]             Backup database to SQL file"
+    echo -e "  ${YELLOW}backup-schedule${NC}           Configure automatic backup schedule (enable/disable/status)"
     echo -e "  ${YELLOW}restore${NC} <file>            Restore database from SQL file"
     echo ""
     echo -e "${BOLD}Development:${NC}"
@@ -2927,6 +2998,7 @@ main() {
         test)         cmd_test ;;
         mock)         cmd_mock "$@" ;;
         backup)       cmd_backup "$@" ;;
+        backup-schedule) cmd_backup_schedule "$@" ;;
         restore)      cmd_restore "$@" ;;
         shell)        cmd_shell "$@" ;;
         ssl)          cmd_ssl "$@" ;;

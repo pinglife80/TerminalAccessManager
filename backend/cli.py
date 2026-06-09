@@ -1002,7 +1002,7 @@ def _run_validate():
         with open('app/core/security.py', 'r') as f:
             security_content = f.read()
 
-        if 'bcrypt' in security_content.lower() or 'pwd_context' in security_content:
+        if 'bcrypt' in security_content.lower():
             print(_green("✓ Password hashing implementation found (bcrypt)"))
             passed += 1
         else:

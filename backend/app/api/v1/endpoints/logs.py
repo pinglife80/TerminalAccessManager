@@ -9,7 +9,7 @@ from app.core.database import get_db
 from app.core.security import get_current_user
 from app.models.user import User
 from app.models.log import AuditLog
-from app.schemas.terminal import AuditLogResponse, AuditLogQuery
+from app.schemas.terminal import AuditLogResponse, AuditLogQuery, PaginatedResponse
 from app.services.terminal_service import TerminalService, _parse_date_range
 
 router = APIRouter(prefix="/logs", tags=["Audit Logs"])
@@ -22,6 +22,7 @@ async def export_audit_logs(
     search: str = Query(None, description="Search by IP, username, or details"),
     start_date: str = Query(None, description="Filter by start date (YYYY-MM-DD)"),
     end_date: str = Query(None, description="Filter by end date (YYYY-MM-DD)"),
+    limit: int = Query(10000, ge=1, le=50000, description="Maximum number of records to export"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -49,7 +50,7 @@ async def export_audit_logs(
     stmt = select(AuditLog)
     if conditions:
         stmt = stmt.where(and_(*conditions))
-    stmt = stmt.order_by(desc(AuditLog.timestamp))
+    stmt = stmt.order_by(desc(AuditLog.timestamp)).limit(limit)
 
     result = await db.execute(stmt)
     logs = result.scalars().all()
@@ -105,7 +106,7 @@ async def get_audit_logs(
     return logs
 
 
-@router.get("/search", response_model=List[AuditLogResponse])
+@router.get("/search", response_model=PaginatedResponse[AuditLogResponse])
 async def search_audit_logs(
     username: str = Query(None, description="Filter by username"),
     action: str = Query(None, description="Filter by action type"),
@@ -130,4 +131,5 @@ async def search_audit_logs(
 
     service = TerminalService(db)
     logs = await service.search_audit_logs(query)
-    return logs
+    total = await service.search_audit_logs_count(query)
+    return {"items": logs, "total": total, "skip": skip, "limit": limit}

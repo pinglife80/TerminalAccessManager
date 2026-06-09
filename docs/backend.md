@@ -11,7 +11,7 @@
 | 数据库 | PostgreSQL | 主数据存储 |
 | 缓存 | Redis | 令牌黑名单、限流计数、配置缓存、合规数据缓存 |
 | 认证 | JWT (python-jose) | access_token + refresh_token 双令牌机制 |
-| 密码哈希 | bcrypt (passlib) | 自适应哈希，防暴力破解 |
+| 密码哈希 | bcrypt | 自适应哈希，防暴力破解 |
 
 ### 1.2 项目结构
 
@@ -103,8 +103,25 @@ app = FastAPI(
 
 | 阶段 | 操作 |
 |------|------|
-| Startup | 初始化数据库 (`init_db`) → 种子默认配置 (`seed_defaults`) → 启动 5 个后台定时任务 |
+| Startup | 初始化数据库 (`init_db`) → 种子默认配置 (`seed_defaults`) → 自动迁移审计日志旧 action 值 → 自动迁移 system_config 旧品牌值 → 启动 5 个后台定时任务 |
 | Shutdown | 取消所有后台任务 → 关闭 Redis 连接 (`close_redis_client`) |
+
+#### 启动时自动迁移
+
+应用启动时在 lifespan 中自动执行以下数据迁移，确保旧数据兼容新代码：
+
+**审计日志 action 值迁移：**
+
+| 旧值 | 新值 |
+|------|------|
+| `block_ip` | `block_terminal` |
+| `unblock_ip` | `unblock_terminal` |
+| `block` | `block_blacklist` |
+| `unblock` | `unblock_blacklist` |
+
+**system_config 品牌值迁移：**
+
+将 `system_config` 表中 `app_name`、`login_heading` 等品牌配置项的旧值 `"Terminal Access Platform"` 替换为 `"Terminal Access Manager"`。
 
 #### 后台定时任务
 
@@ -179,7 +196,7 @@ async def _is_task_paused(task_name: str) -> bool:
 
 | 分类 | 配置项 | 类型 | 默认值 | 说明 |
 |------|--------|------|--------|------|
-| 应用 | `PROJECT_NAME` | str | `"Terminal Access Platform"` | 项目名称 |
+| 应用 | `PROJECT_NAME` | str | `"Terminal Access Manager"` | 项目名称 |
 | | `VERSION` | str | `"2.0.0"` | 版本号 |
 | | `API_V1_STR` | str | `"/api/v1"` | API 前缀 |
 | | `DEBUG` | bool | `False` | 调试模式 |
@@ -272,7 +289,7 @@ async_session_factory = async_session_maker  # 别名，供后台任务使用
 
 #### 密码哈希
 
-- 使用 `passlib.CryptContext(schemes=["bcrypt"], deprecated="auto")`。
+- 直接使用 `bcrypt` 库（`bcrypt.hashpw` / `bcrypt.checkpw`）。
 - `verify_password(plain, hashed)` — 验证明文密码。
 - `hash_password(password)` — 哈希密码。
 
@@ -382,6 +399,58 @@ IP 地址解析工具类，支持以下输入格式：
 - `detect_pattern_type(ip_input)` — 检测输入类型（`single_ip` / `cidr` / `ip_range`）。
 - `validate_ip(ip)` — 验证单个 IP 地址合法性。
 
+#### 搜索与分页
+
+4个搜索方法均返回 `PaginatedResponse`（含 `items`、`total`、`skip`、`limit`），支持服务端分页。
+
+| 方法 | 说明 |
+|------|------|
+| `search_terminals(ip, mac, compliance_status, status, start_date, end_date, skip, limit)` | 搜索终端，IP/MAC 使用 ILIKE 模糊搜索 + OR 逻辑（任一匹配即可），支持 `compliance_status` 过滤 |
+| `get_whitelist(query, start_date, end_date, skip, limit)` | 查询白名单，支持搜索（MAC/IP/备注）和日期范围。MAC 搜索使用格式无关匹配（`func.replace` 去除分隔符后 ILIKE） |
+| `get_blacklist(query, start_date, end_date, skip, limit)` | 查询黑名单，支持搜索和日期范围。MAC 搜索使用格式无关匹配（`func.replace` 去除分隔符后 ILIKE） |
+| `search_audit_logs(username, action, search, start_date, end_date, skip, limit)` | 搜索审计日志，支持用户名、操作类型、关键词、日期范围 |
+
+**PaginatedResponse 结构：**
+
+```python
+class PaginatedResponse(Generic[T]):
+    items: List[T]    # 当前页数据
+    total: int        # 总记录数
+    skip: int         # 跳过记录数
+    limit: int        # 每页记录数
+```
+
+**Terminals 搜索逻辑：**
+
+- `ip` 参数：`Terminal.ip_address ILIKE '%{ip}%'`
+- `mac` 参数：`Terminal.mac_address ILIKE '%{mac}%'`
+- IP 和 MAC 同时提供时使用 OR 逻辑（任一匹配即返回）
+- `compliance_status` 参数：精确匹配过滤（compliant/bypass/non_compliant/unknown）
+
+**Whitelist/Blacklist MAC 格式无关搜索逻辑：**
+
+白名单和黑名单的搜索使用 `func.replace` 去除 MAC 地址分隔符后进行 ILIKE 匹配，用户无论输入哪种 MAC 格式均可命中：
+
+```python
+# 去除 MAC 地址中的分隔符（-、:、.）后进行 ILIKE 匹配
+mac_clean = func.replace(
+    func.replace(func.replace(model.mac_address, '-', ''), ':', ''), '.', ''
+)
+search_clean = search.replace('-', '').replace(':', '').replace('.', '')
+mac_clean.ilike(f'%{search_clean}%')
+```
+
+#### Count 方法
+
+4个 count 方法用于获取符合条件的总记录数，供分页计算使用：
+
+| 方法 | 说明 |
+|------|------|
+| `count_terminals(ip, mac, compliance_status, status, start_date, end_date)` | 统计终端搜索结果总数 |
+| `count_whitelist(query, start_date, end_date)` | 统计白名单搜索结果总数 |
+| `count_blacklist(query, start_date, end_date)` | 统计黑名单搜索结果总数 |
+| `count_audit_logs(username, action, search, start_date, end_date)` | 统计审计日志搜索结果总数 |
+
 #### get_stats
 
 仪表盘统计，按 `compliance_status` 和 `status` 分组计数：
@@ -416,7 +485,7 @@ IP 地址解析工具类，支持以下输入格式：
 
 | 方法 | 说明 |
 |------|------|
-| `get_whitelist(query, skip, limit)` | 查询白名单，支持搜索（MAC/IP/备注）和日期范围 |
+| `get_whitelist(query, start_date, end_date, skip, limit)` | 查询白名单，返回 `PaginatedResponse`，支持搜索（MAC/IP/备注）和日期范围 |
 | `add_to_whitelist(mac_address, ip_address, comments, username)` | 添加白名单，存储原始 pattern（不展开 CIDR），自动失效白名单缓存 |
 | `delete_from_whitelist(identifier, username)` | 删除白名单，自动识别 MAC 或 IP，失效缓存 |
 
@@ -428,7 +497,7 @@ IP 地址解析工具类，支持以下输入格式：
 
 | 方法 | 说明 |
 |------|------|
-| `get_blacklist(query, skip, limit)` | 查询黑名单，支持搜索和日期范围 |
+| `get_blacklist(query, start_date, end_date, skip, limit)` | 查询黑名单，返回 `PaginatedResponse`，支持搜索和日期范围 |
 | `add_to_blacklist(ip_address, mac_address, reason, username, block_time, firewall_tag)` | 添加黑名单并调用防火墙 API |
 | `delete_from_blacklist(identifier, username)` | 删除黑名单并调用防火墙 API 解封 |
 | `cleanup_expired_blacklist()` | 清理过期黑名单，恢复 MAC 状态，调用防火墙解封 |
@@ -437,8 +506,42 @@ IP 地址解析工具类，支持以下输入格式：
 
 | 方法 | 说明 |
 |------|------|
-| `search_audit_logs(query)` | 搜索审计日志，支持用户名、操作类型、关键词、日期范围 |
-| `_log_action(username, action, resource_type, resource_id, details)` | 内部审计日志写入 |
+| `search_audit_logs(username, action, search, start_date, end_date, skip, limit)` | 搜索审计日志，返回 `PaginatedResponse`，支持用户名、操作类型、关键词、日期范围 |
+| `log_action(db, username, action, resource_type, resource_id, details, ip_address)` | 公共审计日志写入函数，`details` 接收 dict 并使用 `json.dumps(details, ensure_ascii=False)` 序列化，`ip_address` 参数记录操作来源 IP |
+
+**action 命名变更对照表：**
+
+| 旧 action 值 | 新 action 值 | 说明 |
+|---|---|---|
+| `block_ip` | `block_terminal` | 封禁终端（从终端管理页面操作） |
+| `unblock_ip` | `unblock_terminal` | 解封终端（从终端管理页面操作） |
+| `block` | `block_blacklist` | 加入黑名单 |
+| `unblock` | `unblock_blacklist` | 移出黑名单 |
+
+**完整 action 值列表：**
+
+| action 值 | 说明 | 触发位置 |
+|---|---|---|
+| `block_terminal` | 封禁终端 | terminals.py |
+| `unblock_terminal` | 解封终端 | terminals.py |
+| `block_blacklist` | 加入黑名单 | blacklist.py |
+| `unblock_blacklist` | 移出黑名单 | blacklist.py |
+| `add_whitelist` | 添加白名单 | whitelist.py |
+| `remove_whitelist` | 移除白名单 | whitelist.py |
+| `cleanup_expired` | 清理过期黑名单 | 定时任务 |
+| `login` | 用户登录 | auth.py |
+| `logout` | 用户登出 | auth.py |
+| `create_datasource` | 创建数据源 | data_sources.py |
+| `update_datasource` | 更新数据源 | data_sources.py |
+| `delete_datasource` | 删除数据源 | data_sources.py |
+| `test_datasource` | 测试数据源连接 | data_sources.py |
+| `sync_datasource` | 同步数据源 | data_sources.py |
+| `create_user` | 创建用户 | users.py |
+| `update_user` | 更新用户 | users.py |
+| `delete_user` | 删除用户 | users.py |
+| `reset_password` | 重置密码 | users.py |
+| `unlock_user` | 解锁用户 | users.py |
+| `update_config` | 更新系统配置 | settings.py |
 
 #### MAC 地址标准化
 
@@ -643,10 +746,10 @@ def _normalize_mac(mac: str) -> str:
 
 | 键 | 默认值 | 类型 | 说明 |
 |----|--------|------|------|
-| `app_name` | `"Terminal Access Platform"` | string | 应用显示名称 |
+| `app_name` | `"Terminal Access Manager"` | string | 应用显示名称 |
 | `app_short_name` | `"Terminal Access"` | string | 侧边栏短名称 |
 | `app_subtitle` | `"Manager"` | string | 侧边栏副标题 |
-| `login_heading` | `"Terminal Access Platform"` | string | 登录页标题 |
+| `login_heading` | `"Terminal Access Manager"` | string | 登录页标题 |
 | `login_subheading` | `"Sign in to your account"` | string | 登录页副标题 |
 | `login_footer_text` | `"Secure authentication · Session-based access control"` | string | 登录页页脚 |
 | `login_bg_url` | `""` | string | 登录页背景图 URL |
@@ -736,10 +839,55 @@ def _normalize_mac(mac: str) -> str:
 3. 关键导入 — 依赖安装状态
 4. 配置 — `.env.example` 和关键环境变量
 5. 代码质量 — 类型提示、文档字符串、异步模式
-6. 安全 — 硬编码密码检测、密码哈希和 JWT 实现
+6. 安全 — 硬编码密码检测、bcrypt 直接调用和 JWT 实现
 7. API 端点 — 关键端点关键词检测
 8. Docker — Dockerfile、健康检查、非 root 用户
 
 ### firewall_query 任务修复
 
 `firewall_query` 任务已改用 `TerminalService._get_sangfor_service_by_tag()` 获取防火墙服务实例，再调用 `SangforService.get_blocked_ips()` 查询黑名单。原调用不存在的 `query_firewall_blacklist` 方法已修复。
+
+---
+
+## 7. API 端点审计记录
+
+各端点模块在执行关键操作时通过 `log_action` 公共函数记录审计日志，包含操作来源 IP 地址。
+
+### 7.1 认证端点 (auth.py)
+
+| 端点 | 审计 action | 说明 |
+|------|-------------|------|
+| `POST /auth/login` | `login` | 用户登录成功时记录，details 包含登录用户名 |
+| `POST /auth/logout` | `logout` | 用户登出时记录，details 包含登出用户名 |
+
+**认证端点参数变更：**
+
+| 端点 | 变更 | 说明 |
+|------|------|------|
+| `POST /auth/refresh` | `refresh_token` 参数从 Query 改为 Body | 原先 refresh_token 通过 URL Query 参数传递，存在安全风险（日志泄露、浏览器历史记录），现改为通过请求 Body 传递 |
+
+### 7.2 数据源端点 (data_sources.py)
+
+| 端点 | 审计 action | 说明 |
+|------|-------------|------|
+| `POST /data-sources/` | `create_datasource` | 创建数据源 |
+| `PUT /data-sources/{id}` | `update_datasource` | 更新数据源 |
+| `DELETE /data-sources/{id}` | `delete_datasource` | 删除数据源 |
+| `POST /data-sources/{id}/test` | `test_datasource` | 测试数据源连接 |
+| `POST /data-sources/{id}/sync` | `sync_datasource` | 同步数据源 |
+
+### 7.3 用户管理端点 (users.py)
+
+| 端点 | 审计 action | 说明 |
+|------|-------------|------|
+| `POST /users/` | `create_user` | 创建用户 |
+| `PUT /users/{id}` | `update_user` | 更新用户 |
+| `DELETE /users/{id}` | `delete_user` | 删除用户 |
+| `POST /users/{id}/reset-password` | `reset_password` | 重置用户密码 |
+| `POST /users/{id}/unlock` | `unlock_user` | 解锁用户账户 |
+
+### 7.4 系统配置端点 (settings.py)
+
+| 端点 | 审计 action | 说明 |
+|------|-------------|------|
+| `PUT /settings/` | `update_config` | 更新系统配置 |

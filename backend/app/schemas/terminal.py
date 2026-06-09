@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Optional, List
+from typing import Generic, TypeVar, Optional, List
 from datetime import datetime
 
 
@@ -41,6 +41,7 @@ class TerminalQuery(BaseModel):
     ip: Optional[str] = None
     mac: Optional[str] = None
     status: Optional[str] = None
+    compliance_status: Optional[str] = Field(None, description="Filter by compliance status")
     start_date: Optional[str] = Field(None, description="Filter by start date (YYYY-MM-DD)")
     end_date: Optional[str] = Field(None, description="Filter by end date (YYYY-MM-DD)")
     skip: int = Field(0, ge=0)
@@ -187,3 +188,15 @@ class ResponseMessage(BaseModel):
     """Generic response message"""
     message: str
     success: bool = True
+
+
+# Paginated response wrapper
+T = TypeVar('T')
+
+
+class PaginatedResponse(BaseModel, Generic[T]):
+    """Paginated response wrapper"""
+    items: List[T]
+    total: int
+    skip: int
+    limit: int

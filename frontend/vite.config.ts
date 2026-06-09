@@ -21,5 +21,14 @@ export default defineConfig({
   },
   build: {
     sourcemap: false,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          vendor: ['react', 'react-dom', 'react-router-dom'],
+          query: ['@tanstack/react-query', '@tanstack/react-table'],
+          ui: ['lucide-react', 'sonner', 'react-hook-form'],
+        },
+      },
+    },
   },
 })

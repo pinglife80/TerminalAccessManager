@@ -110,19 +110,19 @@ interface BrandingConfig {
 
 | 配置项 | 字段路径 | 类型 | 默认值 | 说明 |
 |--------|----------|------|--------|------|
-| 应用全名 | `appName` | string | `Terminal Access Platform` | 侧边栏、登录页标题 |
+| 应用全名 | `appName` | string | `Terminal Access Manager` | 侧边栏、登录页标题 |
 | 应用短名 | `appShortName` | string | `Terminal Access` | 侧边栏展开时显示 |
 | 副标题 | `appSubtitle` | string | `Manager` | 侧边栏应用名下方 |
 | 版本号 | `version` | string | `v2.0.0` | 页脚显示 |
-| 浏览器标题 | `title` | string | `Terminal Access Platform` | 标签页标题 |
+| 浏览器标题 | `title` | string | `Terminal Access Manager` | 标签页标题 |
 | Favicon | `favicon` | string | `/favicon.svg` | 浏览器标签图标路径 |
 | Logo 类型 | `logo.type` | `'icon'` \| `'image'` | `'icon'` | 图标或图片模式 |
 | Logo 图标名 | `logo.name` | string | `Shield` | Lucide 图标名称 |
 | Logo 图片路径 | `logo.path` | string | `/logo.svg` | 图片文件路径 |
 | Logo 样式 | `logo.className` | string | `text-blue-500` | Tailwind CSS 类名 |
-| 登录标题 | `login.heading` | string | `Terminal Access Platform` | 登录页大标题 |
-| 登录副标题 | `login.subheading` | string | `Sign in to your account` | 登录页副标题 |
-| 登录页脚文字 | `login.footerText` | string | `Secure authentication · Session-based access control` | 登录卡片底部 |
+| 登录标题 | `login.heading` | string | `Terminal Access Manager` | 登录页大标题 |
+| 登录副标题 | `login.subheading` | string | `Sign in to your account` | 登录页副标题（优先使用 i18n 翻译键 `auth.signInToAccount`，branding 配置作为回退值） |
+| 登录页脚文字 | `login.footerText` | string | `Secure authentication · Session-based access control` | 登录卡片底部（优先使用 i18n 翻译键 `auth.secureAuthFooter`，branding 配置作为回退值） |
 | 背景类型 | `login.background.type` | `'gradient'` \| `'image'` | `'gradient'` | 渐变色或背景图片 |
 | 渐变色类名 | `login.background.gradientClass` | string | `bg-gradient-to-br from-gray-50 via-blue-50 to-indigo-100` | Tailwind 渐变类 |
 | 背景图片路径 | `login.background.imagePath` | string | `/login-bg.jpg` | 背景图片路径 |
@@ -208,6 +208,8 @@ favicon: '/favicon.ico',
 **推荐尺寸**：32×32px 或 64×64px
 
 ### 4. 修改登录页背景
+
+> **深色主题说明**：登录页背景现在使用 `bg-background` 语义化颜色（支持深色主题自动适配），`gradientClass` 配置仍存在但在深色模式下被语义化颜色覆盖。如需自定义深色模式背景，请修改 Tailwind 的 `dark:bg-background` 变量。
 
 #### 方式一：使用渐变色（默认）
 
@@ -538,6 +540,53 @@ docker compose up -d --build frontend
 1. **开发环境**：刷新浏览器即可（Vite 直接服务 `public/` 目录）
 2. **生产环境**：需重新构建前端，因为资源会在构建时被复制到 `dist/` 目录
 3. **Docker 环境**：需重新构建 frontend 容器
+
+## 主题切换
+
+主题切换功能已从 Sidebar 移至 **HeaderControls** 组件（页面顶部右上角），登录页和登录后均可见。
+
+### 切换选项
+
+| 选项 | 说明 |
+|------|------|
+| 浅色 | 固定使用浅色主题 |
+| 深色 | 固定使用深色主题 |
+| 跟随系统 | 自动匹配操作系统主题设置（默认） |
+
+主题偏好持久化到 `localStorage`，刷新页面后保持不变。
+
+### 深色主题兼容
+
+登录页各区域已添加 `dark:` 变体适配深色主题：
+
+- 背景使用 `bg-background` 语义化颜色，深色模式自动适配
+- 锁定警告区、错误提示区、验证码区、输入框均已添加深色变体
+- 自定义样式需注意深色模式兼容性，建议同时提供 `dark:` 变体
+
+## 语言切换
+
+语言切换功能位于 **HeaderControls** 组件中，通过 Globe 图标下拉菜单选择。
+
+### 支持语言
+
+| 语言 | 代码 | 说明 |
+|------|------|------|
+| 中文 | `zh` | 简体中文 |
+| 英文 | `en` | 英语 |
+| 日语 | `ja` | 日本語 |
+
+### 语言检测与持久化
+
+1. **自动检测**：首次访问时通过 `i18next-browser-languagedetector` 自动检测浏览器语言
+2. **手动切换**：点击 Globe 图标下拉菜单选择语言
+3. **持久化**：语言偏好保存到 `localStorage`，刷新页面后保持不变
+
+### i18n 翻译优先级
+
+登录页副标题和页脚文字优先使用 i18n 翻译键：
+
+- 副标题：i18n 键 `auth.signInToAccount` → branding 配置 `login.subheading` 作为回退值
+- 页脚文字：i18n 键 `auth.secureAuthFooter` → branding 配置 `login.footerText` 作为回退值
 
 ## 常见问题
 

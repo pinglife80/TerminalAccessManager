@@ -13,37 +13,52 @@ TerminalAccessManager 的前端已使用现代 React + TypeScript 技术栈完�
 frontend/
 ├── src/
 │   ├── components/       # 可复用 UI 组件
-│   │   ├── Layout.tsx           # 主布局（侧边栏 + 内容 + 页脚）
-│   │   ├── Sidebar.tsx          # 可折叠侧边栏导航
+│   │   ├── Layout.tsx           # 主布局（顶栏 + 侧边栏 + 内容 + 页脚）
+│   │   ├── Sidebar.tsx          # 可折叠侧边栏导航（hover 预加载）
+│   │   ├── HeaderControls.tsx   # 顶栏控件（主题切换 + 语言选择）
+│   │   ├── Modal.tsx            # 统一模态框组件（ESC 关闭、焦点管理、ARIA 属性）
 │   │   ├── Pagination.tsx       # 高级分页组件（top/bottom 变体）
 │   │   ├── DateRangeFilter.tsx  # 日期范围过滤器
 │   │   ├── Button.tsx           # 按钮组件（PrimaryButton/IconButton/ButtonGroup）
 │   │   ├── StateDisplay.tsx     # 状态显示组件（EmptyState/LoadingState）
 │   │   ├── Skeleton.tsx         # 骨架屏组件
 │   │   ├── ProtectedRoute.tsx   # 路由保护包装器
-│   │   └── ErrorBoundary.tsx    # 错误边界组件
+│   │   ├── ErrorBoundary.tsx    # 错误边界组件
+│   │   └── datasources/         # 数据源管理子组件
+│   │       ├── DataSourcesTab.tsx
+│   │       ├── ComplianceBaselinesTab.tsx
+│   │       ├── BindingsTab.tsx
+│   │       └── shared.ts        # 共享类型和配置
 │   ├── config/           # 配置
 │   │   └── branding.ts          # 品牌自定义配置
 │   ├── hooks/            # 自定义 Hooks
-│   │   └── useTerminalData.ts    # 数据查询 Hooks（终端、白名单、统计）
+│   │   ├── useTerminalData.ts    # 数据查询 Hooks（终端、白名单、统计）
+│   │   └── useNetworkStatus.ts   # 网络状态检测 Hook
+│   ├── i18n/             # 国际化
+│   │   ├── index.ts             # i18n 配置（i18next + browser-languagedetector）
+│   │   └── locales/             # 翻译文件
+│   │       ├── zh.ts            # 中文翻译
+│   │       ├── en.ts            # 英文翻译
+│   │       └── ja.ts            # 日语翻译
 │   ├── lib/              # 工具和 API 客户端
 │   │   ├── api.ts               # 带拦截器的 Axios 客户端
 │   │   ├── constants.ts         # 常量定义（状态、导航、API 端点等）
 │   │   └── utils.ts             # 工具函数（日期格式化、CSV 导出、MAC/IP 验证等）
 │   ├── pages/            # 页面组件
-│   │   ├── Login.tsx            # 登录页（验证码、账户锁定）
+│   │   ├── Login.tsx            # 登录页（验证码、账户锁定、深色主题、i18n）
 │   │   ├── Dashboard.tsx        # 主仪表板
 │   │   ├── Terminals.tsx         # 终端管理
-│   │   ├── Whitelist.tsx        # 白名单管理
-│   │   ├── Blacklist.tsx        # 黑名单管理
-│   │   ├── AuditLogs.tsx        # 审计日志
-│   │   ├── DataSources.tsx      # 数据源管理（管理员专属）
+│   │   ├── Whitelist.tsx        # 白名单管理（MAC 格式无关搜索、keepPreviousData）
+│   │   ├── Blacklist.tsx        # 黑名单管理（MAC 格式无关搜索、keepPreviousData）
+│   │   ├── AuditLogs.tsx        # 审计日志（8 类分类过滤、彩色 badge、JSON details）
+│   │   ├── DataSources.tsx      # 数据源管理（管理员专属，Tab 容器）
 │   │   ├── Users.tsx            # 用户管理（管理员专属）
 │   │   └── Profile.tsx          # 个人资料
 │   ├── store/            # 状态管理
-│   │   ├── auth.ts              # 认证状态管理
-│   │   └── branding.ts         # 品牌动态配置 store（useBrandingStore）
-│   ├── App.tsx           # 带路由的主应用
+│   │   ├── auth.ts              # 认证状态管理（initializeAuth timeout 10s）
+│   │   ├── branding.ts         # 品牌动态配置 store（useBrandingStore）
+│   │   └── theme.ts            # 主题状态管理（Light/Dark/System + localStorage 持久化）
+│   ├── App.tsx           # 带路由的主应用（Suspense 在 Layout Outlet 外层）
 │   ├── main.tsx          # 入口点
 │   ├── index.css         # TailwindCSS 全局样式
 │   └── vite-env.d.ts     # Vite 类型声明
@@ -73,11 +88,19 @@ frontend/
 - 受保护路由（未认证时重定向到登录页）
 - 登出功能
 - 用户会话持久化
+- 启动时认证状态恢复（`initializeAuth()`）：应用启动时检查 sessionStorage → 调用 `/auth/me` 验证 token → 失效则尝试 refresh → 全部失败则清除会话
+- `initializeAuth` timeout 10s：网络异常时 10 秒后超时降级，避免页面永久加载
+- `isInitializing` 状态：恢复期间为 `true`，页面显示加载状态，避免未认证闪烁
+- App.tsx 启动时自动调用 `initializeAuth()`
 
 #### API 集成
 - 配置好的 Axios HTTP 客户端
 - 请求拦截器（自动附加 JWT 令牌）
 - 响应拦截器（处理 401 错误，自动刷新令牌）
+- 401 拦截器并发控制：`isRefreshing` 标志锁定 + `failedQueue` 队列，多个 401 仅触发一次刷新
+- 排队请求 `_retry` 防循环：标记已重试的请求，避免 refresh 失败后无限循环
+- React Query 401 不重试：配置 `retry` 函数，401 状态码不触发自动重试
+- 刷新失败时 toast 提示用户"会话已过期，请重新登录"
 - 通过 toast 通知的错误处理
 - Vite 开发服务器中配置的后端代理
 - 30 秒请求超时
@@ -90,13 +113,15 @@ frontend/
 - TanStack Query 管理服务端数据缓存
 
 #### UI 组件
-- 可折叠侧边栏导航
-- 主布局（侧边栏 + 内容区 + 页脚）
+- 可折叠侧边栏导航（Logo 区域固定高度 `h-10`，防止折叠/展开时布局跳动，hover 预加载目标页面数据）
+- HeaderControls 顶栏控件（主题切换浅色/深色/跟随系统三选项并列 + 语言选择 Globe 下拉菜单）
+- 主布局（顶栏 + 侧边栏 + 内容区 + 页脚）
 - 高级分页组件（支持 top/bottom 变体、每页条数选择）
 - 日期范围过滤器
 - 按钮组件（PrimaryButton/IconButton/ButtonGroup）
 - 空状态和加载状态组件
 - 骨架屏加载占位
+- 统一 Modal 组件（ESC 关闭、焦点 trap、ARIA 属性、点击遮罩关闭、body 滚动锁定）
 - 错误边界组件
 - Toast 通知（成功/错误消息）
 - 确认对话框
@@ -131,6 +156,7 @@ frontend/
 | HTTP | Axios 1.6 | API 客户端 |
 | 图标 | Lucide React | 图标库 |
 | 通知 | Sonner | Toast 消息 |
+| 国际化 | i18next + react-i18next + i18next-browser-languagedetector | 多语言支持（中文/英文/日语），自动检测浏览器语言，语言持久化 localStorage |
 
 ---
 
@@ -164,20 +190,43 @@ const LOCK_DURATION = 15 * 60 * 1000;
 ### 3. 令牌刷新机制
 
 ```typescript
-// Axios 响应拦截器
+// Axios 响应拦截器 — 带并发控制 + 防循环
+let isRefreshing = false;
+let failedQueue: Array<{ resolve: Function; reject: Function }> = [];
+
 if (error.response?.status === 401 && !originalRequest._retry) {
-  // 使用刷新令牌获取新令牌
-  const response = await axios.post('/auth/refresh', null, {
-    params: { refresh_token: refreshToken },
+  if (isRefreshing) {
+    // 已有刷新进行中，加入等待队列
+    return new Promise((resolve, reject) => {
+      failedQueue.push({ resolve, reject });
+    }).then(token => {
+      originalRequest.headers.Authorization = `Bearer ${token}`;
+      return apiClient(originalRequest);
+    });
+  }
+
+  originalRequest._retry = true; // 防止循环重试
+  isRefreshing = true;
+  // 使用刷新令牌获取新令牌（通过 Body 传递 refresh_token）
+  const response = await axios.post('/auth/refresh', {
+    refresh_token: refreshToken,
   })
 
   // 更新 sessionStorage
   sessionStorage.setItem('access_token', newAccessToken)
   sessionStorage.setItem('refresh_token', newRefreshToken)
 
+  // 重试队列中所有等待的请求
+  failedQueue.forEach(({ resolve }) => resolve(newAccessToken));
+  failedQueue = [];
+  isRefreshing = false;
+
   // 重试原始请求
   return apiClient(originalRequest)
 }
+
+// 刷新失败时：清除会话 + toast 提示
+toast.error('会话已过期，请重新登录');
 ```
 
 ### 4. 受保护路由
@@ -224,6 +273,8 @@ apiClient.interceptors.request.use((config) => {
 - 通过 toast 显示错误消息
 - 品牌自定义（标题、副标题、背景、按钮样式）
 - 盾牌图标品牌
+- 深色主题支持：背景改用 `bg-background` 语义化颜色，各区域添加 `dark:` 变体
+- 副标题/页脚使用 i18n 翻译键（优先使用 i18n 翻译，回退到品牌配置）
 
 ### 2. 仪表板 (`/dashboard`)
 **功能：**
@@ -237,10 +288,10 @@ apiClient.interceptors.request.use((config) => {
 ### 3. 终端管理 (`/terminals`)
 **功能：**
 - 终端列表数据表格
-- 搜索过滤（按 IP/MAC 地址搜索）
+- 搜索过滤（debounce 防抖 + 服务端模糊搜索，按 IP/MAC 地址）
 - 状态过滤（active/inactive/frozen/pending/unfrozen/bypass）
 - 日期范围过滤
-- 高级分页（top/bottom 变体、每页条数选择）
+- 服务端分页（PaginatedResponse：items / total / page / page_size / total_pages）
 - 封禁/解封操作
 - 添加到白名单操作
 - 终端详情弹窗
@@ -251,9 +302,10 @@ apiClient.interceptors.request.use((config) => {
 ### 4. 白名单管理 (`/whitelist`)
 **功能：**
 - 白名单列表数据表格
-- 搜索过滤（按 MAC/IP 地址搜索）
+- 搜索过滤（debounce 防抖 + 服务端模糊搜索，按 MAC/IP 地址）
+- MAC 地址格式无关搜索（后端去除分隔符后 ILIKE 匹配，前端 `keepPreviousData` 防搜索闪烁）
 - 日期范围过滤
-- 高级分页
+- 服务端分页（PaginatedResponse）
 - 添加白名单条目（支持 MAC 地址、IP 地址、CIDR/范围）
 - 删除白名单条目（带确认对话框）
 - MAC 地址格式自动标准化
@@ -265,9 +317,10 @@ apiClient.interceptors.request.use((config) => {
 ### 5. 黑名单管理 (`/blacklist`)
 **功能：**
 - 黑名单列表数据表格
-- 搜索过滤（按 MAC/IP 地址搜索）
+- 搜索过滤（debounce 防抖 + 服务端模糊搜索，按 MAC/IP 地址）
+- MAC 地址格式无关搜索（后端去除分隔符后 ILIKE 匹配，前端 `keepPreviousData` 防搜索闪烁）
 - 日期范围过滤
-- 高级分页
+- 服务端分页（PaginatedResponse）
 - 添加黑名单条目（MAC 地址、IP 地址、原因、过期时间）
 - 删除黑名单条目（带确认对话框）
 - 查看详情弹窗
@@ -280,10 +333,14 @@ apiClient.interceptors.request.use((config) => {
 ### 6. 审计日志 (`/audit-logs`)
 **功能：**
 - 审计日志列表数据表格
-- 搜索过滤（按用户名、操作、详情搜索）
+- 搜索过滤（debounce 防抖 + 服务端模糊搜索，按用户名、操作、详情）
+- 8 类分类过滤（认证、终端操作、白名单、黑名单、用户管理、数据源、合规、配置变更）
+- action 彩色 badge（不同操作类型使用不同颜色标识）
+- resource 展示优化（突出显示资源类型和 ID）
+- details JSON 解析展示（自动解析 JSON 格式的 details 字段，格式化展示结构化信息）
 - 操作类型过滤
 - 日期范围过滤
-- 高级分页
+- 服务端分页（PaginatedResponse）
 - 日志详情弹窗
 - CSV 导出
 - 可折叠过滤器面板
@@ -297,6 +354,7 @@ apiClient.interceptors.request.use((config) => {
 - 合规检查操作
 - 自动封禁/自动解封配置
 - Compliance Baselines Tab（合规基准管理，支持 CRUD、测试连接、手动同步）
+- DataSources 拆分为独立 Tab 组件（DataSourcesTab、ComplianceBaselinesTab、BindingsTab、shared）
 - 搜索和过滤
 - 高级分页
 - 空状态和加载状态
@@ -335,7 +393,7 @@ apiClient.interceptors.request.use((config) => {
 2. `Dockerfile` - Docker 构建
 3. `nginx.conf` - Nginx 配置
 
-### 源代码文件（23）
+### 源代码文件（30）
 1. `src/main.tsx` - React 入口点
 2. `src/App.tsx` - 带路由的主应用
 3. `src/index.css` - 带 Tailwind 的全局样式
@@ -346,16 +404,28 @@ apiClient.interceptors.request.use((config) => {
 8. `src/config/branding.ts` - 品牌自定义配置
 9. `src/store/auth.ts` - 认证 store
 10. `src/store/branding.ts` - 品牌动态配置 store（useBrandingStore）
-11. `src/hooks/useTerminalData.ts` - 数据查询 Hooks
-12. `src/components/Layout.tsx` - 主布局组件
-13. `src/components/Sidebar.tsx` - 侧边栏导航
-14. `src/components/Pagination.tsx` - 分页组件
-15. `src/components/DateRangeFilter.tsx` - 日期范围过滤器
-16. `src/components/Button.tsx` - 按钮组件
-17. `src/components/StateDisplay.tsx` - 状态显示组件
-18. `src/components/Skeleton.tsx` - 骨架屏组件
-19. `src/components/ProtectedRoute.tsx` - 路由守卫
-20. `src/components/ErrorBoundary.tsx` - 错误边界
+11. `src/store/theme.ts` - 主题状态管理（Light/Dark/System + localStorage 持久化）
+12. `src/hooks/useTerminalData.ts` - 数据查询 Hooks
+13. `src/hooks/useNetworkStatus.ts` - 网络状态检测 Hook
+14. `src/i18n/index.ts` - i18n 配置（i18next + browser-languagedetector）
+15. `src/i18n/locales/zh.ts` - 中文翻译
+16. `src/i18n/locales/en.ts` - 英文翻译
+17. `src/i18n/locales/ja.ts` - 日语翻译
+18. `src/components/Layout.tsx` - 主布局组件（顶栏 + 侧边栏 + 内容区 + 页脚）
+19. `src/components/Sidebar.tsx` - 侧边栏导航（hover 预加载）
+20. `src/components/HeaderControls.tsx` - 顶栏控件（主题切换 + 语言选择）
+21. `src/components/Modal.tsx` - 统一模态框组件
+22. `src/components/Pagination.tsx` - 分页组件
+23. `src/components/DateRangeFilter.tsx` - 日期范围过滤器
+24. `src/components/Button.tsx` - 按钮组件
+25. `src/components/StateDisplay.tsx` - 状态显示组件
+26. `src/components/Skeleton.tsx` - 骨架屏组件
+27. `src/components/ProtectedRoute.tsx` - 路由守卫
+28. `src/components/ErrorBoundary.tsx` - 错误边界
+29. `src/components/datasources/DataSourcesTab.tsx` - 数据源 Tab 组件
+30. `src/components/datasources/ComplianceBaselinesTab.tsx` - 合规基准 Tab 组件
+31. `src/components/datasources/BindingsTab.tsx` - 绑定关系 Tab 组件
+32. `src/components/datasources/shared.ts` - 数据源共享类型和配置
 
 ### 页面文件（9）
 1. `src/pages/Login.tsx` - 登录页面
@@ -415,8 +485,8 @@ apiClient.interceptors.request.use((config) => {
 | `favicon` | 网站图标路径（文件放于 `public/` 目录） |
 | `logo` | Logo 配置，支持 Lucide 图标（type: 'icon'）或自定义图片（type: 'image'） |
 | `login.heading` | 登录页标题 |
-| `login.subheading` | 登录页副标题 |
-| `login.footerText` | 登录卡片底部文字 |
+| `login.subheading` | 登录页副标题（优先使用 i18n 翻译键 `login.subheading`，回退到品牌配置） |
+| `login.footerText` | 登录卡片底部文字（优先使用 i18n 翻译键 `login.footerText`，回退到品牌配置） |
 | `login.background` | 登录页背景，支持渐变（type: 'gradient'）或背景图片（type: 'image'） |
 | `login.buttonGradient` | 登录按钮渐变色 |
 | `login.headerGradient` | 登录页头部渐变色 |
@@ -442,7 +512,7 @@ apiClient.interceptors.request.use((config) => {
 ### 已连接
 - `POST /api/v1/auth/login` - 用户认证
 - `GET /api/v1/auth/login-status` - 登录状态查询（验证码/锁定状态）
-- `POST /api/v1/auth/refresh` - 令牌刷新
+- `POST /api/v1/auth/refresh` - 令牌刷新（refresh_token 通过 Body 传递）
 - `GET /api/v1/auth/me` - 获取当前用户信息
 - `POST /api/v1/auth/register` - 用户注册
 - `GET /api/v1/auth/users` - 用户列表（CRUD）
@@ -494,10 +564,14 @@ apiClient.interceptors.request.use((config) => {
 - Tree shaking（ES 模块）
 - 懒加载就绪（React.lazy）
 - 高效重渲染（React.memo 就绪）
-- 查询缓存（TanStack Query）
+- 查询缓存（TanStack Query，staleTime 30s 减少重复请求）
 - 登录后数据预取（prefetchQuery）
+- Sidebar hover 预加载（鼠标悬停时预加载目标页面数据）
 - 骨架屏加载占位
-- 防抖和节流工具函数
+- 搜索防抖（debounce 300ms，减少服务端请求）
+- 服务端分页（PaginatedResponse 统一分页结构，避免前端全量加载）
+- Suspense 位置优化（移到 Layout Outlet 外层，避免路由切换闪烁）
+- keepPreviousData（白名单/黑名单搜索时保持旧数据，防止闪烁）
 
 ### 未来改进
 - 大表格的虚拟滚动
@@ -589,9 +663,15 @@ npm run build
 
 前端已完整实现，包括：
 - 现代技术栈
-- 完整的认证系统（含验证码和账户锁定）
+- 完整的认证系统（含验证码和账户锁定，initializeAuth timeout 10s）
 - 全部 9 个页面（登录、仪表板、终端管理、白名单、黑名单、审计日志、数据源管理、用户管理、个人资料）
 - 品牌自定义配置系统
+- i18n 三语言支持（中文/英文/日语），自动检测浏览器语言，手动切换，语言持久化 localStorage
+- 深浅色主题切换（Light/Dark/System）+ HeaderControls 统一控件
+- 审计日志分类体系（8 类分类过滤 + 彩色 badge + JSON details 解析）
+- MAC 地址格式无关搜索 + keepPreviousData 防闪烁
+- 前端请求可靠性增强（refresh token Body 传递、_retry 防循环、401 不重试）
+- 页面闪烁修复（Suspense 位置调整、staleTime 30s、hover 预加载）
 - 所有后端 API 已连接
 - 响应式设计
 - 开发者友好的设置

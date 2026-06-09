@@ -7,6 +7,64 @@
 
 ---
 
+## [2.5.0] - 2026-06-09
+
+### 新增
+
+- i18n 国际化：i18next + react-i18next + i18next-browser-languagedetector，支持中文(zh)/英文(en)/日语(ja)三种语言，自动检测浏览器语言，手动切换（HeaderControls Globe 下拉菜单），语言持久化到 localStorage，14 个页面/组件全部 i18n 替换，翻译文件 en.ts/zh.ts/ja.ts
+- HeaderControls 组件：新增 `frontend/src/components/HeaderControls.tsx`，页面顶部右上角（登录页和登录后均可见），主题切换浅色/深色/跟随系统三选项并列，语言选择 Globe 图标下拉菜单
+- Layout 顶栏：内容区顶部新增一行顶栏，右侧显示 HeaderControls
+- 审计日志前端分类过滤：8 类操作分类过滤（认证/终端/白名单/黑名单/数据源/用户/配置/系统），彩色 badge 标识，resource 展示优化，details JSON 解析展示
+- MAC 地址格式无关搜索：后端 whitelist/blacklist 搜索使用 `func.replace` 去除 MAC 分隔符后 ILIKE 匹配，前端 `keepPreviousData` 防搜索闪烁
+
+### 改进
+
+- 审计日志 action 统一命名：`block_ip` → `block_terminal` 等规范化，启动时自动迁移旧值
+- 审计日志 details 改为 JSON 格式，补充 login/logout/数据源/用户管理/配置变更审计记录
+- 审计日志新增 `log_action` 公共函数 + `ip_address` 字段
+- Sidebar 简化：移除主题和语言切换按钮（移至 HeaderControls），只保留 Profile 和 Logout
+- 品牌名称替换：Terminal Access Platform → Terminal Access Manager，代码 19 处 + package.json + 后端启动时自动迁移数据库
+- 前端请求超时和可靠性增强：`initializeAuth` timeout 10s、refresh token 传递统一为 body、排队请求 `_retry` 防循环、React Query 401 不重试、`api.ts` refresh timeout 10s、sonner 动态 import `.catch()`
+
+### 修复
+
+- 登录深色主题适配：背景从 `branding.login.background.gradientClass` 改为 `bg-background` 语义化颜色，锁定警告区/错误提示区/验证码区/输入框全部添加 `dark:` 变体
+- 页面闪烁修复：Suspense 移到 Layout Outlet 外层、QueryClient `staleTime` 30s、Sidebar hover 预加载页面组件
+- 搜索闪烁修复：前端使用 `keepPreviousData` 防止搜索时页面闪烁
+
+---
+
+## [2.4.0] - 2026-06-09
+
+### 新增
+
+- 搜索优化：4个搜索API返回 `PaginatedResponse`（含 items/total/skip/limit），支持真正的服务端分页
+- Terminals 搜索改为 ILIKE 模糊搜索 + OR 逻辑（IP 或 MAC 任一匹配即可）
+- Terminals 搜索新增 `compliance_status` 过滤参数
+- 前端4个页面搜索输入框添加 300ms debounce，减少无效 API 请求
+- 前端4个页面实现服务端分页，支持浏览全部数据
+- 数据库索引优化：whitelist.created_at、blacklist.blocked_at/expires_at、audit_logs.ip_address
+- 数据库迁移脚本 003_search_indexes.py
+- 认证状态恢复机制：`initializeAuth()` 在应用启动时从 sessionStorage 恢复认证状态
+- 401 拦截器并发控制：多个 401 请求只触发一次 token 刷新，排队的请求用新 token 重发
+- 会话过期提示：token 刷新失败时 toast 提示"Session expired"
+
+### 改进
+
+- 移除 passlib 依赖，直接使用 bcrypt 库，彻底解决 bcrypt 版本兼容性警告
+- Sidebar Logo 区域固定高度（h-10），折叠/展开时不再位置跳动
+- health check 中 frontend 容器 exited(0) 视为正常（构建完成），不再误报 ERROR
+
+### 修复
+
+- 修复会话超时后不会自动退出登录的问题
+- 修复页面刷新后认证状态丢失的问题
+- 修复 Terminals 搜索使用精确匹配导致部分输入无法搜到结果的问题
+- 修复前端分页与后端分页矛盾导致只能看到前50条数据的问题
+- 修复 logs/export 无 limit 限制可能导致 OOM 的问题（新增 limit 参数，默认10000，最大50000）
+
+---
+
 ## [2.3.0] - 2026-06-08
 
 ### 新增

@@ -34,8 +34,8 @@ export const PrimaryButton: React.FC<PrimaryButtonProps> = ({
     success: 'bg-green-600 hover:bg-green-700 text-white shadow-md hover:shadow-lg',
     danger: 'bg-red-600 hover:bg-red-700 text-white shadow-md hover:shadow-lg',
     warning: 'bg-yellow-500 hover:bg-yellow-600 text-white shadow-md hover:shadow-lg',
-    secondary: 'bg-gray-100 hover:bg-gray-200 text-gray-700',
-    ghost: 'bg-transparent hover:bg-gray-100 text-gray-700',
+    secondary: 'bg-muted hover:bg-muted/80 text-foreground',
+    ghost: 'bg-transparent hover:bg-muted text-foreground',
   };
 
   const sizeStyles: Record<ButtonSize, string> = {
@@ -98,8 +98,8 @@ export const IconButton: React.FC<IconButtonProps> = ({
     success: 'text-green-600 hover:bg-green-100 active:bg-green-200',
     danger: 'text-red-600 hover:bg-red-100 active:bg-red-200',
     warning: 'text-yellow-600 hover:bg-yellow-100 active:bg-yellow-200',
-    secondary: 'text-gray-600 hover:bg-gray-100 active:bg-gray-200',
-    ghost: 'text-gray-500 hover:bg-gray-50 active:bg-gray-100',
+    secondary: 'text-muted-foreground hover:bg-muted active:bg-muted/80',
+    ghost: 'text-muted-foreground hover:bg-muted/50 active:bg-muted',
   };
 
   const activeStyles: Record<ButtonVariant, string> = {
@@ -107,8 +107,8 @@ export const IconButton: React.FC<IconButtonProps> = ({
     success: 'bg-green-100 text-green-700',
     danger: 'bg-red-100 text-red-700',
     warning: 'bg-yellow-100 text-yellow-700',
-    secondary: 'bg-gray-100 text-gray-700',
-    ghost: 'bg-gray-50 text-gray-600',
+    secondary: 'bg-muted text-foreground',
+    ghost: 'bg-muted/50 text-muted-foreground',
   };
 
   const sizeStyles: Record<ButtonSize, string> = {

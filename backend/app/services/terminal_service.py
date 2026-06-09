@@ -1,8 +1,9 @@
 import re
+import json
 import ipaddress
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc, and_, or_, func
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from datetime import datetime, timedelta, timezone
 from loguru import logger
 
@@ -279,15 +280,25 @@ class TerminalService:
         try:
             conditions = []
 
+            # IP and MAC use OR logic with fuzzy matching
+            ip_mac_conditions = []
             if query.ip:
-                conditions.append(Terminal.ip_address == query.ip)
-
+                ip_mac_conditions.append(Terminal.ip_address.ilike(f"%{query.ip}%"))
             if query.mac:
-                normalized_mac = self._normalize_mac(query.mac)
-                conditions.append(Terminal.mac_address == normalized_mac)
+                # Strip all separators for format-agnostic MAC matching
+                mac_clean = query.mac.replace('-', '').replace(':', '').replace('.', '').upper()
+                # Use func.replace to strip separators from DB column too
+                mac_col_stripped = func.replace(func.replace(func.replace(Terminal.mac_address, ':', ''), '-', ''), '.', '')
+                ip_mac_conditions.append(mac_col_stripped.ilike(f"%{mac_clean}%"))
+
+            if ip_mac_conditions:
+                conditions.append(or_(*ip_mac_conditions))
 
             if query.status:
                 conditions.append(Terminal.status == query.status)
+
+            if query.compliance_status:
+                conditions.append(Terminal.compliance_status == query.compliance_status)
 
             # Date range filtering
             date_conditions = _parse_date_range(query.start_date, query.end_date)
@@ -307,6 +318,47 @@ class TerminalService:
 
         except Exception as e:
             logger.error(f"Error searching MACs: {str(e)}")
+            raise
+
+    async def search_macs_count(self, query: TerminalQuery) -> int:
+        """Get total count of MAC addresses matching search criteria"""
+        try:
+            conditions = []
+
+            # Same conditions as search_macs
+            ip_mac_conditions = []
+            if query.ip:
+                ip_mac_conditions.append(Terminal.ip_address.ilike(f"%{query.ip}%"))
+            if query.mac:
+                # Strip all separators for format-agnostic MAC matching
+                mac_clean = query.mac.replace('-', '').replace(':', '').replace('.', '').upper()
+                mac_col_stripped = func.replace(func.replace(func.replace(Terminal.mac_address, ':', ''), '-', ''), '.', '')
+                ip_mac_conditions.append(mac_col_stripped.ilike(f"%{mac_clean}%"))
+
+            if ip_mac_conditions:
+                conditions.append(or_(*ip_mac_conditions))
+
+            if query.status:
+                conditions.append(Terminal.status == query.status)
+
+            if query.compliance_status:
+                conditions.append(Terminal.compliance_status == query.compliance_status)
+
+            # Date range filtering
+            date_conditions = _parse_date_range(query.start_date, query.end_date)
+            for dc in date_conditions:
+                conditions.append(dc(Terminal.timestamp))
+
+            stmt = (
+                select(func.count(Terminal.id))
+                .where(and_(*conditions) if conditions else True)
+            )
+
+            result = await self.db.execute(stmt)
+            return result.scalar() or 0
+
+        except Exception as e:
+            logger.error(f"Error counting MACs: {str(e)}")
             raise
 
     async def block_ip(self, ip_address: str, mac_address: str, username: str,
@@ -369,8 +421,9 @@ class TerminalService:
                 self.db.add(blacklist_entry)
 
                 # Log the action
-                await self._log_action(username, "block_ip", "mac", ip_address,
-                                     f"Blocked IP {ip_address} (MAC: {mac_address}) for {block_time}")
+                await self.log_action(username, "block_terminal", "mac", ip_address,
+                                     {"message": f"Blocked IP {ip_address} (MAC: {mac_address}) for {block_time}",
+                                      "ip": ip_address, "mac": mac_address, "duration": block_time})
 
                 await self.db.commit()
 
@@ -440,8 +493,9 @@ class TerminalService:
                     await self.db.delete(entry)
 
                 # Log the action
-                await self._log_action(username, "unblock_ip", "mac", ip_address,
-                                     f"Unblocked IP {ip_address}")
+                await self.log_action(username, "unblock_terminal", "mac", ip_address,
+                                     {"message": f"Unblocked IP {ip_address}",
+                                      "ip": ip_address})
 
                 await self.db.commit()
 
@@ -469,9 +523,13 @@ class TerminalService:
             # Search by MAC, IP pattern, or comments
             if query.search:
                 search_term = f"%{query.search}%"
+                # Format-agnostic MAC matching: strip separators from both
+                # the search term and the DB column before comparing
+                mac_clean = query.search.replace('-', '').replace(':', '').replace('.', '').upper()
+                mac_col_stripped = func.replace(func.replace(func.replace(Whitelist.mac_address, ':', ''), '-', ''), '.', '')
                 conditions.append(
                     or_(
-                        Whitelist.mac_address.ilike(search_term),
+                        mac_col_stripped.ilike(f"%{mac_clean}%"),
                         Whitelist.ip_pattern.ilike(search_term),
                         Whitelist.comments.ilike(search_term),
                     )
@@ -495,6 +553,37 @@ class TerminalService:
 
         result = await self.db.execute(stmt)
         return result.scalars().all()
+
+    async def get_whitelist_count(self, query: Optional[WhitelistQuery] = None) -> int:
+        """Get total count of whitelist entries matching search criteria"""
+        conditions = []
+
+        if query:
+            # Search by MAC, IP pattern, or comments
+            if query.search:
+                search_term = f"%{query.search}%"
+                mac_clean = query.search.replace('-', '').replace(':', '').replace('.', '').upper()
+                mac_col_stripped = func.replace(func.replace(func.replace(Whitelist.mac_address, ':', ''), '-', ''), '.', '')
+                conditions.append(
+                    or_(
+                        mac_col_stripped.ilike(f"%{mac_clean}%"),
+                        Whitelist.ip_pattern.ilike(search_term),
+                        Whitelist.comments.ilike(search_term),
+                    )
+                )
+
+            # Date range filtering
+            date_conditions = _parse_date_range(query.start_date, query.end_date)
+            for dc in date_conditions:
+                conditions.append(dc(Whitelist.created_at))
+
+        stmt = (
+            select(func.count(Whitelist.id))
+            .where(and_(*conditions) if conditions else True)
+        )
+
+        result = await self.db.execute(stmt)
+        return result.scalar() or 0
 
     async def add_to_whitelist(self, mac_address: str = None, ip_address: str = None,
                                 comments: str = "", username: str = "") -> dict:
@@ -579,20 +668,23 @@ class TerminalService:
             except Exception:
                 pass
 
-            # Build log message
+            # Build log details
             if ip_address and mac_address:
-                log_details = f"Added MAC {normalized_mac} and IP pattern {ip_pattern} ({pattern_type}) to whitelist"
+                log_details = {"message": f"Added MAC {normalized_mac} and IP pattern {ip_pattern} ({pattern_type}) to whitelist",
+                               "mac": normalized_mac, "ip_pattern": ip_pattern, "match_type": pattern_type}
                 resource_id = normalized_mac
             elif ip_address:
-                log_details = f"Added IP pattern {ip_pattern} ({pattern_type}) to whitelist"
+                log_details = {"message": f"Added IP pattern {ip_pattern} ({pattern_type}) to whitelist",
+                               "ip_pattern": ip_pattern, "match_type": pattern_type}
                 resource_id = ip_pattern
             elif mac_address:
-                log_details = f"Added MAC {normalized_mac} to whitelist"
+                log_details = {"message": f"Added MAC {normalized_mac} to whitelist",
+                               "mac": normalized_mac}
                 resource_id = normalized_mac
             else:
-                log_details = "Added entry to whitelist"
+                log_details = {"message": "Added entry to whitelist"}
                 resource_id = None
-            await self._log_action(username, "add_whitelist", "whitelist", resource_id, log_details)
+            await self.log_action(username, "add_whitelist", "whitelist", resource_id, log_details)
 
             await self.db.commit()
 
@@ -642,10 +734,15 @@ class TerminalService:
                     log_details_parts.append(f"MAC {whitelist_entry.mac_address}")
                 if whitelist_entry.ip_pattern:
                     log_details_parts.append(f"IP {whitelist_entry.ip_pattern}")
-                log_details = f"Removed {' and '.join(log_details_parts)} from whitelist"
+
+                log_details = {"message": f"Removed {' and '.join(log_details_parts)} from whitelist"}
+                if whitelist_entry.mac_address:
+                    log_details["mac"] = whitelist_entry.mac_address
+                if whitelist_entry.ip_pattern:
+                    log_details["ip_pattern"] = whitelist_entry.ip_pattern
 
                 resource_id = whitelist_entry.mac_address if whitelist_entry.mac_address else whitelist_entry.ip_pattern
-                await self._log_action(username, "remove_whitelist", "whitelist", resource_id, log_details)
+                await self.log_action(username, "remove_whitelist", "whitelist", resource_id, log_details)
 
                 await self.db.commit()
                 return True
@@ -669,9 +766,13 @@ class TerminalService:
             # Search by MAC or IP
             if query.search:
                 search_term = f"%{query.search}%"
+                # Format-agnostic MAC matching: strip separators from both
+                # the search term and the DB column before comparing
+                mac_clean = query.search.replace('-', '').replace(':', '').replace('.', '').upper()
+                mac_col_stripped = func.replace(func.replace(func.replace(Blacklist.mac_address, ':', ''), '-', ''), '.', '')
                 conditions.append(
                     or_(
-                        Blacklist.mac_address.ilike(search_term),
+                        mac_col_stripped.ilike(f"%{mac_clean}%"),
                         Blacklist.ip_address.ilike(search_term),
                     )
                 )
@@ -694,6 +795,36 @@ class TerminalService:
 
         result = await self.db.execute(stmt)
         return result.scalars().all()
+
+    async def get_blacklist_count(self, query: Optional[BlacklistQuery] = None) -> int:
+        """Get total count of blacklist entries matching search criteria"""
+        conditions = []
+
+        if query:
+            # Search by MAC or IP
+            if query.search:
+                search_term = f"%{query.search}%"
+                mac_clean = query.search.replace('-', '').replace(':', '').replace('.', '').upper()
+                mac_col_stripped = func.replace(func.replace(func.replace(Blacklist.mac_address, ':', ''), '-', ''), '.', '')
+                conditions.append(
+                    or_(
+                        mac_col_stripped.ilike(f"%{mac_clean}%"),
+                        Blacklist.ip_address.ilike(search_term),
+                    )
+                )
+
+            # Date range filtering
+            date_conditions = _parse_date_range(query.start_date, query.end_date)
+            for dc in date_conditions:
+                conditions.append(dc(Blacklist.blocked_at))
+
+        stmt = (
+            select(func.count(Blacklist.id))
+            .where(and_(*conditions) if conditions else True)
+        )
+
+        result = await self.db.execute(stmt)
+        return result.scalar() or 0
 
     async def add_to_blacklist(self, ip_address: str = "", mac_address: str = None,
                                 reason: str = "", username: str = "",
@@ -767,12 +898,22 @@ class TerminalService:
                 log_details_parts.append(f"MAC {normalized_mac}")
             if ip_address:
                 log_details_parts.append(f"IP {ip_address}")
-            log_details = f"Blocked {' and '.join(log_details_parts)} - {reason}"
+            log_msg = f"Blocked {' and '.join(log_details_parts)}"
+            if reason:
+                log_msg += f" - {reason}"
             if not sangfor_success and ip_address and svc and svc.base_url:
-                log_details += " (Sangfor API block may have failed)"
+                log_msg += " (Sangfor API block may have failed)"
+
+            log_details = {"message": log_msg}
+            if normalized_mac:
+                log_details["mac"] = normalized_mac
+            if ip_address:
+                log_details["ip"] = ip_address
+            if reason:
+                log_details["reason"] = reason
 
             resource_id = normalized_mac if normalized_mac else ip_address
-            await self._log_action(username, "block", "blacklist", resource_id, log_details)
+            await self.log_action(username, "block_blacklist", "blacklist", resource_id, log_details)
 
             await self.db.commit()
 
@@ -843,10 +984,15 @@ class TerminalService:
                     log_details_parts.append(f"MAC {blacklist_entry.mac_address}")
                 if blacklist_entry.ip_address:
                     log_details_parts.append(f"IP {blacklist_entry.ip_address}")
-                log_details = f"Unblocked {' and '.join(log_details_parts)}"
+
+                log_details = {"message": f"Unblocked {' and '.join(log_details_parts)}"}
+                if blacklist_entry.mac_address:
+                    log_details["mac"] = blacklist_entry.mac_address
+                if blacklist_entry.ip_address:
+                    log_details["ip"] = blacklist_entry.ip_address
 
                 resource_id = blacklist_entry.mac_address if blacklist_entry.mac_address else blacklist_entry.ip_address
-                await self._log_action(username, "unblock", "blacklist", resource_id, log_details)
+                await self.log_action(username, "unblock_blacklist", "blacklist", resource_id, log_details)
 
                 await self.db.delete(blacklist_entry)
                 await self.db.commit()
@@ -898,8 +1044,9 @@ class TerminalService:
                 count += 1
 
             if count > 0:
-                await self._log_action("system", "cleanup_expired", "blacklist", None,
-                                      f"Cleaned up {count} expired blacklist entries")
+                await self.log_action("system", "cleanup_expired", "blacklist", None,
+                                      {"message": f"Cleaned up {count} expired blacklist entries",
+                                       "count": count})
                 await self.db.commit()
 
             return count
@@ -948,18 +1095,54 @@ class TerminalService:
         result = await self.db.execute(stmt)
         return result.scalars().all()
 
+    async def search_audit_logs_count(self, query: AuditLogQuery) -> int:
+        """Get total count of audit logs matching search criteria"""
+        conditions = []
+
+        if query.username:
+            conditions.append(AuditLog.username == query.username)
+
+        if query.action:
+            conditions.append(AuditLog.action == query.action)
+
+        # Keyword search across IP, username, and details
+        if query.search:
+            search_term = f"%{query.search}%"
+            conditions.append(
+                or_(
+                    AuditLog.ip_address.ilike(search_term),
+                    AuditLog.username.ilike(search_term),
+                    AuditLog.details.ilike(search_term),
+                )
+            )
+
+        # Date range filtering
+        date_conditions = _parse_date_range(query.start_date, query.end_date)
+        for dc in date_conditions:
+            conditions.append(dc(AuditLog.timestamp))
+
+        stmt = (
+            select(func.count(AuditLog.id))
+            .where(and_(*conditions) if conditions else True)
+        )
+
+        result = await self.db.execute(stmt)
+        return result.scalar() or 0
+
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
-    async def _log_action(self, username: str, action: str, resource_type: str,
-                         resource_id: str, details: str):
-        """Log an audit action"""
+    async def log_action(self, username: str, action: str, resource_type: str,
+                         resource_id: str, details: Dict[str, Any],
+                         ip_address: str = None):
+        """Log an audit action with JSON details"""
         audit_log = AuditLog(
             username=username,
             action=action,
             resource_type=resource_type,
             resource_id=resource_id,
-            details=details
+            details=json.dumps(details, ensure_ascii=False),
+            ip_address=ip_address,
         )
         self.db.add(audit_log)
 

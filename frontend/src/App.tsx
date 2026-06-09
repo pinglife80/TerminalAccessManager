@@ -1,44 +1,73 @@
-import React, { useEffect } from 'react';
+import '@/i18n';
+import React, { useEffect, Suspense, lazy } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Toaster } from 'sonner';
-import Login from './pages/Login';
-import Dashboard from './pages/Dashboard';
-import Terminals from './pages/Terminals';
-import Whitelist from './pages/Whitelist';
-import Blacklist from './pages/Blacklist';
-import DataSources from './pages/DataSources';
-import AuditLogs from './pages/AuditLogs';
-import Profile from './pages/Profile';
-import Users from './pages/Users';
 import ProtectedRoute from './components/ProtectedRoute';
 import Layout from './components/Layout';
 import ErrorBoundary from './components/ErrorBoundary';
+
+// Lazy-loaded pages for code splitting
+const Login = lazy(() => import('./pages/Login'));
+const Dashboard = lazy(() => import('./pages/Dashboard'));
+const Terminals = lazy(() => import('./pages/Terminals'));
+const Whitelist = lazy(() => import('./pages/Whitelist'));
+const Blacklist = lazy(() => import('./pages/Blacklist'));
+const DataSources = lazy(() => import('./pages/DataSources'));
+const AuditLogs = lazy(() => import('./pages/AuditLogs'));
+const Profile = lazy(() => import('./pages/Profile'));
+const Users = lazy(() => import('./pages/Users'));
+
+// Preload page components on hover to eliminate lazy-load flash
+export const pagePreloadMap: Record<string, () => Promise<unknown>> = {
+  '/dashboard': () => import('./pages/Dashboard'),
+  '/terminals': () => import('./pages/Terminals'),
+  '/whitelist': () => import('./pages/Whitelist'),
+  '/blacklist': () => import('./pages/Blacklist'),
+  '/data-sources': () => import('./pages/DataSources'),
+  '/audit-logs': () => import('./pages/AuditLogs'),
+  '/profile': () => import('./pages/Profile'),
+  '/users': () => import('./pages/Users'),
+};
 import { apiClient } from './lib/api';
+import { useAuthStore } from './store/auth';
+import { useThemeStore } from './store/theme';
 import branding from './config/branding';
 
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      retry: 1,
+      retry: (count, error: unknown) => {
+        // Don't retry on 401 — the interceptor handles token refresh
+        const status = (error as { response?: { status?: number } })?.response?.status;
+        if (status === 401) return false;
+        return count < 1;
+      },
       refetchOnWindowFocus: false,
+      staleTime: 30 * 1000,
     },
   },
 });
 
 const App: React.FC = () => {
-  // Set document title from branding config
+  const { initializeAuth, isAuthenticated, isInitializing } = useAuthStore();
+  const { initTheme } = useThemeStore();
+
   useEffect(() => {
     document.title = branding.title;
-    // Update favicon if configured
     const link = document.querySelector("link[rel~='icon']") as HTMLLinkElement;
     if (link) {
       link.href = branding.favicon;
     }
   }, []);
+
   useEffect(() => {
-    const token = sessionStorage.getItem('access_token');
-    if (token) {
+    initializeAuth();
+    initTheme();
+  }, [initializeAuth, initTheme]);
+
+  useEffect(() => {
+    if (isAuthenticated) {
       queryClient.prefetchQuery({
         queryKey: ['terminals'],
         queryFn: async () => {
@@ -55,14 +84,33 @@ const App: React.FC = () => {
         },
       });
     }
-  }, []);
+  }, [isAuthenticated]);
+
+  if (isInitializing) {
+    return (
+      <div className="h-screen w-screen flex items-center justify-center bg-background">
+        <div className="flex flex-col items-center space-y-3">
+          <div className="h-8 w-8 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
+          <span className="text-sm text-muted-foreground">Loading...</span>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <QueryClientProvider client={queryClient}>
       <ErrorBoundary>
         <BrowserRouter>
           <Routes>
-            <Route path="/login" element={<Login />} />
+            <Route path="/login" element={
+              <Suspense fallback={
+                <div className="h-screen w-screen flex items-center justify-center bg-background">
+                  <div className="h-8 w-8 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
+                </div>
+              }>
+                <Login />
+              </Suspense>
+            } />
             <Route
               path="/"
               element={

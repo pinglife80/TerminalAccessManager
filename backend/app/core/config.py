@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     """Application settings loaded from environment variables"""
 
     # Application
-    PROJECT_NAME: str = "Terminal Access Platform"
+    PROJECT_NAME: str = "Terminal Access Manager"
     VERSION: str = "2.0.0"
     API_V1_STR: str = "/api/v1"
     DEBUG: bool = False
@@ -90,6 +90,13 @@ _INSECURE_DEFAULTS = [
 if settings.ENVIRONMENT == "production":
     if settings.SECRET_KEY in _INSECURE_DEFAULTS:
         print(f"ERROR: SECRET_KEY is set to an insecure default value. "
+              f"Generate a strong key with: python3 -c \"import secrets; print(secrets.token_urlsafe(32))\"",
+              file=sys.stderr)
+        sys.exit(1)
+
+    if len(settings.SECRET_KEY) < 32:
+        print(f"ERROR: SECRET_KEY is too short ({len(settings.SECRET_KEY)} chars). "
+              f"Minimum 32 characters required for production. "
               f"Generate a strong key with: python3 -c \"import secrets; print(secrets.token_urlsafe(32))\"",
               file=sys.stderr)
         sys.exit(1)

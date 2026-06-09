@@ -81,15 +81,15 @@ export const Pagination: React.FC<PaginationProps> = ({
     return (
       <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
         {/* 信息显示 - 顶部显示精简信息 */}
-        <div className="text-sm text-gray-600 font-medium">
+        <div className="text-sm text-muted-foreground font-medium">
           {totalItems !== undefined && (
             <span className="flex items-center gap-1.5">
-              <List className="h-4 w-4 text-gray-400" />
-              Showing <span className="text-gray-900 font-semibold">{startItem}</span>
+              <List className="h-4 w-4 text-muted-foreground" />
+              Showing <span className="text-foreground font-semibold">{startItem}</span>
               {' - '}
-              <span className="text-gray-900 font-semibold">{endItem}</span>
+              <span className="text-foreground font-semibold">{endItem}</span>
               {' of '}
-              <span className="text-gray-900 font-semibold">{totalItems}</span>
+              <span className="text-foreground font-semibold">{totalItems}</span>
               {' items'}
             </span>
           )}
@@ -97,7 +97,7 @@ export const Pagination: React.FC<PaginationProps> = ({
 
         {/* 简洁跳转导航 */}
         <div className="flex items-center gap-2">
-          <span className="text-sm text-gray-500">Page</span>
+          <span className="text-sm text-muted-foreground">Page</span>
           <span className="px-3 py-1.5 bg-blue-50 text-blue-700 font-semibold rounded-lg text-sm">
             {currentPage} / {totalPages}
           </span>
@@ -108,18 +108,18 @@ export const Pagination: React.FC<PaginationProps> = ({
 
   // 底部变体 - 完整功能分页导航
   return (
-    <div className="bg-white border-t border-gray-200 px-4 sm:px-6 py-4">
+    <div className="bg-card border-t border-border px-4 sm:px-6 py-4">
       <div className="flex flex-col lg:flex-row items-center justify-between gap-4">
         {/* 左侧信息显示区 */}
         <div className="flex items-center gap-4 text-sm">
           {totalItems !== undefined && (
-            <span className="text-gray-600">
+            <span className="text-muted-foreground">
               Showing{' '}
-              <span className="font-semibold text-gray-900">{startItem}</span>
+              <span className="font-semibold text-foreground">{startItem}</span>
               {' - '}
-              <span className="font-semibold text-gray-900">{endItem}</span>
+              <span className="font-semibold text-foreground">{endItem}</span>
               {' of '}
-              <span className="font-semibold text-gray-900">{totalItems}</span>
+              <span className="font-semibold text-foreground">{totalItems}</span>
               {' results'}
             </span>
           )}
@@ -127,11 +127,11 @@ export const Pagination: React.FC<PaginationProps> = ({
           {/* 每页数量选择器 */}
           {showPageSizeSelector && onPageSizeChange && (
             <div className="flex items-center gap-2">
-              <span className="text-gray-500">Per page</span>
+              <span className="text-muted-foreground">Per page</span>
               <select
                 value={pageSize}
                 onChange={(e) => onPageSizeChange(Number(e.target.value))}
-                className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 bg-white hover:border-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-colors cursor-pointer"
+                className="px-3 py-1.5 border border-border rounded-lg text-sm font-medium text-muted-foreground bg-card hover:border-border focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-colors cursor-pointer"
               >
                 {pageSizeOptions.map((size) => (
                   <option key={size} value={size}>
@@ -151,7 +151,7 @@ export const Pagination: React.FC<PaginationProps> = ({
             type="button"
             onClick={() => onPageChange(1)}
             disabled={currentPage === 1}
-            className="inline-flex items-center justify-center p-2 rounded-lg border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 hover:text-gray-900 hover:border-gray-400 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-white disabled:hover:border-gray-300 transition-all duration-150 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
+            className="inline-flex items-center justify-center p-2 rounded-lg border border-border bg-card text-muted-foreground hover:bg-muted hover:text-foreground hover:border-border disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-card disabled:hover:border-border transition-all duration-150 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
             title="First page"
             aria-label="First page"
           >
@@ -163,7 +163,7 @@ export const Pagination: React.FC<PaginationProps> = ({
             type="button"
             onClick={() => onPageChange(currentPage - 1)}
             disabled={currentPage === 1}
-            className="inline-flex items-center justify-center p-2 rounded-lg border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 hover:text-gray-900 hover:border-gray-400 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-white disabled:hover:border-gray-300 transition-all duration-150 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
+            className="inline-flex items-center justify-center p-2 rounded-lg border border-border bg-card text-muted-foreground hover:bg-muted hover:text-foreground hover:border-border disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-card disabled:hover:border-border transition-all duration-150 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
             title="Previous page"
             aria-label="Previous page"
           >
@@ -176,7 +176,7 @@ export const Pagination: React.FC<PaginationProps> = ({
               page === 'ellipsis' ? (
                 <span
                   key={`ellipsis-${idx}`}
-                  className="px-2 py-1 text-gray-400 font-semibold select-none"
+                  className="px-2 py-1 text-muted-foreground font-semibold select-none"
                 >
                   ...
                 </span>
@@ -189,7 +189,7 @@ export const Pagination: React.FC<PaginationProps> = ({
                   className={`min-w-[2.25rem] h-9 px-3 inline-flex items-center justify-center rounded-lg text-sm font-semibold transition-all duration-150 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1 ${
                     page === currentPage
                       ? 'bg-gradient-to-br from-blue-600 to-indigo-600 text-white shadow-md shadow-blue-200'
-                      : 'border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 hover:text-gray-900 hover:border-gray-400'
+                      : 'border border-border bg-card text-muted-foreground hover:bg-muted hover:text-foreground hover:border-border'
                   }`}
                 >
                   {page}
@@ -208,7 +208,7 @@ export const Pagination: React.FC<PaginationProps> = ({
             type="button"
             onClick={() => onPageChange(currentPage + 1)}
             disabled={currentPage === totalPages}
-            className="inline-flex items-center justify-center p-2 rounded-lg border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 hover:text-gray-900 hover:border-gray-400 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-white disabled:hover:border-gray-300 transition-all duration-150 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
+            className="inline-flex items-center justify-center p-2 rounded-lg border border-border bg-card text-muted-foreground hover:bg-muted hover:text-foreground hover:border-border disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-card disabled:hover:border-border transition-all duration-150 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
             title="Next page"
             aria-label="Next page"
           >
@@ -220,7 +220,7 @@ export const Pagination: React.FC<PaginationProps> = ({
             type="button"
             onClick={() => onPageChange(totalPages)}
             disabled={currentPage === totalPages}
-            className="inline-flex items-center justify-center p-2 rounded-lg border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 hover:text-gray-900 hover:border-gray-400 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-white disabled:hover:border-gray-300 transition-all duration-150 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
+            className="inline-flex items-center justify-center p-2 rounded-lg border border-border bg-card text-muted-foreground hover:bg-muted hover:text-foreground hover:border-border disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-card disabled:hover:border-border transition-all duration-150 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
             title="Last page"
             aria-label="Last page"
           >

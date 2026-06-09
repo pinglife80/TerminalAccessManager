@@ -1,5 +1,5 @@
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -47,6 +47,7 @@ async def list_data_sources(
 @router.post("/", response_model=DataSourceResponse, status_code=status.HTTP_201_CREATED)
 async def create_data_source(
     data: DataSourceCreate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_active_superuser),
 ):
@@ -54,6 +55,15 @@ async def create_data_source(
     service = DataSourceService(db)
     try:
         source = await service.create_data_source(data)
+
+        # Audit log
+        from app.services.terminal_service import TerminalService
+        ts = TerminalService(db)
+        await ts.log_action(current_user.username, "create_datasource", "datasource", str(source.id),
+                            {"message": "Created datasource", "name": source.name,
+                             "type": source.type, "tag": source.tag},
+                            ip_address=request.client.host if request.client else None)
+
         return source
     except ValueError as e:
         raise HTTPException(
@@ -83,6 +93,7 @@ async def get_data_source(
 async def update_data_source(
     source_id: int,
     data: DataSourceUpdate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_active_superuser),
 ):
@@ -95,6 +106,14 @@ async def update_data_source(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Data source not found",
             )
+
+        # Audit log
+        from app.services.terminal_service import TerminalService
+        ts = TerminalService(db)
+        await ts.log_action(current_user.username, "update_datasource", "datasource", str(source.id),
+                            {"message": "Updated datasource", "name": source.name, "tag": source.tag},
+                            ip_address=request.client.host if request.client else None)
+
         return source
     except ValueError as e:
         raise HTTPException(
@@ -106,11 +125,21 @@ async def update_data_source(
 @router.delete("/{source_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_data_source(
     source_id: int,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_active_superuser),
 ):
     """Delete a data source (superuser only)"""
     service = DataSourceService(db)
+    source = await service.get_data_source_by_id(source_id)
+    if not source:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Data source not found",
+        )
+
+    deleted_name = source.name
+    deleted_tag = source.tag
     deleted = await service.delete_data_source(source_id)
     if not deleted:
         raise HTTPException(
@@ -118,22 +147,47 @@ async def delete_data_source(
             detail="Data source not found",
         )
 
+    # Audit log
+    from app.services.terminal_service import TerminalService
+    ts = TerminalService(db)
+    await ts.log_action(current_user.username, "delete_datasource", "datasource", str(source_id),
+                        {"message": "Deleted datasource", "name": deleted_name, "tag": deleted_tag},
+                        ip_address=request.client.host if request.client else None)
+
 
 @router.post("/{source_id}/test", response_model=ConnectionTestResult)
 async def test_data_source_connection(
     source_id: int,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_active_superuser),
 ):
     """Test connection to a data source (superuser only)"""
     service = DataSourceService(db)
+    source = await service.get_data_source_by_id(source_id)
+    if not source:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Data source not found",
+        )
+
     result = await service.test_connection(source_id)
+
+    # Audit log
+    from app.services.terminal_service import TerminalService
+    ts = TerminalService(db)
+    await ts.log_action(current_user.username, "test_datasource", "datasource", str(source_id),
+                        {"message": "Tested datasource connection", "name": source.name,
+                         "success": result.success},
+                        ip_address=request.client.host if request.client else None)
+
     return result
 
 
 @router.post("/{source_id}/sync", response_model=SyncResult)
 async def sync_data_source(
     source_id: int,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_active_superuser),
 ):
@@ -151,6 +205,13 @@ async def sync_data_source(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Data source is disabled",
         )
+
+    # Audit log
+    from app.services.terminal_service import TerminalService
+    ts = TerminalService(db)
+    await ts.log_action(current_user.username, "sync_datasource", "datasource", str(source_id),
+                        {"message": "Synced datasource", "name": source.name},
+                        ip_address=request.client.host if request.client else None)
 
     if source.type == "arp_ssh":
         arp_service = ArpCollectorService(db)

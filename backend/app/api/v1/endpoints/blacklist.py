@@ -9,6 +9,7 @@ from app.schemas.terminal import (
     BlacklistCreate,
     BlacklistResponse,
     BlacklistQuery,
+    PaginatedResponse,
     ResponseMessage
 )
 from app.services.terminal_service import TerminalService
@@ -16,7 +17,7 @@ from app.services.terminal_service import TerminalService
 router = APIRouter(prefix="/blacklist", tags=["Blacklist"])
 
 
-@router.get("/", response_model=List[BlacklistResponse])
+@router.get("/", response_model=PaginatedResponse[BlacklistResponse])
 async def get_blacklist(
     search: str = Query(None, description="Search by MAC or IP"),
     start_date: str = Query(None, description="Filter by start date (YYYY-MM-DD)"),
@@ -39,7 +40,8 @@ async def get_blacklist(
 
     service = TerminalService(db)
     blacklist = await service.get_blacklist(query=query, skip=skip, limit=limit)
-    return blacklist
+    total = await service.get_blacklist_count(query=query)
+    return {"items": blacklist, "total": total, "skip": skip, "limit": limit}
 
 
 @router.post("/", status_code=status.HTTP_201_CREATED)

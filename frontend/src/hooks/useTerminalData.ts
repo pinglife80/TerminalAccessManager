@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import { apiClient } from '@/lib/api';
 
 export interface Terminal {
@@ -13,6 +13,7 @@ export interface Terminal {
   compliance_status: string;  // compliant / bypass / non_compliant / unknown
   wl_match_type: string | null;  // "mac" / "ip" / "both" / null
   firewall_tag: string | null;  // from blacklist data
+  black_match_type: string | null;  // from blacklist data: "mac" / "ip" / null
 }
 
 export interface WhitelistEntry {
@@ -100,6 +101,7 @@ export interface TerminalSearchParams {
   ip?: string;
   mac?: string;
   status?: string;
+  compliance_status?: string;
   start_date?: string;
   end_date?: string;
   skip?: number;
@@ -112,8 +114,9 @@ export const useTerminals = (params?: TerminalSearchParams) => {
     queryKey: ['terminals', params],
     queryFn: async () => {
       const response = await apiClient.get('/terminals/search', { params });
-      return response.data as Terminal[];
+      return response.data as PaginatedResponse<Terminal>;
     },
+    placeholderData: keepPreviousData,
     refetchInterval: params?.refetchInterval,
   });
 };
@@ -144,8 +147,9 @@ export const useWhitelist = (params?: WhitelistSearchParams) => {
     queryKey: ['whitelist', params],
     queryFn: async () => {
       const response = await apiClient.get('/whitelist/', { params });
-      return response.data as WhitelistEntry[];
+      return response.data as PaginatedResponse<WhitelistEntry>;
     },
+    placeholderData: keepPreviousData,
   });
 };
 
@@ -166,8 +170,9 @@ export const useBlacklist = (params?: BlacklistSearchParams) => {
     queryKey: ['blacklist', params],
     queryFn: async () => {
       const response = await apiClient.get('/blacklist/', { params });
-      return response.data as BlacklistEntry[];
+      return response.data as PaginatedResponse<BlacklistEntry>;
     },
+    placeholderData: keepPreviousData,
     refetchInterval: params?.refetchInterval,
   });
 };
@@ -201,8 +206,9 @@ export const useAuditLogs = (params?: AuditLogSearchParams) => {
     queryKey: ['audit-logs', params],
     queryFn: async () => {
       const response = await apiClient.get('/logs/search', { params });
-      return response.data as AuditLog[];
+      return response.data as PaginatedResponse<AuditLog>;
     },
+    placeholderData: keepPreviousData,
   });
 };
 
@@ -324,7 +330,7 @@ export interface DataSourceItem {
   name: string;
   type: string;  // arp_ssh / arp_api / ipguard / sangfor
   tag: string;
-  config: Record<string, any>;
+  config: Record<string, string | number | boolean | object | null>;
   enabled: boolean;
   last_sync_at: string | null;
   last_sync_status: string | null;
@@ -347,6 +353,7 @@ export const useDataSources = () => {
       const response = await apiClient.get('/data-sources/');
       return response.data as DataSourceItem[];
     },
+    placeholderData: keepPreviousData,
   });
 };
 
@@ -357,6 +364,7 @@ export const useDataSourceBindings = () => {
       const response = await apiClient.get('/data-sources/bindings/');
       return response.data as DataSourceBindingItem[];
     },
+    placeholderData: keepPreviousData,
   });
 };
 
@@ -368,7 +376,7 @@ export interface ComplianceBaselineItem {
   name: string;
   type: string;  // ipguard
   tag: string;
-  config: Record<string, any>;
+  config: Record<string, string | number | boolean | object | null>;
   enabled: boolean;
   last_sync_at: string | null;
   last_sync_status: string | null;
@@ -384,5 +392,6 @@ export function useComplianceBaselines() {
       const { data } = await apiClient.get('/compliance-baselines/');
       return data as ComplianceBaselineItem[];
     },
+    placeholderData: keepPreviousData,
   });
 }

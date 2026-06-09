@@ -1,5 +1,5 @@
 from datetime import timedelta, datetime, timezone
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Body, Depends, HTTPException, status, Request
 from fastapi.security import OAuth2PasswordRequestForm, OAuth2PasswordBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -36,6 +36,7 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.API_V1_STR}/auth/login
 
 @router.post("/login", response_model=Token)
 async def login(
+    request: Request,
     form_data: OAuth2PasswordRequestForm = Depends(),
     captcha: str = None,
     db: AsyncSession = Depends(get_db)
@@ -82,7 +83,7 @@ async def login(
         headers = {"X-Captcha-Required": "true" if captcha_now else "false"}
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Username does not exist",
+            detail="Invalid credentials",
             headers=headers,
         )
 
@@ -107,7 +108,7 @@ async def login(
 
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect password",
+            detail="Invalid credentials",
             headers=headers,
         )
 
@@ -119,6 +120,13 @@ async def login(
 
     # Reset failed login attempts on successful login
     await reset_login_attempts(username)
+
+    # Audit log for login
+    from app.services.terminal_service import TerminalService
+    ts = TerminalService(db)
+    await ts.log_action(user.username, "login", "auth", str(user.id),
+                        {"message": "User logged in successfully"},
+                        ip_address=request.client.host if request.client else None)
 
     # Create tokens (uses hot-reloadable config for expiration)
     access_token = await create_access_token_async(data={"sub": user.username})
@@ -215,7 +223,7 @@ async def get_current_user_info(
 
 @router.post("/refresh", response_model=Token)
 async def refresh_token(
-    refresh_token: str,
+    refresh_token: str = Body(..., embed=True),
     db: AsyncSession = Depends(get_db)
 ):
     """Refresh access token"""
@@ -271,8 +279,10 @@ async def refresh_token(
 
 @router.post("/logout", response_model=ResponseMessage)
 async def logout(
+    request: Request,
     current_user: User = Depends(get_current_user),
-    token: str = Depends(oauth2_scheme)
+    token: str = Depends(oauth2_scheme),
+    db: AsyncSession = Depends(get_db),
 ):
     """Logout and blacklist the current token"""
     try:
@@ -285,6 +295,13 @@ async def logout(
             await add_token_to_blacklist(jti, exp_dt)
     except Exception:
         pass  # Even if token parsing fails, return success
+
+    # Audit log for logout
+    from app.services.terminal_service import TerminalService
+    ts = TerminalService(db)
+    await ts.log_action(current_user.username, "logout", "auth", str(current_user.id),
+                        {"message": "User logged out"},
+                        ip_address=request.client.host if request.client else None)
 
     return {"message": "Successfully logged out", "success": True}
 
@@ -362,6 +379,7 @@ async def list_users(
 @router.post("/users", response_model=UserDetailResponse, status_code=status.HTTP_201_CREATED)
 async def admin_create_user(
     user_data: AdminUserCreate,
+    request: Request,
     current_user: User = Depends(get_current_active_superuser),
     db: AsyncSession = Depends(get_db),
 ):
@@ -387,6 +405,15 @@ async def admin_create_user(
     db.add(new_user)
     await db.commit()
     await db.refresh(new_user)
+
+    # Audit log
+    from app.services.terminal_service import TerminalService
+    ts = TerminalService(db)
+    await ts.log_action(current_user.username, "create_user", "user", str(new_user.id),
+                        {"message": "Created user", "username": new_user.username,
+                         "role": "superuser" if new_user.is_superuser else "user"},
+                        ip_address=request.client.host if request.client else None)
+
     return new_user
 
 
@@ -408,6 +435,7 @@ async def get_user(
 async def admin_update_user(
     user_id: int,
     user_data: UserUpdate,
+    request: Request,
     current_user: User = Depends(get_current_active_superuser),
     db: AsyncSession = Depends(get_db),
 ):
@@ -439,12 +467,21 @@ async def admin_update_user(
 
     await db.commit()
     await db.refresh(user)
+
+    # Audit log
+    from app.services.terminal_service import TerminalService
+    ts = TerminalService(db)
+    await ts.log_action(current_user.username, "update_user", "user", str(user.id),
+                        {"message": "Updated user", "username": user.username},
+                        ip_address=request.client.host if request.client else None)
+
     return user
 
 
 @router.delete("/users/{user_id}", response_model=ResponseMessage)
 async def admin_delete_user(
     user_id: int,
+    request: Request,
     current_user: User = Depends(get_current_active_superuser),
     db: AsyncSession = Depends(get_db),
 ):
@@ -457,15 +494,25 @@ async def admin_delete_user(
     if user.id == current_user.id:
         raise HTTPException(status_code=400, detail="Cannot delete your own account")
 
+    deleted_username = user.username
     await db.delete(user)
     await db.commit()
-    return {"message": f"User '{user.username}' deleted successfully", "success": True}
+
+    # Audit log
+    from app.services.terminal_service import TerminalService
+    ts = TerminalService(db)
+    await ts.log_action(current_user.username, "delete_user", "user", str(user_id),
+                        {"message": "Deleted user", "username": deleted_username},
+                        ip_address=request.client.host if request.client else None)
+
+    return {"message": f"User '{deleted_username}' deleted successfully", "success": True}
 
 
 @router.put("/users/{user_id}/password", response_model=ResponseMessage)
 async def admin_reset_password(
     user_id: int,
     data: AdminPasswordReset,
+    request: Request,
     current_user: User = Depends(get_current_active_superuser),
     db: AsyncSession = Depends(get_db),
 ):
@@ -477,12 +524,21 @@ async def admin_reset_password(
 
     user.hashed_password = hash_password(data.new_password)
     await db.commit()
+
+    # Audit log
+    from app.services.terminal_service import TerminalService
+    ts = TerminalService(db)
+    await ts.log_action(current_user.username, "reset_password", "user", str(user.id),
+                        {"message": "Reset password for user", "username": user.username},
+                        ip_address=request.client.host if request.client else None)
+
     return {"message": f"Password for '{user.username}' reset successfully", "success": True}
 
 
 @router.post("/users/{user_id}/unlock", response_model=ResponseMessage)
 async def admin_unlock_user(
     user_id: int,
+    request: Request,
     current_user: User = Depends(get_current_active_superuser),
     db: AsyncSession = Depends(get_db),
 ):
@@ -494,5 +550,12 @@ async def admin_unlock_user(
 
     # Clear Redis lock and attempts
     await reset_login_attempts(user.username)
+
+    # Audit log
+    from app.services.terminal_service import TerminalService
+    ts = TerminalService(db)
+    await ts.log_action(current_user.username, "unlock_user", "user", str(user.id),
+                        {"message": "Unlocked user account", "username": user.username},
+                        ip_address=request.client.host if request.client else None)
 
     return {"message": f"Account '{user.username}' unlocked successfully", "success": True}

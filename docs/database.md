@@ -207,7 +207,13 @@
 | pattern_type | VARCHAR(20) | | 'single_ip' | 模式类型 |
 | comments | TEXT | | NULL | 备注 |
 | added_by | VARCHAR(50) | NOT NULL | — | 添加人用户名 |
-| created_at | TIMESTAMP WITH TZ | | utcnow | 创建时间 |
+| created_at | TIMESTAMP WITH TZ | INDEX | utcnow | 创建时间 |
+
+**索引：**
+
+| 索引名 | 类型 | 字段 |
+|---|---|---|
+| idx_whitelist_created_at | SINGLE | created_at |
 
 **数据字典 — pattern_type：**
 
@@ -245,6 +251,8 @@
 | idx_blacklist_ip | COMPOSITE | (ip_address) |
 | idx_blacklist_mac | COMPOSITE | (mac_address) |
 | idx_blacklist_auto | COMPOSITE | (is_auto_blocked, auto_unblocked) |
+| idx_blacklist_blocked_at | SINGLE | blocked_at |
+| idx_blacklist_expires_at | SINGLE | expires_at |
 
 ---
 
@@ -260,8 +268,8 @@
 | action | VARCHAR(100) | NOT NULL, INDEX | — | 操作类型 |
 | resource_type | VARCHAR(50) | | NULL | 资源类型 |
 | resource_id | VARCHAR(100) | | NULL | 资源标识 |
-| details | TEXT | | NULL | 操作详情（JSON 格式） |
-| ip_address | VARCHAR(45) | | NULL | 请求来源 IP |
+| details | TEXT | | NULL | 操作详情（JSON 格式，json.dumps 序列化，每个 dict 包含 message 字段） |
+| ip_address | VARCHAR(45) | INDEX | NULL | 请求来源 IP |
 | timestamp | TIMESTAMP WITH TZ | INDEX | utcnow | 操作时间 |
 
 **索引：**
@@ -270,6 +278,7 @@
 |---|---|---|
 | idx_audit_user_timestamp | COMPOSITE | (username, timestamp) |
 | idx_audit_action | COMPOSITE | (action) |
+| idx_audit_ip_address | SINGLE | ip_address |
 
 **数据字典 — resource_type：**
 
@@ -278,6 +287,35 @@
 | mac | 终端地址操作 |
 | whitelist | 白名单操作 |
 | blacklist | 黑名单操作 |
+| datasource | 数据源操作 |
+| user | 用户管理操作 |
+| auth | 认证操作 |
+| system | 系统配置操作 |
+
+**数据字典 — action：**
+
+| 值 | 说明 | resource_type |
+|---|---|---|
+| `block_terminal` | 封禁终端 | mac |
+| `unblock_terminal` | 解封终端 | mac |
+| `block_blacklist` | 加入黑名单 | blacklist |
+| `unblock_blacklist` | 移出黑名单 | blacklist |
+| `add_whitelist` | 添加白名单 | whitelist |
+| `remove_whitelist` | 移除白名单 | whitelist |
+| `cleanup_expired` | 清理过期黑名单 | blacklist |
+| `login` | 用户登录 | auth |
+| `logout` | 用户登出 | auth |
+| `create_datasource` | 创建数据源 | datasource |
+| `update_datasource` | 更新数据源 | datasource |
+| `delete_datasource` | 删除数据源 | datasource |
+| `test_datasource` | 测试数据源连接 | datasource |
+| `sync_datasource` | 同步数据源 | datasource |
+| `create_user` | 创建用户 | user |
+| `update_user` | 更新用户 | user |
+| `delete_user` | 删除用户 | user |
+| `reset_password` | 重置密码 | user |
+| `unlock_user` | 解锁用户 | user |
+| `update_config` | 更新系统配置 | system |
 
 ---
 
@@ -319,6 +357,10 @@
 | int | 整数 | `"300"` |
 | bool | 布尔值 | `"true"` |
 | json | JSON 对象 | `'{"key": "value"}'` |
+
+**启动时自动迁移：**
+
+应用启动时，lifespan 会自动检查并迁移 `system_config` 表中的旧品牌值。将 `app_name`、`login_heading` 等品牌配置项中包含的旧品牌名 `"Terminal Access Platform"` 替换为 `"Terminal Access Manager"`，确保品牌一致性。此迁移为幂等操作，仅更新包含旧值的记录。
 
 ---
 
@@ -556,3 +598,45 @@
 - `manage.sh scheduler resume <task>` 删除该键
 - `_is_task_paused()` 函数在定时任务循环中检查该键，值为 `"paused"` 时跳过当轮执行
 - 可用任务名：`arp_collection`、`ipguard_sync`、`firewall_query`、`compliance_check`、`auto_unblock`
+
+---
+
+## 6. 数据库迁移脚本
+
+| 脚本 | 说明 |
+|---|---|
+| 001_initial_schema.py | 初始数据库结构（terminals 重命名前） |
+| 002_terminal_baseline.py | Terminal 重命名 + ComplianceBaseline 分离 |
+| 003_search_indexes.py | 搜索优化索引：whitelist.created_at、blacklist.blocked_at、blacklist.expires_at、audit_logs.ip_address |
+
+### 003_search_indexes.py 详情
+
+为搜索和分页查询添加数据库索引，提升查询性能：
+
+| 索引名 | 表 | 字段 | 用途 |
+|---|---|---|---|
+| idx_whitelist_created_at | whitelist | created_at | 白名单日期范围查询优化 |
+| idx_blacklist_blocked_at | blacklist | blocked_at | 黑名单按阻断时间查询优化 |
+| idx_blacklist_expires_at | blacklist | expires_at | 过期黑名单清理查询优化 |
+| idx_audit_ip_address | audit_logs | ip_address | 审计日志按 IP 查询优化 |
+
+### 应用启动时自动迁移
+
+除 Alembic 迁移脚本外，以下数据迁移在应用启动时由 lifespan 自动执行（无需手动运行脚本）：
+
+**审计日志 action 值迁移：**
+
+将 `audit_logs` 表中旧的 action 值自动更新为新命名规范：
+
+| 旧值 | 新值 |
+|---|---|
+| `block_ip` | `block_terminal` |
+| `unblock_ip` | `unblock_terminal` |
+| `block` | `block_blacklist` |
+| `unblock` | `unblock_blacklist` |
+
+**system_config 品牌值迁移：**
+
+将 `system_config` 表中品牌配置项（`app_name`、`login_heading` 等）的旧值 `"Terminal Access Platform"` 替换为 `"Terminal Access Manager"`。
+
+> **注意：** 这些迁移为幂等操作，仅更新包含旧值的记录，已更新的记录不受影响。

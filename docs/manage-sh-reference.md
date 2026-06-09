@@ -142,7 +142,7 @@ TerminalAccessManager (TAM) 统一管理脚本，用于项目全生命周期管�
 ./manage.sh health
 ```
 
-**检查项目：** Docker 守护进程、服务容器状态、数据库连接、Redis 连接、后端 API、Web UI、SSL 证书、磁盘空间。
+**检查项目：** Docker 守护进程、服务容器状态（frontend 容器 exited(0) 显示为 [OK] "build complete (exited)"，属正常状态；仅 exited(非0) 才显示为 [ERROR]）、数据库连接、Redis 连接、后端 API、Web UI、SSL 证书、磁盘空间。
 
 ---
 

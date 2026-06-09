@@ -1,5 +1,6 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { useAuthStore } from '@/store/auth';
 import { useStats, useSystemStatus } from '@/hooks/useTerminalData';
 import {
@@ -10,6 +11,7 @@ import { DashboardSkeleton } from '@/components/Skeleton';
 import { PrimaryButton } from '@/components/Button';
 
 const Dashboard: React.FC = () => {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const { user } = useAuthStore();
   const { data: stats, isLoading, error, dataUpdatedAt } = useStats();
@@ -17,13 +19,13 @@ const Dashboard: React.FC = () => {
 
   if (error) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="bg-white rounded-2xl shadow-lg p-8 max-w-md">
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="bg-card rounded-2xl shadow-lg p-8 max-w-md">
           <AlertCircle className="h-12 w-12 text-red-500 mx-auto mb-4" />
-          <h2 className="text-xl font-semibold text-gray-900 mb-2 text-center">Error Loading Data</h2>
-          <p className="text-gray-600 text-center">{error.message}</p>
+          <h2 className="text-xl font-semibold text-foreground mb-2 text-center">{t('dashboard.errorLoadingData')}</h2>
+          <p className="text-muted-foreground text-center">{error.message}</p>
           <PrimaryButton
-            label="Refresh"
+            label={t('common.refresh')}
             variant="primary"
             onClick={() => window.location.reload()}
             className="mt-4 w-full"
@@ -40,8 +42,8 @@ const Dashboard: React.FC = () => {
   const quickActions = [
     {
       icon: Search,
-      label: 'Search Terminals',
-      description: 'Find and manage network terminals',
+      label: t('dashboard.searchTerminals'),
+      description: t('dashboard.findAndManage'),
       path: '/terminals',
       color: 'blue',
       bgClass: 'bg-blue-50',
@@ -51,8 +53,8 @@ const Dashboard: React.FC = () => {
     },
     {
       icon: Shield,
-      label: 'Manage Whitelist',
-      description: 'Add or remove trusted terminals',
+      label: t('dashboard.manageWhitelist'),
+      description: t('dashboard.addOrRemoveTrusted'),
       path: '/whitelist',
       color: 'green',
       bgClass: 'bg-green-50',
@@ -62,8 +64,8 @@ const Dashboard: React.FC = () => {
     },
     {
       icon: ShieldOff,
-      label: 'Block Terminals',
-      description: 'Block or unblock network access',
+      label: t('dashboard.blockTerminals'),
+      description: t('dashboard.blockOrUnblock'),
       path: '/blacklist',
       color: 'red',
       bgClass: 'bg-red-50',
@@ -73,8 +75,8 @@ const Dashboard: React.FC = () => {
     },
     {
       icon: FileText,
-      label: 'Audit Logs',
-      description: 'Review system activity logs',
+      label: t('dashboard.auditLogsAction'),
+      description: t('dashboard.reviewSystemLogs'),
       path: '/audit-logs',
       color: 'purple',
       bgClass: 'bg-purple-50',
@@ -86,100 +88,98 @@ const Dashboard: React.FC = () => {
 
   const systemStatusItems = [
     {
-      name: 'Backend API',
+      name: t('dashboard.backendApi'),
       status: (systemStatus?.backend_api === 'connected' ? 'connected' : 'disconnected') as 'connected' | 'pending',
       icon: Activity,
-      detail: systemStatus?.backend_api === 'connected' ? 'Running' : 'Disconnected',
+      detail: systemStatus?.backend_api === 'connected' ? t('dashboard.running') : t('dashboard.disconnected'),
     },
     {
-      name: 'Database',
+      name: t('dashboard.database'),
       status: (systemStatus?.database === 'connected' ? 'connected' : 'pending') as 'connected' | 'pending',
       icon: Database,
-      detail: systemStatus?.database === 'connected' ? 'Active' : 'Unavailable',
+      detail: systemStatus?.database === 'connected' ? t('dashboard.activeStatus') : t('dashboard.unavailable'),
     },
     {
-      name: 'Sangfor AF',
+      name: t('dashboard.sangforAf'),
       status: (systemStatus?.sangfor?.connected ? 'connected' : 'pending') as 'connected' | 'pending',
       icon: Shield,
       detail: systemStatus?.sangfor?.connected
         ? `CPU: ${systemStatus.sangfor.cpu ?? '-'}% | Mem: ${systemStatus.sangfor.memory ?? '-'}%`
-        : (systemStatus?.sangfor?.error || 'Not configured'),
+        : (systemStatus?.sangfor?.error || t('dashboard.notConfigured')),
     },
     {
-      name: 'Network Scanner',
+      name: t('dashboard.networkScanner'),
       status: (systemStatus?.network_scanner === 'connected' ? 'connected' : 'pending') as 'connected' | 'pending',
       icon: Wifi,
-      detail: systemStatus?.network_scanner === 'connected' ? 'Running' : 'Pending configuration',
+      detail: systemStatus?.network_scanner === 'connected' ? t('dashboard.running') : t('dashboard.pendingConfiguration'),
     },
   ];
 
   return (
-    <div className="min-h-full bg-gray-50 p-4 sm:p-6 lg:p-8">
+    <div className="min-h-full bg-background p-4 sm:p-6 lg:p-8">
       {/* Page Header */}
       <div className="mb-6">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Dashboard</h1>
-            <p className="text-gray-600 mt-1">Welcome back, {user?.username}</p>
+            <h1 className="text-2xl sm:text-3xl font-bold text-foreground">{t('dashboard.title')}</h1>
+            <p className="text-muted-foreground mt-1">{t('dashboard.welcomeBack')}, {user?.username}</p>
           </div>
         </div>
       </div>
 
       {/* Overview Section */}
-      <div className="mb-6 bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
-        <div className="px-6 py-5 border-b border-gray-100">
-          <h2 className="text-lg font-semibold text-gray-900">Dashboard Overview</h2>
+      <div className="mb-6 bg-card rounded-2xl border border-border shadow-sm overflow-hidden">
+        <div className="px-6 py-5 border-b border-border">
+          <h2 className="text-lg font-semibold text-foreground">{t('dashboard.dashboardOverview')}</h2>
         </div>
         <div className="p-6">
-          <p className="text-gray-600 text-sm leading-relaxed">
-            Welcome to the Terminal Network Access Manager. This dashboard provides real-time monitoring
-            and management of network terminals, access control, and security controls. Use the quick actions
-            below to navigate to key features, or check the system status to ensure all services are running properly.
+          <p className="text-muted-foreground text-sm leading-relaxed">
+            {t('dashboard.welcomeDescription')}
           </p>
         </div>
       </div>
 
       {/* Stats Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-6 mb-8">
-        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+        <div className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden">
           <div className="p-5 sm:p-6">
             <div className="flex items-center gap-4">
               <div className="flex-shrink-0 w-12 h-12 bg-blue-100 rounded-xl flex items-center justify-center">
                 <Server className="h-6 w-6 text-blue-600" />
               </div>
               <div>
-                <p className="text-sm font-medium text-gray-500">Total Terminals</p>
-                <p className="text-2xl sm:text-3xl font-bold text-gray-900">{stats?.total || 0}</p>
+                <p className="text-sm font-medium text-muted-foreground">{t('dashboard.totalTerminals')}</p>
+                <p className="text-2xl sm:text-3xl font-bold text-foreground">{stats?.total || 0}</p>
               </div>
             </div>
           </div>
           <div className="h-1 bg-gradient-to-r from-blue-400 to-blue-600" />
         </div>
 
-        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+        <div className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden">
           <div className="p-5 sm:p-6">
             <div className="flex items-center gap-4">
               <div className="flex-shrink-0 w-12 h-12 bg-green-100 rounded-xl flex items-center justify-center">
                 <List className="h-6 w-6 text-green-600" />
               </div>
               <div>
-                <p className="text-sm font-medium text-gray-500">Whitelisted</p>
-                <p className="text-2xl sm:text-3xl font-bold text-gray-900">{stats?.whitelisted || 0}</p>
+                <p className="text-sm font-medium text-muted-foreground">{t('dashboard.whitelisted')}</p>
+                <p className="text-2xl sm:text-3xl font-bold text-foreground">{stats?.whitelisted || 0}</p>
               </div>
             </div>
           </div>
           <div className="h-1 bg-gradient-to-r from-green-400 to-green-600" />
         </div>
 
-        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+        <div className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden">
           <div className="p-5 sm:p-6">
             <div className="flex items-center gap-4">
               <div className="flex-shrink-0 w-12 h-12 bg-red-100 rounded-xl flex items-center justify-center">
                 <ShieldOff className="h-6 w-6 text-red-600" />
               </div>
               <div>
-                <p className="text-sm font-medium text-gray-500">Blocked</p>
-                <p className="text-2xl sm:text-3xl font-bold text-gray-900">{stats?.blocked || 0}</p>
+                <p className="text-sm font-medium text-muted-foreground">{t('dashboard.blocked')}</p>
+                <p className="text-2xl sm:text-3xl font-bold text-foreground">{stats?.blocked || 0}</p>
               </div>
             </div>
           </div>
@@ -191,12 +191,12 @@ const Dashboard: React.FC = () => {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Quick Actions - Takes 2 columns */}
         <div className="lg:col-span-2">
-          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
-            <div className="px-6 py-5 border-b border-gray-100">
+          <div className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden">
+            <div className="px-6 py-5 border-b border-border">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <Network className="h-5 w-5 text-gray-500" />
-                  <h2 className="text-lg font-semibold text-gray-900">Quick Actions</h2>
+                  <Network className="h-5 w-5 text-muted-foreground" />
+                  <h2 className="text-lg font-semibold text-foreground">{t('dashboard.quickActions')}</h2>
                 </div>
               </div>
             </div>
@@ -207,20 +207,20 @@ const Dashboard: React.FC = () => {
                     key={action.path}
                     type="button"
                     onClick={() => navigate(action.path)}
-                    className={`group flex items-start gap-4 p-4 rounded-xl border border-gray-200 bg-white ${action.hoverClass} hover:shadow-md transition-all duration-200 text-left`}
+                    className={`group flex items-start gap-4 p-4 rounded-xl border border-border bg-card ${action.hoverClass} hover:shadow-md transition-all duration-200 text-left`}
                   >
                     <div className={`flex-shrink-0 w-10 h-10 ${action.iconBgClass} rounded-lg flex items-center justify-center`}>
                       <action.icon className={`h-5 w-5 ${action.iconClass}`} />
                     </div>
                     <div className="flex-1 min-w-0">
-                      <p className="text-sm font-semibold text-gray-900 group-hover:text-gray-700">
+                      <p className="text-sm font-semibold text-foreground group-hover:text-muted-foreground">
                         {action.label}
                       </p>
-                      <p className="text-xs text-gray-500 mt-0.5">
+                      <p className="text-xs text-muted-foreground mt-0.5">
                         {action.description}
                       </p>
                     </div>
-                    <ArrowRight className="h-4 w-4 text-gray-300 group-hover:text-gray-500 mt-1 flex-shrink-0 transition-colors" />
+                    <ArrowRight className="h-4 w-4 text-muted-foreground group-hover:text-muted-foreground mt-1 flex-shrink-0 transition-colors" />
                   </button>
                 ))}
               </div>
@@ -230,11 +230,11 @@ const Dashboard: React.FC = () => {
 
         {/* System Status - Takes 1 column */}
         <div className="lg:col-span-1">
-          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden h-full">
-            <div className="px-6 py-5 border-b border-gray-100">
+          <div className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden h-full">
+            <div className="px-6 py-5 border-b border-border">
               <div className="flex items-center gap-2">
-                <Activity className="h-5 w-5 text-gray-500" />
-                <h2 className="text-lg font-semibold text-gray-900">System Status</h2>
+                <Activity className="h-5 w-5 text-muted-foreground" />
+                <h2 className="text-lg font-semibold text-foreground">{t('dashboard.systemStatus')}</h2>
               </div>
             </div>
             <div className="p-4 sm:p-6">
@@ -242,7 +242,7 @@ const Dashboard: React.FC = () => {
                 {systemStatusItems.map((item) => (
                   <div
                     key={item.name}
-                    className="flex items-center gap-3 p-3 bg-gray-50 rounded-xl"
+                    className="flex items-center gap-3 p-3 bg-background rounded-xl"
                   >
                     <div className={`flex-shrink-0 w-9 h-9 rounded-lg flex items-center justify-center ${
                       item.status === 'connected'
@@ -256,8 +256,8 @@ const Dashboard: React.FC = () => {
                       }`} />
                     </div>
                     <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-gray-900">{item.name}</p>
-                      <p className="text-xs text-gray-500">{item.detail}</p>
+                      <p className="text-sm font-medium text-foreground">{item.name}</p>
+                      <p className="text-xs text-muted-foreground">{item.detail}</p>
                     </div>
                     <div className="flex items-center gap-1.5">
                       <span className={`h-2 w-2 rounded-full ${
@@ -270,7 +270,7 @@ const Dashboard: React.FC = () => {
                           ? 'text-green-700'
                           : 'text-yellow-700'
                       }`}>
-                        {item.status === 'connected' ? 'Online' : 'Pending'}
+                        {item.status === 'connected' ? t('common.online') : t('common.pending')}
                       </span>
                     </div>
                   </div>
@@ -278,10 +278,10 @@ const Dashboard: React.FC = () => {
               </div>
 
               {/* Last updated indicator */}
-              <div className="mt-6 pt-4 border-t border-gray-100">
-                <div className="flex items-center gap-2 text-xs text-gray-400">
+              <div className="mt-6 pt-4 border-t border-border">
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
                   <Clock className="h-3.5 w-3.5" />
-                  <span>Last updated: {dataUpdatedAt ? new Date(dataUpdatedAt).toLocaleTimeString() : '—'}</span>
+                  <span>{t('common.lastUpdated')}: {dataUpdatedAt ? new Date(dataUpdatedAt).toLocaleTimeString() : '—'}</span>
                 </div>
               </div>
             </div>

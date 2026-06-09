@@ -35,6 +35,32 @@ async def _is_task_paused(task_name: str) -> bool:
         return False
 
 
+async def _acquire_task_lock(task_name: str, ttl: int = 300) -> bool:
+    """Acquire a distributed lock for a scheduler task via Redis.
+    Returns True if lock acquired, False if another instance holds it."""
+    try:
+        from app.core.security import get_redis_client
+        redis_client = await get_redis_client()
+        lock_key = f"scheduler:lock:{task_name}"
+        # SET with NX (only if not exists) and EX (expire)
+        acquired = await redis_client.set(lock_key, "locked", nx=True, ex=ttl)
+        return acquired is not None
+    except Exception:
+        # If Redis is unavailable, allow task to run (fail-open)
+        return True
+
+
+async def _release_task_lock(task_name: str) -> None:
+    """Release a distributed lock for a scheduler task"""
+    try:
+        from app.core.security import get_redis_client
+        redis_client = await get_redis_client()
+        lock_key = f"scheduler:lock:{task_name}"
+        await redis_client.delete(lock_key)
+    except Exception:
+        pass
+
+
 async def _get_scheduler_interval(key: str, default: int) -> int:
     """Get scheduler interval from config, clamped to 30-86400 seconds"""
     try:
@@ -58,12 +84,17 @@ async def cleanup_expired_blacklist():
             await asyncio.sleep(interval)
             if await _is_task_paused("firewall_query"):
                 continue
-            async with async_session_factory() as db:
-                from app.services.terminal_service import TerminalService
-                service = TerminalService(db)
-                count = await service.cleanup_expired_blacklist()
-                if count > 0:
-                    logger.info(f"Cleaned up {count} expired blacklist entries")
+            if not await _acquire_task_lock("firewall_query"):
+                continue
+            try:
+                async with async_session_factory() as db:
+                    from app.services.terminal_service import TerminalService
+                    service = TerminalService(db)
+                    count = await service.cleanup_expired_blacklist()
+                    if count > 0:
+                        logger.info(f"Cleaned up {count} expired blacklist entries")
+            finally:
+                await _release_task_lock("firewall_query")
         except Exception as e:
             logger.error(f"Error in blacklist cleanup task: {str(e)}")
 
@@ -76,10 +107,15 @@ async def scheduled_arp_collection():
             await asyncio.sleep(interval)
             if await _is_task_paused("arp_collection"):
                 continue
-            async with async_session_factory() as db:
-                from app.services.arp_collector_service import ArpCollectorService
-                service = ArpCollectorService(db)
-                await service.run_scheduled_collection()
+            if not await _acquire_task_lock("arp_collection"):
+                continue
+            try:
+                async with async_session_factory() as db:
+                    from app.services.arp_collector_service import ArpCollectorService
+                    service = ArpCollectorService(db)
+                    await service.run_scheduled_collection()
+            finally:
+                await _release_task_lock("arp_collection")
         except Exception as e:
             logger.error(f"Error in scheduled ARP collection task: {str(e)}")
 
@@ -92,20 +128,25 @@ async def scheduled_ipguard_sync():
             await asyncio.sleep(interval)
             if await _is_task_paused("ipguard_sync"):
                 continue
-            async with async_session_factory() as db:
-                from sqlalchemy import select
-                from app.models.compliance_baseline import ComplianceBaseline
-                from app.services.compliance_service import ComplianceService
-                service = ComplianceService(db)
-                stmt = select(ComplianceBaseline).where(ComplianceBaseline.enabled == True)
-                result = await db.execute(stmt)
-                baselines = result.scalars().all()
-                for baseline in baselines:
-                    try:
-                        await service.sync_ipguard_data(baseline.tag)
-                        logger.info(f"Synced IPGuard data for baseline: {baseline.tag}")
-                    except Exception as e:
-                        logger.error(f"Error syncing IPGuard data for {baseline.tag}: {str(e)}")
+            if not await _acquire_task_lock("ipguard_sync"):
+                continue
+            try:
+                async with async_session_factory() as db:
+                    from sqlalchemy import select
+                    from app.models.compliance_baseline import ComplianceBaseline
+                    from app.services.compliance_service import ComplianceService
+                    service = ComplianceService(db)
+                    stmt = select(ComplianceBaseline).where(ComplianceBaseline.enabled == True)
+                    result = await db.execute(stmt)
+                    baselines = result.scalars().all()
+                    for baseline in baselines:
+                        try:
+                            await service.sync_ipguard_data(baseline.tag)
+                            logger.info(f"Synced IPGuard data for baseline: {baseline.tag}")
+                        except Exception as e:
+                            logger.error(f"Error syncing IPGuard data for {baseline.tag}: {str(e)}")
+            finally:
+                await _release_task_lock("ipguard_sync")
         except Exception as e:
             logger.error(f"Error in scheduled IPGuard sync task: {str(e)}")
 
@@ -118,56 +159,61 @@ async def scheduled_compliance_check():
             await asyncio.sleep(interval)
             if await _is_task_paused("compliance_check"):
                 continue
-            async with async_session_factory() as db:
-                from app.services.compliance_service import ComplianceService
-                service = ComplianceService(db)
-                from app.services.data_source_service import DataSourceService
-                ds_service = DataSourceService(db)
-                sources = await ds_service.list_data_sources(type="arp_ssh", enabled=True)
-                sources2 = await ds_service.list_data_sources(type="arp_api", enabled=True)
-                all_arp_sources = sources + sources2
-                for source in all_arp_sources:
-                    try:
-                        from sqlalchemy import select as sa_select
-                        from app.models.terminal import Terminal
-                        stmt = sa_select(Terminal).where(
-                            (Terminal.source_tag == source.tag) &
-                            (Terminal.compliance_status == "unknown")
-                        )
-                        r = await db.execute(stmt)
-                        unchecked = r.scalars().all()
-                        if unchecked:
-                            check_entries = [
-                                {"ip_address": e.ip_address, "mac_address": e.mac_address, "source_tag": e.source_tag}
-                                for e in unchecked
-                            ]
-                            result = await service.batch_check_compliance(check_entries)
-                            # Update compliance_status for each entry
-                            bypass_data = {}  # ip -> wl_match_type
-                            compliant_ips = set()
-                            non_compliant_ips = set()
-                            if result.details:
-                                for item in result.details.get("bypass", []):
-                                    bypass_data[item.get("ip_address")] = item.get("wl_match_type")
-                                for item in result.details.get("compliant", []):
-                                    compliant_ips.add(item.get("ip_address"))
-                                for item in result.details.get("non_compliant", []):
-                                    non_compliant_ips.add(item.get("ip_address"))
-                            for entry in unchecked:
-                                if entry.ip_address in bypass_data:
-                                    entry.compliance_status = "bypass"
-                                    entry.wl_match_type = bypass_data[entry.ip_address]
-                                elif entry.ip_address in compliant_ips:
-                                    entry.compliance_status = "compliant"
-                                    entry.wl_match_type = None
-                                elif entry.ip_address in non_compliant_ips:
-                                    entry.compliance_status = "non_compliant"
-                                    entry.wl_match_type = None
-                            await db.commit()
-                            if result.non_compliant > 0 or result.bypass > 0:
-                                logger.info(f"Compliance check for {source.tag}: {result.compliant} compliant, {result.bypass} bypass, {result.non_compliant} non-compliant")
-                    except Exception as e:
-                        logger.error(f"Error in compliance check for {source.tag}: {str(e)}")
+            if not await _acquire_task_lock("compliance_check"):
+                continue
+            try:
+                async with async_session_factory() as db:
+                    from app.services.compliance_service import ComplianceService
+                    service = ComplianceService(db)
+                    from app.services.data_source_service import DataSourceService
+                    ds_service = DataSourceService(db)
+                    sources = await ds_service.list_data_sources(type="arp_ssh", enabled=True)
+                    sources2 = await ds_service.list_data_sources(type="arp_api", enabled=True)
+                    all_arp_sources = sources + sources2
+                    for source in all_arp_sources:
+                        try:
+                            from sqlalchemy import select as sa_select
+                            from app.models.terminal import Terminal
+                            stmt = sa_select(Terminal).where(
+                                (Terminal.source_tag == source.tag) &
+                                (Terminal.compliance_status == "unknown")
+                            )
+                            r = await db.execute(stmt)
+                            unchecked = r.scalars().all()
+                            if unchecked:
+                                check_entries = [
+                                    {"ip_address": e.ip_address, "mac_address": e.mac_address, "source_tag": e.source_tag}
+                                    for e in unchecked
+                                ]
+                                result = await service.batch_check_compliance(check_entries)
+                                # Update compliance_status for each entry
+                                bypass_data = {}  # ip -> wl_match_type
+                                compliant_ips = set()
+                                non_compliant_ips = set()
+                                if result.details:
+                                    for item in result.details.get("bypass", []):
+                                        bypass_data[item.get("ip_address")] = item.get("wl_match_type")
+                                    for item in result.details.get("compliant", []):
+                                        compliant_ips.add(item.get("ip_address"))
+                                    for item in result.details.get("non_compliant", []):
+                                        non_compliant_ips.add(item.get("ip_address"))
+                                for entry in unchecked:
+                                    if entry.ip_address in bypass_data:
+                                        entry.compliance_status = "bypass"
+                                        entry.wl_match_type = bypass_data[entry.ip_address]
+                                    elif entry.ip_address in compliant_ips:
+                                        entry.compliance_status = "compliant"
+                                        entry.wl_match_type = None
+                                    elif entry.ip_address in non_compliant_ips:
+                                        entry.compliance_status = "non_compliant"
+                                        entry.wl_match_type = None
+                                await db.commit()
+                                if result.non_compliant > 0 or result.bypass > 0:
+                                    logger.info(f"Compliance check for {source.tag}: {result.compliant} compliant, {result.bypass} bypass, {result.non_compliant} non-compliant")
+                        except Exception as e:
+                            logger.error(f"Error in compliance check for {source.tag}: {str(e)}")
+            finally:
+                await _release_task_lock("compliance_check")
         except Exception as e:
             logger.error(f"Error in scheduled compliance check task: {str(e)}")
 
@@ -180,12 +226,17 @@ async def scheduled_auto_unblock():
             await asyncio.sleep(interval)
             if await _is_task_paused("auto_unblock"):
                 continue
-            async with async_session_factory() as db:
-                from app.services.compliance_service import ComplianceService
-                service = ComplianceService(db)
-                result = await service.auto_unblock_compliant()
-                if result.unblocked > 0:
-                    logger.info(f"Auto-unblocked {result.unblocked} compliant terminals")
+            if not await _acquire_task_lock("auto_unblock"):
+                continue
+            try:
+                async with async_session_factory() as db:
+                    from app.services.compliance_service import ComplianceService
+                    service = ComplianceService(db)
+                    result = await service.auto_unblock_compliant()
+                    if result.unblocked > 0:
+                        logger.info(f"Auto-unblocked {result.unblocked} compliant terminals")
+            finally:
+                await _release_task_lock("auto_unblock")
         except Exception as e:
             logger.error(f"Error in scheduled auto-unblock task: {str(e)}")
 
@@ -210,7 +261,35 @@ async def lifespan(app: FastAPI):
         else:
             logger.info("System configs already initialized")
 
-    # Start background tasks
+        # Migrate legacy "Terminal Access Platform" → "Terminal Access Manager"
+        from sqlalchemy import text
+        legacy_rows = await db.execute(
+            text("SELECT id, value FROM system_config WHERE value LIKE '%Terminal Access Platform%'")
+        )
+        for row in legacy_rows:
+            new_value = row[1].replace("Terminal Access Platform", "Terminal Access Manager")
+            await db.execute(
+                text("UPDATE system_config SET value = :val WHERE id = :id"),
+                {"val": new_value, "id": row[0]}
+            )
+            logger.info(f"Migrated config id={row[0]}: '{row[1]}' → '{new_value}'")
+        await db.commit()
+
+        # Migrate legacy action names in audit_logs
+        action_migrations = {
+            "block_ip": "block_terminal",
+            "unblock_ip": "unblock_terminal",
+            "block": "block_blacklist",
+            "unblock": "unblock_blacklist",
+        }
+        for old_action, new_action in action_migrations.items():
+            result = await db.execute(
+                text("UPDATE audit_logs SET action = :new WHERE action = :old"),
+                {"new": new_action, "old": old_action}
+            )
+            if result.rowcount > 0:
+                logger.info(f"Migrated {result.rowcount} audit log action(s): '{old_action}' → '{new_action}'")
+        await db.commit()
     cleanup_task = asyncio.create_task(cleanup_expired_blacklist())
     arp_collection_task = asyncio.create_task(scheduled_arp_collection())
     ipguard_sync_task = asyncio.create_task(scheduled_ipguard_sync())
@@ -221,16 +300,22 @@ async def lifespan(app: FastAPI):
     yield
 
     # Shutdown
-    cleanup_task.cancel()
-    arp_collection_task.cancel()
-    ipguard_sync_task.cancel()
-    compliance_check_task.cancel()
-    auto_unblock_task.cancel()
     logger.info("Shutting down Terminal Network Access Manager...")
+
+    # Cancel background tasks and wait for them to finish
+    for task in [cleanup_task, arp_collection_task, ipguard_sync_task, compliance_check_task, auto_unblock_task]:
+        task.cancel()
+    await asyncio.gather(*[cleanup_task, arp_collection_task, ipguard_sync_task, compliance_check_task, auto_unblock_task], return_exceptions=True)
+    logger.info("Background tasks cancelled")
 
     # Close Redis connections
     await close_redis_client()
     logger.info("Redis connections closed")
+
+    # Dispose database engine
+    from app.core.database import engine
+    await engine.dispose()
+    logger.info("Database engine disposed")
 
 
 # Determine API docs visibility based on environment
@@ -294,7 +379,10 @@ async def health_check():
         async with engine.connect() as conn:
             await conn.execute(text("SELECT 1"))
     except Exception as e:
-        health_status["db"] = f"error: {str(e)}"
+        if settings.ENVIRONMENT == "production":
+            health_status["db"] = "error"
+        else:
+            health_status["db"] = f"error: {str(e)}"
         health_status["status"] = "unhealthy"
 
     # Check Redis connection
@@ -303,7 +391,10 @@ async def health_check():
         await redis_client.ping()
         await redis_client.close()
     except Exception as e:
-        health_status["redis"] = f"error: {str(e)}"
+        if settings.ENVIRONMENT == "production":
+            health_status["redis"] = "error"
+        else:
+            health_status["redis"] = f"error: {str(e)}"
         health_status["status"] = "unhealthy"
 
     status_code = 200 if health_status["status"] == "healthy" else 503
@@ -320,8 +411,8 @@ async def root():
     }
 
 
-# Prometheus monitoring (optional)
-if settings.ENVIRONMENT != "production" or True:  # Enable in all environments
+# Prometheus monitoring (optional, controlled by environment)
+if settings.ENVIRONMENT != "production":
     try:
         from prometheus_fastapi_instrumentator import Instrumentator
         Instrumentator().instrument(app).expose(app)

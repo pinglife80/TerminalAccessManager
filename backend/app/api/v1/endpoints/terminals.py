@@ -9,6 +9,7 @@ from app.models.terminal import Terminal
 from app.schemas.terminal import (
     TerminalResponse,
     TerminalQuery,
+    PaginatedResponse,
     ResponseMessage
 )
 from app.services.terminal_service import TerminalService
@@ -29,11 +30,12 @@ async def get_invalid_mac_addresses(
     return macs
 
 
-@router.get("/search", response_model=List[TerminalResponse])
+@router.get("/search", response_model=PaginatedResponse[TerminalResponse])
 async def search_mac_addresses(
     ip: str = Query(None, description="Filter by IP address"),
     mac: str = Query(None, description="Filter by MAC address"),
     status_filter: str = Query(None, alias="status", description="Filter by status"),
+    compliance_status: str = Query(None, description="Filter by compliance status"),
     start_date: str = Query(None, description="Filter by start date (YYYY-MM-DD)"),
     end_date: str = Query(None, description="Filter by end date (YYYY-MM-DD)"),
     skip: int = Query(0, ge=0),
@@ -46,6 +48,7 @@ async def search_mac_addresses(
         ip=ip,
         mac=mac,
         status=status_filter,
+        compliance_status=compliance_status,
         start_date=start_date,
         end_date=end_date,
         skip=skip,
@@ -54,7 +57,8 @@ async def search_mac_addresses(
 
     service = TerminalService(db)
     results = await service.search_macs(query)
-    return results
+    total = await service.search_macs_count(query)
+    return {"items": results, "total": total, "skip": skip, "limit": limit}
 
 
 @router.post("/block/{ip_address}", response_model=ResponseMessage)

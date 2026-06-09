@@ -1,36 +1,40 @@
 import React, { useState, useMemo } from 'react';
-import { useTerminals, useBlacklist } from '@/hooks/useTerminalData';
-import { Search, Filter, RefreshCw, Clock, Server, Shield, ShieldOff, Plus, Download, Eye, X, Info, ChevronDown, Trash2 } from 'lucide-react';
+import { useTerminals, useBlacklist, Terminal } from '@/hooks/useTerminalData';
+import { useTranslation } from 'react-i18next';
+import { Search, Filter, RefreshCw, Clock, Server, Shield, ShieldOff, Plus, Download, Eye, Info, ChevronDown, Trash2 } from 'lucide-react';
 import { apiClient } from '@/lib/api';
-import { STATUS_CONFIG } from '@/lib/constants';
+import { STATUS_CONFIG, API_ENDPOINTS } from '@/lib/constants';
 
-const COMPLIANCE_CONFIG: Record<string, { label: string; className: string }> = {
-  compliant: { label: 'Normal', className: 'bg-green-100 text-green-800' },
-  bypass: { label: 'Bypass', className: 'bg-blue-100 text-blue-800' },
-  non_compliant: { label: 'Blocked', className: 'bg-red-100 text-red-800' },
-  unknown: { label: 'Pending', className: 'bg-yellow-100 text-yellow-800' },
+const COMPLIANCE_CONFIG: Record<string, { labelKey: string; className: string }> = {
+  compliant: { labelKey: 'terminal.complianceStatusValues.compliant', className: 'bg-green-100 text-green-800' },
+  bypass: { labelKey: 'terminal.complianceStatusValues.bypass', className: 'bg-blue-100 text-blue-800' },
+  non_compliant: { labelKey: 'terminal.complianceStatusValues.non_compliant', className: 'bg-red-100 text-red-800' },
+  unknown: { labelKey: 'terminal.complianceStatusValues.unknown', className: 'bg-yellow-100 text-yellow-800' },
 };
 
 const REFRESH_OPTIONS = [
-  { label: 'Off', value: 0 },
-  { label: '30s', value: 30000 },
-  { label: '1m', value: 60000 },
-  { label: '5m', value: 300000 },
-  { label: '10m', value: 600000 },
+  { labelKey: 'common.off', value: 0 },
+  { labelKey: '', label: '30s', value: 30000 },
+  { labelKey: '', label: '1m', value: 60000 },
+  { labelKey: '', label: '5m', value: 300000 },
+  { labelKey: '', label: '10m', value: 600000 },
 ];
 
-import { downloadCSV, formatDate } from '@/lib/utils';
+import { downloadCSV, formatDate, useDebounce, getErrorMessage } from '@/lib/utils';
 import { toast } from 'sonner';
 import { PrimaryButton, IconButton, ButtonGroup } from '@/components/Button';
 import { Pagination } from '@/components/Pagination';
-import { EmptyState, LoadingState } from '@/components/StateDisplay';
+import { EmptyState } from '@/components/StateDisplay';
+import { PageSkeleton } from '@/components/Skeleton';
+import { Modal } from '@/components/Modal';
 import { DateRangeFilter } from '@/components/DateRangeFilter';
 
 const Terminals: React.FC = () => {
+  const { t } = useTranslation();
   const [searchTerm, setSearchTerm] = useState('');
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [filterCompliance, setFilterCompliance] = useState<string>('all');
-  const [selectedTerminal, setSelectedTerminal] = useState<any>(null);
+  const [selectedTerminal, setSelectedTerminal] = useState<Terminal | null>(null);
   const [showModal, setShowModal] = useState(false);
   const [filterCollapsed, setFilterCollapsed] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
@@ -39,21 +43,35 @@ const Terminals: React.FC = () => {
   const [endDate, setEndDate] = useState('');
   const [autoRefresh, setAutoRefresh] = useState<number>(0);
 
-  // Loading states for operations
-  const [blockingId, setBlockingId] = useState<string | null>(null);
-  const [whitelistId, setWhitelistId] = useState<string | null>(null);
-  const [removingWlId, setRemovingWlId] = useState<string | null>(null);
-  const [removingBlId, setRemovingBlId] = useState<string | null>(null);
+  // Debounce search term
+  const debouncedSearch = useDebounce(searchTerm, 300);
 
-  const { data: macAddresses, isLoading, refetch } = useTerminals({
-    ip: searchTerm || undefined,
-    mac: searchTerm || undefined,
+  // Loading states for operations
+  const [blockingId, setBlockingId] = useState<number | null>(null);
+  const [whitelistId, setWhitelistId] = useState<number | null>(null);
+  const [removingWlId, setRemovingWlId] = useState<number | null>(null);
+  const [removingBlId, setRemovingBlId] = useState<number | null>(null);
+
+  const { data: terminalsData, isLoading, refetch } = useTerminals({
+    ip: debouncedSearch || undefined,
+    mac: debouncedSearch || undefined,
     status: filterStatus !== 'all' ? filterStatus : undefined,
+    compliance_status: filterCompliance !== 'all' ? filterCompliance : undefined,
     start_date: startDate || undefined,
     end_date: endDate || undefined,
+    skip: (currentPage - 1) * pageSize,
+    limit: pageSize,
     refetchInterval: autoRefresh || undefined,
   });
-  const { data: blackListItems, refetch: refetchBlacklist } = useBlacklist();
+  const { data: blackListData, refetch: refetchBlacklist } = useBlacklist({
+    skip: 0,
+    limit: 9999,
+  });
+
+  // Extract items and total from paginated response
+  const macAddresses = terminalsData?.items ?? [];
+  const totalFromServer = terminalsData?.total ?? 0;
+  const blackListItems = blackListData?.items ?? [];
 
   // Build blacklist lookup sets for MAC and IP matching
   const { blackMacSet, blackIpSet, blackEntryMap } = useMemo(() => {
@@ -88,9 +106,7 @@ const Terminals: React.FC = () => {
 
   // Merge ARP data with blacklist data (no whitelist-only entries)
   const allTerminals = useMemo(() => {
-    const macList = macAddresses || [];
-
-    return macList.map((mac) => {
+    return macAddresses.map((mac) => {
       const macInBlacklist = blackMacSet.has(mac.mac_address?.toLowerCase());
       const ipInBlacklist = blackIpSet.has(mac.ip_address);
 
@@ -129,23 +145,7 @@ const Terminals: React.FC = () => {
     });
   }, [macAddresses, blackMacSet, blackIpSet, blackEntryMap]);
 
-  const filteredAddresses = useMemo(() => {
-    let result = allTerminals;
-    if (filterStatus !== 'all') {
-      result = result.filter((mac) => mac.status === filterStatus);
-    }
-    if (filterCompliance !== 'all') {
-      result = result.filter((mac) => (mac.compliance_status || 'unknown') === filterCompliance);
-    }
-    return result;
-  }, [allTerminals, filterStatus, filterCompliance]);
-
-  const totalPages = Math.ceil(filteredAddresses.length / pageSize);
-  const paginatedAddresses = useMemo(() => {
-    const start = (currentPage - 1) * pageSize;
-    const end = start + pageSize;
-    return filteredAddresses.slice(start, end);
-  }, [filteredAddresses, currentPage, pageSize]);
+  const totalPages = Math.ceil(totalFromServer / pageSize);
 
   const handlePageChange = (page: number) => {
     setCurrentPage(page);
@@ -156,88 +156,88 @@ const Terminals: React.FC = () => {
     setCurrentPage(1);
   };
 
-  const handleBlock = async (mac: any) => {
+  const handleBlock = async (mac: Terminal) => {
     setBlockingId(mac.id);
     try {
-      await apiClient.post(`/terminals/block/${mac.ip_address}`, null, {
+      await apiClient.post(`${API_ENDPOINTS.TERMINALS_BLOCK}${mac.ip_address}`, null, {
         params: { mac_address: mac.mac_address, block_time: '30d' }
       });
-      toast.success(`Blocked ${mac.ip_address}`);
+      toast.success(t('terminal.blocked'));
       refetch();
-    } catch (error: any) {
-      toast.error(error.response?.data?.detail || 'Failed to block');
+    } catch (error: unknown) {
+      toast.error(getErrorMessage(error, t('terminal.failedToBlock')));
     } finally {
       setBlockingId(null);
     }
   };
 
-  const handleUnblock = async (mac: any) => {
+  const handleUnblock = async (mac: Terminal) => {
     setBlockingId(mac.id);
     try {
-      await apiClient.post(`/terminals/unblock/${mac.ip_address}`);
-      toast.success(`Unblocked ${mac.ip_address}`);
+      await apiClient.post(`${API_ENDPOINTS.TERMINALS_UNBLOCK}${mac.ip_address}`);
+      toast.success(t('terminal.unblocked'));
       refetch();
-    } catch (error: any) {
-      toast.error(error.response?.data?.detail || 'Failed to unblock');
+    } catch (error: unknown) {
+      toast.error(getErrorMessage(error, t('terminal.failedToUnblock')));
     } finally {
       setBlockingId(null);
     }
   };
 
-  const handleAddToWhitelist = async (mac: any) => {
+  const handleAddToWhitelist = async (mac: Terminal) => {
     setWhitelistId(mac.id);
     try {
       const payload: Record<string, string> = {};
       if (mac.mac_address) payload['mac_address'] = mac.mac_address;
       if (mac.ip_address) payload['ip_address'] = mac.ip_address;
-      await apiClient.post('/whitelist/', payload);
-      toast.success(`Added ${mac.mac_address || mac.ip_address} to whitelist`);
+      await apiClient.post(API_ENDPOINTS.WHITELIST, payload);
+      toast.success(t('terminal.addedToWhitelist'));
       refetch();
-    } catch (error: any) {
-      toast.error(error.response?.data?.detail || 'Failed to add to whitelist');
+    } catch (error: unknown) {
+      toast.error(getErrorMessage(error, t('terminal.failedToAddToWhitelist')));
     } finally {
       setWhitelistId(null);
     }
   };
 
-  const handleRemoveFromWhitelist = async (mac: any) => {
+  const handleRemoveFromWhitelist = async (mac: Terminal) => {
     const identifier = mac.wl_match_type === 'ip' ? mac.ip_address : mac.mac_address;
     setRemovingWlId(mac.id);
     try {
-      await apiClient.delete(`/whitelist/${identifier}`);
-      toast.success(`Removed ${identifier} from whitelist`);
+      await apiClient.delete(`${API_ENDPOINTS.WHITELIST}${identifier}`);
+      toast.success(t('terminal.removedFromWhitelist'));
       refetch();
-    } catch (error: any) {
-      toast.error(error.response?.data?.detail || 'Failed to remove from whitelist');
+    } catch (error: unknown) {
+      toast.error(getErrorMessage(error, t('terminal.failedToRemoveFromWhitelist')));
     } finally {
       setRemovingWlId(null);
     }
   };
 
-  const handleRemoveFromBlacklist = async (mac: any) => {
+  const handleRemoveFromBlacklist = async (mac: Terminal) => {
     const identifier = mac.black_match_type === 'ip' ? mac.ip_address : mac.mac_address;
     setRemovingBlId(mac.id);
     try {
-      await apiClient.delete(`/blacklist/${identifier}`);
-      toast.success(`Removed ${identifier} from blacklist`);
+      await apiClient.delete(`${API_ENDPOINTS.BLACKLIST}${identifier}`);
+      toast.success(t('terminal.removedFromBlacklist'));
       refetch();
       refetchBlacklist();
-    } catch (error: any) {
-      toast.error(error.response?.data?.detail || 'Failed to remove from blacklist');
+    } catch (error: unknown) {
+      toast.error(getErrorMessage(error, t('terminal.failedToRemoveFromBlacklist')));
     } finally {
       setRemovingBlId(null);
     }
   };
 
   const handleExport = () => {
-    const headers = ['MAC Address', 'IP Address', 'Status', 'Source', 'Source Tag', 'Compliance Status', 'WL Match Type', 'Firewall Tag', 'Added', 'Comments'];
-    const rows = filteredAddresses?.map((mac) => [
+    const headers = [t('terminal.mac'), t('terminal.ip'), t('common.status'), t('terminal.source'), t('terminal.sourceTag'), t('terminal.complianceStatus'), t('terminal.whitelistMatch'), t('terminal.firewallTag'), t('terminal.added'), t('terminal.comments')];
+    const rows = allTerminals?.map((mac) => [
       mac.mac_address,
       mac.ip_address,
       STATUS_CONFIG[mac.status]?.label || mac.status,
       mac.source,
       mac.source_tag || '',
-      COMPLIANCE_CONFIG[mac.compliance_status || 'unknown']?.label || 'Unknown',
+      COMPLIANCE_CONFIG[mac.compliance_status || 'unknown']?.labelKey ? t(COMPLIANCE_CONFIG[mac.compliance_status || 'unknown']?.labelKey) : 'Unknown',
       mac.wl_match_type || '',
       mac.firewall_tag || '',
       formatDate(mac.timestamp),
@@ -247,7 +247,7 @@ const Terminals: React.FC = () => {
     downloadCSV(headers, rows, 'terminals');
   };
 
-  const handleViewDetails = (mac: any) => {
+  const handleViewDetails = (mac: Terminal) => {
     setSelectedTerminal(mac);
     setShowModal(true);
   };
@@ -267,41 +267,58 @@ const Terminals: React.FC = () => {
     refetchBlacklist();
   };
 
-  // Stats
-  const totalTerminals = filteredAddresses.length;
-  const normalCount = filteredAddresses.filter((m) => (m.compliance_status || 'unknown') === 'compliant').length;
-  const bypassCount = filteredAddresses.filter((m) => m.compliance_status === 'bypass').length;
-  const blockedCount = filteredAddresses.filter((m) => m.compliance_status === 'non_compliant').length;
-  const pendingCount = filteredAddresses.filter((m) => (m.compliance_status || 'unknown') === 'unknown').length;
+  // Stats - use server total and current page data for compliance counts
+  const totalTerminals = totalFromServer;
+  const normalCount = allTerminals.filter((m) => (m.compliance_status || 'unknown') === 'compliant').length;
+  const bypassCount = allTerminals.filter((m) => m.compliance_status === 'bypass').length;
+  const blockedCount = allTerminals.filter((m) => m.compliance_status === 'non_compliant').length;
+  const pendingCount = allTerminals.filter((m) => (m.compliance_status || 'unknown') === 'unknown').length;
+
+  // Helper to get status label via i18n
+  const getStatusLabel = (status: string): string => {
+    const keyMap: Record<string, string> = {
+      active: 'terminal.status.active',
+      inactive: 'terminal.status.inactive',
+      frozen: 'terminal.status.frozen',
+      pending: 'terminal.status.pending',
+      unfrozen: 'terminal.status.unfrozen',
+      bypass: 'terminal.status.bypass',
+    };
+    return keyMap[status] ? t(keyMap[status]) : (STATUS_CONFIG[status]?.label || status);
+  };
 
   return (
-    <div className="min-h-full bg-gray-50 p-4 sm:p-6 lg:p-8">
+    <div className="min-h-full bg-background p-4 sm:p-6 lg:p-8">
+      {isLoading && !terminalsData ? (
+        <PageSkeleton />
+      ) : (
+      <>
       {/* Page Header */}
       <div className="mb-6 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div>
-          <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Network Terminals</h1>
-          <p className="text-gray-600 mt-1">Manage and monitor all terminals on your network</p>
+          <h1 className="text-2xl sm:text-3xl font-bold text-foreground">{t('terminal.networkTerminals')}</h1>
+          <p className="text-muted-foreground mt-1">{t('terminal.manageAndMonitor')}</p>
         </div>
         <PrimaryButton
           icon={Download}
-          label="Export CSV"
+          label={t('terminal.exportCSV')}
           variant="success"
           onClick={handleExport}
         />
       </div>
 
       {/* Search and Filter Section - Enhanced */}
-      <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden mb-6">
+      <div className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden mb-6">
         {/* Section Header - Clickable */}
         <button
           onClick={() => setFilterCollapsed(!filterCollapsed)}
-          className={`w-full px-5 py-4 flex items-center justify-between hover:bg-gray-50/50 transition-colors ${!filterCollapsed ? 'border-b border-gray-100' : ''}`}
+          className={`w-full px-5 py-4 flex items-center justify-between hover:bg-background/50 transition-colors ${!filterCollapsed ? 'border-b border-border' : ''}`}
         >
           <div className="flex items-center gap-2">
-            <Search className="h-5 w-5 text-gray-500" />
-            <h2 className="text-base font-semibold text-gray-900">Search & Filter</h2>
+            <Search className="h-5 w-5 text-muted-foreground" />
+            <h2 className="text-base font-semibold text-foreground">{t('terminal.searchAndFilter')}</h2>
           </div>
-          <ChevronDown className={`h-4 w-4 text-gray-500 transition-transform duration-200 ${filterCollapsed ? '' : 'rotate-180'}`} />
+          <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform duration-200 ${filterCollapsed ? '' : 'rotate-180'}`} />
         </button>
         {/* Filter Bar */}
         {!filterCollapsed && (
@@ -310,58 +327,58 @@ const Terminals: React.FC = () => {
           <div className="flex flex-col xl:flex-row gap-4">
             {/* Search Input */}
             <div className="flex-1 relative">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-5 w-5 text-gray-400" />
+              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-5 w-5 text-muted-foreground" />
               <input
                 type="text"
-                placeholder="Search by MAC or IP address..."
+                placeholder={t('terminal.searchByMacOrIp')}
                 value={searchTerm}
                 onChange={(e) => {
                   setSearchTerm(e.target.value);
                   setCurrentPage(1);
                 }}
-                className="w-full pl-10 pr-4 py-2.5 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm transition-all"
+                className="w-full pl-10 pr-4 py-2.5 border border-border rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm transition-all"
               />
             </div>
 
             {/* Filters */}
             <div className="flex flex-wrap items-center gap-2">
               {/* Status Filter */}
-              <div className="flex items-center gap-2 bg-gray-50 rounded-xl px-3 py-1.5">
-                <Filter className="h-4 w-4 text-gray-500 flex-shrink-0" />
+              <div className="flex items-center gap-2 bg-background rounded-xl px-3 py-1.5">
+                <Filter className="h-4 w-4 text-muted-foreground flex-shrink-0" />
                 <select
                   value={filterStatus}
                   onChange={(e) => {
                     setFilterStatus(e.target.value);
                     setCurrentPage(1);
                   }}
-                  className="bg-transparent py-1.5 text-sm text-gray-700 focus:outline-none focus:ring-0 cursor-pointer font-medium min-w-[6rem]"
+                  className="bg-transparent py-1.5 text-sm text-muted-foreground focus:outline-none focus:ring-0 cursor-pointer font-medium min-w-[6rem]"
                 >
-                  <option value="all">All Status</option>
-                  <option value="active">Active</option>
-                  <option value="inactive">Inactive</option>
-                  <option value="frozen">Blocked</option>
-                  <option value="pending">Pending</option>
-                  <option value="unfrozen">Unblocked</option>
-                  <option value="bypass">Bypass</option>
+                  <option value="all">{t('terminal.allStatus')}</option>
+                  <option value="active">{t('terminal.status.active')}</option>
+                  <option value="inactive">{t('terminal.status.inactive')}</option>
+                  <option value="frozen">{t('terminal.status.frozen')}</option>
+                  <option value="pending">{t('terminal.status.pending')}</option>
+                  <option value="unfrozen">{t('terminal.status.unfrozen')}</option>
+                  <option value="bypass">{t('terminal.status.bypass')}</option>
                 </select>
               </div>
 
               {/* Compliance Filter */}
-              <div className="flex items-center gap-2 bg-gray-50 rounded-xl px-3 py-1.5">
-                <Shield className="h-4 w-4 text-gray-500 flex-shrink-0" />
+              <div className="flex items-center gap-2 bg-background rounded-xl px-3 py-1.5">
+                <Shield className="h-4 w-4 text-muted-foreground flex-shrink-0" />
                 <select
                   value={filterCompliance}
                   onChange={(e) => {
                     setFilterCompliance(e.target.value);
                     setCurrentPage(1);
                   }}
-                  className="bg-transparent py-1.5 text-sm text-gray-700 focus:outline-none focus:ring-0 cursor-pointer font-medium min-w-[7rem]"
+                  className="bg-transparent py-1.5 text-sm text-muted-foreground focus:outline-none focus:ring-0 cursor-pointer font-medium min-w-[7rem]"
                 >
-                  <option value="all">All Compliance</option>
-                  <option value="compliant">Normal</option>
-                  <option value="bypass">Bypass</option>
-                  <option value="non_compliant">Blocked</option>
-                  <option value="unknown">Pending</option>
+                  <option value="all">{t('terminal.allCompliance')}</option>
+                  <option value="compliant">{t('terminal.complianceStatusValues.compliant')}</option>
+                  <option value="bypass">{t('terminal.complianceStatusValues.bypass')}</option>
+                  <option value="non_compliant">{t('terminal.complianceStatusValues.non_compliant')}</option>
+                  <option value="unknown">{t('terminal.complianceStatusValues.unknown')}</option>
                 </select>
               </div>
 
@@ -381,20 +398,20 @@ const Terminals: React.FC = () => {
                 icon={RefreshCw}
                 variant="secondary"
                 size="sm"
-                title="Refresh"
+                title={t('common.refresh')}
                 onClick={handleManualRefresh}
               />
 
               {/* Auto Refresh Selector */}
-              <div className="flex items-center gap-2 bg-gray-50 rounded-xl px-3 py-1.5">
-                <Clock className="h-4 w-4 text-gray-500 flex-shrink-0" />
+              <div className="flex items-center gap-2 bg-background rounded-xl px-3 py-1.5">
+                <Clock className="h-4 w-4 text-muted-foreground flex-shrink-0" />
                 <select
                   value={autoRefresh}
                   onChange={(e) => setAutoRefresh(Number(e.target.value))}
-                  className="bg-transparent py-1.5 text-sm text-gray-700 focus:outline-none focus:ring-0 cursor-pointer font-medium min-w-[4rem]"
+                  className="bg-transparent py-1.5 text-sm text-muted-foreground focus:outline-none focus:ring-0 cursor-pointer font-medium min-w-[4rem]"
                 >
                   {REFRESH_OPTIONS.map((opt) => (
-                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                    <option key={opt.value} value={opt.value}>{opt.labelKey ? t(opt.labelKey) : opt.label}</option>
                   ))}
                 </select>
               </div>
@@ -402,7 +419,7 @@ const Terminals: React.FC = () => {
               {/* Reset Button */}
               <PrimaryButton
                 icon={RefreshCw}
-                label="Reset"
+                label={t('common.reset')}
                 variant="secondary"
                 size="sm"
                 onClick={handleReset}
@@ -413,14 +430,14 @@ const Terminals: React.FC = () => {
 
         {/* Top Pagination - Info Row */}
         {totalPages > 1 && (
-          <div className="px-4 sm:px-5 py-3 bg-gray-50 border-t border-gray-200">
+          <div className="px-4 sm:px-5 py-3 bg-background border-t border-border">
             <Pagination
               currentPage={currentPage}
               totalPages={totalPages}
               onPageChange={handlePageChange}
               pageSize={pageSize}
               onPageSizeChange={handlePageSizeChange}
-              totalItems={filteredAddresses.length}
+              totalItems={totalFromServer}
               variant="top"
               showPageSizeSelector={false}
             />
@@ -432,141 +449,135 @@ const Terminals: React.FC = () => {
 
       {/* Stats - 4 compliance statuses + Total */}
       <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3 mb-6">
-        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden relative group">
-          <div className="absolute top-2 right-2 z-10" title="Total ARP entries">
-            <Info className="h-3.5 w-3.5 text-gray-300 group-hover:text-gray-500 transition-colors cursor-help" />
+        <div className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden relative group">
+          <div className="absolute top-2 right-2 z-10" title={t('terminal.totalArpEntries')}>
+            <Info className="h-3.5 w-3.5 text-gray-300 group-hover:text-muted-foreground transition-colors cursor-help" />
           </div>
           <div className="p-4 text-center">
-            <div className="text-xl sm:text-2xl font-bold text-gray-900">{totalTerminals}</div>
-            <div className="text-xs sm:text-sm text-gray-600 mt-1">Total</div>
+            <div className="text-xl sm:text-2xl font-bold text-foreground">{totalTerminals}</div>
+            <div className="text-xs sm:text-sm text-muted-foreground mt-1">{t('common.total')}</div>
           </div>
           <div className="h-1 bg-gradient-to-r from-gray-300 to-gray-500" />
         </div>
-        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden relative group">
-          <div className="absolute top-2 right-2 z-10" title="Terminal complies with security policy">
-            <Info className="h-3.5 w-3.5 text-gray-300 group-hover:text-gray-500 transition-colors cursor-help" />
+        <div className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden relative group">
+          <div className="absolute top-2 right-2 z-10" title={t('terminal.terminalCompliesPolicy')}>
+            <Info className="h-3.5 w-3.5 text-gray-300 group-hover:text-muted-foreground transition-colors cursor-help" />
           </div>
           <div className="p-4 text-center">
             <div className="text-xl sm:text-2xl font-bold text-green-600">{normalCount}</div>
-            <div className="text-xs sm:text-sm text-gray-600 mt-1">Normal</div>
+            <div className="text-xs sm:text-sm text-muted-foreground mt-1">{t('terminal.complianceStatusValues.compliant')}</div>
           </div>
           <div className="h-1 bg-gradient-to-r from-green-400 to-green-600" />
         </div>
-        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden relative group">
-          <div className="absolute top-2 right-2 z-10" title="In whitelist, bypasses security checks">
-            <Info className="h-3.5 w-3.5 text-gray-300 group-hover:text-gray-500 transition-colors cursor-help" />
+        <div className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden relative group">
+          <div className="absolute top-2 right-2 z-10" title={t('terminal.inWhitelistBypass')}>
+            <Info className="h-3.5 w-3.5 text-gray-300 group-hover:text-muted-foreground transition-colors cursor-help" />
           </div>
           <div className="p-4 text-center">
             <div className="text-xl sm:text-2xl font-bold text-blue-600">{bypassCount}</div>
-            <div className="text-xs sm:text-sm text-gray-600 mt-1">Bypass</div>
+            <div className="text-xs sm:text-sm text-muted-foreground mt-1">{t('terminal.complianceStatusValues.bypass')}</div>
           </div>
           <div className="h-1 bg-gradient-to-r from-blue-400 to-blue-600" />
         </div>
-        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden relative group">
-          <div className="absolute top-2 right-2 z-10" title="Terminal is blocked by blacklist">
-            <Info className="h-3.5 w-3.5 text-gray-300 group-hover:text-gray-500 transition-colors cursor-help" />
+        <div className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden relative group">
+          <div className="absolute top-2 right-2 z-10" title={t('terminal.terminalBlockedByBlacklist')}>
+            <Info className="h-3.5 w-3.5 text-gray-300 group-hover:text-muted-foreground transition-colors cursor-help" />
           </div>
           <div className="p-4 text-center">
             <div className="text-xl sm:text-2xl font-bold text-red-600">{blockedCount}</div>
-            <div className="text-xs sm:text-sm text-gray-600 mt-1">Blocked</div>
+            <div className="text-xs sm:text-sm text-muted-foreground mt-1">{t('terminal.complianceStatusValues.non_compliant')}</div>
           </div>
           <div className="h-1 bg-gradient-to-r from-red-400 to-red-600" />
         </div>
-        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden relative group">
-          <div className="absolute top-2 right-2 z-10" title="Compliance status has not been determined">
-            <Info className="h-3.5 w-3.5 text-gray-300 group-hover:text-gray-500 transition-colors cursor-help" />
+        <div className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden relative group">
+          <div className="absolute top-2 right-2 z-10" title={t('terminal.complianceNotDetermined')}>
+            <Info className="h-3.5 w-3.5 text-gray-300 group-hover:text-muted-foreground transition-colors cursor-help" />
           </div>
           <div className="p-4 text-center">
             <div className="text-xl sm:text-2xl font-bold text-yellow-600">{pendingCount}</div>
-            <div className="text-xs sm:text-sm text-gray-600 mt-1">Pending</div>
+            <div className="text-xs sm:text-sm text-muted-foreground mt-1">{t('terminal.complianceStatusValues.unknown')}</div>
           </div>
           <div className="h-1 bg-gradient-to-r from-yellow-400 to-yellow-600" />
         </div>
       </div>
 
       {/* Table */}
-      <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+      <div className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="min-w-full divide-y divide-gray-200">
-            <thead className="bg-gray-50">
+          <table className="min-w-full divide-y divide-border">
+            <thead className="bg-background">
               <tr>
-                <th className="px-4 sm:px-6 py-3.5 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                  MAC Address
+                <th className="px-4 sm:px-6 py-3.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                  {t('terminal.mac')}
                 </th>
-                <th className="px-4 sm:px-6 py-3.5 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                  IP Address
+                <th className="px-4 sm:px-6 py-3.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                  {t('terminal.ip')}
                 </th>
-                <th className="px-4 sm:px-6 py-3.5 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                  Status
+                <th className="px-4 sm:px-6 py-3.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                  {t('common.status')}
                 </th>
-                <th className="px-4 sm:px-6 py-3.5 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                  Source
+                <th className="px-4 sm:px-6 py-3.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                  {t('terminal.source')}
                 </th>
-                <th className="px-4 sm:px-6 py-3.5 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                  Compliance
+                <th className="px-4 sm:px-6 py-3.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                  {t('terminal.compliance')}
                 </th>
-                <th className="px-4 sm:px-6 py-3.5 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                  Firewall Tag
+                <th className="px-4 sm:px-6 py-3.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                  {t('terminal.firewallTag')}
                 </th>
-                <th className="px-4 sm:px-6 py-3.5 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                  Added
+                <th className="px-4 sm:px-6 py-3.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                  {t('terminal.added')}
                 </th>
-                <th className="px-4 sm:px-6 py-3.5 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                  Comments
+                <th className="px-4 sm:px-6 py-3.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                  {t('terminal.comments')}
                 </th>
-                <th className="px-4 sm:px-6 py-3.5 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                  Actions
+                <th className="px-4 sm:px-6 py-3.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                  {t('common.actions')}
                 </th>
               </tr>
             </thead>
-            <tbody className="bg-white divide-y divide-gray-200">
-              {isLoading ? (
-                <tr>
-                  <td colSpan={9}>
-                    <LoadingState message="Loading terminals..." />
-                  </td>
-                </tr>
-              ) : filteredAddresses?.length === 0 ? (
+            <tbody className="bg-card divide-y divide-border">
+              {allTerminals?.length === 0 ? (
                 <tr>
                   <td colSpan={9}>
                     <EmptyState
                       icon={Server}
-                      title="No Terminals Found"
-                      description="Try adjusting your search filters or add terminals to the whitelist"
+                      title={t('terminal.noTerminalsFound')}
+                      description={t('terminal.noTerminalsDescription')}
                     />
                   </td>
                 </tr>
               ) : (
-                (paginatedAddresses || []).map((mac) => (
+                (allTerminals || []).map((mac) => (
                   <tr key={mac.id} className="hover:bg-blue-50/30 transition-colors">
                     <td className="px-4 sm:px-6 py-4 whitespace-nowrap">
                       <div className="flex items-center">
-                        <Server className="h-4 w-4 text-gray-400 mr-2 flex-shrink-0" />
-                        <span className="font-medium text-gray-900 font-mono text-sm">
+                        <Server className="h-4 w-4 text-muted-foreground mr-2 flex-shrink-0" />
+                        <span className="font-medium text-foreground font-mono text-sm">
                           {mac.mac_address}
                         </span>
                       </div>
                     </td>
-                    <td className="px-4 sm:px-6 py-4 whitespace-nowrap font-mono text-sm text-gray-600">
+                    <td className="px-4 sm:px-6 py-4 whitespace-nowrap font-mono text-sm text-muted-foreground">
                       {mac.ip_address}
                     </td>
                     <td className="px-4 sm:px-6 py-4 whitespace-nowrap">
                       <span
-                        className={`px-2.5 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${STATUS_CONFIG[mac.status]?.className || 'bg-gray-100 text-gray-800'}`}
+                        className={`px-2.5 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${STATUS_CONFIG[mac.status]?.className || 'bg-muted text-foreground'}`}
                       >
-                        {STATUS_CONFIG[mac.status]?.label || mac.status}
+                        {getStatusLabel(mac.status)}
                       </span>
                     </td>
                     <td className="px-4 sm:px-6 py-4 whitespace-nowrap">
-                      <span className="text-sm text-gray-600 capitalize">
-                        {mac.source}{mac.source_tag ? <span className="text-gray-400"> ({mac.source_tag})</span> : ''}
+                      <span className="text-sm text-muted-foreground capitalize">
+                        {mac.source}{mac.source_tag ? <span className="text-muted-foreground"> ({mac.source_tag})</span> : ''}
                       </span>
                     </td>
                     <td className="px-4 sm:px-6 py-4 whitespace-nowrap">
                       <span
-                        className={`px-2.5 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${COMPLIANCE_CONFIG[mac.compliance_status || 'unknown']?.className || 'bg-gray-100 text-gray-800'}`}
+                        className={`px-2.5 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${COMPLIANCE_CONFIG[mac.compliance_status || 'unknown']?.className || 'bg-muted text-foreground'}`}
                       >
-                        {COMPLIANCE_CONFIG[mac.compliance_status || 'unknown']?.label || 'Unknown'}
+                        {COMPLIANCE_CONFIG[mac.compliance_status || 'unknown']?.labelKey ? t(COMPLIANCE_CONFIG[mac.compliance_status || 'unknown']?.labelKey) : 'Unknown'}
                         {mac.compliance_status === 'bypass' && mac.wl_match_type && (
                           <span className="ml-1 text-xs opacity-75">({mac.wl_match_type.toUpperCase()})</span>
                         )}
@@ -575,17 +586,17 @@ const Terminals: React.FC = () => {
                         )}
                       </span>
                     </td>
-                    <td className="px-4 sm:px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+                    <td className="px-4 sm:px-6 py-4 whitespace-nowrap text-sm text-muted-foreground">
                       {mac.firewall_tag || '-'}
                     </td>
                     <td className="px-4 sm:px-6 py-4 whitespace-nowrap">
-                      <div className="flex items-center text-sm text-gray-600">
-                        <Clock className="h-4 w-4 mr-1.5 text-gray-400" />
+                      <div className="flex items-center text-sm text-muted-foreground">
+                        <Clock className="h-4 w-4 mr-1.5 text-muted-foreground" />
                         {formatDate(mac.timestamp)}
                       </div>
                     </td>
                     <td className="px-4 sm:px-6 py-4">
-                      <p className="text-sm text-gray-600 max-w-xs truncate">{mac.comments}</p>
+                      <p className="text-sm text-muted-foreground max-w-xs truncate">{mac.comments}</p>
                     </td>
                     <td className="px-4 sm:px-6 py-4 whitespace-nowrap">
                       <ButtonGroup>
@@ -593,7 +604,7 @@ const Terminals: React.FC = () => {
                           icon={Eye}
                           variant="primary"
                           size="md"
-                          title="View Details"
+                          title={t('terminal.viewDetails')}
                           onClick={() => handleViewDetails(mac)}
                         />
                         {mac.compliance_status === 'bypass' ? (
@@ -601,8 +612,8 @@ const Terminals: React.FC = () => {
                             icon={Trash2}
                             variant="danger"
                             size="md"
-                            title="Remove from Whitelist"
-                            loading={removingWlId === String(mac.id)}
+                            title={t('terminal.removeFromWhitelist')}
+                            loading={removingWlId === mac.id}
                             onClick={() => handleRemoveFromWhitelist(mac)}
                           />
                         ) : mac.compliance_status === 'non_compliant' && mac.black_match_type ? (
@@ -610,8 +621,8 @@ const Terminals: React.FC = () => {
                             icon={Trash2}
                             variant="danger"
                             size="md"
-                            title="Remove from Blacklist"
-                            loading={removingBlId === String(mac.id)}
+                            title={t('terminal.removeFromBlacklist')}
+                            loading={removingBlId === mac.id}
                             onClick={() => handleRemoveFromBlacklist(mac)}
                           />
                         ) : mac.compliance_status !== 'bypass' && mac.compliance_status !== 'non_compliant' ? (
@@ -620,8 +631,8 @@ const Terminals: React.FC = () => {
                               icon={Plus}
                               variant="success"
                               size="md"
-                              title="Add to Whitelist"
-                              loading={whitelistId === String(mac.id)}
+                              title={t('terminal.addToWhitelist')}
+                              loading={whitelistId === mac.id}
                               onClick={() => handleAddToWhitelist(mac)}
                             />
                             {mac.status !== 'frozen' ? (
@@ -629,8 +640,8 @@ const Terminals: React.FC = () => {
                                 icon={Shield}
                                 variant="danger"
                                 size="md"
-                                title="Block Terminal"
-                                loading={blockingId === String(mac.id)}
+                                title={t('terminal.blockTerminal')}
+                                loading={blockingId === mac.id}
                                 onClick={() => handleBlock(mac)}
                               />
                             ) : (
@@ -638,8 +649,8 @@ const Terminals: React.FC = () => {
                                 icon={ShieldOff}
                                 variant="secondary"
                                 size="md"
-                                title="Unblock Terminal"
-                                loading={blockingId === String(mac.id)}
+                                title={t('terminal.unblockTerminal')}
+                                loading={blockingId === mac.id}
                                 onClick={() => handleUnblock(mac)}
                               />
                             )}
@@ -661,153 +672,140 @@ const Terminals: React.FC = () => {
           onPageChange={handlePageChange}
           pageSize={pageSize}
           onPageSizeChange={handlePageSizeChange}
-          totalItems={filteredAddresses.length}
+          totalItems={totalFromServer}
           variant="bottom"
         />
       </div>
 
       {/* Details Modal */}
-      {showModal && selectedTerminal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-md">
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-3">
-                <div className="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center">
-                  <Server className="h-6 w-6 text-blue-600" />
-                </div>
-                <div>
-                  <h2 className="text-xl font-semibold text-gray-900">Terminal Details</h2>
-                  <p className="text-sm text-gray-500">ID: {selectedTerminal.id}</p>
-                </div>
-              </div>
-              <IconButton
-                icon={X}
-                variant="ghost"
-                size="md"
-                onClick={() => setShowModal(false)}
-              />
+      <Modal isOpen={showModal && !!selectedTerminal} onClose={() => setShowModal(false)} title={t('terminal.terminalDetails')} size="md">
+        <div className="space-y-4">
+          <div className="flex items-center gap-3 mb-2">
+            <div className="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center">
+              <Server className="h-6 w-6 text-blue-600" />
             </div>
+            <p className="text-sm text-muted-foreground">ID: {selectedTerminal?.id}</p>
+          </div>
 
-            <div className="space-y-4">
-              <div className="bg-gray-50 rounded-lg p-4">
-                <div className="space-y-3">
-                  <div className="flex justify-between">
-                    <span className="text-gray-500">MAC Address</span>
-                    <span className="font-mono text-gray-900">{selectedTerminal.mac_address}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-500">IP Address</span>
-                    <span className="font-mono text-gray-900">{selectedTerminal.ip_address}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-500">Status</span>
-                    <span className={`px-2.5 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${STATUS_CONFIG[selectedTerminal.status]?.className || 'bg-gray-100 text-gray-800'}`}>
-                      {STATUS_CONFIG[selectedTerminal.status]?.label || selectedTerminal.status}
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-500">Source</span>
-                    <span className="capitalize text-gray-900">{selectedTerminal.source}</span>
-                  </div>
-                  {selectedTerminal.source_tag && (
-                  <div className="flex justify-between">
-                    <span className="text-gray-500">Source Tag</span>
-                    <span className="text-gray-900">{selectedTerminal.source_tag}</span>
-                  </div>
-                  )}
-                  <div className="flex justify-between">
-                    <span className="text-gray-500">Compliance Status</span>
-                    <span className={`px-2.5 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${COMPLIANCE_CONFIG[selectedTerminal.compliance_status || 'unknown']?.className || 'bg-gray-100 text-gray-800'}`}>
-                      {COMPLIANCE_CONFIG[selectedTerminal.compliance_status || 'unknown']?.label || 'Unknown'}
-                    </span>
-                  </div>
-                  {selectedTerminal.compliance_status === 'bypass' && selectedTerminal.wl_match_type && (
-                  <div className="flex justify-between">
-                    <span className="text-gray-500">Whitelist Match</span>
-                    <span className="text-gray-900">{selectedTerminal.wl_match_type.toUpperCase()}</span>
-                  </div>
-                  )}
-                  {selectedTerminal.compliance_status === 'non_compliant' && selectedTerminal.black_match_type && (
-                  <div className="flex justify-between">
-                    <span className="text-gray-500">Blacklist Match</span>
-                    <span className="text-gray-900">{selectedTerminal.black_match_type.toUpperCase()}</span>
-                  </div>
-                  )}
-                  {selectedTerminal.firewall_tag && (
-                  <div className="flex justify-between">
-                    <span className="text-gray-500">Firewall Tag</span>
-                    <span className="text-gray-900">{selectedTerminal.firewall_tag}</span>
-                  </div>
-                  )}
-                  <div className="flex justify-between">
-                    <span className="text-gray-500">Added Date</span>
-                    <span className="text-gray-900">{formatDate(selectedTerminal.timestamp)}</span>
-                  </div>
-                </div>
+          <div className="bg-background rounded-lg p-4">
+            <div className="space-y-3">
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">{t('terminal.mac')}</span>
+                <span className="font-mono text-foreground">{selectedTerminal?.mac_address}</span>
               </div>
-
-              <div>
-                <span className="text-gray-500 block mb-2">Comments</span>
-                <p className="text-gray-900 bg-gray-50 rounded-lg p-4">
-                  {selectedTerminal.comments || 'No comments available'}
-                </p>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">{t('terminal.ip')}</span>
+                <span className="font-mono text-foreground">{selectedTerminal?.ip_address}</span>
               </div>
-
-              <div className="flex gap-3">
-                {selectedTerminal.compliance_status === 'bypass' ? (
-                  <PrimaryButton
-                    icon={Trash2}
-                    label="Remove from Whitelist"
-                    variant="danger"
-                    onClick={() => {
-                      handleRemoveFromWhitelist(selectedTerminal);
-                      setShowModal(false);
-                    }}
-                    className="flex-1"
-                  />
-                ) : selectedTerminal.compliance_status === 'non_compliant' && selectedTerminal.black_match_type ? (
-                  <PrimaryButton
-                    icon={Trash2}
-                    label="Remove from Blacklist"
-                    variant="danger"
-                    onClick={() => {
-                      handleRemoveFromBlacklist(selectedTerminal);
-                      setShowModal(false);
-                    }}
-                    className="flex-1"
-                  />
-                ) : (
-                  <>
-                    <PrimaryButton
-                      icon={Plus}
-                      label="Add to Whitelist"
-                      variant="success"
-                      onClick={() => handleAddToWhitelist(selectedTerminal)}
-                      className="flex-1"
-                    />
-                    {selectedTerminal.status !== 'frozen' ? (
-                      <PrimaryButton
-                        icon={Shield}
-                        label="Block Terminal"
-                        variant="danger"
-                        onClick={() => handleBlock(selectedTerminal)}
-                        className="flex-1"
-                      />
-                    ) : (
-                      <PrimaryButton
-                        icon={ShieldOff}
-                        label="Unblock Terminal"
-                        variant="secondary"
-                        onClick={() => handleUnblock(selectedTerminal)}
-                        className="flex-1"
-                      />
-                    )}
-                  </>
-                )}
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">{t('common.status')}</span>
+                <span className={`px-2.5 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${STATUS_CONFIG[selectedTerminal?.status || '']?.className || 'bg-muted text-foreground'}`}>
+                  {getStatusLabel(selectedTerminal?.status || '')}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">{t('terminal.source')}</span>
+                <span className="capitalize text-foreground">{selectedTerminal?.source}</span>
+              </div>
+              {selectedTerminal?.source_tag && (
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">{t('terminal.sourceTag')}</span>
+                <span className="text-foreground">{selectedTerminal.source_tag}</span>
+              </div>
+              )}
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">{t('terminal.complianceStatus')}</span>
+                <span className={`px-2.5 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${COMPLIANCE_CONFIG[selectedTerminal?.compliance_status || 'unknown']?.className || 'bg-muted text-foreground'}`}>
+                  {COMPLIANCE_CONFIG[selectedTerminal?.compliance_status || 'unknown']?.labelKey ? t(COMPLIANCE_CONFIG[selectedTerminal?.compliance_status || 'unknown']?.labelKey) : 'Unknown'}
+                </span>
+              </div>
+              {selectedTerminal?.compliance_status === 'bypass' && selectedTerminal?.wl_match_type && (
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">{t('terminal.whitelistMatch')}</span>
+                <span className="text-foreground">{selectedTerminal.wl_match_type.toUpperCase()}</span>
+              </div>
+              )}
+              {selectedTerminal?.compliance_status === 'non_compliant' && selectedTerminal?.black_match_type && (
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">{t('terminal.blacklistMatch')}</span>
+                <span className="text-foreground">{selectedTerminal.black_match_type.toUpperCase()}</span>
+              </div>
+              )}
+              {selectedTerminal?.firewall_tag && (
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">{t('terminal.firewallTag')}</span>
+                <span className="text-foreground">{selectedTerminal.firewall_tag}</span>
+              </div>
+              )}
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">{t('terminal.addedDate')}</span>
+                <span className="text-foreground">{formatDate(selectedTerminal?.timestamp)}</span>
               </div>
             </div>
           </div>
+
+          <div>
+            <span className="text-muted-foreground block mb-2">{t('terminal.comments')}</span>
+            <p className="text-foreground bg-background rounded-lg p-4">
+              {selectedTerminal?.comments || t('common.noComments')}
+            </p>
+          </div>
+
+          <div className="flex gap-3">
+            {selectedTerminal?.compliance_status === 'bypass' ? (
+              <PrimaryButton
+                icon={Trash2}
+                label={t('terminal.removeFromWhitelist')}
+                variant="danger"
+                onClick={() => {
+                  if (selectedTerminal) handleRemoveFromWhitelist(selectedTerminal);
+                  setShowModal(false);
+                }}
+                className="flex-1"
+              />
+            ) : selectedTerminal?.compliance_status === 'non_compliant' && selectedTerminal?.black_match_type ? (
+              <PrimaryButton
+                icon={Trash2}
+                label={t('terminal.removeFromBlacklist')}
+                variant="danger"
+                onClick={() => {
+                  if (selectedTerminal) handleRemoveFromBlacklist(selectedTerminal);
+                  setShowModal(false);
+                }}
+                className="flex-1"
+              />
+            ) : (
+              <>
+                <PrimaryButton
+                  icon={Plus}
+                  label={t('terminal.addToWhitelist')}
+                  variant="success"
+                  onClick={() => { if (selectedTerminal) handleAddToWhitelist(selectedTerminal); }}
+                  className="flex-1"
+                />
+                {selectedTerminal?.status !== 'frozen' ? (
+                  <PrimaryButton
+                    icon={Shield}
+                    label={t('terminal.blockTerminal')}
+                    variant="danger"
+                    onClick={() => { if (selectedTerminal) handleBlock(selectedTerminal); }}
+                    className="flex-1"
+                  />
+                ) : (
+                  <PrimaryButton
+                    icon={ShieldOff}
+                    label={t('terminal.unblockTerminal')}
+                    variant="secondary"
+                    onClick={() => { if (selectedTerminal) handleUnblock(selectedTerminal); }}
+                    className="flex-1"
+                  />
+                )}
+              </>
+            )}
+          </div>
         </div>
+      </Modal>
+      </>
       )}
     </div>
   );
