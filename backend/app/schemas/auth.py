@@ -53,6 +53,8 @@ class UserResponse(BaseModel):
     email: Optional[str] = None
     is_active: bool = True
     is_superuser: bool = False
+    roles: list[str] = []  # role names
+    permissions: list[str] = []  # permission codes
 
     class Config:
         from_attributes = True
@@ -72,6 +74,7 @@ class UserUpdate(BaseModel):
     email: Optional[str] = Field(None, description="Email address")
     is_active: Optional[bool] = Field(None, description="Active status")
     is_superuser: Optional[bool] = Field(None, description="Superuser status")
+    role_ids: Optional[list[int]] = Field(None, description="Role IDs to assign")
 
 
 class AdminUserCreate(BaseModel):
@@ -81,6 +84,7 @@ class AdminUserCreate(BaseModel):
     password: str = Field(..., min_length=8, max_length=128, description="Password")
     is_active: bool = Field(True, description="Active status")
     is_superuser: bool = Field(False, description="Superuser status")
+    role_ids: list[int] = Field(default_factory=list, description="Role IDs to assign")
 
     @field_validator('password')
     @classmethod

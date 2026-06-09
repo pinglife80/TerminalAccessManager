@@ -21,6 +21,7 @@ class User(Base):
 
     # Relationships
     audit_logs = relationship("AuditLog", back_populates="user_rel")
+    roles = relationship("Role", secondary="user_roles", back_populates="users")
 
     def __repr__(self):
         return f"<User(username='{self.username}', email='{self.email}')>"
