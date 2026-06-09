@@ -1,5 +1,7 @@
 # TerminalAccessManager 数据库设计文档
 
+> 文档版本：v3.0.0 | 更新日期：2026-06-09
+
 ## 1. 概述
 
 ### 1.1 技术栈
@@ -155,6 +157,12 @@
 |---|---|---|
 | idx_terminal_timestamp | COMPOSITE | (mac_address, timestamp) |
 | idx_ip_status | COMPOSITE | (ip_address, status) |
+
+**约束：**
+
+| 约束名 | 类型 | 字段 | 说明 |
+|---|---|---|---|
+| uq_terminal_ip_mac | UNIQUE | (ip_address, mac_address) | 防止并发 ARP 采集产生重复 (ip, mac) 记录 |
 
 **数据字典 — status：**
 
@@ -608,6 +616,7 @@
 | 001_initial_schema.py | 初始数据库结构（terminals 重命名前） |
 | 002_terminal_baseline.py | Terminal 重命名 + ComplianceBaseline 分离 |
 | 003_search_indexes.py | 搜索优化索引：whitelist.created_at、blacklist.blocked_at、blacklist.expires_at、audit_logs.ip_address |
+| 004_terminal_unique_constraint.py | terminals 表联合唯一约束 uq_terminal_ip_mac + 迁移前去重 |
 
 ### 003_search_indexes.py 详情
 
@@ -619,6 +628,19 @@
 | idx_blacklist_blocked_at | blacklist | blocked_at | 黑名单按阻断时间查询优化 |
 | idx_blacklist_expires_at | blacklist | expires_at | 过期黑名单清理查询优化 |
 | idx_audit_ip_address | audit_logs | ip_address | 审计日志按 IP 查询优化 |
+
+### 004_terminal_unique_constraint.py 详情
+
+- 添加 `uq_terminal_ip_mac` 联合唯一约束
+- 迁移前自动去重：删除重复 (ip_address, mac_address) 记录，仅保留最新一条（MAX id）
+- 不可逆迁移（downgrade 仅移除约束，不恢复已删除的重复记录）
+
+### Alembic 配置说明
+
+**env.py 驱动兼容性：**
+
+- 修复 asyncpg 驱动兼容性：不再将 `postgresql+asyncpg://` 替换为 `postgresql://`
+- 迁移现在使用 asyncpg 驱动，无需安装 psycopg2
 
 ### 应用启动时自动迁移
 

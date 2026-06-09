@@ -1,5 +1,7 @@
 # TerminalAccessManager - 部署与运维手册
 
+> 文档版本：v3.0.0 | 更新日期：2026-06-09
+
 ## 目录
 
 - [1. 环境要求](#1-环境要求)
@@ -110,15 +112,22 @@ vim .env                          # 编辑配置
 | 变量 | 必填 | 说明 |
 |------|------|------|
 | `DB_USER` | 是 | 数据库用户名（默认 tam_admin） |
-| `DB_PASSWORD` | 是 | 数据库密码 |
-| `REDIS_PASSWORD` | 是 | Redis 密码 |
-| `SECRET_KEY` | 是 | JWT 签名密钥 |
+| `DB_PASSWORD` | 是 | 数据库密码（必需，无默认值） |
+| `REDIS_PASSWORD` | 是 | Redis 密码（必需，无默认值） |
+| `SECRET_KEY` | 是 | JWT 签名密钥（必需，无默认值，生产环境至少 32 字符） |
+| `ENCRYPTION_KEY` | 是 | 独立加密密钥（必需，无默认值，不能与 SECRET_KEY 相同） |
 | `SANGFOR_BASE_URL` | 否 | 深信服 API 地址 |
 | `SANGFOR_USERNAME` | 否 | 深信服 API 用户名 |
 | `SANGFOR_PASSWORD` | 否 | 深信服 API 密码 |
 | `SWITCH_HOST` | 否 | 网络交换机 IP |
 | `SWITCH_USERNAME` | 否 | 交换机用户名 |
 | `SWITCH_PASSWORD` | 否 | 交换机密码 |
+
+### 3.5 docker-compose.yml 安全配置
+
+- 所有敏感配置不再有默认值回退
+- 使用 `:?` 语法确保必需变量已设置
+- 未配置必需变量时 `docker compose up` 将报错并拒绝启动
 
 ---
 
@@ -143,6 +152,12 @@ vim .env                          # 编辑配置
 ./manage.sh deploy --prod        # 生产模式（交互式向导）
 ./manage.sh -y deploy --prod     # 生产模式（非交互，使用已有 .env）
 ```
+
+**部署前环境变量检查：**
+
+- 新增 `_check_required_env` 环境变量检查，确保所有必需变量已配置
+- 生产向导自动生成 `ENCRYPTION_KEY`
+- Demo 模式自动生成 `ENCRYPTION_KEY`
 
 #### `start`
 
@@ -810,3 +825,22 @@ ss -tlnp | grep -E '8080|8443'
 | `deploy_mode` | 部署模式（demo/prod） |
 | `deploy_time` | 部署时间 |
 | `db_initialized` | 数据库是否已初始化 |
+
+### 安全部署检查清单
+
+| 检查项 | 要求 |
+|--------|------|
+| SECRET_KEY | 至少 32 字符，非弱密码 |
+| ENCRYPTION_KEY | 已设置，与 SECRET_KEY 不同 |
+| DB_PASSWORD | 强密码，非默认值 |
+| REDIS_PASSWORD | 强密码，非默认值 |
+| BACKEND_CORS_ORIGINS | 仅包含实际域名，不含 `*` |
+| SSL 证书 | 非自签名证书（生产环境） |
+
+### Nginx 安全配置
+
+**/uploads/ Referer 检查：**
+
+- `/uploads/` 路径添加 Referer 检查
+- 恶意来源返回 403
+- 无 Referer 和同站 Referer 允许访问

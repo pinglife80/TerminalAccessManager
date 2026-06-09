@@ -171,9 +171,14 @@ class TestAuthEndpoints:
                 "password": "wrongpassword"
             }
         )
-        
+
         assert response.status_code == 401
-        assert "Incorrect username or password" in response.json()["detail"]
+        detail = response.json()["detail"]
+        # Detail is now a structured object with message field
+        if isinstance(detail, dict):
+            assert "Invalid credentials" in detail.get("message", "")
+        else:
+            assert "Invalid credentials" in detail
     
     def test_login_nonexistent_user(self, client: TestClient):
         """Test login with non-existent user fails"""

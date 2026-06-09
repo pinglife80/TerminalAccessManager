@@ -476,14 +476,22 @@ class ArpCollectorService:
         return formatted
 
     async def _auto_block_task(self, source_tag: str):
-        """Background task for auto-blocking non-compliant terminals"""
-        try:
-            from app.services.compliance_service import ComplianceService
-            compliance_service = ComplianceService(self.db)
-            result = await compliance_service.auto_block_non_compliant(source_tag)
-            logger.info(
-                f"Auto-block result for '{source_tag}': "
-                f"blocked={result.blocked}, skipped={result.skipped}"
-            )
-        except Exception as e:
-            logger.error(f"Auto-block task failed for '{source_tag}': {str(e)}")
+        """Background task for auto-blocking non-compliant terminals.
+
+        Uses an independent database session to avoid lifecycle issues
+        with the parent request's session.
+        """
+        from app.core.database import async_session_factory
+        async with async_session_factory() as session:
+            try:
+                from app.services.compliance_service import ComplianceService
+                compliance_service = ComplianceService(session)
+                result = await compliance_service.auto_block_non_compliant(source_tag)
+                await session.commit()
+                logger.info(
+                    f"Auto-block result for '{source_tag}': "
+                    f"blocked={result.blocked}, skipped={result.skipped}"
+                )
+            except Exception as e:
+                await session.rollback()
+                logger.error(f"Auto-block task failed for '{source_tag}': {str(e)}")

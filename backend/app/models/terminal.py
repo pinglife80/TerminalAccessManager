@@ -1,5 +1,5 @@
 import enum
-from sqlalchemy import Column, Integer, String, DateTime, Text, Index, Enum
+from sqlalchemy import Column, Integer, String, DateTime, Text, Index, Enum, UniqueConstraint
 from datetime import datetime, timezone
 
 from app.core.database import Base
@@ -34,6 +34,7 @@ class Terminal(Base):
 
     # Composite index for efficient queries
     __table_args__ = (
+        UniqueConstraint('ip_address', 'mac_address', name='uq_terminal_ip_mac'),
         Index('idx_mac_timestamp', 'mac_address', 'timestamp'),
         Index('idx_ip_status', 'ip_address', 'status'),
     )

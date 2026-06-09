@@ -1,5 +1,7 @@
 # TerminalAccessManager 后端实现文档
 
+> 文档版本：v3.0.0 | 更新日期：2026-06-09
+
 ## 1. 概述
 
 ### 1.1 技术栈
@@ -25,7 +27,8 @@ backend/
 │   │   ├── __init__.py
 │   │   ├── config.py                    # 配置管理 (Settings)
 │   │   ├── database.py                  # 数据库引擎与会话
-│   │   └── security.py                  # 安全模块 (JWT/密码/登录防护)
+│   │   ├── security.py                  # 安全模块 (JWT/密码/登录防护)
+│   │   ├── crypto.py                    # 字段级加密 (Fernet + ENC: 前缀 + 独立 ENCRYPTION_KEY)
 │   ├── middleware/
 │   │   ├── __init__.py
 │   │   ├── rate_limit.py                # 限流中间件
@@ -163,6 +166,10 @@ async def _is_task_paused(task_name: str) -> bool:
 2. **RequestLoggingMiddleware** — 请求日志
 3. **CORSMiddleware** — 跨域
 
+#### CORS 安全校验
+
+当 `allow_origins=["*"]` 时自动降级 `allow_credentials=False`，防止 CORS 规范违规（规范不允许通配符来源与凭证模式同时启用）。
+
 #### 健康检查端点
 
 `GET /health` 返回：
@@ -211,6 +218,7 @@ async def _is_task_paused(task_name: str) -> bool:
 | | `ALGORITHM` | str | `"HS256"` | JWT 算法 |
 | | `ACCESS_TOKEN_EXPIRE_MINUTES` | int | `30` | Access Token 有效期（分钟） |
 | | `REFRESH_TOKEN_EXPIRE_DAYS` | int | `7` | Refresh Token 有效期（天） |
+| | `ENCRYPTION_KEY` | Optional[str] | `None` | 独立加密密钥，生产环境必须设置且不能与 SECRET_KEY 相同 |
 | 深信服 | `SANGFOR_BASE_URL` | Optional[str] | `None` | 深信服 API 地址 |
 | | `SANGFOR_USERNAME` | Optional[str] | `None` | 深信服用户名 |
 | | `SANGFOR_PASSWORD` | Optional[str] | `None` | 深信服密码 |
@@ -297,11 +305,11 @@ async_session_factory = async_session_maker  # 别名，供后台任务使用
 
 | 函数 | 说明 |
 |------|------|
-| `create_access_token_async(data, expires_delta)` | 创建 Access Token，有效期从 ConfigService 热加载（`access_token_expire_minutes`） |
-| `create_refresh_token_async(data)` | 创建 Refresh Token，有效期从 ConfigService 热加载（`refresh_token_expire_days`） |
+| `create_access_token_async(data, expires_delta=None, user_id=None)` | 创建 Access Token，payload 包含 `sub`/`exp`/`jti`/`type:"access"`/`ver`(Token 版本号)，有效期从 ConfigService 热加载（`access_token_expire_minutes`） |
+| `create_refresh_token_async(data, user_id=None)` | 创建 Refresh Token，payload 包含 `sub`/`exp`/`jti`/`type:"refresh"`/`ver`(Token 版本号)，有效期从 ConfigService 热加载（`refresh_token_expire_days`） |
 
 - 每个令牌携带唯一 `jti`（UUID4），用于黑名单标识。
-- 令牌载荷：`sub`（用户名）、`exp`（过期时间）、`jti`（唯一标识）。
+- 令牌载荷：`sub`（用户名）、`exp`（过期时间）、`jti`（唯一标识）、`type`（令牌类型：`access` 或 `refresh`）、`ver`（创建时的 Token 版本号）。
 
 #### Redis 令牌黑名单
 
@@ -325,6 +333,20 @@ async_session_factory = async_session_maker  # 别名，供后台任务使用
 - Redis 键：
   - `login_attempts:{username}` — 失败次数计数器，首次设置 TTL 为 `lockout_duration_minutes * 60`。
   - `login_lock:{username}` — 锁定标记，TTL 为 `lockout_duration_minutes * 60`。
+
+#### 验证码
+
+| 函数 | 说明 |
+|------|------|
+| `generate_captcha()` | 生成算术验证码，答案存入 Redis（5 分钟 TTL），返回 `(captcha_id, question)` |
+| `verify_captcha(captcha_id, answer)` | 校验验证码答案，验证后删除 |
+
+#### Token 版本号
+
+| 函数 | 说明 |
+|------|------|
+| `get_token_version(user_id)` | 获取用户当前 Token 版本号（Redis key: `token_version:{user_id}`） |
+| `increment_token_version(user_id)` | 递增用户 Token 版本号（密码变更时调用） |
 
 #### 鉴权依赖
 
@@ -426,6 +448,10 @@ class PaginatedResponse(Generic[T]):
 - `mac` 参数：`Terminal.mac_address ILIKE '%{mac}%'`
 - IP 和 MAC 同时提供时使用 OR 逻辑（任一匹配即返回）
 - `compliance_status` 参数：精确匹配过滤（compliant/bypass/non_compliant/unknown）
+
+**LIKE 通配符注入防护：**
+
+- `_escape_like(value)` — 转义 LIKE 通配符 `%` 和 `_`，防止通配符注入，21 处 ilike 查询统一使用
 
 **Whitelist/Blacklist MAC 格式无关搜索逻辑：**
 
@@ -797,6 +823,7 @@ def _normalize_mac(mac: str) -> str:
 - 每轮循环开始时从 ConfigService 读取间隔，钳制 30~86400 秒。
 - 使用 `asyncio.sleep(interval)` 控制间隔。
 - 每轮循环在 `await asyncio.sleep(interval)` 之后调用 `_is_task_paused(task_name)` 检查 Redis 暂停键，若已暂停则 `continue` 跳过当轮执行。
+- `_auto_block_task` 改用 `async_session_factory()` 创建独立数据库会话，含 commit/rollback。
 - 异常时记录日志并继续下一轮循环。
 - 应用关闭时通过 `task.cancel()` 取消。
 

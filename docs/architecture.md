@@ -1,5 +1,7 @@
 # TerminalAccessManager 系统架构设计文档
 
+> 文档版本：v3.0.0 | 更新日期：2026-06-09
+
 ## 1. 系统概述
 
 TerminalAccessManager 是基于 MAC 地址和 IP 地址的网络终端准入管理平台，面向企业网络环境，实现对网络终端的合规监控、自动准入控制与多数据源集成。
@@ -179,12 +181,18 @@ ARP 数据采集          合规判定              准入执行
 ### 3.3 认证与授权流程
 
 ```
-┌────────┐    POST /auth/login     ┌──────────────┐
+┌────────┐    GET /auth/captcha     ┌──────────────┐
+│        │ ──────────────────────→  │  获取验证码   │
+│        │ ←──────────────────────  │  captcha_id   │
+│        │    captcha_id + question │  + question   │
+│        │                          └──────────────┘
+│        │
+│        │    POST /auth/login      ┌──────────────┐
 │        │ ──────────────────────→ │  验证码检查   │
 │        │                         │ (失败次数≥3)  │
 │        │                         └──────┬───────┘
-│        │                                │
-│  客户端 │                         ┌──────▼───────┐
+│  客户端 │                                │
+│        │                         ┌──────▼───────┐
 │        │                         │ 账户锁定检查  │
 │        │                         │ (失败次数≥5)  │
 │        │                         └──────┬───────┘
@@ -209,9 +217,29 @@ ARP 数据采集          合规判定              准入执行
   - 失败次数 < `captcha_threshold`（默认 3）：正常登录
   - 失败次数 >= `captcha_threshold`：要求验证码
   - 失败次数 >= `max_login_attempts`（默认 5）：账户锁定 `lockout_duration_minutes`（默认 15 分钟）
+- **验证码流程** -- 前端先调用 `GET /auth/captcha` 获取题目和 `captcha_id`，登录时提交 `captcha_id` 和答案
+- **登录失败状态** -- 登录失败时从错误响应体（JSON detail）获取 `captcha_required`/`locked`/`lock_remaining` 状态
 - **角色控制** -- `User.is_superuser` 字段区分超管与普通用户，超管专用端点通过 `get_current_active_superuser` 依赖守卫
 - **认证状态恢复** -- 应用启动时前端调用 `initializeAuth()` 恢复认证状态：检查 sessionStorage 中是否存在 token → 调用 `/auth/me` 验证 token 有效性 → token 失效则尝试 refresh → 全部失败则清除会话。恢复期间 `isInitializing` 状态为 `true`，页面显示加载状态，避免未认证闪烁。`initializeAuth` 设置 10 秒超时（timeout: 10000），防止后端不可达时前端请求卡死
 - **401 拦截器并发控制** -- 多个请求同时收到 401 时，仅触发一次 token 刷新：通过 `isRefreshing` 标志锁定，后续 401 请求加入 `failedQueue` 队列等待；刷新成功后重试队列中所有请求，刷新失败则统一清除会话并 toast 提示。刷新时 refresh_token 通过 Body 传递（非 Query 参数），使用 `_retry` 标志防止循环重试，React Query 配置 401 状态码不自动重试
+
+### Token 版本号机制
+
+密码变更后旧 Token 自动失效：
+
+- Redis 存储每个用户的 Token 版本号（key: `token_version:{user_id}`）
+- JWT payload 包含 `ver` 字段（创建时的版本号）
+- Token 验证时检查 `ver` 是否与 Redis 当前版本一致
+- 密码变更/重置时调用 `increment_token_version()` 递增版本号
+- 旧 Token（ver 不匹配）自动被拒绝
+- 无 `ver` 字段的旧 Token 视为版本 0（向后兼容）
+
+### JWT Token 类型区分
+
+- Access Token payload 包含 `"type": "access"`
+- Refresh Token payload 包含 `"type": "refresh"`
+- `/auth/refresh` 端点验证 Token 类型，拒绝 access token 用于刷新
+- 旧 Token（无 type 字段）向后兼容
 
 ---
 
@@ -362,7 +390,7 @@ ARP 数据采集          合规判定              准入执行
 
 | 措施 | 实现方式 |
 |------|----------|
-| CORS | CORSMiddleware，白名单域名，限制方法和头部 |
+| CORS | CORSMiddleware，白名单域名，限制方法和头部。当 `allow_origins=["*"]` 时自动降级 `allow_credentials=False`，防止 CORS 规范违规 |
 | 速率限制 | RateLimitMiddleware，Redis Sorted Set 滑动窗口 |
 | 输入验证 | Pydantic Schema 严格校验所有请求体 |
 | SQL 注入防护 | SQLAlchemy ORM 参数化查询 |
@@ -445,6 +473,7 @@ PaginatedResponse[T]
 | 特性 | 实现方式 |
 |------|----------|
 | 模糊搜索 | PostgreSQL `ILIKE` 模式匹配，搜索关键词自动添加 `%keyword%` 通配符 |
+| LIKE 通配符注入防护 | `_escape_like()` 函数转义 `%` → `\%`、`_` → `\_`，所有 ilike 查询统一使用 `_escape_like()` 包装搜索词 |
 | MAC 地址格式无关搜索 | 白名单/黑名单搜索使用 `func.replace` 去除 MAC 地址分隔符（`-`、`:`、`.`）后 `ILIKE` 匹配，用户输入任意格式均可命中 |
 | 服务端分页 | 后端根据 `page` + `page_size` 参数执行 `OFFSET/LIMIT` 查询，返回分页元数据 |
 | 前端防抖 | 搜索输入使用 debounce（300ms），减少无效请求 |

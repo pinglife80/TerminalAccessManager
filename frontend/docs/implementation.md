@@ -1,5 +1,7 @@
 # 前端实现总结
 
+> 文档版本：v3.0.0 | 更新日期：2026-06-09
+
 ## 概述
 
 TerminalAccessManager 的前端已使用现代 React + TypeScript 技术栈完整实现，包含认证系统、终端合规监控、数据源管理、白名单/黑名单管理、审计日志、用户管理等全部核心功能，以及品牌动态配置系统。
@@ -81,8 +83,9 @@ frontend/
 
 #### 认证系统
 - 登录页面带表单验证
-- 验证码机制（连续失败 3 次后显示验证码）
+- 验证码机制：从后端 `GET /auth/captcha` 获取（返回 `captcha_id` + `question`），移除本地验证码生成和校验；提交时传 `captcha_id` + `captcha`（答案）参数
 - 账户锁定机制（连续失败 5 次后锁定 15 分钟）
+- 移除 `/auth/login-status` 轮询逻辑，改为从登录失败的错误响应体（JSON detail）获取 `captcha_required` / `locked` / `lock_remaining` 状态
 - JWT 令牌存储在 sessionStorage
 - 令牌过期时自动刷新
 - 受保护路由（未认证时重定向到登录页）
@@ -180,11 +183,16 @@ onSuccess: (data) => {
 ### 2. 验证码与账户锁定
 
 ```typescript
-// 连续失败 3 次后显示验证码
-const CAPTCHA_THRESHOLD = 3;
+// 验证码从后端获取，不再本地生成
+// GET /auth/captcha → { captcha_id: string, question: string }
+// 登录时传 captcha_id + captcha（答案）参数
+
 // 连续失败 5 次后锁定账户 15 分钟
 const LOCK_THRESHOLD = 5;
 const LOCK_DURATION = 15 * 60 * 1000;
+
+// 登录失败时从错误响应体获取状态（不再轮询 /auth/login-status）
+// 错误响应体格式：{"detail": {"message": "...", "captcha_required": true, "locked": false}}
 ```
 
 ### 3. 令牌刷新机制
@@ -267,8 +275,9 @@ apiClient.interceptors.request.use((config) => {
 **功能：**
 - 用户名/密码表单
 - 实时验证
-- 验证码机制（连续失败 3 次后触发）
+- 验证码机制：从后端 `GET /auth/captcha` 获取（`captcha_id` + `question`），移除本地验证码生成和校验；提交时传 `captcha_id` + `captcha`（答案）参数
 - 账户锁定机制（连续失败 5 次后锁定 15 分钟）
+- 移除 `/auth/login-status` 轮询逻辑，改为从登录失败的错误响应体（JSON detail）获取 `captcha_required` / `locked` / `lock_remaining` 状态
 - 加载状态
 - 通过 toast 显示错误消息
 - 品牌自定义（标题、副标题、背景、按钮样式）
@@ -399,10 +408,10 @@ apiClient.interceptors.request.use((config) => {
 3. `src/index.css` - 带 Tailwind 的全局样式
 4. `src/vite-env.d.ts` - Vite 类型声明
 5. `src/lib/api.ts` - Axios 客户端设置
-6. `src/lib/constants.ts` - 常量定义
+6. `src/lib/constants.ts` - 常量定义（已移除 `AUTH_LOGIN_STATUS` 常量，新增 `AUTH_CAPTCHA` 常量指向 `/auth/captcha`）
 7. `src/lib/utils.ts` - 工具函数
 8. `src/config/branding.ts` - 品牌自定义配置
-9. `src/store/auth.ts` - 认证 store
+9. `src/store/auth.ts` - 认证 store（登录错误处理改为解析结构化 JSON detail，而非响应头；错误响应体格式：`{"detail": {"message": "...", "captcha_required": true, "locked": false}}`）
 10. `src/store/branding.ts` - 品牌动态配置 store（useBrandingStore）
 11. `src/store/theme.ts` - 主题状态管理（Light/Dark/System + localStorage 持久化）
 12. `src/hooks/useTerminalData.ts` - 数据查询 Hooks
@@ -449,7 +458,7 @@ apiClient.interceptors.request.use((config) => {
 - 启动开发服务器：`npm run dev`
 - 在 `http://localhost:3000` 查看登录页面
 - 提交登录表单
-- 验证码机制（连续失败后触发）
+- 验证码机制（从后端 `GET /auth/captcha` 获取，提交 `captcha_id` + `captcha` 答案）
 - 账户锁定机制（连续失败 5 次后锁定 15 分钟）
 - 从后端接收 JWT 令牌
 - 在 sessionStorage 中存储令牌
@@ -511,7 +520,7 @@ apiClient.interceptors.request.use((config) => {
 
 ### 已连接
 - `POST /api/v1/auth/login` - 用户认证
-- `GET /api/v1/auth/login-status` - 登录状态查询（验证码/锁定状态）
+- `GET /api/v1/auth/captcha` - 获取验证码（captcha_id + question）
 - `POST /api/v1/auth/refresh` - 令牌刷新（refresh_token 通过 Body 传递）
 - `GET /api/v1/auth/me` - 获取当前用户信息
 - `POST /api/v1/auth/register` - 用户注册
@@ -590,7 +599,7 @@ apiClient.interceptors.request.use((config) => {
 - 安全令牌存储（sessionStorage 带刷新）
 - 输入验证（React Hook Form + 自定义验证）
 - 受保护路由（需要认证）
-- 验证码机制（防止暴力破解）
+- 验证码机制（后端验证码，防止暴力破解）
 - 账户锁定机制（连续失败后锁定）
 - 错误边界（防止 UI 崩溃）
 
@@ -663,7 +672,7 @@ npm run build
 
 前端已完整实现，包括：
 - 现代技术栈
-- 完整的认证系统（含验证码和账户锁定，initializeAuth timeout 10s）
+- 完整的认证系统（含后端验证码和账户锁定，登录错误解析结构化 JSON detail，initializeAuth timeout 10s）
 - 全部 9 个页面（登录、仪表板、终端管理、白名单、黑名单、审计日志、数据源管理、用户管理、个人资料）
 - 品牌自定义配置系统
 - i18n 三语言支持（中文/英文/日语），自动检测浏览器语言，手动切换，语言持久化 localStorage

@@ -1,5 +1,7 @@
 # 品牌自定义指南
 
+> 文档版本：v3.0.0 | 更新日期：2026-06-09
+
 ## 概述
 
 TerminalAccessManager 支持全面的品牌自定义，无需修改任何组件代码。品牌配置支持两种方式：
@@ -37,6 +39,12 @@ TerminalAccessManager 支持全面的品牌自定义，无需修改任何组件�
 - 修改后刷新页面即可生效
 - 支持上传资源文件（背景图、Favicon）
 - 配置存储在数据库中，Redis 缓存加速读取
+
+**上传安全策略：**
+- 文件扩展名白名单：仅支持 `.jpg` / `.jpeg` / `.png` / `.gif` / `.ico`（SVG 不再支持，可嵌入 JavaScript，存在 XSS 风险）
+- 文件名使用 UUID 重命名（不可猜测，增强安全性）
+- 双重校验：`content_type` + 扩展名都必须在白名单中
+- 文件大小限制：5MB
 
 ### 方式二：静态配置文件
 
@@ -320,6 +328,14 @@ frontend/public/
 - 在 `branding.ts` 中使用绝对路径引用，以 `/` 开头
 - 例如：文件 `frontend/public/company-logo.svg` → 配置路径 `/company-logo.svg`
 - Vite 构建时会自动将 `public/` 目录内容复制到输出目录
+
+### 上传资源访问控制（/uploads/ 路径）
+
+通过 `config upload` 上传的品牌资源文件存储在 `/uploads/` 路径下，Nginx 对该路径实施了以下访问控制：
+
+- **Referer 检查**：Nginx 添加 Referer 校验，恶意来源（非本站 Referer）返回 403
+- **无 Referer 允许**：浏览器直接访问（无 Referer）和同站 Referer 允许访问
+- **UUID 文件名**：上传文件使用 UUID 重命名，使 URL 不可枚举，防止暴力遍历
 
 ### 文件格式建议
 

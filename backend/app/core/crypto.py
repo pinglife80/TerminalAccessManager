@@ -5,20 +5,29 @@ Encrypts sensitive fields in DataSource config (passwords, API keys, etc.)
 before storing to database, and decrypts on read.
 
 ENCRYPTION_KEY must be set in environment variables for production.
+If ENCRYPTION_KEY is not set, SECRET_KEY is used as fallback (development only).
 """
 
 from cryptography.fernet import Fernet
 import base64
 import os
 import hashlib
+import logging
 from typing import Optional, Any, Dict
 
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 def _get_fernet() -> Fernet:
     """Get Fernet cipher from ENCRYPTION_KEY or derive from SECRET_KEY"""
     key_source = getattr(settings, 'ENCRYPTION_KEY', None) or settings.SECRET_KEY
+    if not getattr(settings, 'ENCRYPTION_KEY', None):
+        logger.warning(
+            "ENCRYPTION_KEY is not set. Falling back to SECRET_KEY for field encryption. "
+            "This is insecure for production — set ENCRYPTION_KEY to a separate strong key."
+        )
     # Derive a valid 32-byte Fernet key from the source
     key_bytes = hashlib.sha256(key_source.encode()).digest()
     return Fernet(base64.urlsafe_b64encode(key_bytes))

@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Optional, Tuple
 from jose import JWTError, jwt
 import bcrypt
 from fastapi import Depends, HTTPException, status
@@ -8,11 +8,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 import redis.asyncio as aioredis
 import uuid
+import random
+import logging
 
 from app.core.config import settings
 from app.core.database import get_db
 from app.models.user import User
 from app.schemas.auth import TokenData
+
+logger = logging.getLogger(__name__)
 
 # OAuth2 scheme for token extraction
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.API_V1_STR}/auth/login")
@@ -59,6 +63,29 @@ async def is_token_blacklisted(jti: str) -> bool:
     """Check if a JWT token is in the blacklist"""
     redis_client = await get_redis_client()
     return await redis_client.exists(f"token_blacklist:{jti}") > 0
+
+
+# ==================== Token Version Functions ====================
+
+async def get_token_version(user_id: int) -> int:
+    """Get the current token version for a user from Redis.
+
+    Returns 0 if no version is set (default for new users).
+    """
+    redis_client = await get_redis_client()
+    version = await redis_client.get(f"token_version:{user_id}")
+    return int(version) if version else 0
+
+
+async def increment_token_version(user_id: int) -> int:
+    """Increment the token version for a user, invalidating all existing tokens.
+
+    Returns the new version number.
+    """
+    redis_client = await get_redis_client()
+    new_version = await redis_client.incr(f"token_version:{user_id}")
+    logger.info(f"Token version incremented for user_id={user_id}: now at {new_version}")
+    return new_version
 
 
 async def check_login_attempts(username: str) -> bool:
@@ -124,6 +151,66 @@ async def reset_login_attempts(username: str) -> None:
     await redis_client.delete(attempts_key, lock_key)
 
 
+# ==================== Captcha Functions ====================
+
+CAPTCHA_TTL_SECONDS = 300  # 5 minutes
+
+
+async def generate_captcha() -> Tuple[str, str]:
+    """Generate a server-side arithmetic captcha.
+
+    Returns:
+        Tuple of (captcha_id, question_string)
+    """
+    a = random.randint(1, 20)
+    b = random.randint(1, 20)
+    if random.random() > 0.5:
+        question = f"{a} + {b}"
+        answer = a + b
+    else:
+        x, y = max(a, b), min(a, b)
+        question = f"{x} - {y}"
+        answer = x - y
+
+    captcha_id = str(uuid.uuid4())
+    redis_client = await get_redis_client()
+    await redis_client.setex(f"captcha:{captcha_id}", CAPTCHA_TTL_SECONDS, str(answer))
+
+    return captcha_id, question
+
+
+async def verify_captcha(captcha_id: str, user_answer: str) -> bool:
+    """Verify a captcha answer against the stored value in Redis.
+
+    Args:
+        captcha_id: The captcha UUID returned by generate_captcha
+        user_answer: The user's answer string
+
+    Returns:
+        True if the answer is correct, False otherwise.
+        Also returns False if the captcha_id is not found or expired.
+        The captcha is always deleted after verification (one-time use).
+    """
+    redis_client = await get_redis_client()
+    captcha_key = f"captcha:{captcha_id}"
+
+    # Get and delete in a pipeline for atomicity
+    async with redis_client.pipeline(transaction=True) as pipe:
+        pipe.get(captcha_key)
+        pipe.delete(captcha_key)
+        results = await pipe.execute()
+
+    stored_answer = results[0]
+    if stored_answer is None:
+        # Captcha not found or expired
+        return False
+
+    try:
+        return int(user_answer) == int(stored_answer)
+    except (ValueError, TypeError):
+        return False
+
+
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Verify a plain password against a hashed password"""
     return bcrypt.checkpw(plain_password.encode("utf-8"), hashed_password.encode("utf-8"))
@@ -134,9 +221,10 @@ def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
 
-async def create_access_token_async(data: dict, expires_delta: Optional[timedelta] = None) -> str:
+async def create_access_token_async(data: dict, expires_delta: Optional[timedelta] = None, user_id: Optional[int] = None) -> str:
     """Create a JWT access token with hot-reloadable expiration.
-    Reads access_token_expire_minutes from ConfigService."""
+    Reads access_token_expire_minutes from ConfigService.
+    Includes token version (ver) for invalidation on password change."""
     to_encode = data.copy()
 
     if expires_delta:
@@ -147,21 +235,32 @@ async def create_access_token_async(data: dict, expires_delta: Optional[timedelt
         expire = datetime.now(timezone.utc) + timedelta(minutes=expire_minutes)
 
     jti = str(uuid.uuid4())
-    to_encode.update({"exp": expire, "jti": jti})
+    to_encode.update({"exp": expire, "jti": jti, "type": "access"})
+
+    # Include token version for password-change invalidation
+    if user_id is not None:
+        to_encode["ver"] = await get_token_version(user_id)
+
     encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 
     return encoded_jwt
 
 
-async def create_refresh_token_async(data: dict) -> str:
+async def create_refresh_token_async(data: dict, user_id: Optional[int] = None) -> str:
     """Create a JWT refresh token with hot-reloadable expiration.
-    Reads refresh_token_expire_days from ConfigService."""
+    Reads refresh_token_expire_days from ConfigService.
+    Includes token version (ver) for invalidation on password change."""
     to_encode = data.copy()
     from app.services.config_service import get_config_value
     expire_days = await get_config_value("refresh_token_expire_days", settings.REFRESH_TOKEN_EXPIRE_DAYS)
     expire = datetime.now(timezone.utc) + timedelta(days=expire_days)
     jti = str(uuid.uuid4())
-    to_encode.update({"exp": expire, "jti": jti})
+    to_encode.update({"exp": expire, "jti": jti, "type": "refresh"})
+
+    # Include token version for password-change invalidation
+    if user_id is not None:
+        to_encode["ver"] = await get_token_version(user_id)
+
     encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 
     return encoded_jwt
@@ -215,6 +314,14 @@ async def get_current_user(
 
     if user is None:
         raise credentials_exception
+
+    # Verify token version — reject tokens issued before password change
+    token_ver = payload.get("ver")
+    if token_ver is not None:
+        current_ver = await get_token_version(user.id)
+        if int(token_ver) != current_ver:
+            raise credentials_exception
+    # Tokens without 'ver' field (legacy) are accepted if user version is still 0
 
     if not user.is_active:
         raise HTTPException(

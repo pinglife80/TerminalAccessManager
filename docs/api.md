@@ -1,5 +1,7 @@
 # TerminalAccessManager API 文档
 
+> 文档版本：v3.0.0 | 更新日期：2026-06-09
+
 > 基于 MAC 地址和 IP 地址的网络终端准入管理平台
 
 > 本文档中所有 API 示例使用 `<HOST_IP>` 代表实际部署主机 IP 地址，本机部署时替换为 `localhost`。
@@ -47,6 +49,7 @@ Authorization: Bearer <access_token>
 | 公开 | 无需认证 |
 | 需认证 | 需要有效的 access_token |
 | 超管专用 | 需要有效的 access_token 且用户 is_superuser = true |
+| 超管专用（新增） | 原需认证的审计日志导出端点已升级为超管专用 |
 
 ### 通用错误响应
 
@@ -116,12 +119,12 @@ Authorization: Bearer <access_token>
 
 **错误响应**
 
-| 状态码 | 说明 | 特殊响应头 |
-|--------|------|-----------|
-| 400 | 需要验证码 | `X-Captcha-Required: true` |
-| 401 | 用户名不存在或密码错误 | `X-Captcha-Required`, `X-Account-Locked`, `X-Lock-Remaining` |
-| 403 | 账户被禁用 | - |
-| 423 | 账户已锁定 | `X-Account-Locked: true`, `X-Lock-Remaining: <秒数>` |
+| 状态码 | 说明 |
+|--------|------|
+| 400 | 需要验证码：`{"detail": {"message": "Captcha verification is required...", "captcha_required": true}}` |
+| 401 | 用户名不存在或密码错误：`{"detail": {"message": "Invalid credentials", "captcha_required": true/false}}` |
+| 403 | 账户被禁用 |
+| 423 | 账户已锁定：`{"detail": {"message": "Account locked...", "locked": true, "lock_remaining": 900}}` |
 
 **用例**
 
@@ -137,46 +140,28 @@ curl -X POST "https://<HOST_IP>:8443/api/v1/auth/login?captcha=abc123" \
 
 ---
 
-### 1.2 GET /auth/login-status
+### 获取验证码
 
-获取指定用户名的登录状态（是否需要验证码、账户是否锁定）。
+`GET /auth/captcha`
 
-- **认证要求**：公开
+**认证级别：** 公开
 
-**请求参数**
+生成服务端算术验证码，答案存入 Redis（5 分钟 TTL）。
 
-| 参数 | 位置 | 类型 | 必填 | 说明 |
-|------|------|------|------|------|
-| username | Query | string | 是 | 用户名 |
-
-**成功响应** `200`
+**响应示例：**
 
 ```json
 {
-  "captcha_required": true,
-  "locked": false
+  "captcha_id": "550e8400-e29b-41d4-a716-446655440000",
+  "question": "3 + 5 = ?"
 }
 ```
 
-若账户已锁定：
-
-```json
-{
-  "captcha_required": true,
-  "locked": true,
-  "lock_remaining_seconds": 720
-}
-```
-
-**用例**
-
-```bash
-curl "https://<HOST_IP>:8443/api/v1/auth/login-status?username=admin"
-```
+> 验证码为一次性使用，验证后自动删除。每次登录失败后应重新获取。
 
 ---
 
-### 1.3 POST /auth/register
+### 1.2 POST /auth/register
 
 用户注册。生产环境默认禁用，由 `ALLOW_REGISTRATION` 配置控制。
 
@@ -223,7 +208,7 @@ curl -X POST https://<HOST_IP>:8443/api/v1/auth/register \
 
 ---
 
-### 1.4 GET /auth/me
+### 1.3 GET /auth/me
 
 获取当前登录用户信息。
 
@@ -250,7 +235,7 @@ curl https://<HOST_IP>:8443/api/v1/auth/me \
 
 ---
 
-### 1.5 POST /auth/refresh
+### 1.4 POST /auth/refresh
 
 刷新令牌。旧 refresh_token 自动加入黑名单。
 
@@ -288,7 +273,7 @@ curl -X POST https://<HOST_IP>:8443/api/v1/auth/refresh \
 
 ---
 
-### 1.6 POST /auth/logout
+### 1.5 POST /auth/logout
 
 登出，当前 access_token 加入黑名单。
 
@@ -314,7 +299,7 @@ curl -X POST https://<HOST_IP>:8443/api/v1/auth/logout \
 
 ---
 
-### 1.7 PUT /auth/me/profile
+### 1.6 PUT /auth/me/profile
 
 更新当前用户个人资料（邮箱）。
 
@@ -355,7 +340,7 @@ curl -X PUT https://<HOST_IP>:8443/api/v1/auth/me/profile \
 
 ---
 
-### 1.8 PUT /auth/me/password
+### 1.7 PUT /auth/me/password
 
 修改当前用户密码，需验证旧密码。
 
@@ -2136,7 +2121,7 @@ curl "https://<HOST_IP>:8443/api/v1/logs/search?username=admin&action=block_term
 
 导出审计日志为 CSV 文件。
 
-- **认证要求**：需认证
+- **认证要求**：超管专用
 
 **请求参数**
 
@@ -2532,13 +2517,16 @@ curl -X POST https://<HOST_IP>:8443/api/v1/settings/invalidate-cache \
 
 | 参数 | 位置 | 类型 | 必填 | 说明 |
 |------|------|------|------|------|
-| file | Body (form) | File | 是 | 图片文件（JPEG/PNG/GIF/SVG/ICO） |
+| file | Body (form) | File | 是 | 图片文件（仅支持 .jpg/.jpeg/.png/.gif/.ico） |
 | purpose | Query | string | 是 | 用途：`login_bg` 或 `favicon` |
 
 **限制**
 
 - 文件大小：最大 5MB
-- 文件类型：image/jpeg, image/png, image/gif, image/svg+xml, image/x-icon
+- 扩展名白名单：仅支持 .jpg/.jpeg/.png/.gif/.ico
+- SVG 不再支持（XSS 风险）
+- 双重校验：content_type + 扩展名均须匹配
+- 文件名使用 UUID 重命名
 
 **成功响应** `200`
 

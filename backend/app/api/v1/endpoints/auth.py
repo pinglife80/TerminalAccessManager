@@ -20,6 +20,8 @@ from app.core.security import (
     check_captcha_required,
     record_failed_login,
     reset_login_attempts,
+    generate_captcha,
+    verify_captcha,
 )
 from app.core.config import settings
 from app.models.user import User
@@ -38,7 +40,8 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.API_V1_STR}/auth/login
 async def login(
     request: Request,
     form_data: OAuth2PasswordRequestForm = Depends(),
-    captcha: str = None,
+    captcha_id: Optional[str] = None,
+    captcha: Optional[str] = None,
     db: AsyncSession = Depends(get_db)
 ):
     """Login and get access token"""
@@ -55,20 +58,34 @@ async def login(
 
         raise HTTPException(
             status_code=status.HTTP_423_LOCKED,
-            detail=f"Account locked due to too many failed attempts. Try again in {remaining_minutes} minutes.",
-            headers={"X-Account-Locked": "true", "X-Lock-Remaining": str(remaining_minutes * 60)},
+            detail={
+                "message": f"Account locked due to too many failed attempts. Try again in {remaining_minutes} minutes.",
+                "locked": True,
+                "lock_remaining": remaining_minutes * 60,
+            },
         )
 
     # Check if captcha is required
     captcha_required = await check_captcha_required(username)
 
-    # If captcha is required but not provided, reject
-    if captcha_required and not captcha:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Captcha verification is required. Please solve the captcha and try again.",
-            headers={"X-Captcha-Required": "true"},
-        )
+    # If captcha is required, validate captcha_id + captcha answer via server-side verification
+    if captcha_required:
+        if not captcha_id or not captcha:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "message": "Captcha verification is required. Please solve the captcha and try again.",
+                    "captcha_required": True,
+                },
+            )
+        if not await verify_captcha(captcha_id, captcha):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "message": "Captcha verification failed. Please try again.",
+                    "captcha_required": True,
+                },
+            )
 
     # Step 1: Check if user exists
     from sqlalchemy import select
@@ -80,11 +97,12 @@ async def login(
         # User does not exist - record failed attempt for anti-enumeration
         await record_failed_login(username)
         captcha_now = await check_captcha_required(username)
-        headers = {"X-Captcha-Required": "true" if captcha_now else "false"}
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid credentials",
-            headers=headers,
+            detail={
+                "message": "Invalid credentials",
+                "captcha_required": captcha_now,
+            },
         )
 
     # Step 2: Verify password
@@ -94,8 +112,9 @@ async def login(
         captcha_now = await check_captcha_required(username)
         locked_now = await check_login_attempts(username)
 
-        headers = {
-            "X-Captcha-Required": "true" if captcha_now else "false",
+        error_detail = {
+            "message": "Invalid credentials",
+            "captcha_required": captcha_now,
         }
         if locked_now:
             from app.core.security import get_redis_client
@@ -103,13 +122,12 @@ async def login(
             lock_key = f"login_lock:{username}"
             ttl = await redis_client.ttl(lock_key)
             remaining_minutes = max(0, (ttl + 59) // 60) if ttl > 0 else settings.LOCKOUT_DURATION_MINUTES
-            headers["X-Account-Locked"] = "true"
-            headers["X-Lock-Remaining"] = str(remaining_minutes * 60)
+            error_detail["locked"] = True
+            error_detail["lock_remaining"] = remaining_minutes * 60
 
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid credentials",
-            headers=headers,
+            detail=error_detail,
         )
 
     if not user.is_active:
@@ -129,8 +147,8 @@ async def login(
                         ip_address=request.client.host if request.client else None)
 
     # Create tokens (uses hot-reloadable config for expiration)
-    access_token = await create_access_token_async(data={"sub": user.username})
-    refresh_token = await create_refresh_token_async(data={"sub": user.username})
+    access_token = await create_access_token_async(data={"sub": user.username}, user_id=user.id)
+    refresh_token = await create_refresh_token_async(data={"sub": user.username}, user_id=user.id)
 
     return {
         "access_token": access_token,
@@ -139,26 +157,15 @@ async def login(
     }
 
 
-@router.get("/login-status")
-async def get_login_status(username: str):
-    """Get login status for a username (captcha required, account locked)"""
-    captcha_required = await check_captcha_required(username)
-    locked = await check_login_attempts(username)
+@router.get("/captcha")
+async def get_captcha():
+    """Generate a server-side arithmetic captcha.
 
-    result = {
-        "captcha_required": captcha_required,
-        "locked": locked,
-    }
-
-    if locked:
-        from app.core.security import get_redis_client
-        redis_client = await get_redis_client()
-        lock_key = f"login_lock:{username}"
-        ttl = await redis_client.ttl(lock_key)
-        remaining_seconds = max(0, ttl) if ttl > 0 else settings.LOCKOUT_DURATION_MINUTES * 60
-        result["lock_remaining_seconds"] = remaining_seconds
-
-    return result
+    Returns captcha_id and question. The answer is stored in Redis
+    with a 5-minute TTL and verified on login.
+    """
+    captcha_id, question = await generate_captcha()
+    return {"captcha_id": captcha_id, "question": question}
 
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
@@ -231,11 +238,20 @@ async def refresh_token(
         payload = jwt.decode(refresh_token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
         username: str = payload.get("sub")
         jti: str = payload.get("jti")
+        token_type: str = payload.get("type")
 
         if username is None:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid refresh token"
+            )
+
+        # Verify this is actually a refresh token (not an access token)
+        # Legacy tokens without 'type' field are accepted for backward compatibility
+        if token_type is not None and token_type != "refresh":
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid token type: expected refresh token"
             )
 
         # Check if refresh token is blacklisted
@@ -255,9 +271,20 @@ async def refresh_token(
                 detail="Invalid user"
             )
 
+        # Verify token version in refresh token
+        token_ver = payload.get("ver")
+        if token_ver is not None:
+            from app.core.security import get_token_version
+            current_ver = await get_token_version(user.id)
+            if int(token_ver) != current_ver:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Token has been invalidated"
+                )
+
         # Create new tokens (uses hot-reloadable config for expiration)
-        access_token = await create_access_token_async(data={"sub": username})
-        new_refresh_token = await create_refresh_token_async(data={"sub": username})
+        access_token = await create_access_token_async(data={"sub": username}, user_id=user.id)
+        new_refresh_token = await create_refresh_token_async(data={"sub": username}, user_id=user.id)
 
         # Blacklist old refresh token
         if jti:
@@ -342,6 +369,11 @@ async def change_password(
         )
     current_user.hashed_password = hash_password(data.new_password)
     await db.commit()
+
+    # Invalidate all existing tokens for this user
+    from app.core.security import increment_token_version
+    await increment_token_version(current_user.id)
+
     return {"message": "Password changed successfully", "success": True}
 
 
@@ -367,8 +399,9 @@ async def list_users(
     """List all users with optional search and filter (superuser only)"""
     stmt = select(User).order_by(User.id)
     if search:
+        escaped_search = search.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
         stmt = stmt.where(
-            (User.username.ilike(f"%{search}%")) | (User.email.ilike(f"%{search}%"))
+            (User.username.ilike(f"%{escaped_search}%")) | (User.email.ilike(f"%{escaped_search}%"))
         )
     if is_active is not None:
         stmt = stmt.where(User.is_active == is_active)
@@ -524,6 +557,10 @@ async def admin_reset_password(
 
     user.hashed_password = hash_password(data.new_password)
     await db.commit()
+
+    # Invalidate all existing tokens for this user
+    from app.core.security import increment_token_version
+    await increment_token_version(user.id)
 
     # Audit log
     from app.services.terminal_service import TerminalService

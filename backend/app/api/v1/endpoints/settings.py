@@ -20,7 +20,9 @@ router = APIRouter(prefix="/settings", tags=["settings"])
 UPLOAD_DIR = "/app/uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/gif", "image/svg+xml", "image/x-icon", "image/vnd.microsoft.icon"}
+ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/gif", "image/x-icon", "image/vnd.microsoft.icon"}
+ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".ico"}
+# Note: SVG is excluded due to XSS risk (SVG can embed JavaScript)
 MAX_FILE_SIZE = 5 * 1024 * 1024  # 5MB
 
 
@@ -146,7 +148,7 @@ async def upload_branding_asset(
     if file.content_type not in ALLOWED_IMAGE_TYPES:
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid file type. Allowed: {', '.join(ALLOWED_IMAGE_TYPES)}"
+            detail=f"Invalid file type. Allowed: {', '.join(sorted(ALLOWED_IMAGE_TYPES))}"
         )
 
     # Read and check size
@@ -154,9 +156,16 @@ async def upload_branding_asset(
     if len(content) > MAX_FILE_SIZE:
         raise HTTPException(status_code=400, detail="File too large (max 5MB)")
 
-    # Generate unique filename
-    ext = os.path.splitext(file.filename or "")[1] or ".png"
-    filename = f"{purpose}_{uuid.uuid4().hex[:8]}{ext}"
+    # Validate file extension against whitelist
+    ext = os.path.splitext(file.filename or "")[1].lower()
+    if ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid file extension '{ext}'. Allowed: {', '.join(sorted(ALLOWED_EXTENSIONS))}"
+        )
+
+    # Generate UUID-based filename to prevent URL guessing and path traversal
+    filename = f"{purpose}_{uuid.uuid4().hex}{ext}"
     filepath = os.path.join(UPLOAD_DIR, filename)
 
     with open(filepath, "wb") as f:

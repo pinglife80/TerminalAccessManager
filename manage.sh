@@ -259,6 +259,63 @@ ensure_env() {
     fi
 }
 
+# Check required environment variables for security
+_INSECURE_VALUES=("password" "redis_password" "your-secret-key-change-in-production" "change-this-to-a-random-secret-key-in-production" "your-encryption-key-change-in-production" "change-this-to-a-unique-encryption-key")
+
+_check_required_env() {
+    local missing=()
+    local insecure=()
+
+    # Check required variables
+    for var in DB_PASSWORD REDIS_PASSWORD SECRET_KEY; do
+        local val
+        val=$(get_env "${var}")
+        if [ -z "$val" ]; then
+            missing+=("${var}")
+        elif echo "${_INSECURE_VALUES[@]}" | grep -qw "$val"; then
+            insecure+=("${var}=${val}")
+        fi
+    done
+
+    # Check ENCRYPTION_KEY (required for production, optional for dev)
+    local enc_key
+    enc_key=$(get_env "ENCRYPTION_KEY")
+    local env_mode
+    env_mode=$(get_env "ENVIRONMENT")
+    if [ "${env_mode}" = "production" ]; then
+        if [ -z "$enc_key" ]; then
+            missing+=("ENCRYPTION_KEY")
+        elif echo "${_INSECURE_VALUES[@]}" | grep -qw "$enc_key"; then
+            insecure+=("ENCRYPTION_KEY=${enc_key}")
+        fi
+        # Check ENCRYPTION_KEY != SECRET_KEY
+        local secret_val
+        secret_val=$(get_env "SECRET_KEY")
+        if [ -n "$enc_key" ] && [ "$enc_key" = "$secret_val" ]; then
+            log_error "ENCRYPTION_KEY must be different from SECRET_KEY in production"
+            insecure+=("ENCRYPTION_KEY=same_as_SECRET_KEY")
+        fi
+    fi
+
+    if [ ${#missing[@]} -gt 0 ]; then
+        log_error "Required environment variables not set: ${missing[*]}"
+        log_error "Run './manage.sh deploy' to configure, or edit .env manually"
+        exit 1
+    fi
+
+    if [ ${#insecure[@]} -gt 0 ]; then
+        log_warn "Insecure default values detected:"
+        for item in "${insecure[@]}"; do
+            log_warn "  - ${item}"
+        done
+        log_warn "These values are not safe for production. Run './manage.sh deploy --prod' to reconfigure."
+        if [ "${env_mode}" = "production" ]; then
+            log_error "Insecure defaults are not allowed in production mode. Aborting."
+            exit 1
+        fi
+    fi
+}
+
 # Wait for a service to become healthy (with timeout)
 wait_healthy() {
     local service="$1"
@@ -651,14 +708,16 @@ _configure_demo_env() {
     rm -f "${ENV_FILE}"
     cp "${ENV_EXAMPLE}" "${ENV_FILE}"
 
-    local db_pass redis_pass secret
+    local db_pass redis_pass secret enc_key
     db_pass="demo_db_pass_$(openssl rand -hex 4)"
     redis_pass="demo_redis_$(openssl rand -hex 4)"
     secret="$(openssl rand -hex 32)"
+    enc_key="$(openssl rand -hex 32)"
 
     set_env "DB_PASSWORD" "${db_pass}"
     set_env "REDIS_PASSWORD" "${redis_pass}"
     set_env "SECRET_KEY" "${secret}"
+    set_env "ENCRYPTION_KEY" "${enc_key}"
 
     # Clear optional integrations
     set_env "SANGFOR_BASE_URL" ""
@@ -745,6 +804,12 @@ _configure_production_wizard() {
     set_env "SECRET_KEY" "${secret}"
     log_info "JWT secret key auto-generated"
 
+    # ─── Encryption Key ────────────────────────────────────────────────────
+    local enc_key
+    enc_key="$(openssl rand -hex 32)"
+    set_env "ENCRYPTION_KEY" "${enc_key}"
+    log_info "Encryption key auto-generated (separate from JWT secret)"
+
     # ─── Optional Integrations ───────────────────────────────────────────
     echo ""
     echo -e "${BOLD}── Optional Integrations ──${NC}"
@@ -789,6 +854,7 @@ _configure_production_wizard() {
     echo -e "  Database password:  ${GREEN}set${NC}"
     echo -e "  Redis password:     ${GREEN}set${NC}"
     echo -e "  JWT secret:         ${GREEN}auto-generated${NC}"
+    echo -e "  Encryption key:     ${GREEN}auto-generated${NC}"
     echo -e "  Sangfor API:        $(if [ -n "$(get_env SANGFOR_BASE_URL)" ]; then echo "${GREEN}configured${NC}"; else echo "${DIM}skipped${NC}"; fi)"
     echo -e "  Network switch:     $(if [ -n "$(get_env SWITCH_HOST)" ]; then echo "${GREEN}configured${NC}"; else echo "${DIM}skipped${NC}"; fi)"
     echo ""
@@ -801,13 +867,13 @@ _edit_existing_env() {
     echo -e "${BOLD}Current configuration:${NC}"
     echo ""
 
-    local keys=("DB_PASSWORD" "REDIS_PASSWORD" "SECRET_KEY" "SANGFOR_BASE_URL" "SWITCH_HOST")
-    local labels=("Database password" "Redis password" "JWT Secret Key" "Sangfor API URL" "Switch Host")
+    local keys=("DB_PASSWORD" "REDIS_PASSWORD" "SECRET_KEY" "ENCRYPTION_KEY" "SANGFOR_BASE_URL" "SWITCH_HOST")
+    local labels=("Database password" "Redis password" "JWT Secret Key" "Encryption Key" "Sangfor API URL" "Switch Host")
 
     for i in "${!keys[@]}"; do
         local val
         val=$(get_env "${keys[$i]}")
-        if [ "${keys[$i]}" = "DB_PASSWORD" ] || [ "${keys[$i]}" = "REDIS_PASSWORD" ] || [ "${keys[$i]}" = "SECRET_KEY" ]; then
+        if [ "${keys[$i]}" = "DB_PASSWORD" ] || [ "${keys[$i]}" = "REDIS_PASSWORD" ] || [ "${keys[$i]}" = "SECRET_KEY" ] || [ "${keys[$i]}" = "ENCRYPTION_KEY" ]; then
             echo -e "  ${labels[$i]}: ${DIM}(set)${NC}"
         else
             echo -e "  ${labels[$i]}: ${val:-${DIM}(empty)${NC}}"
@@ -842,6 +908,7 @@ _edit_existing_env() {
 ###############################################################################
 cmd_start() {
     ensure_env
+    _check_required_env
     log_step "Starting Services"
 
     if services_running; then
@@ -1039,7 +1106,7 @@ cmd_health() {
     echo -e "${BOLD}4. Redis Connectivity${NC}"
     local redis_pass
     redis_pass=$(get_env "REDIS_PASSWORD")
-    if dc exec -T redis redis-cli -a "${redis_pass}" ping 2>/dev/null | grep -q "PONG"; then
+    if dc exec -T redis env REDISCLI_AUTH="${redis_pass}" redis-cli ping 2>/dev/null | grep -q "PONG"; then
         log_success "Redis responding to ping"
     else
         log_error "Redis not responding"
@@ -1590,7 +1657,7 @@ cmd_backup() {
     # Backup Redis
     local TIMESTAMP=$(date +%Y%m%d_%H%M%S)
     echo "  Backing up Redis..."
-    docker exec tam_redis redis-cli --no-auth-warning -a "${REDIS_PASSWORD:-redis_password}" BGSAVE
+    docker exec tam_redis env REDISCLI_AUTH="${REDIS_PASSWORD}" redis-cli BGSAVE
     sleep 2
     docker cp tam_redis:/data/dump.rdb "${BACKUP_DIR}/redis_${TIMESTAMP}.rdb" 2>/dev/null || echo "  [WARN] Redis backup failed (data may be empty)"
 
@@ -1740,7 +1807,7 @@ cmd_shell() {
             log_info "Opening Redis CLI..."
             local redis_pass
             redis_pass=$(get_env "REDIS_PASSWORD")
-            dc exec redis redis-cli -a "${redis_pass}"
+            dc exec redis env REDISCLI_AUTH="${redis_pass}" redis-cli
             ;;
         *)
             log_error "Unknown shell target: $target"
@@ -2391,21 +2458,21 @@ cmd_redis() {
     case "$subcmd" in
         info)
             log_step "Redis Server Info"
-            dc exec -T redis redis-cli -a "${redis_pass}" INFO server 2>/dev/null \
+            dc exec -T redis env REDISCLI_AUTH="${redis_pass}" redis-cli INFO server 2>/dev/null \
                 | grep -E "^(redis_version|redis_mode|os|tcp_port|uptime_in_days|connected_clients|used_memory_human|maxmemory_human|keyspace_hits|keyspace_misses)" || true
             echo ""
             echo -e "${BOLD}Memory:${NC}"
-            dc exec -T redis redis-cli -a "${redis_pass}" INFO memory 2>/dev/null \
+            dc exec -T redis env REDISCLI_AUTH="${redis_pass}" redis-cli INFO memory 2>/dev/null \
                 | grep -E "^(used_memory_human|used_memory_peak_human|maxmemory_human|mem_fragmentation_ratio)" || true
             echo ""
             echo -e "${BOLD}Keyspace:${NC}"
-            dc exec -T redis redis-cli -a "${redis_pass}" INFO keyspace 2>/dev/null || true
+            dc exec -T redis env REDISCLI_AUTH="${redis_pass}" redis-cli INFO keyspace 2>/dev/null || true
             ;;
         keys)
             local pattern="${1:-*}"
             log_step "Redis Keys (pattern: ${pattern})"
             local keys
-            keys=$(dc exec -T redis redis-cli -a "${redis_pass}" KEYS "$pattern" 2>/dev/null)
+            keys=$(dc exec -T redis env REDISCLI_AUTH="${redis_pass}" redis-cli KEYS "$pattern" 2>/dev/null)
             if [ -z "$keys" ]; then
                 log_info "No keys matching pattern: ${pattern}"
             else
@@ -2414,9 +2481,9 @@ cmd_redis() {
                 log_info "Found ${count} key(s):"
                 echo "$keys" | while read -r key; do
                     local ttl
-                    ttl=$(dc exec -T redis redis-cli -a "${redis_pass}" TTL "$key" 2>/dev/null || echo "?")
+                    ttl=$(dc exec -T redis env REDISCLI_AUTH="${redis_pass}" redis-cli TTL "$key" 2>/dev/null || echo "?")
                     local type
-                    type=$(dc exec -T redis redis-cli -a "${redis_pass}" TYPE "$key" 2>/dev/null || echo "?")
+                    type=$(dc exec -T redis env REDISCLI_AUTH="${redis_pass}" redis-cli TYPE "$key" 2>/dev/null || echo "?")
                     if [ "$ttl" = "-1" ]; then
                         ttl_str="no TTL"
                     elif [ "$ttl" = "-2" ]; then
@@ -2435,32 +2502,32 @@ cmd_redis() {
                 return 1
             fi
             local type
-            type=$(dc exec -T redis redis-cli -a "${redis_pass}" TYPE "$key" 2>/dev/null || echo "none")
+            type=$(dc exec -T redis env REDISCLI_AUTH="${redis_pass}" redis-cli TYPE "$key" 2>/dev/null || echo "none")
             case "$type" in
                 string)
-                    dc exec -T redis redis-cli -a "${redis_pass}" GET "$key" 2>/dev/null
+                    dc exec -T redis env REDISCLI_AUTH="${redis_pass}" redis-cli GET "$key" 2>/dev/null
                     ;;
                 hash)
-                    dc exec -T redis redis-cli -a "${redis_pass}" HGETALL "$key" 2>/dev/null
+                    dc exec -T redis env REDISCLI_AUTH="${redis_pass}" redis-cli HGETALL "$key" 2>/dev/null
                     ;;
                 list)
                     local len
-                    len=$(dc exec -T redis redis-cli -a "${redis_pass}" LLEN "$key" 2>/dev/null || echo "0")
+                    len=$(dc exec -T redis env REDISCLI_AUTH="${redis_pass}" redis-cli LLEN "$key" 2>/dev/null || echo "0")
                     log_info "List length: ${len}"
-                    dc exec -T redis redis-cli -a "${redis_pass}" LRANGE "$key" 0 19 2>/dev/null
+                    dc exec -T redis env REDISCLI_AUTH="${redis_pass}" redis-cli LRANGE "$key" 0 19 2>/dev/null
                     ;;
                 set)
-                    dc exec -T redis redis-cli -a "${redis_pass}" SMEMBERS "$key" 2>/dev/null
+                    dc exec -T redis env REDISCLI_AUTH="${redis_pass}" redis-cli SMEMBERS "$key" 2>/dev/null
                     ;;
                 zset)
-                    dc exec -T redis redis-cli -a "${redis_pass}" ZRANGE "$key" 0 -1 WITHSCORES 2>/dev/null
+                    dc exec -T redis env REDISCLI_AUTH="${redis_pass}" redis-cli ZRANGE "$key" 0 -1 WITHSCORES 2>/dev/null
                     ;;
                 none)
                     log_warn "Key '${key}' does not exist"
                     ;;
                 *)
                     log_warn "Unsupported type: ${type}"
-                    dc exec -T redis redis-cli -a "${redis_pass}" DUMP "$key" 2>/dev/null | head -c 200
+                    dc exec -T redis env REDISCLI_AUTH="${redis_pass}" redis-cli DUMP "$key" 2>/dev/null | head -c 200
                     ;;
             esac
             ;;
@@ -2479,7 +2546,7 @@ cmd_redis() {
                 log_info "Cancelled"
                 return 0
             fi
-            dc exec -T redis redis-cli -a "${redis_pass}" DEL "$key" 2>/dev/null
+            dc exec -T redis env REDISCLI_AUTH="${redis_pass}" redis-cli DEL "$key" 2>/dev/null
             log_success "Deleted key: ${key}"
             ;;
         flush)
@@ -2499,7 +2566,7 @@ cmd_redis() {
                 log_info "Cancelled"
                 return 0
             fi
-            dc exec -T redis redis-cli -a "${redis_pass}" -n "$db_num" FLUSHDB 2>/dev/null
+            dc exec -T redis env REDISCLI_AUTH="${redis_pass}" redis-cli -n "$db_num" FLUSHDB 2>/dev/null
             log_success "Flushed Redis database ${db_num}"
             ;;
         *)
@@ -2611,7 +2678,7 @@ except:
                 local ctrl_key
                 ctrl_key=$(_sched_ctrl_key "$task")
                 local is_paused
-                is_paused=$(dc exec -T redis redis-cli -a "${redis_pass}" GET "$ctrl_key" 2>/dev/null || echo "")
+                is_paused=$(dc exec -T redis env REDISCLI_AUTH="${redis_pass}" redis-cli GET "$ctrl_key" 2>/dev/null || echo "")
 
                 local status_display
                 if [ "$is_paused" = "paused" ]; then
@@ -2641,7 +2708,7 @@ except:
             fi
             local ctrl_key
             ctrl_key=$(_sched_ctrl_key "$task")
-            dc exec -T redis redis-cli -a "${redis_pass}" SET "$ctrl_key" "paused" 2>/dev/null >/dev/null
+            dc exec -T redis env REDISCLI_AUTH="${redis_pass}" redis-cli SET "$ctrl_key" "paused" 2>/dev/null >/dev/null
             log_success "Paused: $(_sched_display_name "$task")"
             log_info "Resume with: ./manage.sh scheduler resume ${task}"
             ;;
@@ -2654,7 +2721,7 @@ except:
             fi
             local ctrl_key
             ctrl_key=$(_sched_ctrl_key "$task")
-            dc exec -T redis redis-cli -a "${redis_pass}" DEL "$ctrl_key" 2>/dev/null >/dev/null
+            dc exec -T redis env REDISCLI_AUTH="${redis_pass}" redis-cli DEL "$ctrl_key" 2>/dev/null >/dev/null
             log_success "Resumed: $(_sched_display_name "$task")"
             ;;
         trigger)

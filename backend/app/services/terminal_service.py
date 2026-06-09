@@ -16,6 +16,11 @@ from app.schemas.terminal import TerminalQuery, WhitelistQuery, BlacklistQuery, 
 from app.services.sangfor_service import SangforService
 
 
+def _escape_like(value: str) -> str:
+    """Escape LIKE wildcard characters (% and _) in search values to prevent wildcard injection."""
+    return value.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
+
+
 def _parse_date_range(start_date: Optional[str], end_date: Optional[str]):
     """Parse date range strings into datetime objects for filtering"""
     conditions = []
@@ -283,13 +288,13 @@ class TerminalService:
             # IP and MAC use OR logic with fuzzy matching
             ip_mac_conditions = []
             if query.ip:
-                ip_mac_conditions.append(Terminal.ip_address.ilike(f"%{query.ip}%"))
+                ip_mac_conditions.append(Terminal.ip_address.ilike(f"%{_escape_like(query.ip)}%"))
             if query.mac:
                 # Strip all separators for format-agnostic MAC matching
                 mac_clean = query.mac.replace('-', '').replace(':', '').replace('.', '').upper()
                 # Use func.replace to strip separators from DB column too
                 mac_col_stripped = func.replace(func.replace(func.replace(Terminal.mac_address, ':', ''), '-', ''), '.', '')
-                ip_mac_conditions.append(mac_col_stripped.ilike(f"%{mac_clean}%"))
+                ip_mac_conditions.append(mac_col_stripped.ilike(f"%{_escape_like(mac_clean)}%"))
 
             if ip_mac_conditions:
                 conditions.append(or_(*ip_mac_conditions))
@@ -328,12 +333,12 @@ class TerminalService:
             # Same conditions as search_macs
             ip_mac_conditions = []
             if query.ip:
-                ip_mac_conditions.append(Terminal.ip_address.ilike(f"%{query.ip}%"))
+                ip_mac_conditions.append(Terminal.ip_address.ilike(f"%{_escape_like(query.ip)}%"))
             if query.mac:
                 # Strip all separators for format-agnostic MAC matching
                 mac_clean = query.mac.replace('-', '').replace(':', '').replace('.', '').upper()
                 mac_col_stripped = func.replace(func.replace(func.replace(Terminal.mac_address, ':', ''), '-', ''), '.', '')
-                ip_mac_conditions.append(mac_col_stripped.ilike(f"%{mac_clean}%"))
+                ip_mac_conditions.append(mac_col_stripped.ilike(f"%{_escape_like(mac_clean)}%"))
 
             if ip_mac_conditions:
                 conditions.append(or_(*ip_mac_conditions))
@@ -529,9 +534,9 @@ class TerminalService:
                 mac_col_stripped = func.replace(func.replace(func.replace(Whitelist.mac_address, ':', ''), '-', ''), '.', '')
                 conditions.append(
                     or_(
-                        mac_col_stripped.ilike(f"%{mac_clean}%"),
-                        Whitelist.ip_pattern.ilike(search_term),
-                        Whitelist.comments.ilike(search_term),
+                        mac_col_stripped.ilike(f"%{_escape_like(mac_clean)}%"),
+                        Whitelist.ip_pattern.ilike(f"%{_escape_like(search_term)}%"),
+                        Whitelist.comments.ilike(f"%{_escape_like(search_term)}%"),
                     )
                 )
 
@@ -566,9 +571,9 @@ class TerminalService:
                 mac_col_stripped = func.replace(func.replace(func.replace(Whitelist.mac_address, ':', ''), '-', ''), '.', '')
                 conditions.append(
                     or_(
-                        mac_col_stripped.ilike(f"%{mac_clean}%"),
-                        Whitelist.ip_pattern.ilike(search_term),
-                        Whitelist.comments.ilike(search_term),
+                        mac_col_stripped.ilike(f"%{_escape_like(mac_clean)}%"),
+                        Whitelist.ip_pattern.ilike(f"%{_escape_like(search_term)}%"),
+                        Whitelist.comments.ilike(f"%{_escape_like(search_term)}%"),
                     )
                 )
 
@@ -772,8 +777,8 @@ class TerminalService:
                 mac_col_stripped = func.replace(func.replace(func.replace(Blacklist.mac_address, ':', ''), '-', ''), '.', '')
                 conditions.append(
                     or_(
-                        mac_col_stripped.ilike(f"%{mac_clean}%"),
-                        Blacklist.ip_address.ilike(search_term),
+                        mac_col_stripped.ilike(f"%{_escape_like(mac_clean)}%"),
+                        Blacklist.ip_address.ilike(f"%{_escape_like(search_term)}%"),
                     )
                 )
 
@@ -808,8 +813,8 @@ class TerminalService:
                 mac_col_stripped = func.replace(func.replace(func.replace(Blacklist.mac_address, ':', ''), '-', ''), '.', '')
                 conditions.append(
                     or_(
-                        mac_col_stripped.ilike(f"%{mac_clean}%"),
-                        Blacklist.ip_address.ilike(search_term),
+                        mac_col_stripped.ilike(f"%{_escape_like(mac_clean)}%"),
+                        Blacklist.ip_address.ilike(f"%{_escape_like(search_term)}%"),
                     )
                 )
 
@@ -1073,9 +1078,9 @@ class TerminalService:
             search_term = f"%{query.search}%"
             conditions.append(
                 or_(
-                    AuditLog.ip_address.ilike(search_term),
-                    AuditLog.username.ilike(search_term),
-                    AuditLog.details.ilike(search_term),
+                    AuditLog.ip_address.ilike(f"%{_escape_like(search_term)}%"),
+                    AuditLog.username.ilike(f"%{_escape_like(search_term)}%"),
+                    AuditLog.details.ilike(f"%{_escape_like(search_term)}%"),
                 )
             )
 
@@ -1110,9 +1115,9 @@ class TerminalService:
             search_term = f"%{query.search}%"
             conditions.append(
                 or_(
-                    AuditLog.ip_address.ilike(search_term),
-                    AuditLog.username.ilike(search_term),
-                    AuditLog.details.ilike(search_term),
+                    AuditLog.ip_address.ilike(f"%{_escape_like(search_term)}%"),
+                    AuditLog.username.ilike(f"%{_escape_like(search_term)}%"),
+                    AuditLog.details.ilike(f"%{_escape_like(search_term)}%"),
                 )
             )
 

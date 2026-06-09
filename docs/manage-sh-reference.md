@@ -1,5 +1,7 @@
 # manage.sh 命令行操作手册
 
+> 文档版本：v3.0.0 | 更新日期：2026-06-09
+
 TerminalAccessManager (TAM) 统一管理脚本，用于项目全生命周期管理。
 
 ## 全局选项
@@ -43,11 +45,13 @@ TerminalAccessManager (TAM) 统一管理脚本，用于项目全生命周期管�
 
 **执行效果：**
 1. 检查前置条件（Docker、磁盘空间、端口）
-2. 生成 SSL 证书
-3. 配置环境变量（.env）
-4. 构建并启动所有服务
-5. 初始化数据库和管理员账户
-6. 演示模式下自动生成 Mock 数据
+2. `_check_required_env` 函数：启动前检查 `DB_PASSWORD`、`REDIS_PASSWORD`、`SECRET_KEY` 是否已设置，缺失则中止部署
+3. 生成 SSL 证书
+4. 配置环境变量（.env）
+5. 生产向导（`--prod`）和 Demo 模式（`--demo`）自动生成 `ENCRYPTION_KEY`（Fernet 密钥），用于敏感数据加密
+6. 构建并启动所有服务
+7. 初始化数据库和管理员账户
+8. 演示模式下自动生成 Mock 数据
 
 **示例：**
 ```bash
@@ -504,6 +508,7 @@ cp .env .env.backup             # 备份配置文件
 - `captcha_required` — 验证码开关
 - `max_login_attempts` — 最大登录尝试次数
 - `rate_limit` — 速率限制
+- `ENCRYPTION_KEY` — 数据加密密钥（Fernet 密钥，用于敏感数据加密，修改后已加密数据将无法解密）
 
 **⚠ 警告：** 修改安全配置不当可能导致用户被锁定或安全策略削弱
 
@@ -535,6 +540,8 @@ cp .env .env.backup             # 备份配置文件
 ---
 
 ### 4.2 redis — Redis 管理
+
+> **安全说明：** 所有 Redis 命令改用 `env REDISCLI_AUTH="${redis_pass}" redis-cli` 形式传递密码，密码不再通过命令行参数（`-a`）传递，避免在进程列表中泄露密码。
 
 #### 4.2.1 redis info — Redis 信息
 

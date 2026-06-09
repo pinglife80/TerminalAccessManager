@@ -341,13 +341,30 @@ app.add_middleware(RequestLoggingMiddleware)
 
 # Configure CORS
 if settings.BACKEND_CORS_ORIGINS:
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=[str(origin) for origin in settings.BACKEND_CORS_ORIGINS],
-        allow_credentials=True,
-        allow_methods=["GET", "POST", "PUT", "DELETE"],
-        allow_headers=["Authorization", "Content-Type"],
-    )
+    origins = [str(origin) for origin in settings.BACKEND_CORS_ORIGINS]
+
+    # Security check: allow_credentials=True with wildcard origin is invalid per CORS spec
+    # and would allow any site to make authenticated requests
+    if "*" in origins and len(origins) == 1:
+        logger.warning(
+            "CORS: allow_origins='*' with allow_credentials=True is insecure. "
+            "Falling back to allow_credentials=False."
+        )
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=["*"],
+            allow_credentials=False,
+            allow_methods=["GET", "POST", "PUT", "DELETE"],
+            allow_headers=["Authorization", "Content-Type"],
+        )
+    else:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=origins,
+            allow_credentials=True,
+            allow_methods=["GET", "POST", "PUT", "DELETE"],
+            allow_headers=["Authorization", "Content-Type"],
+        )
 
 # Include API router
 app.include_router(api_router, prefix=settings.API_V1_STR)

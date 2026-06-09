@@ -23,15 +23,10 @@ interface LoginFormData {
   captcha?: string;
 }
 
-const generateCaptcha = (): { question: string; answer: number } => {
-  const a = Math.floor(Math.random() * 20) + 1;
-  const b = Math.floor(Math.random() * 20) + 1;
-  const isAdd = Math.random() > 0.5;
-  return {
-    question: isAdd ? `${a} + ${b}` : `${Math.max(a, b)} - ${Math.min(a, b)}`,
-    answer: isAdd ? a + b : Math.max(a, b) - Math.min(a, b),
-  };
-};
+interface CaptchaData {
+  captcha_id: string;
+  question: string;
+}
 
 const Login: React.FC = () => {
   const { t } = useTranslation();
@@ -40,7 +35,7 @@ const Login: React.FC = () => {
   const { login } = useAuthStore();
 
   const [backendError, setBackendError] = useState('');
-  const [captcha, setCaptcha] = useState<{ question: string; answer: number } | null>(null);
+  const [captcha, setCaptcha] = useState<CaptchaData | null>(null);
   const [captchaRequired, setCaptchaRequired] = useState(false);
   const [isLocked, setIsLocked] = useState(false);
   const [lockRemaining, setLockRemaining] = useState(0);
@@ -49,8 +44,22 @@ const Login: React.FC = () => {
   const [loginBgUrl, setLoginBgUrl] = useState('');
   const errorTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const { register, handleSubmit, formState: { errors }, watch } = useForm<LoginFormData>();
-  const usernameValue = watch('username');
+  const { register, handleSubmit, formState: { errors } } = useForm<LoginFormData>();
+
+  // Fetch captcha from backend
+  const fetchCaptcha = async () => {
+    try {
+      const response = await apiClient.get(API_ENDPOINTS.AUTH_CAPTCHA);
+      setCaptcha({
+        captcha_id: response.data.captcha_id,
+        question: response.data.question,
+      });
+    } catch {
+      // If captcha fetch fails, generate a fallback local captcha
+      // This should not happen in normal operation
+      setCaptcha(null);
+    }
+  };
 
   // Load branding config (background image, favicon) on mount
   useEffect(() => {
@@ -76,43 +85,6 @@ const Login: React.FC = () => {
     };
     loadBranding();
   }, []);
-
-  // Check login status from backend when username changes
-  useEffect(() => {
-    if (!usernameValue || usernameValue.length < 2) {
-      setCaptchaRequired(false);
-      setIsLocked(false);
-      setCaptcha(null);
-      return;
-    }
-
-    const timer = setTimeout(async () => {
-      try {
-        const response = await apiClient.get(API_ENDPOINTS.AUTH_LOGIN_STATUS, {
-          params: { username: usernameValue },
-        });
-        const { captcha_required, locked, lock_remaining_seconds } = response.data;
-
-        setCaptchaRequired(captcha_required);
-        if (captcha_required && !captcha) {
-          setCaptcha(generateCaptcha());
-        } else if (!captcha_required) {
-          setCaptcha(null);
-        }
-
-        if (locked) {
-          setIsLocked(true);
-          setLockRemaining(lock_remaining_seconds || 900);
-        } else {
-          setIsLocked(false);
-        }
-      } catch {
-        // Silently ignore - login-status is optional
-      }
-    }, 500);
-
-    return () => clearTimeout(timer);
-  }, [usernameValue]);
 
   // Countdown timer for lock
   useEffect(() => {
@@ -143,9 +115,10 @@ const Login: React.FC = () => {
       formData.append('username', data.username);
       formData.append('password', data.password);
 
-      // Pass captcha answer to backend if required
+      // Pass captcha_id and captcha answer to backend if required
       const params: Record<string, string> = {};
       if (captcha && data.captcha) {
+        params.captcha_id = captcha.captcha_id;
         params.captcha = data.captcha;
       }
 
@@ -179,21 +152,23 @@ const Login: React.FC = () => {
       const from = (location.state as { from?: { pathname: string } } | null)?.from?.pathname || '/dashboard';
       navigate(from, { replace: true });
     },
-    onError: (error: unknown) => {
-      const response = (error as { response?: { status?: number; data?: { detail?: string }; headers?: Record<string, string> } } | null)?.response;
+    onError: async (error: unknown) => {
+      const axiosError = error as { response?: { status?: number; data?: { detail?: string | { message?: string; captcha_required?: boolean; locked?: boolean; lock_remaining?: number } } } };
+      const response = axiosError.response;
       const statusCode = response?.status;
-      const serverMessage = response?.data?.detail || '';
+
+      // Parse error detail - backend returns structured JSON in detail field
+      const errorDetail = response?.data?.detail;
+      const isStructuredError = typeof errorDetail === 'object' && errorDetail !== null;
+      const serverMessage = isStructuredError ? (errorDetail as { message?: string }).message : (errorDetail as string) || '';
+      const captchaRequiredFromError = isStructuredError ? (errorDetail as { captcha_required?: boolean }).captcha_required : false;
+      const lockedFromError = isStructuredError ? (errorDetail as { locked?: boolean }).locked : false;
+      const lockRemainingFromError = isStructuredError ? (errorDetail as { lock_remaining?: number }).lock_remaining : 0;
 
       // Map backend error details to user-friendly messages
       let friendlyMessage: string;
       if (statusCode === 401) {
-        if (serverMessage === 'Username does not exist') {
-          friendlyMessage = t('auth.usernameNotExist');
-        } else if (serverMessage === 'Incorrect password') {
-          friendlyMessage = t('auth.incorrectPassword');
-        } else {
-          friendlyMessage = serverMessage || t('auth.authenticationFailed');
-        }
+        friendlyMessage = t('auth.authenticationFailed');
       } else if (statusCode === 423) {
         friendlyMessage = serverMessage || t('auth.accountTemporarilyLocked');
       } else if (statusCode === 400) {
@@ -209,39 +184,21 @@ const Login: React.FC = () => {
       setBackendError(friendlyMessage);
       setShowError(true);
 
-      // Update captcha/lock state from backend response headers
-      const headers = response?.headers || {};
-      const captchaRequiredHeader = headers['x-captcha-required'];
-      const lockedHeader = headers['x-account-locked'];
-      const lockRemainingHeader = headers['x-lock-remaining'];
-
-      if (captchaRequiredHeader === 'true') {
+      // Update captcha/lock state from error response body
+      if (captchaRequiredFromError) {
         setCaptchaRequired(true);
-        if (!captcha) {
-          setCaptcha(generateCaptcha());
-        } else {
-          // Refresh captcha on failure
-          setCaptcha(generateCaptcha());
-        }
+        await fetchCaptcha();
       }
 
-      if (lockedHeader === 'true') {
+      if (lockedFromError || statusCode === 423) {
         setIsLocked(true);
-        setLockRemaining(parseInt(lockRemainingHeader || '900', 10));
-      }
-
-      // Handle 423 locked status
-      if (response?.status === 423) {
-        setIsLocked(true);
-        setLockRemaining(parseInt(lockRemainingHeader || '900', 10));
+        setLockRemaining(lockRemainingFromError || 900);
       }
 
       // Handle 400 captcha required
-      if (response?.status === 400) {
+      if (statusCode === 400) {
         setCaptchaRequired(true);
-        if (!captcha) {
-          setCaptcha(generateCaptcha());
-        }
+        await fetchCaptcha();
       }
     },
   });
@@ -262,17 +219,8 @@ const Login: React.FC = () => {
 
     if (isLocked) return;
 
-    // Validate captcha locally before sending to backend
-    if (captcha && captchaRequired) {
-      const userAnswer = parseInt(data.captcha || '', 10);
-      if (isNaN(userAnswer) || userAnswer !== captcha.answer) {
-        setBackendError(t('auth.incorrectCaptcha'));
-        setShowError(true);
-        setCaptcha(generateCaptcha());
-        return;
-      }
-    }
-
+    // Captcha validation is done server-side
+    // Just submit the form data with captcha_id + captcha answer
     loginMutation.mutate(data);
   };
 

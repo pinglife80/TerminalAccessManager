@@ -5,7 +5,7 @@ services:
     environment:
       POSTGRES_DB: tam_db
       POSTGRES_USER: ${DB_USER:-tam_admin}
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-password}
+      POSTGRES_PASSWORD: "${DB_PASSWORD:?ERROR: DB_PASSWORD must be set in .env}"
     ports: []
     command: >
       postgres
@@ -39,12 +39,12 @@ services:
   redis:
     image: redis:7-alpine
     container_name: tam_redis
-    command: redis-server --requirepass ${REDIS_PASSWORD:-redis_password} --appendonly yes --appendfsync everysec
+    command: "redis-server --requirepass '${REDIS_PASSWORD:?ERROR: REDIS_PASSWORD must be set in .env}' --appendonly yes --appendfsync everysec"
     ports: []
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-redis_password}", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -63,9 +63,10 @@ services:
     container_name: tam_backend
     ports: []
     environment:
-      DATABASE_URL: postgresql+asyncpg://${DB_USER:-tam_admin}:${DB_PASSWORD:-password}@postgres:5432/tam_db
-      REDIS_URL: redis://:${REDIS_PASSWORD:-redis_password}@redis:6379/0
-      SECRET_KEY: ${SECRET_KEY:-your-secret-key-change-in-production}
+      DATABASE_URL: "postgresql+asyncpg://${DB_USER:-tam_admin}:${DB_PASSWORD}@postgres:5432/tam_db"
+      REDIS_URL: "redis://:${REDIS_PASSWORD}@redis:6379/0"
+      SECRET_KEY: "${SECRET_KEY:?ERROR: SECRET_KEY must be set in .env}"
+      ENCRYPTION_KEY: "${ENCRYPTION_KEY:-}"
       SANGFOR_BASE_URL: ${SANGFOR_BASE_URL}
       SANGFOR_USERNAME: ${SANGFOR_USERNAME}
       SANGFOR_PASSWORD: ${SANGFOR_PASSWORD}

@@ -30,7 +30,8 @@ target_metadata = Base.metadata
 
 # Override sqlalchemy.url with DATABASE_URL from settings
 from app.core.config import settings
-config.set_main_option("sqlalchemy.url", settings.DATABASE_URL.replace("+asyncpg", ""))
+# Keep asyncpg driver for async migration support
+config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
 
 
 def run_migrations_offline() -> None:

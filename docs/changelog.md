@@ -7,6 +7,41 @@
 
 ---
 
+## [3.0.0] - 2026-06-09
+
+### 安全修复（Critical）
+
+- 服务端验证码机制：新增 `GET /auth/captcha` 端点生成算术验证码，答案存入 Redis（5 分钟 TTL），登录时校验 captcha_id + 答案，前端移除本地验证码生成和校验逻辑
+- 加密密钥分离：新增 `ENCRYPTION_KEY` 配置字段，生产环境启动时强制校验（未设置或与 SECRET_KEY 相同则拒绝启动），开发环境回退到 SECRET_KEY 并输出警告日志
+- 移除不安全默认密码：docker-compose.yml 移除 `DB_PASSWORD:-password`、`REDIS_PASSWORD:-redis_password`、`SECRET_KEY:-your-secret-key-change-in-production` 等弱默认值，改用 `:?` 必填语法；manage.sh 新增 `_check_required_env` 函数检查必需环境变量
+
+### 安全修复（High）
+
+- 移除 `/auth/login-status` 公开端点：防止未认证用户枚举有效用户名
+- 移除登录响应头信息泄露：删除 `X-Captcha-Required`、`X-Account-Locked`、`X-Lock-Remaining` 响应头，改为在错误响应 JSON detail 中返回 `captcha_required`/`locked`/`lock_remaining` 字段
+- LIKE 通配符注入防护：新增 `_escape_like()` 工具函数，21 处 ilike 查询统一转义 `%` 和 `_` 通配符
+- Token 版本号机制：JWT payload 新增 `ver` 字段，密码变更/重置时递增用户 Token 版本号，旧 Token 自动失效
+- terminals 表联合唯一约束：新增 `(ip_address, mac_address)` 联合唯一约束 `uq_terminal_ip_mac`，Alembic 004 迁移脚本含去重逻辑
+- `_auto_block_task` 会话生命周期修复：改用 `async_session_factory()` 创建独立数据库会话，含 commit/rollback
+
+### 安全修复（Medium）
+
+- JWT Token 类型区分：access token 添加 `"type": "access"` 字段，refresh token 添加 `"type": "refresh"` 字段，refresh 端点验证 Token 类型
+- 上传文件安全加固：新增 `ALLOWED_EXTENSIONS` 扩展名白名单（.jpg/.jpeg/.png/.gif/.ico），移除 SVG 支持（XSS 风险），双重校验 content_type + 扩展名，文件名 UUID 重命名
+- /uploads/ 访问控制：Nginx 添加 Referer 检查，恶意来源返回 403
+- 审计日志导出权限：导出端点从 `get_current_user` 改为 `get_current_active_superuser`，仅超管可导出
+- Redis 密码安全：manage.sh 22 处 `redis-cli -a` 改为 `REDISCLI_AUTH` 环境变量，密码不再暴露在进程列表
+- CORS 安全校验：`allow_origins=["*"]` 时自动降级 `allow_credentials=False`
+
+### 改进
+
+- Alembic env.py 修复 asyncpg 驱动兼容性，迁移不再依赖 psycopg2
+- 修复伪测试：`TestSecretKeyValidation` 和 `TestLoginSecurity` 重写为有效测试
+- 新增 `_escape_like` 和 `token_version` 单元测试
+- 修复 `test_login_wrong_password` 断言适配结构化 detail 响应
+
+---
+
 ## [2.5.0] - 2026-06-09
 
 ### 新增
