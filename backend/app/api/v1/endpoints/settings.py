@@ -179,6 +179,13 @@ async def upload_branding_asset(
     service = ConfigService(db)
     result = await service.set(config_key, url_path, updated_by=current_user.username)
 
+    # Audit log
+    from app.services.terminal_service import TerminalService
+    ts = TerminalService(db)
+    await ts.log_action(current_user.username, "upload_branding", "system", config_key,
+                        {"message": "Uploaded branding asset", "purpose": purpose, "url": url_path},
+                        ip_address=None)
+
     return {
         "url": url_path,
         "config_key": config_key,

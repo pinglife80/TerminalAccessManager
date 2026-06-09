@@ -6,6 +6,7 @@ import { Toaster } from 'sonner';
 import ProtectedRoute from './components/ProtectedRoute';
 import Layout from './components/Layout';
 import ErrorBoundary from './components/ErrorBoundary';
+import { logger } from './lib/logger';
 
 // Lazy-loaded pages for code splitting
 const Login = lazy(() => import('./pages/Login'));
@@ -64,6 +65,27 @@ const App: React.FC = () => {
   useEffect(() => {
     initializeAuth();
     initTheme();
+
+    // Register global error listeners
+    const handleUnhandledError = (event: ErrorEvent) => {
+      logger.error('Global', `Uncaught error: ${event.message}`, {
+        filename: event.filename,
+        lineno: event.lineno,
+        colno: event.colno,
+      });
+    };
+
+    const handleUnhandledRejection = (event: PromiseRejectionEvent) => {
+      logger.error('Global', `Unhandled promise rejection: ${String(event.reason)}`);
+    };
+
+    window.addEventListener('error', handleUnhandledError);
+    window.addEventListener('unhandledrejection', handleUnhandledRejection);
+
+    return () => {
+      window.removeEventListener('error', handleUnhandledError);
+      window.removeEventListener('unhandledrejection', handleUnhandledRejection);
+    };
   }, [initializeAuth, initTheme]);
 
   useEffect(() => {

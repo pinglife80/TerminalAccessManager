@@ -1213,6 +1213,165 @@ cmd_logs() {
 }
 
 ###############################################################################
+# Command: logs-cleanup
+###############################################################################
+cmd_logs_cleanup() {
+    log_step "Cleaning up Docker logs"
+    local dry_run=false
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --dry-run) dry_run=true; shift ;;
+            *) shift ;;
+        esac
+    done
+
+    local total_size=0
+    for svc in postgres redis backend frontend nginx; do
+        local container
+        container=$(dc ps -q "$svc" 2>/dev/null)
+        if [[ -n "$container" ]]; then
+            local log_path
+            log_path=$(docker inspect --format='{{.LogPath}}' "$container" 2>/dev/null)
+            if [[ -n "$log_path" && -f "$log_path" ]]; then
+                local size
+                size=$(stat -c%s "$log_path" 2>/dev/null || echo 0)
+                total_size=$((total_size + size))
+                local size_mb
+                size_mb=$(echo "scale=2; $size / 1048576" | bc 2>/dev/null || echo "0")
+                echo "  $svc: ${size_mb}MB"
+            fi
+        fi
+    done
+
+    local total_mb
+    total_mb=$(echo "scale=2; $total_size / 1048576" | bc 2>/dev/null || echo "0")
+    echo "  Total: ${total_mb}MB"
+
+    if $dry_run; then
+        echo "[DRY RUN] No logs were truncated"
+        return 0
+    fi
+
+    echo ""
+    echo "Truncating Docker container logs..."
+    for svc in postgres redis backend frontend nginx; do
+        local container
+        container=$(dc ps -q "$svc" 2>/dev/null)
+        if [[ -n "$container" ]]; then
+            local log_path
+            log_path=$(docker inspect --format='{{.LogPath}}' "$container" 2>/dev/null)
+            if [[ -n "$log_path" && -f "$log_path" ]]; then
+                truncate -s 0 "$log_path" 2>/dev/null && echo "  $svc: truncated" || echo "  $svc: failed (need root)"
+            fi
+        fi
+    done
+    log_ok "Docker logs cleaned up"
+}
+
+###############################################################################
+# Command: logs-archive
+###############################################################################
+cmd_logs_archive() {
+    ensure_env
+    log_step "Archiving application logs"
+
+    local BACKUP_DIR="${SCRIPT_DIR}/backups"
+    mkdir -p "${BACKUP_DIR}"
+    local TIMESTAMP
+    TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+    local ARCHIVE_DIR="${BACKUP_DIR}/logs_${TIMESTAMP}"
+    mkdir -p "${ARCHIVE_DIR}"
+
+    # Archive Docker logs for each service
+    for svc in postgres redis backend frontend nginx; do
+        local container
+        container=$(dc ps -q "$svc" 2>/dev/null)
+        if [[ -n "$container" ]]; then
+            docker logs "$container" > "${ARCHIVE_DIR}/${svc}.log" 2>&1
+            echo "  Archived ${svc} logs"
+        fi
+    done
+
+    # Archive application log file if available
+    if dc exec backend test -f /var/log/tam/app.log 2>/dev/null; then
+        docker cp tam_backend:/var/log/tam/app.log "${ARCHIVE_DIR}/app.log" 2>/dev/null
+        echo "  Archived app.log"
+    fi
+
+    # Compress archive
+    tar -czf "${ARCHIVE_DIR}.tar.gz" -C "${BACKUP_DIR}" "logs_${TIMESTAMP}" 2>/dev/null
+    rm -rf "${ARCHIVE_DIR}"
+
+    log_ok "Logs archived to ${ARCHIVE_DIR}.tar.gz"
+}
+
+###############################################################################
+# Command: audit-cleanup
+###############################################################################
+cmd_audit_cleanup() {
+    ensure_env
+    log_step "Cleaning up expired audit logs"
+
+    local DAYS=180
+    local ARCHIVE=false
+    local FORCE=false
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --days)   DAYS="${2:-180}"; shift 2 ;;
+            --archive) ARCHIVE=true; shift ;;
+            --force)  FORCE=true; shift ;;
+            *) shift ;;
+        esac
+    done
+
+    # Count records to be cleaned
+    local count
+    count=$(docker exec tam_db psql -U "${DB_USER:-tam_admin}" -d tam_db -t -c \
+        "SELECT COUNT(*) FROM audit_logs WHERE timestamp < NOW() - INTERVAL '${DAYS} days';" 2>/dev/null | tr -d ' ')
+
+    if [[ -z "$count" || "$count" == "0" ]]; then
+        echo "No audit logs older than ${DAYS} days found"
+        return 0
+    fi
+
+    echo "Found ${count} audit log(s) older than ${DAYS} days"
+
+    # Archive if requested
+    if $ARCHIVE; then
+        local BACKUP_DIR="${SCRIPT_DIR}/backups"
+        mkdir -p "${BACKUP_DIR}"
+        local TIMESTAMP
+        TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+        local CSV_FILE="${BACKUP_DIR}/audit_logs_${TIMESTAMP}.csv"
+
+        echo "Exporting to ${CSV_FILE}..."
+        docker exec tam_db psql -U "${DB_USER:-tam_admin}" -d tam_db -c \
+            "COPY (SELECT * FROM audit_logs WHERE timestamp < NOW() - INTERVAL '${DAYS} days' ORDER BY timestamp) TO STDOUT WITH CSV HEADER" \
+            > "$CSV_FILE" 2>/dev/null
+        echo "  Exported ${count} record(s)"
+    fi
+
+    # Confirm deletion
+    if ! $FORCE; then
+        echo ""
+        echo "This will permanently delete ${count} audit log(s) older than ${DAYS} days."
+        read -rp "Continue? [y/N] " confirm
+        [[ "$confirm" != "y" && "$confirm" != "Y" ]] && { echo "Aborted"; return 1; }
+    fi
+
+    # Delete records
+    docker exec tam_db psql -U "${DB_USER:-tam_admin}" -d tam_db -c \
+        "DELETE FROM audit_logs WHERE timestamp < NOW() - INTERVAL '${DAYS} days';" 2>/dev/null
+
+    # Vacuum to reclaim space
+    docker exec tam_db psql -U "${DB_USER:-tam_admin}" -d tam_db -c "VACUUM audit_logs;" 2>/dev/null
+
+    log_ok "Cleaned up ${count} audit log(s) older than ${DAYS} days"
+}
+
+###############################################################################
 # Command: update
 ###############################################################################
 cmd_update() {
@@ -3078,6 +3237,9 @@ main() {
         status)       cmd_status ;;
         health)       cmd_health ;;
         logs)         cmd_logs "$@" ;;
+        logs-cleanup) cmd_logs_cleanup "$@" ;;
+        logs-archive) cmd_logs_archive "$@" ;;
+        audit-cleanup) cmd_audit_cleanup "$@" ;;
         update)       cmd_update "$@" ;;
         upgrade)      cmd_upgrade "$@" ;;
         init)         cmd_init ;;

@@ -9,14 +9,12 @@ from sqlalchemy import select
 import redis.asyncio as aioredis
 import uuid
 import random
-import logging
+from loguru import logger
 
 from app.core.config import settings
 from app.core.database import get_db
 from app.models.user import User
 from app.schemas.auth import TokenData
-
-logger = logging.getLogger(__name__)
 
 # OAuth2 scheme for token extraction
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.API_V1_STR}/auth/login")
@@ -58,6 +56,7 @@ async def add_token_to_blacklist(jti: str, exp: datetime) -> None:
                 ttl,
                 "1"
             )
+            logger.debug(f"Token blacklisted: jti={jti}, ttl={ttl}s")
     except Exception as e:
         logger.warning(f"Redis unavailable, skipping token blacklist: {e}")
 

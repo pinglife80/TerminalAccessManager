@@ -1,5 +1,5 @@
 from typing import List
-from fastapi import APIRouter, Depends, Query, Response
+from fastapi import APIRouter, Depends, Query, Response, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc, and_, or_
 import csv
@@ -17,6 +17,7 @@ router = APIRouter(prefix="/logs", tags=["Audit Logs"])
 
 @router.get("/export")
 async def export_audit_logs(
+    request: Request,
     username: str = Query(None, description="Filter by username"),
     action: str = Query(None, description="Filter by action type"),
     search: str = Query(None, description="Search by IP, username, or details"),
@@ -76,6 +77,13 @@ async def export_audit_logs(
         ])
 
     output.seek(0)
+
+    # Audit log for export action
+    from app.services.terminal_service import TerminalService
+    ts = TerminalService(db)
+    await ts.log_action(current_user.username, "export_audit_logs", "system", None,
+                        {"message": "Exported audit logs", "record_count": len(logs)},
+                        ip_address=request.client.host if request.client else None)
 
     headers = {
         "Content-Disposition": "attachment; filename=audit_logs.csv",

@@ -12,12 +12,10 @@ from cryptography.fernet import Fernet
 import base64
 import os
 import hashlib
-import logging
+from loguru import logger
 from typing import Optional, Any, Dict
 
 from app.core.config import settings
-
-logger = logging.getLogger(__name__)
 
 
 def _get_fernet() -> Fernet:

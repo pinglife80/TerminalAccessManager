@@ -97,6 +97,12 @@ async def login(
         # User does not exist - record failed attempt for anti-enumeration
         await record_failed_login(username)
         captcha_now = await check_captcha_required(username)
+        # Audit log for failed login
+        from app.services.terminal_service import TerminalService
+        ts = TerminalService(db)
+        await ts.log_action(username, "login_failed", "auth", None,
+                            {"message": "Login failed: user not found"},
+                            ip_address=request.client.host if request.client else None)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={
@@ -111,6 +117,13 @@ async def login(
         await record_failed_login(username)
         captcha_now = await check_captcha_required(username)
         locked_now = await check_login_attempts(username)
+
+        # Audit log for failed login (wrong password)
+        from app.services.terminal_service import TerminalService
+        ts = TerminalService(db)
+        await ts.log_action(username, "login_failed", "auth", str(user.id),
+                            {"message": "Login failed: incorrect password"},
+                            ip_address=request.client.host if request.client else None)
 
         error_detail = {
             "message": "Invalid credentials",
@@ -291,6 +304,13 @@ async def refresh_token(
             exp = datetime.fromtimestamp(payload.get("exp", 0), tz=timezone.utc)
             await add_token_to_blacklist(jti, exp)
 
+        # Audit log for token refresh
+        from app.services.terminal_service import TerminalService
+        ts = TerminalService(db)
+        await ts.log_action(username, "token_refresh", "auth", str(user.id),
+                            {"message": "Token refreshed"},
+                            ip_address=None)
+
         return {
             "access_token": access_token,
             "refresh_token": new_refresh_token,
@@ -373,6 +393,13 @@ async def change_password(
     # Invalidate all existing tokens for this user
     from app.core.security import increment_token_version
     await increment_token_version(current_user.id)
+
+    # Audit log for password change
+    from app.services.terminal_service import TerminalService
+    ts = TerminalService(db)
+    await ts.log_action(current_user.username, "change_password", "auth", str(current_user.id),
+                        {"message": "User changed their own password"},
+                        ip_address=None)
 
     return {"message": "Password changed successfully", "success": True}
 

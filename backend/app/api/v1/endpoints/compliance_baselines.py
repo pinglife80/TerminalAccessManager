@@ -1,5 +1,5 @@
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -39,6 +39,7 @@ async def list_baselines(
 @router.post("/", response_model=ComplianceBaselineResponse, status_code=status.HTTP_201_CREATED)
 async def create_baseline(
     data: ComplianceBaselineCreate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_active_superuser),
 ):
@@ -57,6 +58,14 @@ async def create_baseline(
     db.add(baseline)
     await db.commit()
     await db.refresh(baseline)
+
+    # Audit log
+    from app.services.terminal_service import TerminalService
+    ts = TerminalService(db)
+    await ts.log_action(current_user.username, "create_baseline", "compliance", str(baseline.id),
+                        {"message": "Created compliance baseline", "name": baseline.name, "tag": baseline.tag},
+                        ip_address=request.client.host if request.client else None)
+
     return baseline
 
 
@@ -80,6 +89,7 @@ async def get_baseline(
 async def update_baseline(
     baseline_id: int,
     data: ComplianceBaselineUpdate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_active_superuser),
 ):
@@ -96,12 +106,21 @@ async def update_baseline(
         setattr(baseline, key, value)
     await db.commit()
     await db.refresh(baseline)
+
+    # Audit log
+    from app.services.terminal_service import TerminalService
+    ts = TerminalService(db)
+    await ts.log_action(current_user.username, "update_baseline", "compliance", str(baseline.id),
+                        {"message": "Updated compliance baseline", "name": baseline.name, "tag": baseline.tag},
+                        ip_address=request.client.host if request.client else None)
+
     return baseline
 
 
 @router.delete("/{baseline_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_baseline(
     baseline_id: int,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_active_superuser),
 ):
@@ -112,8 +131,18 @@ async def delete_baseline(
     baseline = result.scalar_one_or_none()
     if not baseline:
         raise HTTPException(status_code=404, detail="Compliance baseline not found")
+
+    deleted_name = baseline.name
+    deleted_tag = baseline.tag
     await db.delete(baseline)
     await db.commit()
+
+    # Audit log
+    from app.services.terminal_service import TerminalService
+    ts = TerminalService(db)
+    await ts.log_action(current_user.username, "delete_baseline", "compliance", str(baseline_id),
+                        {"message": "Deleted compliance baseline", "name": deleted_name, "tag": deleted_tag},
+                        ip_address=request.client.host if request.client else None)
 
 
 @router.post("/{baseline_id}/test", response_model=ConnectionTestResult)

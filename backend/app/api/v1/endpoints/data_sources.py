@@ -253,6 +253,7 @@ async def list_bindings(
 @router.post("/bindings/", response_model=DataSourceBindingResponse, status_code=status.HTTP_201_CREATED)
 async def create_binding(
     data: DataSourceBindingCreate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_active_superuser),
 ):
@@ -260,6 +261,15 @@ async def create_binding(
     service = DataSourceService(db)
     try:
         binding = await service.create_binding(data.arp_source_tag, data.firewall_tag)
+
+        # Audit log
+        from app.services.terminal_service import TerminalService
+        ts = TerminalService(db)
+        await ts.log_action(current_user.username, "bind_datasource", "datasource", str(binding.id),
+                            {"message": "Created datasource binding", "arp_source_tag": data.arp_source_tag,
+                             "firewall_tag": data.firewall_tag},
+                            ip_address=request.client.host if request.client else None)
+
         return binding
     except ValueError as e:
         raise HTTPException(
@@ -271,6 +281,7 @@ async def create_binding(
 @router.delete("/bindings/{binding_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_binding(
     binding_id: int,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_active_superuser),
 ):
@@ -282,6 +293,13 @@ async def delete_binding(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Binding not found",
         )
+
+    # Audit log
+    from app.services.terminal_service import TerminalService
+    ts = TerminalService(db)
+    await ts.log_action(current_user.username, "unbind_datasource", "datasource", str(binding_id),
+                        {"message": "Deleted datasource binding"},
+                        ip_address=request.client.host if request.client else None)
 
 
 # ------------------------------------------------------------------
