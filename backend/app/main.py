@@ -5,14 +5,15 @@ from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from contextlib import asynccontextmanager
 from loguru import logger
-import sys
 import asyncio
 
 from app.core.config import settings
+from app.core.logging_config import setup_logging
 from app.core.database import init_db, async_session_factory
 from app.api.v1.api import api_router
 from app.core.security import close_redis_client
 from app.middleware.rate_limit import RateLimitMiddleware
+from app.middleware.request_id import RequestIDMiddleware
 from app.middleware.logging import RequestLoggingMiddleware
 from app.middleware.error_handler import (
     http_exception_handler,
@@ -21,13 +22,8 @@ from app.middleware.error_handler import (
 )
 
 
-# Configure logging
-logger.remove()
-logger.add(
-    sys.stdout,
-    format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
-    level=settings.LOG_LEVEL
-)
+# Configure logging (centralized: loguru + intercept stdlib logging)
+setup_logging()
 
 
 async def _is_task_paused(task_name: str) -> bool:
@@ -99,11 +95,11 @@ async def cleanup_expired_blacklist():
                     service = TerminalService(db)
                     count = await service.cleanup_expired_blacklist()
                     if count > 0:
-                        logger.info(f"Cleaned up {count} expired blacklist entries")
+                        logger.info(f"Cleaned up {count} expired blacklist entries [source=scheduler]")
             finally:
                 await _release_task_lock("firewall_query")
         except Exception as e:
-            logger.error(f"Error in blacklist cleanup task: {str(e)}")
+            logger.error(f"Error in blacklist cleanup task: {type(e).__name__}: {e} [source=scheduler]")
 
 
 async def scheduled_arp_collection():
@@ -124,7 +120,7 @@ async def scheduled_arp_collection():
             finally:
                 await _release_task_lock("arp_collection")
         except Exception as e:
-            logger.error(f"Error in scheduled ARP collection task: {str(e)}")
+            logger.error(f"Error in scheduled ARP collection task: {type(e).__name__}: {e} [source=scheduler]")
 
 
 async def scheduled_ipguard_sync():
@@ -149,13 +145,13 @@ async def scheduled_ipguard_sync():
                     for baseline in baselines:
                         try:
                             await service.sync_ipguard_data(baseline.tag)
-                            logger.info(f"Synced IPGuard data for baseline: {baseline.tag}")
+                            logger.info(f"Synced IPGuard data for baseline: {baseline.tag} [source=scheduler]")
                         except Exception as e:
-                            logger.error(f"Error syncing IPGuard data for {baseline.tag}: {str(e)}")
+                            logger.error(f"Error syncing IPGuard data for {baseline.tag}: {type(e).__name__}: {e} [source=scheduler]")
             finally:
                 await _release_task_lock("ipguard_sync")
         except Exception as e:
-            logger.error(f"Error in scheduled IPGuard sync task: {str(e)}")
+            logger.error(f"Error in scheduled IPGuard sync task: {type(e).__name__}: {e} [source=scheduler]")
 
 
 async def scheduled_compliance_check():
@@ -218,11 +214,11 @@ async def scheduled_compliance_check():
                                 if result.non_compliant > 0 or result.bypass > 0:
                                     logger.info(f"Compliance check for {source.tag}: {result.compliant} compliant, {result.bypass} bypass, {result.non_compliant} non-compliant")
                         except Exception as e:
-                            logger.error(f"Error in compliance check for {source.tag}: {str(e)}")
+                            logger.error(f"Error in compliance check for {source.tag}: {type(e).__name__}: {e} [source=scheduler]")
             finally:
                 await _release_task_lock("compliance_check")
         except Exception as e:
-            logger.error(f"Error in scheduled compliance check task: {str(e)}")
+            logger.error(f"Error in scheduled compliance check task: {type(e).__name__}: {e} [source=scheduler]")
 
 
 async def scheduled_auto_unblock():
@@ -245,7 +241,7 @@ async def scheduled_auto_unblock():
             finally:
                 await _release_task_lock("auto_unblock")
         except Exception as e:
-            logger.error(f"Error in scheduled auto-unblock task: {str(e)}")
+            logger.error(f"Error in scheduled auto-unblock task: {type(e).__name__}: {e} [source=scheduler]")
 
 
 @asynccontextmanager
@@ -348,8 +344,13 @@ app.add_exception_handler(Exception, unhandled_exception_handler)
 # Add rate limiting middleware
 app.add_middleware(RateLimitMiddleware)
 
-# Add request logging middleware
+# Add request logging middleware (must be AFTER RequestIDMiddleware so request_id is available)
 app.add_middleware(RequestLoggingMiddleware)
+
+# Add request-id middleware (must be registered AFTER RequestLoggingMiddleware
+# because Starlette applies middleware in reverse registration order —
+# the last registered middleware wraps the outermost layer, so it runs first)
+app.add_middleware(RequestIDMiddleware)
 
 # Configure CORS
 if settings.BACKEND_CORS_ORIGINS:
