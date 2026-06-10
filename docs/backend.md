@@ -1,6 +1,6 @@
 # TerminalAccessManager 后端实现文档
 
-> 文档版本：v3.2.0 | 更新日期：2026-06-10
+> 文档版本：v3.2.0-r1 | 更新日期：2026-06-10
 
 ## 1. 概述
 
@@ -45,14 +45,16 @@ backend/
 │   │   ├── log.py                       # 审计日志模型
 │   │   ├── system_config.py             # 系统配置模型
 │   │   ├── data_source.py              # 数据源模型 + DataSourceBinding
-│   │   └── compliance_baseline.py       # 合规基准模型
+│   │   ├── compliance_baseline.py       # 合规基准模型
+│   │   ├── role.py                      # RBAC 模型（Role, Permission, UserRole, RolePermission）
 │   ├── schemas/
 │   │   ├── __init__.py
 │   │   ├── auth.py                      # 认证相关 Schema
 │   │   ├── terminal.py                  # 终端查询 Schema
 │   │   ├── compliance_baseline.py       # 合规基准 Schema
 │   │   ├── system_config.py             # 系统配置 Schema
-│   │   └── data_source.py              # 数据源 + 合规检查 Schema
+│   │   ├── data_source.py              # 数据源 + 合规检查 Schema
+│   │   ├── role.py                      # 角色 Schema
 │   ├── services/
 │   │   ├── __init__.py
 │   │   ├── terminal_service.py          # 终端管理服务
@@ -75,7 +77,8 @@ backend/
 │               ├── stats.py             # 统计端点
 │               ├── settings.py          # 系统配置端点
 │               ├── data_sources.py      # 数据源端点
-│               └── compliance_baselines.py  # 合规基准端点
+│               ├── compliance_baselines.py  # 合规基准端点
+│               ├── roles.py            # 角色管理端点
 ├── alembic/                             # 数据库迁移
 ├── tests/                               # 测试
 │   ├── conftest.py                      # 测试配置（mock_redis fixture）
@@ -388,6 +391,14 @@ async_session_factory = async_session_maker  # 别名，供后台任务使用
 |----------|------|
 | `get_current_user(token, db)` | 从 JWT 解析用户，检查黑名单和活跃状态，返回 `User` 对象 |
 | `get_current_active_superuser(current_user)` | 在 `get_current_user` 基础上验证 `is_superuser` |
+
+### RBAC 权限框架
+
+- **`require_permission(code)`**: FastAPI 依赖注入工厂函数，superuser 直接通过，普通用户通过 Redis 缓存 + 数据库回查权限码
+- **`get_user_permissions(db, user_id)`**: 获取用户权限码集合，Redis 缓存优先（key: `user_perms:{user_id}`, TTL 300s），缓存未命中时联表查询
+- **`invalidate_user_permissions(user_id)`**: 主动失效用户权限缓存，角色/权限变更时调用
+- **9个端点文件**已从 `get_current_user` 替换为 `require_permission`，覆盖全部功能模块
+- **详细文档**: 参见 [RBAC.md](RBAC.md)
 
 ---
 

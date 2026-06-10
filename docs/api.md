@@ -1,6 +1,6 @@
 # TerminalAccessManager API 文档
 
-> 文档版本：v3.1.0 | 更新日期：2026-06-09
+> 文档版本：v3.2.0-r1 | 更新日期：2026-06-10
 
 > 基于 MAC 地址和 IP 地址的网络终端准入管理平台
 
@@ -10,6 +10,8 @@
 - 基础路径：`/api/v1`
 - 认证方式：Bearer Token（JWT）
 - 内容类型：`application/json`（文件上传除外）
+
+> 每个请求响应头包含 `X-Request-ID`，用于链路追踪
 
 ---
 
@@ -28,7 +30,9 @@
 - [10. 审计日志 /logs](#10-审计日志-logs)
 - [11. 统计 /stats](#11-统计-stats)
 - [12. 系统设置 /settings](#12-系统设置-settings)
-- [13. 健康检查 /health](#13-健康检查-health)
+- [13. 角色管理 /roles](#13-角色管理-roles)
+- [14. 权限码参考](#14-权限码参考)
+- [15. 健康检查 /health](#15-健康检查-health)
 
 ---
 
@@ -2561,9 +2565,9 @@ curl -X POST "https://<HOST_IP>:8443/api/v1/settings/upload?purpose=favicon" \
 
 ---
 
-## 13. 健康检查 /health
+## 15. 健康检查 /health
 
-### 13.1 GET /health
+### 15.1 GET /health
 
 健康检查，验证数据库和 Redis 连接状态。
 
@@ -2599,3 +2603,240 @@ curl -X POST "https://<HOST_IP>:8443/api/v1/settings/upload?purpose=favicon" \
 ```bash
 curl https://<HOST_IP>:8443/health
 ```
+
+---
+
+## 13. 角色管理 /roles
+
+### 获取角色列表
+
+```
+GET /api/v1/roles/
+```
+
+**所需权限**: `role:read`
+
+**查询参数**:
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| 无 | | | |
+
+**响应**: 角色列表数组
+
+```json
+[
+  {
+    "id": 1,
+    "name": "superadmin",
+    "description": "超级管理员",
+    "is_default": false,
+    "permissions": [],
+    "created_at": "2026-06-10T00:00:00",
+    "updated_at": "2026-06-10T00:00:00"
+  }
+]
+```
+
+#### 获取权限码列表
+
+```
+GET /api/v1/roles/permissions
+```
+
+**所需权限**: `role:read`
+
+**响应**: 权限码列表数组
+
+```json
+[
+  {
+    "id": 1,
+    "code": "terminal:read",
+    "name": "查看终端",
+    "module": "terminal",
+    "description": "查看终端列表和详情"
+  }
+]
+```
+
+#### 获取角色详情
+
+```
+GET /api/v1/roles/{role_id}
+```
+
+**所需权限**: `role:read`
+
+**路径参数**:
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| role_id | int | 角色ID |
+
+**业务规则**: 非超管用户查看 superadmin 角色详情返回 403
+
+**响应**:
+
+```json
+{
+  "id": 2,
+  "name": "admin",
+  "description": "管理员",
+  "is_default": false,
+  "permissions": ["datasource:read", "datasource:write", "..."],
+  "user_count": 3,
+  "created_at": "2026-06-10T00:00:00",
+  "updated_at": "2026-06-10T00:00:00"
+}
+```
+
+#### 创建角色
+
+```
+POST /api/v1/roles/
+```
+
+**所需权限**: `role:write`
+
+**请求体**:
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| name | string | 是 | 角色标识名（2-50字符，小写字母开头，仅含小写字母/数字/下划线） |
+| description | string | 否 | 角色描述（最长200字符） |
+| permission_ids | int[] | 是 | 权限ID列表 |
+
+**请求示例**:
+
+```json
+{
+  "name": "custom_operator",
+  "description": "自定义操作员角色",
+  "permission_ids": [1, 2, 3, 5]
+}
+```
+
+#### 更新角色
+
+```
+PUT /api/v1/roles/{role_id}
+```
+
+**所需权限**: `role:write`
+
+**业务规则**: superadmin 角色不可修改
+
+**请求体**:
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| description | string | 否 | 角色描述 |
+| permission_ids | int[] | 否 | 权限ID列表（替换全部） |
+
+**请求示例**:
+
+```json
+{
+  "description": "更新后的描述",
+  "permission_ids": [1, 2, 3, 5, 7]
+}
+```
+
+#### 删除角色
+
+```
+DELETE /api/v1/roles/{role_id}
+```
+
+**所需权限**: `role:delete`
+
+**业务规则**: 内置角色（superadmin/admin/operator/auditor/viewer）不可删除；仍有用户关联的角色不可删除
+
+**响应**: `204 No Content`
+
+#### 分配用户角色
+
+```
+PUT /api/v1/roles/users/{user_id}/roles
+```
+
+**所需权限**: `user:write`
+
+**业务规则**: superadmin 角色不可分配；分配后自动同步 `is_superuser` 字段；自动失效用户权限缓存
+
+**请求体**:
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| role_id | int | 是 | 角色ID（单角色分配） |
+
+**请求示例**:
+
+```json
+{
+  "role_id": 3
+}
+```
+
+#### 获取角色用户列表
+
+```
+GET /api/v1/roles/{role_id}/users
+```
+
+**所需权限**: `role:read`
+
+**业务规则**: 非超管用户查看 superadmin 角色用户返回 403
+
+**响应**:
+
+```json
+[
+  {
+    "id": 1,
+    "username": "admin",
+    "email": "admin@example.com",
+    "is_active": true,
+    "is_superuser": true
+  }
+]
+```
+
+---
+
+## 14. 权限码参考
+
+系统共定义29个权限码，按10个功能模块分组：
+
+| 模块 | 权限码 | 名称 |
+|------|--------|------|
+| terminal | `terminal:read` | 查看终端 |
+| terminal | `terminal:write` | 操作终端 |
+| whitelist | `whitelist:read` | 查看白名单 |
+| whitelist | `whitelist:write` | 管理白名单 |
+| blacklist | `blacklist:read` | 查看封禁列表 |
+| blacklist | `blacklist:write` | 管理封禁列表 |
+| datasource | `datasource:read` | 查看数据源 |
+| datasource | `datasource:write` | 管理数据源 |
+| datasource | `datasource:test` | 测试数据源 |
+| datasource | `datasource:sync` | 同步数据源 |
+| datasource | `datasource:compliance` | 合规检查 |
+| baseline | `baseline:read` | 查看合规基线 |
+| baseline | `baseline:write` | 管理合规基线 |
+| baseline | `baseline:test` | 测试合规基线 |
+| baseline | `baseline:sync` | 同步合规基线 |
+| user | `user:read` | 查看用户 |
+| user | `user:write` | 管理用户 |
+| user | `user:delete` | 删除用户 |
+| user | `user:password` | 重置密码 |
+| user | `user:unlock` | 解锁用户 |
+| audit | `audit:read` | 查看审计日志 |
+| audit | `audit:export` | 导出审计日志 |
+| settings | `settings:read` | 查看系统配置 |
+| settings | `settings:write` | 修改系统配置 |
+| settings | `settings:upload` | 上传品牌资源 |
+| stats | `stats:read` | 查看统计 |
+| role | `role:read` | 查看角色 |
+| role | `role:write` | 管理角色 |
+| role | `role:delete` | 删除角色 |

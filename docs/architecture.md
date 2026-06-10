@@ -1,6 +1,6 @@
 # TerminalAccessManager 系统架构设计文档
 
-> 文档版本：v3.2.0 | 更新日期：2026-06-10
+> 文档版本：v3.2.0-r1 | 更新日期：2026-06-10
 
 ## 1. 系统概述
 
@@ -23,7 +23,7 @@ TerminalAccessManager 是基于 MAC 地址和 IP 地址的网络终端准入管�
 | 反向代理 | Nginx (Alpine) |
 | 容器编排 | Docker Compose |
 | ORM | SQLAlchemy 2.0 (async) |
-| 认证 | JWT (python-jose) + bcrypt |
+| 认证 | JWT (python-jose) + bcrypt + RBAC |
 | HTTP 客户端 | httpx (async) |
 | SSH 客户端 | paramiko |
 | 监控 | Prometheus (可选) |
@@ -427,6 +427,16 @@ ARP 数据采集          合规判定              准入执行
 - `User.is_superuser` 字段区分超管与普通用户
 - `get_current_active_superuser` 依赖守卫超管专用端点（用户管理、系统配置等）
 - `get_current_user` 依赖守卫常规认证端点
+
+### RBAC 权限控制架构
+
+系统采用基于角色的访问控制（RBAC）模型，通过角色（Role）将权限（Permission）与用户（User）关联：
+
+- **数据模型**: 4张核心表（roles, permissions, user_roles, role_permissions），5个预设角色，29个权限码
+- **权限检查**: `require_permission(code)` FastAPI 依赖注入工厂函数，superuser 直接通过，普通用户通过 Redis 缓存（TTL 300s）+ 数据库回查
+- **前端控制**: `usePermission` Hook + `ProtectedRoute` 路由守卫 + 侧边栏导航过滤 + 按钮级权限控制
+- **超管隔离**: 非超管用户不可见/不可管理超管用户，superadmin 角色不可分配/修改
+- **详细文档**: 参见 [RBAC.md](RBAC.md)
 
 ### 7.7 Redis 故障降级
 

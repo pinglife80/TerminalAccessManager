@@ -6,7 +6,28 @@
 
 ---
 
-## [v3.2.0] - 2026-06-10
+## [Unreleased] - RBAC 权限控制
+
+### 提交记录
+
+| 提交 | 说明 |
+|------|------|
+| af1960c | feat(rbac): add RBAC data models, migration and role management API |
+| 48735ac | feat(rbac): implement permission control across all endpoints and frontend |
+| 82ec0e0 | docs(rbac): update role and access control documentation to v2.0 |
+| 707eefb | fix(search): fix search returning empty results on whitelist/blacklist/audit-logs |
+| 3c5b758 | fix(perf): resolve API blocking and improve rate limit config |
+| 7b4a0dc | fix(rbac): enforce superadmin protection and single-role-per-user model |
+| d7a5838 | fix(frontend): improve UX and fix CSP/307 redirect issue |
+| 06dbe11 | fix(i18n): complete i18n coverage for zh/en/ja locales |
+| 253acb6 | test: add RBAC tests and fix security test assertions |
+| 9100a8d | fix(search): increase debounce delay from 300ms to 500ms across all pages |
+| 2f2add5 | fix: prevent superadmin role modification and fix Users search flickering |
+| 0b36d78 | docs: update RBAC documentation to v3.0 with current implementation |
+
+---
+
+## [v3.2.0-r1] - 2026-06-10
 
 **发布类型**：功能迭代 | **合并方式**：Fast-forward | **标签**：`v3.2.0`
 

@@ -1,6 +1,6 @@
 # TerminalAccessManager 数据库设计文档
 
-> 文档版本：v3.2.0 | 更新日期：2026-06-10
+> 文档版本：v3.2.0-r1 | 更新日期：2026-06-10
 
 ## 1. 概述
 
@@ -119,6 +119,30 @@ docker-compose.yml 中 PostgreSQL 的 `command` 参数列表如下：
 │ created_at           │
 │ updated_at           │
 └──────────────────────┘
+
+┌──────────────────┐       ┌──────────────────┐
+│     roles        │       │   permissions    │
+├──────────────────┤       ├──────────────────┤
+│ id           PK  │       │ id           PK  │
+│ name             │       │ code             │
+│ description      │       │ name             │
+│ is_default       │       │ module           │
+│ created_at       │       │ description      │
+│ updated_at       │       └────────┬─────────┘
+└───────┬──────────┘                │
+        │                           │
+        ├───────────┐   ┌───────────┤
+        │           │   │           │
+        ▼           ▼   ▼           │
+┌──────────────────────┐ ┌──────────────────────┐
+│    user_roles        │ │  role_permissions    │
+├──────────────────────┤ ├──────────────────────┤
+│ user_id  FK→users.id │ │ role_id  FK→roles.id │
+│ role_id  FK→roles.id │ │ permission_id        │
+│                      │ │   FK→permissions.id  │
+│ PK: (user_id,        │ │ PK: (role_id,        │
+│      role_id)        │ │      permission_id)  │
+└──────────────────────┘ └──────────────────────┘
 ```
 
 ---
@@ -472,6 +496,51 @@ docker-compose.yml 中 PostgreSQL 的 `command` 参数列表如下：
 | 索引名 | 类型 | 字段 |
 |---|---|---|
 | idx_compliance_baseline_ip_mac | COMPOSITE | (ip_address, mac_address) |
+
+---
+
+### 3.10 RBAC 权限控制表
+
+系统通过4张核心表实现 RBAC 数据模型：
+
+#### roles 表
+
+| 字段 | 类型 | 约束 | 说明 |
+|------|------|------|------|
+| id | SERIAL | PRIMARY KEY | 角色ID |
+| name | VARCHAR(50) | UNIQUE, NOT NULL | 角色标识名 |
+| description | VARCHAR(200) | | 角色描述 |
+| is_default | BOOLEAN | DEFAULT FALSE | 是否为默认角色 |
+| created_at | TIMESTAMP | DEFAULT NOW() | 创建时间 |
+| updated_at | TIMESTAMP | DEFAULT NOW() | 更新时间 |
+
+#### permissions 表
+
+| 字段 | 类型 | 约束 | 说明 |
+|------|------|------|------|
+| id | SERIAL | PRIMARY KEY | 权限ID |
+| code | VARCHAR(100) | UNIQUE, NOT NULL | 权限码（如 terminal:read） |
+| name | VARCHAR(100) | NOT NULL | 权限名称 |
+| module | VARCHAR(50) | NOT NULL | 所属模块 |
+| description | VARCHAR(200) | | 权限描述 |
+
+#### user_roles 表
+
+| 字段 | 类型 | 约束 | 说明 |
+|------|------|------|------|
+| user_id | INTEGER | FK→users.id, ON DELETE CASCADE | 用户ID |
+| role_id | INTEGER | FK→roles.id, ON DELETE CASCADE | 角色ID |
+
+联合主键: (user_id, role_id)
+
+#### role_permissions 表
+
+| 字段 | 类型 | 约束 | 说明 |
+|------|------|------|------|
+| role_id | INTEGER | FK→roles.id, ON DELETE CASCADE | 角色ID |
+| permission_id | INTEGER | FK→permissions.id, ON DELETE CASCADE | 权限ID |
+
+联合主键: (role_id, permission_id)
 
 ---
 

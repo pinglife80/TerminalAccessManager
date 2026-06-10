@@ -1,6 +1,6 @@
 # 前端实现总结
 
-> 文档版本：v3.2.0 | 更新日期：2026-06-10
+> 文档版本：v3.2.0-r1 | 更新日期：2026-06-10
 
 ## 概述
 
@@ -415,6 +415,17 @@ logger.clearLogs();    // 清除所有日志
 - 搜索过滤
 - 高级分页
 - 空状态和加载状态
+
+### RBAC 权限控制
+
+- **usePermission Hook** (`src/hooks/usePermission.ts`): 4个权限判断方法（hasPermission/hasAnyPermission/hasAllPermissions/hasRole），superuser 直接返回 true
+- **ProtectedRoute 路由守卫** (`src/components/ProtectedRoute.tsx`): 支持 `requiredPermission` / `requiredAnyPermissions`，无权限重定向 /403
+- **侧边栏导航过滤** (`src/components/Sidebar.tsx`): 根据 `requiredPermission` 过滤导航项
+- **角色管理页面** (`src/pages/Roles.tsx`): 角色列表、创建/编辑弹窗、权限按模块分组、删除确认、超管角色保护
+- **用户管理页面** (`src/pages/Users.tsx`): 单角色分配（select 下拉）、超管/自己编辑时角色只读、按钮级权限控制
+- **审计日志页面** (`src/pages/AuditLogs.tsx`): 导出按钮权限控制
+- **按钮级权限差距**: Terminals/Whitelist/Blacklist/DataSources/Settings 页面操作按钮尚未添加前端权限控制（后端 API 已有保护）
+- **详细文档**: 参见 [RBAC.md](../../docs/RBAC.md)
 
 ### 9. 个人资料 (`/profile`)
 **功能：**

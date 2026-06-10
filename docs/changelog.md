@@ -7,6 +7,46 @@
 
 ---
 
+## [Unreleased]
+
+### 新增
+
+- RBAC 角色权限控制：4张核心表（roles/permissions/user_roles/role_permissions），5个预设角色（superadmin/admin/operator/auditor/viewer），29个权限码覆盖10个功能模块
+- `require_permission` 权限检查工厂函数：FastAPI 依赖注入 + Redis 缓存（TTL 300s）+ superuser 短路
+- 角色 CRUD API：7个端点（列表/详情/创建/编辑/删除/权限列表/角色用户列表）
+- 用户角色分配 API：`PUT /roles/users/{id}/roles`（单角色分配）
+- 前端 `usePermission` Hook：4个权限判断方法（hasPermission/hasAnyPermission/hasAllPermissions/hasRole）
+- 前端 `ProtectedRoute` 路由守卫：支持 `requiredPermission` / `requiredAnyPermissions`
+- 前端侧边栏导航过滤：根据 `requiredPermission` 过滤导航项
+- 角色管理页面：角色列表、创建/编辑弹窗、权限按模块分组、删除确认
+- 超管隔离机制：非超管不可见/不可管理超管用户，超管只能自己管理自己
+- 初始管理员4层保护：不可删除/降级/停用/角色变更
+- RBAC 后端测试：11个测试用例（权限缓存、权限检查、缓存失效）
+- RBAC 前端测试：20个 usePermission Hook 测试用例
+- RBAC 文档：`docs/RBAC.md`（从"角色管理与用户访问控制说明文档"重命名）
+
+### 改进
+
+- 单角色模型：`role_ids: list[int]` → `role_id: int`，前端 checkbox 多选 → select 单选下拉
+- 搜索防抖统一为 500ms（Terminals/Whitelist/Blacklist/AuditLogs），`keepPreviousData` 防搜索闪屏
+- Redis 客户端添加超时配置（`socket_timeout`/`socket_connect_timeout`），防止无限阻塞
+- API 速率限制从 60→120 次/分钟，认证限制从 5→10 次/分钟
+- i18n 三语言补全：`superadminRoleFixed`/`selectRole` 等 RBAC 相关 key
+- 9个后端端点文件从 `get_current_user` 替换为 `require_permission`，实现真正的 RBAC 权限校验
+
+### 修复
+
+- 搜索返回空结果（Whitelist/Blacklist/AuditLogs）：`_escape_like` 对已包裹 `%` 的字符串转义导致 LIKE 模式错误
+- AuditLog 搜索缺少 action 字段：搜索只覆盖 ip_address/username/details
+- MAC 搜索从前缀匹配改为包含匹配：`ilike(f"{value}%")` → `ilike(f"%{value}%")`
+- API 全局阻塞（30s+）：paramiko SSH 同步操作阻塞 asyncio 事件循环，改用 `asyncio.to_thread()`
+- 307 重定向 + CSP 错误：前端 API 路径带尾部斜杠，后端路由不带
+- 超管角色可被分配给其他用户：创建/编辑用户时过滤 superadmin 角色
+- 超管编辑自己时仍显示角色修改选项：超管或自己编辑时隐藏角色下拉框，显示只读文本
+- Users 搜索框闪屏/失焦：添加 `keepPreviousData` + `useDebounce(500ms)`
+
+---
+
 ## [3.2.0] - 2026-06-10
 
 ### 新增
