@@ -506,6 +506,7 @@ const zh = {
     passwordLabel: '密码',
     administrator: '管理员',
     activeLabel: '活跃',
+    selectRole: '请选择角色',
     required: '必填',
     min3Characters: '最少3个字符',
     lettersNumbersUnderscores: '仅支持字母、数字和下划线',
@@ -545,6 +546,13 @@ const zh = {
     areYouSureDeleteRole: '确定要删除此角色吗？',
     cannotDeleteBuiltInRole: '无法删除内置角色',
     cannotModifySuperadmin: '无法修改超级管理员角色',
+    invalidRoleNameFormat: '角色名称必须以小写字母开头，只能包含小写字母、数字和下划线',
+    viewPermissions: '查看权限',
+    viewUsers: '查看用户',
+    noUsersInRole: '该角色下暂无用户',
+    superadminHasAllPermissions: '超级管理员拥有系统全部权限，无需手动分配',
+    failedToLoadUsers: '加载角色用户失败',
+    cannotAssignAllPermissions: '不能分配全部权限，只有超级管理员拥有全部权限',
     permissionModules: {
       terminal: '终端管理',
       whitelist: '白名单',
@@ -615,6 +623,12 @@ const zh = {
   layout: {
     offlineWarning: '当前处于离线状态，部分功能可能不可用。',
     slowConnectionWarning: '检测到网络连接缓慢，性能可能受到影响。',
+  },
+  forbidden: {
+    title: '403 - 访问被拒绝',
+    message: '您没有权限访问此页面。',
+    goBack: '返回',
+    backToDashboard: '返回{{appName}}',
   },
 };
 

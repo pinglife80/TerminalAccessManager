@@ -506,6 +506,7 @@ const en = {
     passwordLabel: 'Password',
     administrator: 'Administrator',
     activeLabel: 'Active',
+    selectRole: 'Select a role',
     required: 'Required',
     min3Characters: 'Minimum 3 characters',
     lettersNumbersUnderscores: 'Only letters, numbers, and underscores',
@@ -545,6 +546,13 @@ const en = {
     areYouSureDeleteRole: 'Are you sure you want to delete this role?',
     cannotDeleteBuiltInRole: 'Cannot delete built-in role',
     cannotModifySuperadmin: 'Cannot modify superadmin role',
+    invalidRoleNameFormat: 'Role name must start with a lowercase letter and contain only lowercase letters, digits, and underscores',
+    viewPermissions: 'View Permissions',
+    viewUsers: 'View Users',
+    noUsersInRole: 'No users assigned to this role',
+    superadminHasAllPermissions: 'Super admin has all system permissions, no manual assignment needed',
+    failedToLoadUsers: 'Failed to load role users',
+    cannotAssignAllPermissions: 'Cannot assign all permissions. Only superadmin has all permissions.',
     permissionModules: {
       terminal: 'Terminals',
       whitelist: 'Whitelist',
@@ -615,6 +623,12 @@ const en = {
   layout: {
     offlineWarning: 'You are currently offline. Some features may be unavailable.',
     slowConnectionWarning: 'Slow network connection detected. Performance may be affected.',
+  },
+  forbidden: {
+    title: '403 - Access Denied',
+    message: 'You do not have permission to access this page.',
+    goBack: 'Go Back',
+    backToDashboard: 'Back to {{appName}}',
   },
 };
 
