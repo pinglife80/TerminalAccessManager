@@ -43,4 +43,16 @@ class RoleUpdate(BaseModel):
 
 
 class UserRoleUpdate(BaseModel):
-    role_ids: list[int] = Field(..., description="Role IDs to assign to user")
+    role_id: int = Field(..., description="Role ID to assign to user")
+
+
+class RoleUserResponse(BaseModel):
+    """Schema for user info returned by role users endpoint"""
+    id: int
+    username: str
+    email: Optional[str] = None
+    is_active: bool = True
+    is_superuser: bool = False
+
+    class Config:
+        from_attributes = True

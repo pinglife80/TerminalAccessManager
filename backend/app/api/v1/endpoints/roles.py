@@ -9,7 +9,7 @@ from app.models.user import User
 from app.models.role import Role, Permission, UserRole, RolePermission
 from app.schemas.role import (
     RoleResponse, RoleDetailResponse, RoleCreate, RoleUpdate,
-    PermissionResponse, UserRoleUpdate,
+    PermissionResponse, UserRoleUpdate, RoleUserResponse,
 )
 from app.schemas.terminal import ResponseMessage
 
@@ -75,11 +75,15 @@ async def get_role(
     current_user: User = Depends(require_permission("role:read")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get role details by ID"""
+    """Get role details by ID. Non-superadmin users cannot view superadmin role details."""
     result = await db.execute(select(Role).where(Role.id == role_id))
     role = result.scalar_one_or_none()
     if not role:
         raise HTTPException(status_code=404, detail="Role not found")
+
+    # Non-superadmin users cannot view superadmin role details
+    if role.name == "superadmin" and not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="Cannot view superadmin role details")
 
     perm_result = await db.execute(
         select(Permission.code)
@@ -240,34 +244,36 @@ async def assign_user_roles(
     current_user: User = Depends(require_permission("user:write")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Assign roles to a user (replaces all existing roles)"""
+    """Assign a role to a user (replaces existing role)"""
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    # Verify all role IDs exist
-    for rid in data.role_ids:
-        role_result = await db.execute(select(Role).where(Role.id == rid))
-        if not role_result.scalar_one_or_none():
-            raise HTTPException(status_code=400, detail=f"Role ID {rid} not found")
+    # Protect the initial system admin (id=1) from role changes
+    if user.id == 1:
+        raise HTTPException(status_code=400, detail="Cannot modify roles of the initial system administrator")
 
-    # Remove existing roles
+    # Verify role exists
+    role_result = await db.execute(select(Role).where(Role.id == data.role_id))
+    if not role_result.scalar_one_or_none():
+        raise HTTPException(status_code=400, detail=f"Role ID {data.role_id} not found")
+
+    # Prevent assigning superadmin role - it's only for the initial system admin
+    superadmin_result = await db.execute(select(Role.id).where(Role.name == "superadmin"))
+    superadmin_role_id = superadmin_result.scalar_one_or_none()
+    if superadmin_role_id and data.role_id == superadmin_role_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot assign superadmin role. Superadmin is reserved for the initial system administrator."
+        )
+
+    # Remove existing roles and assign new role
     await db.execute(UserRole.__table__.delete().where(UserRole.user_id == user_id))
+    db.add(UserRole(user_id=user_id, role_id=data.role_id))
 
-    # Assign new roles
-    for rid in data.role_ids:
-        db.add(UserRole(user_id=user_id, role_id=rid))
-
-    # Sync is_superuser based on superadmin role
-    superadmin_result = await db.execute(
-        select(Role.id).where(Role.name == "superadmin")
-    )
-    superadmin_role_id = superadmin_result.scalar_one_or_none() or 1
-    sa_result = await db.execute(
-        select(UserRole).where(UserRole.user_id == user_id, UserRole.role_id == superadmin_role_id)
-    )
-    user.is_superuser = sa_result.scalar_one_or_none() is not None
+    # Sync is_superuser
+    user.is_superuser = (data.role_id == superadmin_role_id)
 
     await db.commit()
 
@@ -277,12 +283,43 @@ async def assign_user_roles(
     # Audit log
     from app.services.terminal_service import TerminalService
     ts = TerminalService(db)
-    role_names_result = await db.execute(
-        select(Role.name).where(Role.id.in_(data.role_ids))
-    )
-    role_names = list(role_names_result.scalars().all())
-    await ts.log_action(current_user.username, "assign_roles", "user", str(user_id),
-                        {"message": "Assigned roles to user", "username": user.username, "roles": role_names},
+    role_name_result = await db.execute(select(Role.name).where(Role.id == data.role_id))
+    role_name = role_name_result.scalar_one()
+    await ts.log_action(current_user.username, "assign_role", "user", str(user_id),
+                        {"message": "Assigned role to user", "username": user.username, "role": role_name},
                         ip_address=request.client.host if request.client else None)
 
     return {"message": f"Roles updated for user '{user.username}'", "success": True}
+
+
+@router.get("/{role_id}/users", response_model=List[RoleUserResponse])
+async def get_role_users(
+    role_id: int,
+    current_user: User = Depends(require_permission("role:read")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get all users assigned to a specific role. Non-superadmin users cannot view superadmin role users."""
+    result = await db.execute(select(Role).where(Role.id == role_id))
+    role = result.scalar_one_or_none()
+    if not role:
+        raise HTTPException(status_code=404, detail="Role not found")
+
+    # Non-superadmin users cannot view superadmin role users
+    if role.name == "superadmin" and not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="Cannot view superadmin role users")
+
+    user_result = await db.execute(
+        select(User).join(UserRole, UserRole.user_id == User.id).where(UserRole.role_id == role_id)
+    )
+    users = user_result.scalars().all()
+
+    return [
+        RoleUserResponse(
+            id=u.id,
+            username=u.username,
+            email=u.email,
+            is_active=u.is_active,
+            is_superuser=u.is_superuser,
+        )
+        for u in users
+    ]

@@ -288,18 +288,23 @@ async def get_current_user_info(
     db: AsyncSession = Depends(get_db),
 ):
     """Get current user information with roles and permissions"""
-    # Get role names
-    role_result = await db.execute(
-        select(Role.name).join(UserRole, UserRole.role_id == Role.id).where(UserRole.user_id == current_user.id)
-    )
-    role_names = list(role_result.scalars().all())
+    import asyncio
 
-    # Get permission codes
-    if current_user.is_superuser:
-        perm_result = await db.execute(select(Permission.code))
-        perm_codes = list(perm_result.scalars().all())
-    else:
-        perm_codes = list(await get_user_permissions(db, current_user.id))
+    # Parallel: fetch roles and permissions concurrently
+    async def _get_roles():
+        role_result = await db.execute(
+            select(Role.name).join(UserRole, UserRole.role_id == Role.id).where(UserRole.user_id == current_user.id)
+        )
+        return list(role_result.scalars().all())
+
+    async def _get_permissions():
+        if current_user.is_superuser:
+            perm_result = await db.execute(select(Permission.code))
+            return list(perm_result.scalars().all())
+        else:
+            return list(await get_user_permissions(db, current_user.id))
+
+    role_names, perm_codes = await asyncio.gather(_get_roles(), _get_permissions())
 
     return UserResponse(
         id=current_user.id,
@@ -500,9 +505,13 @@ async def list_users(
     current_user: User = Depends(require_permission("user:read")),
     db: AsyncSession = Depends(get_db),
 ):
-    """List all users with optional search and filter (requires user:read permission)"""
+    """List all users with optional search and filter (requires user:read permission).
+    Non-superadmin users cannot see the superadmin user."""
     from sqlalchemy.orm import selectinload
     stmt = select(User).options(selectinload(User.roles)).order_by(User.id)
+    # Non-superadmin users cannot see the superadmin user
+    if not current_user.is_superuser:
+        stmt = stmt.where(User.is_superuser == False)
     if search:
         escaped_search = search.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
         stmt = stmt.where(
@@ -555,21 +564,26 @@ async def admin_create_user(
     await db.commit()
     await db.refresh(new_user)
 
-    # Assign roles if provided
-    if user_data.role_ids:
-        for rid in user_data.role_ids:
-            db.add(UserRole(user_id=new_user.id, role_id=rid))
+    # Assign role if provided
+    if user_data.role_id:
+        # Prevent assigning superadmin role - it's only for the initial system admin
+        superadmin_role_id = await _get_superadmin_role_id(db)
+        if user_data.role_id == superadmin_role_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot assign superadmin role. Superadmin is reserved for the initial system administrator."
+            )
+        db.add(UserRole(user_id=new_user.id, role_id=user_data.role_id))
     elif not user_data.is_superuser:
-        # Assign default role (operator) if no roles specified and not superuser
+        # Assign default role (operator) if no role specified and not superuser
         default_role = await db.execute(select(Role).where(Role.is_default == True))
         role = default_role.scalar_one_or_none()
         if role:
             db.add(UserRole(user_id=new_user.id, role_id=role.id))
 
-    # Assign superadmin role if is_superuser
-    if new_user.is_superuser:
-        superadmin_role_id = await _get_superadmin_role_id(db)
-        db.add(UserRole(user_id=new_user.id, role_id=superadmin_role_id))
+    # is_superuser is only set internally, not through user creation API
+    # New users should never be superuser
+    new_user.is_superuser = False
 
     await db.commit()
 
@@ -590,10 +604,14 @@ async def get_user(
     current_user: User = Depends(require_permission("user:read")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get user details by ID (requires user:read permission)"""
+    """Get user details by ID (requires user:read permission).
+    Non-superadmin users cannot view the superadmin user."""
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
     if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    # Non-superadmin users cannot see the superadmin user
+    if user.is_superuser and not current_user.is_superuser:
         raise HTTPException(status_code=404, detail="User not found")
     return await _build_user_detail_response(db, user)
 
@@ -606,11 +624,23 @@ async def admin_update_user(
     current_user: User = Depends(require_permission("user:write")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Update user info (requires user:write permission)"""
+    """Update user info (requires user:write permission).
+    Non-superadmin users cannot modify superadmin users."""
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+
+    # Non-superadmin users cannot modify superadmin users
+    if user.is_superuser and not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="Cannot modify superadmin user")
+
+    # Protect the initial system admin (id=1) from demotion or deactivation
+    if user.id == 1:
+        if user_data.is_superuser is False:
+            raise HTTPException(status_code=400, detail="Cannot demote the initial system administrator")
+        if user_data.is_active is False:
+            raise HTTPException(status_code=400, detail="Cannot deactivate the initial system administrator")
 
     # Prevent self-demotion
     if user.id == current_user.id and user_data.is_superuser is False:
@@ -664,16 +694,21 @@ async def admin_update_user(
     await db.refresh(user)
 
     # Handle role assignment
-    if user_data.role_ids is not None:
-        await db.execute(UserRole.__table__.delete().where(UserRole.user_id == user.id))
-        for rid in user_data.role_ids:
-            db.add(UserRole(user_id=user.id, role_id=rid))
-        # Sync is_superuser
+    if user_data.role_id is not None:
+        # Protect the initial system admin (id=1) from role changes
+        if user.id == 1:
+            raise HTTPException(status_code=400, detail="Cannot modify roles of the initial system administrator")
+        # Prevent assigning superadmin role - it's only for the initial system admin
         superadmin_role_id = await _get_superadmin_role_id(db)
-        sa_result = await db.execute(
-            select(UserRole).where(UserRole.user_id == user.id, UserRole.role_id == superadmin_role_id)
-        )
-        user.is_superuser = sa_result.scalar_one_or_none() is not None
+        if user_data.role_id == superadmin_role_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot assign superadmin role. Superadmin is reserved for the initial system administrator."
+            )
+        await db.execute(UserRole.__table__.delete().where(UserRole.user_id == user.id))
+        db.add(UserRole(user_id=user.id, role_id=user_data.role_id))
+        # Sync is_superuser - only true if user has superadmin role
+        user.is_superuser = (user_data.role_id == superadmin_role_id)
         await db.commit()
         await db.refresh(user)
         await invalidate_user_permissions(user.id)
@@ -695,14 +730,23 @@ async def admin_delete_user(
     current_user: User = Depends(require_permission("user:delete")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Delete a user (requires user:delete permission). Cannot delete self."""
+    """Delete a user (requires user:delete permission). Cannot delete self or initial admin.
+    Non-superadmin users cannot delete superadmin users."""
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
+    # Non-superadmin users cannot delete superadmin users
+    if user.is_superuser and not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="Cannot delete superadmin user")
+
     if user.id == current_user.id:
         raise HTTPException(status_code=400, detail="Cannot delete your own account")
+
+    # Protect the initial system admin (id=1) from deletion
+    if user.id == 1:
+        raise HTTPException(status_code=400, detail="Cannot delete the initial system administrator")
 
     deleted_username = user.username
     await db.delete(user)
