@@ -297,7 +297,7 @@ class TerminalService:
             if query.mac:
                 # Strip all separators for format-agnostic MAC matching
                 mac_clean = _normalize_mac(query.mac)
-                ip_mac_conditions.append(Terminal.mac_address_normalized.ilike(f"{_escape_like(mac_clean)}%"))
+                ip_mac_conditions.append(Terminal.mac_address_normalized.ilike(f"%{_escape_like(mac_clean)}%"))
 
             if ip_mac_conditions:
                 conditions.append(or_(*ip_mac_conditions))
@@ -340,7 +340,7 @@ class TerminalService:
             if query.mac:
                 # Strip all separators for format-agnostic MAC matching
                 mac_clean = _normalize_mac(query.mac)
-                ip_mac_conditions.append(Terminal.mac_address_normalized.ilike(f"{_escape_like(mac_clean)}%"))
+                ip_mac_conditions.append(Terminal.mac_address_normalized.ilike(f"%{_escape_like(mac_clean)}%"))
 
             if ip_mac_conditions:
                 conditions.append(or_(*ip_mac_conditions))
@@ -530,14 +530,13 @@ class TerminalService:
         if query:
             # Search by MAC, IP pattern, or comments
             if query.search:
-                search_term = f"%{query.search}%"
                 # Format-agnostic MAC matching using normalized column
                 mac_clean = _normalize_mac(query.search)
                 conditions.append(
                     or_(
-                        Whitelist.mac_address_normalized.ilike(f"{_escape_like(mac_clean)}%"),
-                        Whitelist.ip_pattern.ilike(f"%{_escape_like(search_term)}%"),
-                        Whitelist.comments.ilike(f"%{_escape_like(search_term)}%"),
+                        Whitelist.mac_address_normalized.ilike(f"%{_escape_like(mac_clean)}%"),
+                        Whitelist.ip_pattern.ilike(f"%{_escape_like(query.search)}%"),
+                        Whitelist.comments.ilike(f"%{_escape_like(query.search)}%"),
                     )
                 )
 
@@ -567,13 +566,12 @@ class TerminalService:
         if query:
             # Search by MAC, IP pattern, or comments
             if query.search:
-                search_term = f"%{query.search}%"
                 mac_clean = _normalize_mac(query.search)
                 conditions.append(
                     or_(
-                        Whitelist.mac_address_normalized.ilike(f"{_escape_like(mac_clean)}%"),
-                        Whitelist.ip_pattern.ilike(f"%{_escape_like(search_term)}%"),
-                        Whitelist.comments.ilike(f"%{_escape_like(search_term)}%"),
+                        Whitelist.mac_address_normalized.ilike(f"%{_escape_like(mac_clean)}%"),
+                        Whitelist.ip_pattern.ilike(f"%{_escape_like(query.search)}%"),
+                        Whitelist.comments.ilike(f"%{_escape_like(query.search)}%"),
                     )
                 )
 
@@ -772,13 +770,12 @@ class TerminalService:
         if query:
             # Search by MAC or IP
             if query.search:
-                search_term = f"%{query.search}%"
                 # Format-agnostic MAC matching using normalized column
                 mac_clean = _normalize_mac(query.search)
                 conditions.append(
                     or_(
-                        Blacklist.mac_address_normalized.ilike(f"{_escape_like(mac_clean)}%"),
-                        Blacklist.ip_address.ilike(f"%{_escape_like(search_term)}%"),
+                        Blacklist.mac_address_normalized.ilike(f"%{_escape_like(mac_clean)}%"),
+                        Blacklist.ip_address.ilike(f"%{_escape_like(query.search)}%"),
                     )
                 )
 
@@ -808,12 +805,11 @@ class TerminalService:
         if query:
             # Search by MAC or IP
             if query.search:
-                search_term = f"%{query.search}%"
                 mac_clean = _normalize_mac(query.search)
                 conditions.append(
                     or_(
-                        Blacklist.mac_address_normalized.ilike(f"{_escape_like(mac_clean)}%"),
-                        Blacklist.ip_address.ilike(f"%{_escape_like(search_term)}%"),
+                        Blacklist.mac_address_normalized.ilike(f"%{_escape_like(mac_clean)}%"),
+                        Blacklist.ip_address.ilike(f"%{_escape_like(query.search)}%"),
                     )
                 )
 
@@ -1073,14 +1069,14 @@ class TerminalService:
         if query.action:
             conditions.append(AuditLog.action == query.action)
 
-        # Keyword search across IP, username, and details
+        # Keyword search across IP, username, action, and details
         if query.search:
-            search_term = f"%{query.search}%"
             conditions.append(
                 or_(
-                    AuditLog.ip_address.ilike(f"%{_escape_like(search_term)}%"),
-                    AuditLog.username.ilike(f"%{_escape_like(search_term)}%"),
-                    AuditLog.details.ilike(f"%{_escape_like(search_term)}%"),
+                    AuditLog.ip_address.ilike(f"%{_escape_like(query.search)}%"),
+                    AuditLog.username.ilike(f"%{_escape_like(query.search)}%"),
+                    AuditLog.action.ilike(f"%{_escape_like(query.search)}%"),
+                    AuditLog.details.ilike(f"%{_escape_like(query.search)}%"),
                 )
             )
 
@@ -1110,14 +1106,14 @@ class TerminalService:
         if query.action:
             conditions.append(AuditLog.action == query.action)
 
-        # Keyword search across IP, username, and details
+        # Keyword search across IP, username, action, and details
         if query.search:
-            search_term = f"%{query.search}%"
             conditions.append(
                 or_(
-                    AuditLog.ip_address.ilike(f"%{_escape_like(search_term)}%"),
-                    AuditLog.username.ilike(f"%{_escape_like(search_term)}%"),
-                    AuditLog.details.ilike(f"%{_escape_like(search_term)}%"),
+                    AuditLog.ip_address.ilike(f"%{_escape_like(query.search)}%"),
+                    AuditLog.username.ilike(f"%{_escape_like(query.search)}%"),
+                    AuditLog.action.ilike(f"%{_escape_like(query.search)}%"),
+                    AuditLog.details.ilike(f"%{_escape_like(query.search)}%"),
                 )
             )
 
