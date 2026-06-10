@@ -1,5 +1,7 @@
 # 版本跟踪记录
 
+> 文档版本：v3.2.0-r2 | 更新日期：2026-06-11
+>
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
@@ -24,6 +26,87 @@
 | 9100a8d | fix(search): increase debounce delay from 300ms to 500ms across all pages |
 | 2f2add5 | fix: prevent superadmin role modification and fix Users search flickering |
 | 0b36d78 | docs: update RBAC documentation to v3.0 with current implementation |
+
+---
+
+## [v3.2.0-r2] - 2026-06-11
+
+**发布类型**：Bug 修复 + 功能增强 | **合并方式**：Fast-forward
+
+### 变更概要
+
+manage.sh 全面审查修复与功能增强，修复 6 项 Bug，增强容错机制和备份安全，新增 7 个运维命令和 4 组环境变量。
+
+### 提交记录
+
+| Commit | 类型 | 说明 |
+|--------|------|------|
+| `be61e90` | fix | manage.sh 全面审查修复与功能增强 |
+
+### 变更明细
+
+#### Bug 修复
+
+| 变更项 | 文件 | 说明 |
+|--------|------|------|
+| `log_ok` 未定义 | `manage.sh` | 3处 `log_ok` 改为 `log_success` |
+| `backup-schedule disable` 管道语法 | `manage.sh` | 修复 `|| true` 优先级导致管道断裂 |
+| 硬编码容器名 | `manage.sh` | `tam_db`/`tam_redis` 统一为 `dc exec -T`，`tam_admin` 改为 `get_env DB_USER` |
+| ADMIN_PASSWORD 环境变量缺失 | `manage.sh` + `cli.py` | demo/prod/init 三处写入 .env |
+| `_run_setup` 不填充 RBAC 数据 | `cli.py` | 新增 `_ensure_rbac_seed(db)` 调用，init 时自动种子 5 角色 + 29 权限 |
+| backup/health 硬编码用户名 | `manage.sh` | 改为 `get_env "DB_USER"` |
+
+#### 核心增强
+
+| 变更项 | 文件 | 说明 |
+|--------|------|------|
+| 破坏性操作备份机制 | `manage.sh` | `interactive_backup` 函数，clean/redis flush/migrate 增加备份选项 |
+| 日志开关 | `manage.sh` | `--log` 全局参数 + `TAM_LOG_ENABLED` 环境变量，30天自动清理 |
+| 容错机制加强 | `manage.sh` | `require_services` 自动启动选项 + `check_disk_space`/`check_db_connection` 预检查 |
+| 备份信息展示 | `manage.sh` | `auto_backup` 显示备份文件路径和大小 |
+| SQL 注入防护 | `manage.sh` | `logs-export` 命令参数转义单引号 |
+
+#### 新增功能
+
+| 变更项 | 文件 | 说明 |
+|--------|------|------|
+| 密码重置 | `manage.sh` + `cli.py` | `password reset <username> [--password <pw>]` |
+| 用户管理 CLI | `manage.sh` + `cli.py` | `user list` / `user unlock <username>` |
+| 审计日志导出 | `manage.sh` | `logs-export [--days N] [--output file] [--username user] [--action action]` |
+| RBAC 角色查看 | `manage.sh` + `cli.py` | `role list` / `role permissions` |
+| 服务单独重建 | `manage.sh` | `rebuild frontend/backend/nginx` |
+| IPGuard 配置 | `manage.sh` | 部署向导增加 IPGuard 和 SWITCH_PORT 配置步骤 |
+| 备份轮转 | `manage.sh` | `BACKUP_RETAIN_COUNT` 环境变量控制保留数量 |
+| 配置热重载区分 | `manage.sh` | 区分热重载和需重启的配置键 |
+
+#### 新增环境变量
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `ADMIN_PASSWORD` | — | 自定义初始管理员密码 |
+| `BACKUP_RETAIN_COUNT` | `0`（保留全部） | 备份保留数量 |
+| `TAM_LOG_ENABLED` | `false` | manage.sh 操作日志开关 |
+| `IPGUARD_*` / `SWITCH_PORT` | — | 部署向导新增配置项 |
+
+#### 文档更新
+
+| 文档 | 版本 | 更新内容 |
+|------|------|---------|
+| `docs/release-notes.md` | v3.2.0-r1 → v3.2.0-r2 | 新增 r2 条目 |
+| `docs/backend.md` | v3.2.0-r1 → v3.2.0-r2 | CLI 章节补充新子命令 + setup 行为变更 |
+| `docs/RBAC.md` | v3.2.0-r1 → v3.2.0-r2 | 修正过时方案 + 补充 CLI 运维操作 |
+| `docs/logging-guide.md` | v3.2.0 → v3.2.0-r2 | 补充 --log/TAM_LOG_ENABLED/logs-export |
+| `docs/architecture.md` | v3.2.0-r1 → v3.2.0-r2 | 补充新环境变量 |
+| `docs/production-readiness-assessment.md` | v3.2.0-r1 → v3.2.0-r2 | 运维工具覆盖表更新 |
+| `docs/database.md` | v3.2.0-r1 → v3.2.0-r2 | 备份轮转策略 + RBAC seed 行为 |
+| `docs/branding.md` | v3.2.0-r1 → v3.2.0-r2 | 配置热重载/重启区分 |
+| `docs/api.md` | v3.2.0-r1 → v3.2.0-r2 | CLI 替代方案引用 |
+
+### 变更统计
+
+- **2 个文件变更**，+799 / -46 行
+- **manage.sh**: +753 / -41 行（6 项 Bug 修复 + 3 项核心增强 + 7 项新增功能）
+- **backend/cli.py**: +46 / -5 行（RBAC seed + 5 个新子命令）
 
 ---
 

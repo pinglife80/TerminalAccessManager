@@ -1,6 +1,6 @@
 # TerminalAccessManager 系统架构设计文档
 
-> 文档版本：v3.2.0-r1 | 更新日期：2026-06-10
+> 文档版本：v3.2.0-r2 | 更新日期：2026-06-11
 
 ## 1. 系统概述
 
@@ -598,6 +598,7 @@ WHERE mac_address_normalized ILIKE 'AABBCCDDEEFF%'
 | **scheduler** | scheduler_arp_collection_interval, scheduler_ipguard_sync_interval, scheduler_firewall_query_interval, scheduler_compliance_check_interval, scheduler_auto_unblock_interval | 是 |
 | **general** | environment, debug, log_level | environment/debug 只读 |
 | **branding** | app_name, app_short_name, app_subtitle, login_heading, login_subheading, login_footer_text, login_bg_url, favicon_url, footer_copyright, footer_icp_number, footer_icp_url | 是 |
+| **backup** | backup_retain_count | 是 |
 
 ### 10.3 只读配置
 
@@ -609,6 +610,14 @@ WHERE mac_address_normalized ILIKE 'AABBCCDDEEFF%'
 - JWT 令牌过期时间从 `ConfigService` 读取，修改后新签发的令牌使用新过期时间
 - 速率限制阈值从 `ConfigService` 读取，修改后即时生效
 - 登录安全阈值（验证码/锁定）从 `ConfigService` 读取，修改后即时生效
+
+### 10.5 新增环境变量（v3.2.0-r2）
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `ADMIN_PASSWORD` | — | 自定义初始管理员密码，deploy/init 时写入 .env |
+| `BACKUP_RETAIN_COUNT` | `0`（保留全部） | 备份文件保留数量，超出时自动清理最旧的备份 |
+| `TAM_LOG_ENABLED` | `false` | manage.sh 操作日志开关，启用后所有命令执行记录写入 `.manage/logs/` |
 
 ---
 

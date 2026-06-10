@@ -1,6 +1,6 @@
 # TerminalAccessManager 数据库设计文档
 
-> 文档版本：v3.2.0-r1 | 更新日期：2026-06-10
+> 文档版本：v3.2.0-r2 | 更新日期：2026-06-11
 
 ## 1. 概述
 
@@ -542,6 +542,20 @@ docker-compose.yml 中 PostgreSQL 的 `command` 参数列表如下：
 
 联合主键: (role_id, permission_id)
 
+### RBAC 种子数据自动填充（v3.2.0-r2）
+
+`manage.sh init` 和 `python cli.py setup` 现在自动调用 `_ensure_rbac_seed(db)` 填充 RBAC 种子数据：
+
+| 数据 | 数量 | 说明 |
+|------|------|------|
+| 角色 | 5 | superadmin, admin, operator, auditor, viewer |
+| 权限码 | 29 | 覆盖 10 个功能模块 |
+| 角色-权限映射 | 51 | admin(23), operator(10), auditor(8), viewer(10) |
+
+幂等保护：`roles` 表已有 >= 5 条记录时跳过种子操作。
+
+> **注意**：通过 `alembic upgrade head` 升级的已有数据库，由 006_rbac_tables.py 迁移脚本负责种子数据填充。
+
 ---
 
 ## 4. 数据字典汇总
@@ -790,3 +804,22 @@ docker-compose.yml 中 PostgreSQL 的 `command` 参数列表如下：
 将 `system_config` 表中品牌配置项（`app_name`、`login_heading` 等）的旧值 `"Terminal Access Platform"` 替换为 `"Terminal Access Manager"`。
 
 > **注意：** 这些迁移为幂等操作，仅更新包含旧值的记录，已更新的记录不受影响。
+
+### 备份轮转策略（v3.2.0-r2）
+
+通过 `BACKUP_RETAIN_COUNT` 环境变量控制备份文件保留数量：
+
+| 配置 | 默认值 | 说明 |
+|------|--------|------|
+| `BACKUP_RETAIN_COUNT` | `0`（保留全部） | 保留最近 N 个备份文件，超出时自动清理最旧的 |
+
+轮转范围：
+- PostgreSQL 备份（`backups/db_*.sql`）
+- Redis 备份（`backups/redis_*.rdb`）
+- 配置快照（`backups/config_*.env`）
+
+设置示例：
+```bash
+# 在 .env 中设置保留最近 10 个备份
+BACKUP_RETAIN_COUNT=10
+```

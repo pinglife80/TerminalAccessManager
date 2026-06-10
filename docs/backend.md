@@ -1,6 +1,6 @@
 # TerminalAccessManager 后端实现文档
 
-> 文档版本：v3.2.0-r1 | 更新日期：2026-06-10
+> 文档版本：v3.2.0-r2 | 更新日期：2026-06-11
 
 ## 1. 概述
 
@@ -958,11 +958,16 @@ def _normalize_mac_raw(mac: str) -> str:
 
 | 命令 | 说明 |
 |------|------|
-| `python cli.py setup` | 初始化数据库 + 创建 admin 用户（admin/Admin123） |
-| `python cli.py mock generate` | 生成 Demo 数据 |
-| `python cli.py mock clear` | 清除所有 Demo 数据（需输入 `DELETE` 确认，保留 admin 用户和系统配置） |
+| `python cli.py setup` | 初始化数据库 + 种子 RBAC 数据（5 角色 + 29 权限） + 创建 admin 用户（密码可通过 `ADMIN_PASSWORD` 环境变量自定义，默认 Admin123） |
+| `python cli.py mock generate` | 生成 Demo 数据（自动确保 RBAC 种子数据存在） |
+| `python cli.py mock clear` | 清除所有 Demo 数据（需输入 `DELETE` 确认，保留 admin 用户、系统配置和 5 个内置角色） |
 | `python cli.py validate` | 运行后端验证检查 |
 | `python cli.py test [args]` | 运行 pytest 测试套件 |
+| `python cli.py password reset <username> [--password <pw>]` | 重置用户密码（不指定密码则生成随机密码） |
+| `python cli.py user list` | 列出所有用户 |
+| `python cli.py user unlock <username>` | 解锁被锁定的用户账户 |
+| `python cli.py role list` | 列出所有角色 |
+| `python cli.py role permissions` | 列出所有权限码 |
 
 ### Demo 数据生成详情
 
@@ -990,6 +995,57 @@ def _normalize_mac_raw(mac: str) -> str:
 6. 安全 — 硬编码密码检测、bcrypt 直接调用和 JWT 实现
 7. API 端点 — 关键端点关键词检测
 8. Docker — Dockerfile、健康检查、非 root 用户
+
+### 密码重置
+
+`password reset` 命令用于重置用户密码，适用于管理员忘记密码无法通过 Web UI 恢复的场景：
+
+```bash
+# 重置指定用户密码（自动生成随机密码）
+python cli.py password reset admin
+
+# 指定新密码
+python cli.py password reset admin --password NewPass123
+```
+
+- 密码必须满足复杂度要求：至少 8 位，包含大写字母、小写字母和数字
+- 重置后自动递增 Token 版本号，使该用户所有已登录会话失效
+- 同时清除 Redis 中的登录锁定状态
+
+### 用户管理
+
+`user list` 和 `user unlock` 命令提供 CLI 方式的用户管理，适用于无法访问 Web UI 的紧急运维场景：
+
+```bash
+# 列出所有用户
+python cli.py user list
+
+# 解锁被锁定的用户
+python cli.py user unlock john.doe
+```
+
+### 角色查看
+
+`role list` 和 `role permissions` 命令用于查看 RBAC 角色和权限配置：
+
+```bash
+# 列出所有角色
+python cli.py role list
+
+# 列出所有权限码
+python cli.py role permissions
+```
+
+### setup 行为变更（v3.2.0-r2）
+
+`setup` 命令现在在 `init_db()` 和 `_create_admin_user()` 之间自动调用 `_ensure_rbac_seed(db)`，确保初始化时自动填充 RBAC 种子数据：
+
+- 5 个内置角色：superadmin、admin、operator、auditor、viewer
+- 29 个权限码：覆盖 10 个功能模块
+- 4 组角色-权限映射：admin(23)、operator(10)、auditor(8)、viewer(10)
+- 幂等保护：`roles` 表已有 >= 5 条记录时跳过
+
+此修复解决了 `manage.sh init` 后角色管理页面为空、创建角色时无权限菜单可选的问题。
 
 ### firewall_query 任务修复
 

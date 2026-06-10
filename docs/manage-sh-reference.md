@@ -1,6 +1,6 @@
 # manage.sh 命令行操作手册
 
-> 文档版本：v3.2.0-r1 | 更新日期：2026-06-10
+> 文档版本：v3.2.0-r2 | 更新日期：2026-06-11
 
 TerminalAccessManager (TAM) 统一管理脚本，用于项目全生命周期管理。
 
@@ -10,7 +10,20 @@ TerminalAccessManager (TAM) 统一管理脚本，用于项目全生命周期管�
 |------|------|
 | `-y, --yes` | 跳过所有确认提示（非交互模式） |
 | `-v, --verbose` | 启用详细/调试输出 |
+| `--log` | 启用操作日志记录（本次命令生效） |
 | `-h, --help` | 显示帮助信息 |
+
+**`--log` 操作日志详情：**
+- 日志写入 `.manage/logs/manage_YYYYMMDD.log`
+- 也可通过 `.env` 中设置 `TAM_LOG_ENABLED=true` 全局启用
+- 日志格式：`[YYYY-MM-DD HH:MM:SS] [LEVEL] [COMMAND] Message`
+- 自动清理：保留最近 30 天日志
+
+**示例：**
+```bash
+./manage.sh --log backup          # 本次备份操作记录日志
+./manage.sh --log config set app_name MyApp  # 本次配置修改记录日志
+```
 
 ---
 
@@ -170,7 +183,36 @@ TerminalAccessManager (TAM) 统一管理脚本，用于项目全生命周期管�
 
 ---
 
-### 1.8 upgrade — 拉取远程代码并升级 🔴
+### 1.8 rebuild — 重建指定服务
+
+**风险等级：** 🟡 注意
+
+**应用场景：** 仅重建某个特定服务，比全量 `update` 更快
+
+**命令格式：**
+```bash
+./manage.sh rebuild <service>
+```
+
+**参数说明：**
+| 参数 | 说明 |
+|------|------|
+| `frontend` | 仅重建前端 |
+| `backend` | 仅重建后端 |
+| `nginx` | 仅重建 Nginx |
+
+**执行效果：** 重新构建指定服务的 Docker 镜像并重启该服务。适用于仅修改了某个服务代码的场景。
+
+**示例：**
+```bash
+./manage.sh rebuild frontend     # 仅重建前端
+./manage.sh rebuild backend      # 仅重建后端
+./manage.sh rebuild nginx        # 仅重建 Nginx
+```
+
+---
+
+### 1.9 upgrade — 拉取远程代码并升级 🔴
 
 **风险等级：** 🔴 **高危**
 
@@ -615,9 +657,139 @@ cp .env .env.backup             # 备份配置文件
 
 ---
 
-### 4.3 scheduler — 定时任务管理
+### 4.3 password — 密码管理
 
-#### 4.3.1 scheduler status — 任务状态
+#### 4.3.1 password reset — 重置用户密码 🟡
+
+**风险等级：** 🟡 注意
+
+**应用场景：** 重置指定用户的密码
+
+**命令格式：**
+```bash
+./manage.sh password reset <username> [--password <new_password>]
+```
+
+**参数说明：**
+| 参数 | 说明 |
+|------|------|
+| `<username>` | 要重置密码的用户名 |
+| `--password <new_password>` | 指定新密码（可选） |
+
+**执行效果：**
+1. 重置指定用户的密码
+2. 若未提供 `--password`，则自动生成随机密码
+3. 密码必须满足复杂度要求（8+ 字符，包含大写、小写、数字）
+4. 重置后自动递增该用户的 token 版本（所有现有会话失效）
+5. 清除该用户的 Redis 登录锁定
+
+**示例：**
+```bash
+./manage.sh password reset admin                    # 随机生成新密码
+./manage.sh password reset admin --password NewP@ss123  # 指定新密码
+```
+
+---
+
+### 4.4 user — 用户管理
+
+#### 4.4.1 user list — 列出所有用户
+
+**风险等级：** 🟢 安全
+
+**应用场景：** 查看系统中所有用户信息
+
+**命令格式：**
+```bash
+./manage.sh user list
+```
+
+**输出内容：** 用户名、角色、活跃状态、超级用户状态
+
+#### 4.4.2 user unlock — 解锁用户账户
+
+**风险等级：** 🟢 安全
+
+**应用场景：** 解锁被锁定的用户账户（管理员被锁定无法访问 Web UI 时特别有用）
+
+**命令格式：**
+```bash
+./manage.sh user unlock <username>
+```
+
+**执行效果：** 清除指定用户的 Redis 登录锁定，用户可重新登录。
+
+**示例：**
+```bash
+./manage.sh user unlock admin      # 解锁管理员账户
+```
+
+---
+
+### 4.5 role — 角色管理
+
+#### 4.5.1 role list — 列出所有角色
+
+**风险等级：** 🟢 安全
+
+**应用场景：** 查看系统中所有角色信息
+
+**命令格式：**
+```bash
+./manage.sh role list
+```
+
+**输出内容：** 角色名称、描述、是否默认角色、关联用户数
+
+#### 4.5.2 role permissions — 列出所有权限码
+
+**风险等级：** 🟢 安全
+
+**应用场景：** 查看系统中所有权限码
+
+**命令格式：**
+```bash
+./manage.sh role permissions
+```
+
+**输出内容：** 全部 29 个权限码，按模块分组显示
+
+---
+
+### 4.6 logs-export — 导出审计日志
+
+**风险等级：** 🟢 安全
+
+**应用场景：** 导出审计日志为 CSV 文件
+
+**命令格式：**
+```bash
+./manage.sh logs-export [--days N] [--output file] [--username user] [--action action]
+```
+
+**参数说明：**
+| 参数 | 说明 |
+|------|------|
+| `--days N` | 导出最近 N 天的日志（默认：30） |
+| `--output file` | 输出文件路径（默认：`backups/audit_logs_export_{TIMESTAMP}.csv`） |
+| `--username user` | 按用户名过滤 |
+| `--action action` | 按操作类型过滤 |
+
+**安全说明：** `--username` 和 `--action` 参数已做 SQL 注入防护。
+
+**示例：**
+```bash
+./manage.sh logs-export                                    # 导出最近 30 天审计日志
+./manage.sh logs-export --days 7                           # 导出最近 7 天
+./manage.sh logs-export --username admin --action login    # 过滤 admin 用户的登录操作
+./manage.sh logs-export --output /tmp/audit.csv            # 指定输出路径
+```
+
+---
+
+### 4.7 scheduler — 定时任务管理
+
+#### 4.7.1 scheduler status — 任务状态
 
 **风险等级：** 🟢 安全
 
@@ -636,7 +808,7 @@ cp .env .env.backup             # 备份配置文件
 | `compliance_check` | 合规检查 |
 | `auto_unblock` | 自动解封 |
 
-#### 4.3.2 scheduler pause — 暂停任务
+#### 4.7.2 scheduler pause — 暂停任务
 
 **风险等级：** 🟡 注意
 
@@ -650,7 +822,7 @@ cp .env .env.backup             # 备份配置文件
 
 **⚠ 注意：** 暂停期间相关数据不会更新，长时间暂停可能导致合规状态过时
 
-#### 4.3.3 scheduler resume — 恢复任务
+#### 4.7.3 scheduler resume — 恢复任务
 
 **风险等级：** 🟢 安全
 
@@ -660,7 +832,7 @@ cp .env .env.backup             # 备份配置文件
 
 **执行效果：** 删除 Redis 中的暂停控制键，任务在下一次调度周期恢复执行。
 
-#### 4.3.4 scheduler trigger — 手动触发
+#### 4.7.4 scheduler trigger — 手动触发
 
 **风险等级：** 🟡 注意
 
@@ -672,7 +844,7 @@ cp .env .env.backup             # 备份配置文件
 
 **⚠ 注意：** 手动触发会立即执行任务，可能消耗系统资源
 
-#### 4.3.5 scheduler intervals — 查看间隔配置
+#### 4.7.5 scheduler intervals — 查看间隔配置
 
 **风险等级：** 🟢 安全
 
@@ -689,7 +861,7 @@ cp .env .env.backup             # 备份配置文件
 
 ---
 
-### 4.4 ssl — SSL 证书管理
+### 4.8 ssl — SSL 证书管理
 
 **风险等级：** 🟢 安全（幂等）
 
@@ -706,7 +878,7 @@ cp .env .env.backup             # 备份配置文件
 
 ---
 
-### 4.5 clean — 清理所有数据 🔴
+### 4.9 clean — 清理所有数据 🔴
 
 **风险等级：** 🔴 **高危**
 
@@ -728,7 +900,7 @@ cp .env .env.backup             # 备份配置文件
 
 ---
 
-### 4.6 version — 版本信息
+### 4.10 version — 版本信息
 
 **风险等级：** 🟢 安全
 
@@ -738,7 +910,50 @@ cp .env .env.backup             # 备份配置文件
 
 ---
 
-## 五、命令速查表
+## 五、环境变量说明
+
+以下环境变量可在 `.env` 文件中配置，影响 `manage.sh` 的行为：
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `ADMIN_PASSWORD` | — | 自定义初始管理员密码（在 `deploy`/`init` 时使用） |
+| `BACKUP_RETAIN_COUNT` | 0（保留全部） | 备份文件保留数量，超过此数量自动清理最旧的备份 |
+| `TAM_LOG_ENABLED` | false | 启用 manage.sh 操作日志记录（也可通过 `--log` 选项单次启用） |
+
+---
+
+## 六、破坏性操作备份机制
+
+`clean`、`redis flush`、`migrate` 等破坏性命令在执行前会提供**交互式备份提示**：
+
+- 默认选择为"创建备份"（用户可拒绝）
+- 备份完成后显示备份路径和文件大小
+- `BACKUP_RETAIN_COUNT` 环境变量控制备份轮转数量（默认 0 表示保留全部）
+
+---
+
+## 七、配置热重载与重启说明
+
+`manage.sh config set` 执行后会提示该配置变更的生效方式：
+
+**热重载（无需重启，立即生效）：**
+- 速率限制（rate limits）
+- 登录安全策略（login security）
+- 调度器间隔（scheduler intervals）
+- JWT 过期时间（JWT expiry）
+- 品牌配置（branding）
+
+**需重启服务（修改后需执行 `./manage.sh restart`）：**
+- `LOG_LEVEL`
+- `TZ`
+- `DEBUG`
+- `ENCRYPTION_KEY`
+- 数据库连接配置
+- Redis 连接配置
+
+---
+
+## 八、命令速查表
 
 | 命令 | 风险 | 用途 | 是否幂等 |
 |------|------|------|---------|
@@ -749,6 +964,7 @@ cp .env .env.backup             # 备份配置文件
 | `status` | 🟢 | 查看状态 | ✅ |
 | `health` | 🟢 | 健康检查 | ✅ |
 | `update` | 🟡 | 本地重建 | ✅ |
+| `rebuild` | 🟡 | 重建指定服务 | ✅ |
 | `upgrade` | 🔴 | 远程升级 | ❌ |
 | `init` | 🟢 | 初始化数据库 | ✅ |
 | `migrate` | 🔴 | 数据库迁移 | ❌ |
@@ -771,6 +987,12 @@ cp .env .env.backup             # 备份配置文件
 | `redis get` | 🟢 | 获取键值 | ✅ |
 | `redis del` | 🟡 | 删除键 | ❌ |
 | `redis flush` | 🔴 | 清空数据库 | ❌ |
+| `password reset` | 🟡 | 重置用户密码 | ❌ |
+| `user list` | 🟢 | 列出所有用户 | ✅ |
+| `user unlock` | 🟢 | 解锁用户账户 | ✅ |
+| `role list` | 🟢 | 列出所有角色 | ✅ |
+| `role permissions` | 🟢 | 列出权限码 | ✅ |
+| `logs-export` | 🟢 | 导出审计日志 | ✅ |
 | `scheduler status` | 🟢 | 任务状态 | ✅ |
 | `scheduler pause` | 🟡 | 暂停任务 | ✅ |
 | `scheduler resume` | 🟢 | 恢复任务 | ✅ |
@@ -782,7 +1004,7 @@ cp .env .env.backup             # 备份配置文件
 
 ---
 
-## 六、常见运维场景
+## 九、常见运维场景
 
 ### 场景 1：首次部署
 ```bash

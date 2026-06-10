@@ -1,7 +1,7 @@
 # RBAC 角色管理与用户访问控制
 
-**版本**: v3.2.0-r1  
-**更新日期**: 2026-06-10  
+**版本**: v3.2.0-r2
+**更新日期**: 2026-06-11  
 **变更说明**: 文档重命名为 RBAC.md，版本号对齐项目代码版本，补充单角色模型、超管隔离机制、初始管理员保护、前端按钮级权限差距分析等内容
 
 ---
@@ -854,6 +854,52 @@ flowchart TD
 | 只读查看 | viewer | 仅查看各模块数据，不可操作 |
 | 自定义需求 | 自定义角色 | 按需组合权限码 |
 
+### 8.7 CLI 运维操作
+
+manage.sh 和 cli.py 提供 CLI 方式的 RBAC 运维操作，适用于无法访问 Web UI 的紧急运维场景（如管理员账户锁定、忘记密码等）。
+
+#### 密码重置
+
+```bash
+# 通过 manage.sh（推荐）
+./manage.sh password reset <username>              # 自动生成随机密码
+./manage.sh password reset <username> --password NewPass123  # 指定新密码
+
+# 通过 cli.py
+python cli.py password reset <username>
+python cli.py password reset <username> --password NewPass123
+```
+
+- 密码必须满足复杂度要求：至少 8 位，包含大写字母、小写字母和数字
+- 重置后自动递增 Token 版本号，使该用户所有已登录会话失效
+- 同时清除 Redis 中的登录锁定状态
+
+#### 用户管理
+
+```bash
+# 列出所有用户
+./manage.sh user list
+python cli.py user list
+
+# 解锁被锁定的用户账户
+./manage.sh user unlock <username>
+python cli.py user unlock <username>
+```
+
+#### 角色查看
+
+```bash
+# 列出所有角色
+./manage.sh role list
+python cli.py role list
+
+# 列出所有权限码
+./manage.sh role permissions
+python cli.py role permissions
+```
+
+> **重要提示**：当管理员账户被锁定或忘记密码时，CLI 操作是唯一的恢复手段。建议将 `password reset` 和 `user unlock` 命令纳入运维应急手册。
+
 ---
 
 ## 9. 审计与追踪
@@ -993,7 +1039,7 @@ flowchart TD
 | Alembic KeyError '005_mac_normalized_column' | 迁移脚本 down_revision 写错 | 修正为实际 revision ID '005' |
 | DuplicateTableError 'data_sources' | 数据库表已存在但 alembic 版本缺失 | `alembic stamp 005` 标记版本 |
 | DuplicateTableError 'roles' | FastAPI create_all 已创建表 | `alembic stamp 006` + 手动 seed |
-| RBAC 表无预设数据 | create_all 只建表不 seed | 手动执行 INSERT SQL |
+| RBAC 表无预设数据 | create_all 只建表不 seed | `_run_setup()` 自动调用 `_ensure_rbac_seed(db)` 种子数据（v3.2.0-r2 修复） |
 | DetachedInstanceError on /auth/users | ORM relationship 在 session 外被 Pydantic 序列化 | selectinload 预加载 + 手动构建响应 |
 | admin_create_user 角色 roles 返回空 | UserRole 添加后未 commit | 将 commit 移到角色分配之后 |
 | 前端路由权限缺失 | 4个路由未配置 requiredPermission | 补全 terminals/whitelist/blacklist/audit-logs |

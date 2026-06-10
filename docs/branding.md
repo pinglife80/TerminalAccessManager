@@ -1,6 +1,6 @@
 # 品牌自定义指南
 
-> 文档版本：v3.2.0-r1 | 更新日期：2026-06-10
+> 文档版本：v3.2.0-r2 | 更新日期：2026-06-11
 
 ## 概述
 
@@ -556,6 +556,19 @@ docker compose up -d --build frontend
 1. **开发环境**：刷新浏览器即可（Vite 直接服务 `public/` 目录）
 2. **生产环境**：需重新构建前端，因为资源会在构建时被复制到 `dist/` 目录
 3. **Docker 环境**：需重新构建 frontend 容器
+
+### 配置变更生效方式（v3.2.0-r2）
+
+通过 `manage.sh config set` 修改配置时，系统会提示该配置变更的生效方式：
+
+| 生效方式 | 配置项 | 说明 |
+|---------|--------|------|
+| **热重载**（无需重启） | 限流阈值、登录安全、调度间隔、JWT 有效期、品牌配置 | 修改后即时生效，ConfigService 写穿透 + Redis 缓存失效 |
+| **需重启服务** | LOG_LEVEL、TZ、DEBUG、ENCRYPTION_KEY、数据库连接、Redis 连接 | 修改 .env 后需执行 `./manage.sh restart backend` |
+
+`manage.sh config set` 执行时会自动判断并提示：
+- 热重载配置：显示 "✓ 配置已热重载生效"
+- 需重启配置：显示 "⚠ 此配置需要重启 backend 服务才能生效: ./manage.sh restart backend"
 
 ## 主题切换
 

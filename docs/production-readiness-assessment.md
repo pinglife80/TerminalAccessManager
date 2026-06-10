@@ -1,7 +1,7 @@
 # TerminalAccessManager (TAM) 生产环境交付可行性评估报告
 
 **评估日期：** 2026-06-10
-**评估版本：** v3.2.0-r1
+**评估版本：** v3.2.0-r2
 **评估方法：** 10 维度深度代码审查 + 架构分析 + 安全扫描 + 业务链验证
 **修复状态：** 阶段一~三已完成 + 6项高风险修复已完成，3 Critical + 7 High + 8 Medium = 18 项安全问题已修复，6 项高风险问题已修复；v3.2.0 新增：Request-ID 链路追踪、时区全局控制、日志格式函数化、Docker 安全加固注释化
 **综合评分：** **9.0/10** — 达到生产交付就绪状态
@@ -94,6 +94,10 @@ manage.sh（3,094 行）提供 30+ 命令，覆盖完整运维生命周期：
 | Redis | info/keys/get/del/flush | ✅ |
 | 调度器 | status/pause/resume/trigger/intervals | ✅ |
 | 工具 | ssl/clean/version/help | ✅ |
+| 用户管理 | password reset/user list/unlock | ✅ |
+| 角色管理 | role list/permissions | ✅ |
+| 日志管理 | logs-cleanup/logs-archive/logs-export/audit-cleanup | ✅ |
+| 服务重建 | rebuild frontend/backend/nginx | ✅ |
 
 ### 2.4 功能缺口
 

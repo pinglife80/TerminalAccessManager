@@ -1,6 +1,6 @@
 # TerminalAccessManager API 文档
 
-> 文档版本：v3.2.0-r1 | 更新日期：2026-06-10
+> 文档版本：v3.2.0-r2 | 更新日期：2026-06-11
 
 > 基于 MAC 地址和 IP 地址的网络终端准入管理平台
 
@@ -2802,6 +2802,14 @@ GET /api/v1/roles/{role_id}/users
   }
 ]
 ```
+
+> **CLI 替代方案**：以上角色管理操作也可通过命令行完成：
+> - 查看角色列表：`./manage.sh role list` 或 `python cli.py role list`
+> - 查看权限码：`./manage.sh role permissions` 或 `python cli.py role permissions`
+> - 重置用户密码：`./manage.sh password reset <username>`
+> - 解锁用户：`./manage.sh user unlock <username>`
+>
+> CLI 操作适用于无法访问 Web UI 的紧急运维场景。
 
 ---
 

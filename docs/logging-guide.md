@@ -1,7 +1,7 @@
 # TerminalAccessManager 日志说明文档
 
-> **版本**：v3.2.0
-> **最后更新**：2026-06-10  
+> **版本**：v3.2.0-r2
+> **最后更新**：2026-06-11  
 > **适用范围**：后端应用日志、前端运行时日志、审计日志、Docker 容器日志、Nginx 日志、PostgreSQL 日志、运维脚本日志
 
 ---
@@ -742,6 +742,38 @@ logging:
 | `log_warn` | `[WARN]` | 黄色 | stdout | 警告信息 |
 | `log_error` | `[ERROR]` | 红色 | stderr | 错误信息 |
 
+#### manage.sh 操作日志
+
+manage.sh 支持操作日志记录功能，记录所有命令执行过程和结果：
+
+**启用方式**：
+
+```bash
+# 方式一：命令行参数（单次生效）
+./manage.sh --log backup
+
+# 方式二：环境变量（持久生效）
+# 在 .env 中设置
+TAM_LOG_ENABLED=true
+```
+
+**日志存储**：
+
+| 项目 | 说明 |
+|------|------|
+| 目录 | `.manage/logs/` |
+| 文件名 | `manage_YYYYMMDD.log` |
+| 格式 | `[YYYY-MM-DD HH:MM:SS] [LEVEL] [COMMAND] Message` |
+| 轮转 | 保留最近 30 天日志 |
+
+**日志内容**：
+
+- 所有命令执行记录（命令名、参数、时间）
+- 操作结果（成功/失败/警告）
+- 备份记录（文件路径、大小）
+- 破坏性操作确认记录
+- 错误详情
+
 ### 8.2 日志运维命令
 
 #### logs — 查看服务日志
@@ -809,6 +841,40 @@ Continue? [y/N] y
 
 [OK] Cleaned up 1250 audit log(s) older than 180 days
 ```
+
+#### logs-export — 导出审计日志
+
+```bash
+./manage.sh logs-export                              # 导出最近30天审计日志
+./manage.sh logs-export --days 90                    # 导出最近90天
+./manage.sh logs-export --output /tmp/audit.csv      # 指定输出文件
+./manage.sh logs-export --username admin             # 按用户名过滤
+./manage.sh logs-export --action login               # 按操作类型过滤
+```
+
+**输出示例**：
+
+```
+━━━ Exporting audit logs ━━━
+
+Exporting audit logs (last 30 days)...
+  Output: backups/audit_logs_export_20260611_143000.csv
+  Records: 1,250
+  Size: 256KB
+
+[OK] Audit logs exported successfully
+```
+
+**参数说明**：
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `--days N` | 30 | 导出最近 N 天的审计日志 |
+| `--output file` | `backups/audit_logs_export_{TIMESTAMP}.csv` | 输出文件路径 |
+| `--username user` | 全部 | 按用户名过滤 |
+| `--action action` | 全部 | 按操作类型过滤 |
+
+> **安全说明**：`--username` 和 `--action` 参数已做 SQL 注入防护（单引号转义）。
 
 ---
 
@@ -962,6 +1028,7 @@ ls -lh backups/logs_*.tar.gz
 |------|------|---------|
 | v3.1.0 | 2026-06-09 | 初始版本：完整日志体系文档 |
 | v3.2.0 | 2026-06-10 | 新增 Request-ID 链路追踪、文档版本历史、日志监控与告警、紧急处理流程、性能影响说明、日志分析常用命令、日志配置变更指南；修正审计归档 cron 示例、前端日志标注"渐进式接入"、Request-ID 与 error_id 关联说明 |
+| v3.2.0-r2 | 2026-06-11 | 新增 manage.sh 操作日志功能（`--log`/`TAM_LOG_ENABLED`）、`logs-export` 审计日志导出命令 |
 
 ---
 
