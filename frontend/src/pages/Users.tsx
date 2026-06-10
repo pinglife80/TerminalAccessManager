@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useForm } from 'react-hook-form';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
@@ -7,7 +7,7 @@ import { useAuthStore } from '@/store/auth';
 import { usePermission } from '@/hooks/usePermission';
 import { apiClient } from '@/lib/api';
 import { API_ENDPOINTS } from '@/lib/constants';
-import { getErrorMessage } from '@/lib/utils';
+import { getErrorMessage, useDebounce } from '@/lib/utils';
 import { Search, Plus, Edit2, Trash2, Unlock, Shield, ShieldCheck, Eye, EyeOff, KeyRound, Users as UsersIcon, RefreshCw, ChevronDown } from 'lucide-react';
 import { toast } from 'sonner';
 import { PrimaryButton, IconButton, ButtonGroup } from '@/components/Button';
@@ -16,12 +16,20 @@ import { EmptyState } from '@/components/StateDisplay';
 import { PageSkeleton } from '@/components/Skeleton';
 import { Modal } from '@/components/Modal';
 
+interface RoleOption {
+  id: number;
+  name: string;
+  description: string | null;
+  is_default: boolean;
+}
+
 interface UserFormData {
   username: string;
   email: string;
   password: string;
   is_active: boolean;
   is_superuser: boolean;
+  role_id: number | null;
 }
 
 const Users: React.FC = () => {
@@ -30,7 +38,8 @@ const Users: React.FC = () => {
   const { user: currentUser } = useAuthStore();
   const { hasPermission } = usePermission();
   const [searchTerm, setSearchTerm] = useState('');
-  const { data: users, isLoading } = useUsers(searchTerm || undefined);
+  const debouncedSearch = useDebounce(searchTerm, 500);
+  const { data: users, isLoading } = useUsers(debouncedSearch || undefined);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [editingUser, setEditingUser] = useState<UserItem | null>(null);
   const [resetPasswordUser, setResetPasswordUser] = useState<UserItem | null>(null);
@@ -38,9 +47,23 @@ const Users: React.FC = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [filterCollapsed, setFilterCollapsed] = useState(false);
+  const [roles, setRoles] = useState<RoleOption[]>([]);
+
+  // Fetch roles for the form
+  useEffect(() => {
+    const fetchRoles = async () => {
+      try {
+        const res = await apiClient.get(API_ENDPOINTS.ROLES);
+        setRoles(res.data);
+      } catch {
+        // silent
+      }
+    };
+    fetchRoles();
+  }, []);
 
   const { register, handleSubmit, formState: { errors }, reset } = useForm<UserFormData>({
-    defaultValues: { is_active: true, is_superuser: false },
+    defaultValues: { is_active: true, is_superuser: false, role_id: null },
   });
 
   const filteredUsers = users || [];
@@ -69,7 +92,15 @@ const Users: React.FC = () => {
   // Create user
   const onCreateSubmit = async (data: UserFormData) => {
     try {
-      await apiClient.post(API_ENDPOINTS.AUTH_USERS, data);
+      const payload = {
+        username: data.username,
+        email: data.email || null,
+        password: data.password,
+        is_active: data.is_active,
+        is_superuser: data.is_superuser,
+        role_id: data.role_id || undefined,
+      };
+      await apiClient.post(API_ENDPOINTS.AUTH_USERS, payload);
       toast.success(t('users.userCreated', { username: data.username }));
       setShowCreateModal(false);
       reset();
@@ -80,9 +111,13 @@ const Users: React.FC = () => {
   };
 
   // Update user
-  const handleUpdateUser = async (userId: number, updates: Partial<UserItem>) => {
+  const handleUpdateUser = async (userId: number, updates: Partial<UserItem> & { role_id?: number | null }) => {
     try {
-      await apiClient.put(`${API_ENDPOINTS.AUTH_USERS}${userId}`, updates);
+      const payload: Record<string, unknown> = {};
+      if (updates.email !== undefined) payload.email = updates.email;
+      if (updates.is_active !== undefined) payload.is_active = updates.is_active;
+      if (updates.role_id !== undefined) payload.role_id = updates.role_id;
+      await apiClient.put(`${API_ENDPOINTS.AUTH_USERS}${userId}`, payload);
       toast.success(t('users.userUpdated'));
       setEditingUser(null);
       queryClient.invalidateQueries({ queryKey: ['users'] });
@@ -149,7 +184,7 @@ const Users: React.FC = () => {
           icon={Plus}
           label={t('users.newUser')}
           variant="primary"
-          onClick={() => { reset({ username: '', email: '', password: '', is_active: true, is_superuser: false }); setShowCreateModal(true); }}
+          onClick={() => { reset({ username: '', email: '', password: '', is_active: true, is_superuser: false, role_id: null }); setShowCreateModal(true); }}
         />
         )}
       </div>
@@ -276,15 +311,30 @@ const Users: React.FC = () => {
                     </td>
                     <td className="px-4 sm:px-6 py-4 whitespace-nowrap text-sm text-muted-foreground">{user.email || '—'}</td>
                     <td className="px-4 sm:px-6 py-4 whitespace-nowrap text-center">
-                      {user.is_superuser ? (
-                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800">
-                          <ShieldCheck className="h-3 w-3" /> {t('users.admin')}
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-muted text-foreground">
-                          <Shield className="h-3 w-3" /> {t('users.userRole')}
-                        </span>
-                      )}
+                      <div className="flex items-center justify-center gap-1 flex-wrap">
+                        {user.roles && user.roles.length > 0 ? (
+                          user.roles.map((roleName) => (
+                            <span
+                              key={roleName}
+                              className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                                roleName === 'superadmin'
+                                  ? 'bg-purple-100 text-purple-800'
+                                  : roleName === 'admin'
+                                  ? 'bg-blue-100 text-blue-800'
+                                  : 'bg-gray-100 text-gray-700'
+                              }`}
+                            >
+                              {roleName === 'superadmin' && <ShieldCheck className="h-3 w-3" />}
+                              {roleName === 'admin' && <Shield className="h-3 w-3" />}
+                              {t(`roles.${roleName}`, roleName)}
+                            </span>
+                          ))
+                        ) : (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-muted text-foreground">
+                            <Shield className="h-3 w-3" /> {t('users.userRole')}
+                          </span>
+                        )}
+                      </div>
                     </td>
                     <td className="px-4 sm:px-6 py-4 whitespace-nowrap text-center">
                       <button
@@ -401,14 +451,24 @@ const Users: React.FC = () => {
             />
             {errors.password && <p className="text-xs text-red-600 mt-1">{errors.password.message}</p>}
           </div>
+          <div>
+            <label className="block text-sm font-medium text-muted-foreground mb-2">{t('users.role')}</label>
+            <select
+              {...register('role_id', { valueAsNumber: true })}
+              className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+            >
+              <option value="">{t('users.selectRole', 'Select a role')}</option>
+              {roles.filter((r) => r.name !== 'superadmin').map((role) => (
+                <option key={role.id} value={role.id}>
+                  {t(`roles.${role.name}`, role.name)}
+                </option>
+              ))}
+            </select>
+          </div>
           <div className="flex items-center gap-6">
             <label className="flex items-center gap-2 text-sm">
               <input type="checkbox" {...register('is_active')} className="rounded" />
               {t('users.activeLabel')}
-            </label>
-            <label className="flex items-center gap-2 text-sm">
-              <input type="checkbox" {...register('is_superuser')} className="rounded" />
-              {t('users.administrator')}
             </label>
           </div>
           <div className="flex gap-3 pt-2">
@@ -435,6 +495,7 @@ const Users: React.FC = () => {
           isSelf={isSelf(editingUser)}
           onSave={handleUpdateUser}
           onClose={() => setEditingUser(null)}
+          roles={roles}
         />
       )}
 
@@ -460,16 +521,21 @@ const EditUserModal: React.FC<{
   isSelf: boolean;
   onSave: (userId: number, updates: Partial<UserItem>) => Promise<void>;
   onClose: () => void;
-}> = ({ user, isSelf, onSave, onClose }) => {
+  roles: RoleOption[];
+}> = ({ user, isSelf, onSave, onClose, roles }) => {
   const { t } = useTranslation();
   const [email, setEmail] = useState(user.email || '');
   const [isActive, setIsActive] = useState(user.is_active);
-  const [isSuperuser, setIsSuperuser] = useState(user.is_superuser);
+  const [selectedRoleId, setSelectedRoleId] = useState<number | null>(() => {
+    // Map user's role name to role ID
+    const matched = roles.find((r) => user.roles?.includes(r.name));
+    return matched ? matched.id : null;
+  });
   const [saving, setSaving] = useState(false);
 
   const handleSave = async () => {
     setSaving(true);
-    await onSave(user.id, { email, is_active: isActive, is_superuser: isSuperuser });
+    await onSave(user.id, { email, is_active: isActive, role_id: selectedRoleId } as unknown as Partial<UserItem>);
     setSaving(false);
   };
 
@@ -485,14 +551,25 @@ const EditUserModal: React.FC<{
             className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
           />
         </div>
+        <div>
+          <label className="block text-sm font-medium text-muted-foreground mb-2">{t('users.role')}</label>
+          <select
+            value={selectedRoleId ?? ''}
+            onChange={(e) => setSelectedRoleId(e.target.value ? Number(e.target.value) : null)}
+            className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+          >
+            <option value="">{t('users.selectRole', 'Select a role')}</option>
+            {roles.filter((r) => r.name !== 'superadmin').map((role) => (
+              <option key={role.id} value={role.id}>
+                {t(`roles.${role.name}`, role.name)}
+              </option>
+            ))}
+          </select>
+        </div>
         <div className="flex items-center gap-6">
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" checked={isActive} onChange={(e) => setIsActive(e.target.checked)} disabled={isSelf} className="rounded" />
             {t('users.activeLabel')}
-          </label>
-          <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={isSuperuser} onChange={(e) => setIsSuperuser(e.target.checked)} disabled={isSelf} className="rounded" />
-            {t('users.administrator')}
           </label>
         </div>
         {isSelf && <p className="text-xs text-amber-600">{t('users.cannotModifyOwnRole')}</p>}

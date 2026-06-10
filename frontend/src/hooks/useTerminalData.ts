@@ -166,14 +166,16 @@ export interface BlacklistSearchParams {
 }
 
 export const useBlacklist = (params?: BlacklistSearchParams) => {
+  // Separate refetchInterval from API params to avoid sending it to backend
+  const { refetchInterval, ...apiParams } = params || {};
   return useQuery({
-    queryKey: ['blacklist', params],
+    queryKey: ['blacklist', apiParams],
     queryFn: async () => {
-      const response = await apiClient.get('/blacklist/', { params });
+      const response = await apiClient.get('/blacklist/', { params: apiParams });
       return response.data as PaginatedResponse<BlacklistEntry>;
     },
     placeholderData: keepPreviousData,
-    refetchInterval: params?.refetchInterval,
+    refetchInterval: refetchInterval,
   });
 };
 

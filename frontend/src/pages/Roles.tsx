@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Shield, Plus, Edit2, Trash2, CheckCircle, Users as UsersIcon } from 'lucide-react';
+import { Shield, Plus, Edit2, Trash2, CheckCircle, Users as UsersIcon, Eye } from 'lucide-react';
 import { apiClient } from '@/lib/api';
 import { API_ENDPOINTS } from '@/lib/constants';
 import { getErrorMessage } from '@/lib/utils';
@@ -10,6 +10,7 @@ import { EmptyState } from '@/components/StateDisplay';
 import { PageSkeleton } from '@/components/Skeleton';
 import { Modal } from '@/components/Modal';
 import { usePermission } from '@/hooks/usePermission';
+import { useAuthStore } from '@/store/auth';
 
 interface Permission {
   id: number;
@@ -41,11 +42,16 @@ const BUILT_IN_ROLES = ['superadmin', 'admin', 'operator', 'auditor', 'viewer'];
 const Roles: React.FC = () => {
   const { t } = useTranslation();
   const { hasPermission } = usePermission();
+  const { user: currentUser } = useAuthStore();
+  const isSuperadmin = currentUser?.is_superuser ?? false;
   const [roles, setRoles] = useState<RoleItem[]>([]);
   const [permissions, setPermissions] = useState<Permission[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [editingRole, setEditingRole] = useState<RoleItem | null>(null);
+  const [viewingRole, setViewingRole] = useState<RoleItem | null>(null);
+  const [viewingRoleUsers, setViewingRoleUsers] = useState<RoleItem | null>(null);
+  const [roleUsers, setRoleUsers] = useState<{ id: number; username: string; email: string | null; is_active: boolean; is_superuser: boolean }[]>([]);
 
   // Fetch roles and permissions
   React.useEffect(() => {
@@ -193,7 +199,33 @@ const Roles: React.FC = () => {
                     </td>
                     <td className="px-4 sm:px-6 py-4 whitespace-nowrap">
                       <div className="flex items-center justify-center gap-1">
-                        {hasPermission('role:write') && (
+                        {(role.name !== 'superadmin' || isSuperadmin) && (
+                        <IconButton
+                          icon={Eye}
+                          variant="primary"
+                          size="md"
+                          title={t('roles.viewPermissions')}
+                          onClick={() => setViewingRole(role)}
+                        />
+                        )}
+                        {(role.name !== 'superadmin' || isSuperadmin) && (
+                        <IconButton
+                          icon={UsersIcon}
+                          variant="primary"
+                          size="md"
+                          title={t('roles.viewUsers')}
+                          onClick={async () => {
+                            try {
+                              const res = await apiClient.get(`${API_ENDPOINTS.ROLES}${role.id}/users`);
+                              setRoleUsers(res.data);
+                              setViewingRoleUsers(role);
+                            } catch (err: unknown) {
+                              toast.error(getErrorMessage(err, t('roles.failedToLoadUsers')));
+                            }
+                          }}
+                        />
+                        )}
+                        {hasPermission('role:write') && role.name !== 'superadmin' && (
                         <IconButton
                           icon={Edit2}
                           variant="primary"
@@ -260,6 +292,112 @@ const Roles: React.FC = () => {
           onClose={() => setEditingRole(null)}
           title={`${t('roles.editRole')}: ${t(`roles.${editingRole.name}`, editingRole.name)}`}
         />
+      )}
+
+      {/* View Permissions Modal */}
+      {viewingRole && (
+        <Modal isOpen={true} onClose={() => setViewingRole(null)} title={`${t('roles.viewPermissions')}: ${t(`roles.${viewingRole.name}`, viewingRole.name)}`} size="lg">
+          <div className="space-y-3 max-h-[70vh] overflow-y-auto">
+            <div className="mb-3">
+              <span className="text-sm text-muted-foreground">{t('roles.description')}: </span>
+              <span className="text-sm text-foreground">{viewingRole.description || '—'}</span>
+            </div>
+            {viewingRole.name === 'superadmin' ? (
+              <div className="p-3 bg-purple-50 border border-purple-200 rounded-lg">
+                <p className="text-sm font-medium text-purple-800">{t('roles.cannotModifySuperadmin')}</p>
+                <p className="text-xs text-purple-600 mt-1">{t('roles.superadminHasAllPermissions')}</p>
+              </div>
+            ) : (
+              Object.entries(permissionsByModule).map(([module, modulePerms]) => {
+                const modulePermCodes = modulePerms.map((p) => p.code);
+                const assigned = modulePermCodes.filter((code) => viewingRole.permissions.includes(code));
+                if (assigned.length === 0) return null;
+                return (
+                  <div key={module} className="border border-border rounded-lg overflow-hidden">
+                    <div className="px-4 py-2.5 bg-blue-50 text-blue-800 text-sm font-medium flex items-center justify-between">
+                      <span>{t(`roles.permissionModules.${module}`, module)}</span>
+                      <span className="text-xs">{assigned.length}/{modulePermCodes.length}</span>
+                    </div>
+                    <div className="px-4 py-2 grid grid-cols-2 gap-2 bg-card">
+                      {modulePerms.map((perm) => (
+                        <div key={perm.id} className="flex items-center gap-2 text-sm">
+                          {viewingRole.permissions.includes(perm.code) ? (
+                            <CheckCircle className="h-4 w-4 text-green-600 flex-shrink-0" />
+                          ) : (
+                            <div className="h-4 w-4 rounded border border-gray-300 flex-shrink-0" />
+                          )}
+                          <span className={viewingRole.permissions.includes(perm.code) ? 'text-foreground' : 'text-muted-foreground'}>
+                            {perm.name}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })
+            )}
+            <div className="flex gap-3 pt-2">
+              <PrimaryButton
+                label={t('common.close')}
+                variant="secondary"
+                onClick={() => setViewingRole(null)}
+                className="flex-1"
+              />
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* View Role Users Modal */}
+      {viewingRoleUsers && (
+        <Modal isOpen={true} onClose={() => { setViewingRoleUsers(null); setRoleUsers([]); }} title={`${t('roles.viewUsers')}: ${t(`roles.${viewingRoleUsers.name}`, viewingRoleUsers.name)}`} size="md">
+          <div className="space-y-3 max-h-[70vh] overflow-y-auto">
+            {roleUsers.length === 0 ? (
+              <p className="text-sm text-muted-foreground text-center py-4">{t('roles.noUsersInRole')}</p>
+            ) : (
+              <table className="min-w-full divide-y divide-border">
+                <thead className="bg-background">
+                  <tr>
+                    <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground uppercase">{t('auditLogs.user')}</th>
+                    <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground uppercase">{t('users.email')}</th>
+                    <th className="px-4 py-2.5 text-center text-xs font-semibold text-muted-foreground uppercase">{t('common.status')}</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {roleUsers.map((u) => (
+                    <tr key={u.id} className="hover:bg-blue-50/30">
+                      <td className="px-4 py-2.5 text-sm">
+                        <div className="flex items-center gap-2">
+                          <div className="w-7 h-7 rounded-full bg-blue-600 flex items-center justify-center flex-shrink-0">
+                            <span className="text-xs font-medium text-white">{u.username.charAt(0).toUpperCase()}</span>
+                          </div>
+                          <span className="font-medium text-foreground">{u.username}</span>
+                          {u.is_superuser && <span className="text-xs text-purple-600">({t('users.admin')})</span>}
+                        </div>
+                      </td>
+                      <td className="px-4 py-2.5 text-sm text-muted-foreground">{u.email || '—'}</td>
+                      <td className="px-4 py-2.5 text-center">
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
+                          u.is_active ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+                        }`}>
+                          {u.is_active ? t('common.active') : t('common.inactive')}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+            <div className="flex gap-3 pt-2">
+              <PrimaryButton
+                label={t('common.close')}
+                variant="secondary"
+                onClick={() => { setViewingRoleUsers(null); setRoleUsers([]); }}
+                className="flex-1"
+              />
+            </div>
+          </div>
+        </Modal>
       )}
     </div>
   );
