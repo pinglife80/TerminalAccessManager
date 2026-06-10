@@ -551,6 +551,7 @@ const EditUserModal: React.FC<{
             className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
           />
         </div>
+        {!(isSelf || user.is_superuser) && (
         <div>
           <label className="block text-sm font-medium text-muted-foreground mb-2">{t('users.role')}</label>
           <select
@@ -566,6 +567,14 @@ const EditUserModal: React.FC<{
             ))}
           </select>
         </div>
+        )}
+        {(isSelf || user.is_superuser) && (
+          <div>
+            <label className="block text-sm font-medium text-muted-foreground mb-1">{t('users.role')}</label>
+            <p className="text-sm text-foreground">{user.roles?.map((r) => t(`roles.${r}`, r)).join(', ') || '—'}</p>
+            {user.is_superuser && <p className="text-xs text-amber-600 mt-1">{t('users.superadminRoleFixed')}</p>}
+          </div>
+        )}
         <div className="flex items-center gap-6">
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" checked={isActive} onChange={(e) => setIsActive(e.target.checked)} disabled={isSelf} className="rounded" />

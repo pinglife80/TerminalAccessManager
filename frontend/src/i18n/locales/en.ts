@@ -520,6 +520,7 @@ const en = {
     mustContainLowercase: 'Must contain lowercase letter',
     mustContainNumber: 'Must contain a number',
     searchByUsernameOrEmail: 'Search by username or email...',
+    superadminRoleFixed: 'Superadmin role cannot be modified',
   },
   roles: {
     title: 'Role Management',

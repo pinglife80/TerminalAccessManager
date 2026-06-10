@@ -501,6 +501,7 @@ const zh = {
     failedToResetPassword: '重置密码失败',
     you: '你',
     cannotModifyOwnRole: '无法修改自己的角色或状态',
+    superadminRoleFixed: '超管角色不可修改',
     created: '创建时间',
     emailLabel: '邮箱',
     passwordLabel: '密码',

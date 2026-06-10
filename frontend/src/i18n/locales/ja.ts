@@ -520,6 +520,7 @@ const ja = {
     mustContainLowercase: '小文字を含む必要があります',
     mustContainNumber: '数字を含む必要があります',
     searchByUsernameOrEmail: 'ユーザー名またはメールアドレスで検索...',
+    superadminRoleFixed: 'スーパー管理者ロールは変更できません',
   },
   roles: {
     title: 'ロール管理',

@@ -695,9 +695,9 @@ async def admin_update_user(
 
     # Handle role assignment
     if user_data.role_id is not None:
-        # Protect the initial system admin (id=1) from role changes
-        if user.id == 1:
-            raise HTTPException(status_code=400, detail="Cannot modify roles of the initial system administrator")
+        # Superadmin users cannot have their role changed
+        if user.is_superuser:
+            raise HTTPException(status_code=400, detail="Cannot modify role of a superadmin user")
         # Prevent assigning superadmin role - it's only for the initial system admin
         superadmin_role_id = await _get_superadmin_role_id(db)
         if user_data.role_id == superadmin_role_id:

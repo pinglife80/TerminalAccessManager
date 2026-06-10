@@ -323,6 +323,7 @@ export const useUsers = (search?: string) => {
       });
       return response.data as UserItem[];
     },
+    placeholderData: keepPreviousData,
   });
 };
 
