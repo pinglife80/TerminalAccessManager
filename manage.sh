@@ -9,6 +9,7 @@
 # Options:
 #   -y, --yes       Skip confirmation prompts (non-interactive mode)
 #   -v, --verbose   Enable verbose/debug output
+#   --log           Enable file logging (also via TAM_LOG_ENABLED=true in .env)
 #   -h, --help      Show help message
 #
 # Lifecycle Commands:
@@ -93,14 +94,37 @@ YES_FLAG=false
 VERBOSE_FLAG=false
 
 ###############################################################################
-# Logging
+# Logging with optional file logging
 ###############################################################################
-log_info()    { echo -e "${BLUE}[INFO]${NC}    $*"; }
-log_success() { echo -e "${GREEN}[OK]${NC}      $*"; }
-log_warn()    { echo -e "${YELLOW}[WARN]${NC}    $*"; }
-log_error()   { echo -e "${RED}[ERROR]${NC}   $*" >&2; }
-log_verbose() { ${VERBOSE_FLAG} && echo -e "${DIM}[DEBUG]${NC}   $*" || true; }
-log_step()    { echo -e "\n${CYAN}${BOLD}━━━ $* ━━━${NC}\n"; }
+readonly LOG_DIR="${SCRIPT_DIR}/.manage/logs"
+
+# Write a message to the log file if logging is enabled
+_log_to_file() {
+    local level="$1"
+    shift
+    # Check if log is enabled (via .env TAM_LOG_ENABLED or --log flag)
+    if [ "${_LOG_ENABLED:-false}" = "true" ]; then
+        mkdir -p "${LOG_DIR}"
+        local log_file="${LOG_DIR}/manage_$(date +%Y%m%d).log"
+        local timestamp
+        timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+        echo "[${timestamp}] [${level}] $*" >> "${log_file}"
+    fi
+}
+
+# Clean old log files (keep last 30 days)
+_log_cleanup() {
+    if [ -d "${LOG_DIR}" ]; then
+        find "${LOG_DIR}" -name "manage_*.log" -mtime +30 -delete 2>/dev/null || true
+    fi
+}
+
+log_info()    { echo -e "${BLUE}[INFO]${NC}    $*"; _log_to_file "INFO" "$*"; }
+log_success() { echo -e "${GREEN}[OK]${NC}      $*"; _log_to_file "OK" "$*"; }
+log_warn()    { echo -e "${YELLOW}[WARN]${NC}    $*"; _log_to_file "WARN" "$*"; }
+log_error()   { echo -e "${RED}[ERROR]${NC}   $*" >&2; _log_to_file "ERROR" "$*"; }
+log_verbose() { ${VERBOSE_FLAG} && echo -e "${DIM}[DEBUG]${NC}   $*" || true; _log_to_file "DEBUG" "$*"; }
+log_step()    { echo -e "\n${CYAN}${BOLD}━━━ $* ━━━${NC}\n"; _log_to_file "STEP" "$*"; }
 log_banner()  {
     echo -e "${CYAN}${BOLD}"
     echo "  ╔═══════════════════════════════════════════════════════╗"
@@ -359,13 +383,62 @@ service_running() {
     dc ps "$service" --format '{{.Status}}' 2>/dev/null | grep -q "Up"
 }
 
-# Require services to be running, exit with helpful message if not
+# Require services to be running, offer to start if not
 require_services() {
     if ! services_running; then
-        log_error "Services are not running."
-        log_error "Start them first: ./manage.sh start"
-        exit 1
+        log_warn "Services are not running."
+        if ! ${YES_FLAG}; then
+            echo -e "  Start services now? ${GREEN}[Y/n]${NC}"
+            read -rp "> " start_answer
+            start_answer="${start_answer:-yes}"
+        else
+            start_answer="yes"
+        fi
+        case "$start_answer" in
+            [Nn]|[Nn][Oo])
+                log_error "Cannot continue without running services."
+                log_error "Start them manually: ./manage.sh start"
+                exit 1
+                ;;
+            *)
+                cmd_start
+                # Verify services started
+                if ! services_running; then
+                    log_error "Services failed to start. Check logs: ./manage.sh logs"
+                    exit 1
+                fi
+                ;;
+        esac
     fi
+}
+
+# Check disk space before operations that need it (backup, restore, etc.)
+check_disk_space() {
+    local min_gb="${1:-2}"
+    local free_gb
+    free_gb=$(df -BG "${SCRIPT_DIR}" | tail -1 | awk '{print $4}' | sed 's/G//')
+    if [ "${free_gb:-0}" -lt "$min_gb" ]; then
+        log_error "Insufficient disk space: ${free_gb}GB (minimum: ${min_gb}GB required)"
+        log_error "Free up space and try again"
+        return 1
+    fi
+    log_verbose "Disk space check passed: ${free_gb}GB available"
+    return 0
+}
+
+# Verify database connectivity before operations
+check_db_connection() {
+    if ! services_running; then
+        log_warn "Services not running, cannot verify database connection"
+        return 0
+    fi
+    if ! dc exec -T postgres pg_isready -U "$(get_env DB_USER || echo tam_admin)" -d tam_db &>/dev/null; then
+        log_error "Database is not accepting connections"
+        log_error "Check database status: ./manage.sh health"
+        log_error "Check database logs: ./manage.sh logs postgres"
+        return 1
+    fi
+    return 0
 }
 
 # Get the value of an env variable from .env
@@ -387,16 +460,66 @@ set_env() {
 }
 
 # Auto-backup before destructive operations
+# Usage: auto_backup <label> [quiet]
+#   quiet: suppress info output (still logs verbose)
+# Returns: sets _LAST_BACKUP_FILE to the backup path
+_LAST_BACKUP_FILE=""
 auto_backup() {
     local label="${1:-pre_op}"
+    local quiet="${2:-}"
+    _LAST_BACKUP_FILE=""
     if ! services_running; then
+        [ "$quiet" != "quiet" ] && log_warn "Services not running, skipping auto-backup"
         return 0
     fi
     mkdir -p "${BACKUP_DIR}"
     local backup_file="${BACKUP_DIR}/auto_${label}_$(date +%Y%m%d_%H%M%S).sql"
-    if dc exec -T postgres pg_dump -U tam_admin tam_db > "$backup_file" 2>/dev/null; then
-        log_verbose "Auto-backup saved: ${backup_file}"
+    local db_user
+    db_user=$(get_env "DB_USER" || echo "tam_admin")
+    if dc exec -T postgres pg_dump -U "${db_user}" tam_db > "$backup_file" 2>/dev/null; then
+        _LAST_BACKUP_FILE="$backup_file"
+        if [ -f "$backup_file" ] && [ -s "$backup_file" ]; then
+            local size
+            size=$(du -h "$backup_file" | cut -f1)
+            if [ "$quiet" != "quiet" ]; then
+                log_success "Auto-backup saved: ${backup_file} (${size})"
+                log_info "Restore with: ./manage.sh restore ${backup_file}"
+            else
+                log_verbose "Auto-backup saved: ${backup_file} (${size})"
+            fi
+        fi
+    else
+        [ "$quiet" != "quiet" ] && log_warn "Auto-backup failed (database may not be accessible)"
     fi
+}
+
+# Interactive backup before destructive operations
+# Shows warning, asks user if they want backup (default: yes), performs backup
+# Usage: interactive_backup <label> <operation_description>
+interactive_backup() {
+    local label="$1"
+    local description="$2"
+
+    echo -e "${CYAN}${BOLD}Backup Recommendation:${NC}"
+    echo -e "  Operation: ${description}"
+    echo -e "  ${YELLOW}Creating a backup before this operation is strongly recommended${NC}"
+    echo ""
+
+    local do_backup="yes"
+    if ! ${YES_FLAG}; then
+        echo -e "Create a backup before proceeding? ${GREEN}[Y/n]${NC}"
+        read -rp "> " do_backup
+        do_backup="${do_backup:-yes}"
+    fi
+
+    case "$do_backup" in
+        [Nn]|[Nn][Oo])
+            log_warn "Backup skipped — proceed at your own risk"
+            ;;
+        *)
+            auto_backup "$label"
+            ;;
+    esac
 }
 
 # Start services in dependency order
@@ -718,6 +841,7 @@ _configure_demo_env() {
     set_env "REDIS_PASSWORD" "${redis_pass}"
     set_env "SECRET_KEY" "${secret}"
     set_env "ENCRYPTION_KEY" "${enc_key}"
+    set_env "ADMIN_PASSWORD" "Admin123"
 
     # Clear optional integrations
     set_env "SANGFOR_BASE_URL" ""
@@ -810,6 +934,12 @@ _configure_production_wizard() {
     set_env "ENCRYPTION_KEY" "${enc_key}"
     log_info "Encryption key auto-generated (separate from JWT secret)"
 
+    # ─── Admin Password ────────────────────────────────────────────────────
+    local admin_pass
+    prompt_password "Set admin password (for CLI operations like config/scheduler):" admin_pass
+    set_env "ADMIN_PASSWORD" "${admin_pass}"
+    log_info "Admin password saved to .env for CLI operations"
+
     # ─── Optional Integrations ───────────────────────────────────────────
     echo ""
     echo -e "${BOLD}── Optional Integrations ──${NC}"
@@ -834,18 +964,40 @@ _configure_production_wizard() {
 
     # Network Switch
     if confirm "Configure network switch integration?" "default_no"; then
-        local sw_host sw_user sw_pass
+        local sw_host sw_user sw_pass sw_port
         prompt_input "Switch IP address:" "" sw_host
         prompt_input "Switch username:" "" sw_user
         prompt_password "Switch password:" sw_pass "false"
+        prompt_input "Switch SSH port [22]:" "22" sw_port
         set_env "SWITCH_HOST" "${sw_host}"
         set_env "SWITCH_USERNAME" "${sw_user}"
         set_env "SWITCH_PASSWORD" "${sw_pass}"
+        set_env "SWITCH_PORT" "${sw_port}"
         log_success "Network switch configured"
     else
         set_env "SWITCH_HOST" ""
         set_env "SWITCH_USERNAME" ""
         set_env "SWITCH_PASSWORD" ""
+        set_env "SWITCH_PORT" ""
+    fi
+
+    # IPGuard
+    if confirm "Configure IPGuard integration?" "default_no"; then
+        local ipg_host ipg_user ipg_pass ipg_db
+        prompt_input "IPGuard host (e.g. 192.168.1.100):" "" ipg_host
+        prompt_input "IPGuard username:" "" ipg_user
+        prompt_password "IPGuard password:" ipg_pass "false"
+        prompt_input "IPGuard database name [ipguard]:" "ipguard" ipg_db
+        set_env "IPGUARD_HOST" "${ipg_host}"
+        set_env "IPGUARD_USER" "${ipg_user}"
+        set_env "IPGUARD_PASSWORD" "${ipg_pass}"
+        set_env "IPGUARD_DATABASE" "${ipg_db}"
+        log_success "IPGuard configured"
+    else
+        set_env "IPGUARD_HOST" ""
+        set_env "IPGUARD_USER" ""
+        set_env "IPGUARD_PASSWORD" ""
+        set_env "IPGUARD_DATABASE" ""
     fi
 
     # ─── Summary ─────────────────────────────────────────────────────────
@@ -855,8 +1007,10 @@ _configure_production_wizard() {
     echo -e "  Redis password:     ${GREEN}set${NC}"
     echo -e "  JWT secret:         ${GREEN}auto-generated${NC}"
     echo -e "  Encryption key:     ${GREEN}auto-generated${NC}"
+    echo -e "  Admin password:     ${GREEN}set${NC}"
     echo -e "  Sangfor API:        $(if [ -n "$(get_env SANGFOR_BASE_URL)" ]; then echo "${GREEN}configured${NC}"; else echo "${DIM}skipped${NC}"; fi)"
     echo -e "  Network switch:     $(if [ -n "$(get_env SWITCH_HOST)" ]; then echo "${GREEN}configured${NC}"; else echo "${DIM}skipped${NC}"; fi)"
+    echo -e "  IPGuard:            $(if [ -n "$(get_env IPGUARD_HOST)" ]; then echo "${GREEN}configured${NC}"; else echo "${DIM}skipped${NC}"; fi)"
     echo ""
 
     log_success "Production environment configured"
@@ -1094,7 +1248,9 @@ cmd_health() {
     # 3. Database connectivity
     echo ""
     echo -e "${BOLD}3. Database Connectivity${NC}"
-    if dc exec -T postgres pg_isready -U tam_admin -d tam_db &>/dev/null; then
+    local db_user
+    db_user=$(get_env "DB_USER" || echo "tam_admin")
+    if dc exec -T postgres pg_isready -U "${db_user}" -d tam_db &>/dev/null; then
         log_success "PostgreSQL accepting connections"
     else
         log_error "PostgreSQL not accepting connections"
@@ -1266,7 +1422,7 @@ cmd_logs_cleanup() {
             fi
         fi
     done
-    log_ok "Docker logs cleaned up"
+    log_success "Docker logs cleaned up"
 }
 
 ###############################################################################
@@ -1303,7 +1459,7 @@ cmd_logs_archive() {
     tar -czf "${ARCHIVE_DIR}.tar.gz" -C "${BACKUP_DIR}" "logs_${TIMESTAMP}" 2>/dev/null
     rm -rf "${ARCHIVE_DIR}"
 
-    log_ok "Logs archived to ${ARCHIVE_DIR}.tar.gz"
+    log_success "Logs archived to ${ARCHIVE_DIR}.tar.gz"
 }
 
 ###############################################################################
@@ -1311,6 +1467,7 @@ cmd_logs_archive() {
 ###############################################################################
 cmd_audit_cleanup() {
     ensure_env
+    require_services
     log_step "Cleaning up expired audit logs"
 
     local DAYS=180
@@ -1326,9 +1483,12 @@ cmd_audit_cleanup() {
         esac
     done
 
+    local db_user
+    db_user=$(get_env "DB_USER" || echo "tam_admin")
+
     # Count records to be cleaned
     local count
-    count=$(docker exec tam_db psql -U "${DB_USER:-tam_admin}" -d tam_db -t -c \
+    count=$(dc exec -T postgres psql -U "${db_user}" -d tam_db -t -c \
         "SELECT COUNT(*) FROM audit_logs WHERE timestamp < NOW() - INTERVAL '${DAYS} days';" 2>/dev/null | tr -d ' ')
 
     if [[ -z "$count" || "$count" == "0" ]]; then
@@ -1347,7 +1507,7 @@ cmd_audit_cleanup() {
         local CSV_FILE="${BACKUP_DIR}/audit_logs_${TIMESTAMP}.csv"
 
         echo "Exporting to ${CSV_FILE}..."
-        docker exec tam_db psql -U "${DB_USER:-tam_admin}" -d tam_db -c \
+        dc exec -T postgres psql -U "${db_user}" -d tam_db -c \
             "COPY (SELECT * FROM audit_logs WHERE timestamp < NOW() - INTERVAL '${DAYS} days' ORDER BY timestamp) TO STDOUT WITH CSV HEADER" \
             > "$CSV_FILE" 2>/dev/null
         echo "  Exported ${count} record(s)"
@@ -1362,13 +1522,87 @@ cmd_audit_cleanup() {
     fi
 
     # Delete records
-    docker exec tam_db psql -U "${DB_USER:-tam_admin}" -d tam_db -c \
+    dc exec -T postgres psql -U "${db_user}" -d tam_db -c \
         "DELETE FROM audit_logs WHERE timestamp < NOW() - INTERVAL '${DAYS} days';" 2>/dev/null
 
     # Vacuum to reclaim space
-    docker exec tam_db psql -U "${DB_USER:-tam_admin}" -d tam_db -c "VACUUM audit_logs;" 2>/dev/null
+    dc exec -T postgres psql -U "${db_user}" -d tam_db -c "VACUUM audit_logs;" 2>/dev/null
 
-    log_ok "Cleaned up ${count} audit log(s) older than ${DAYS} days"
+    log_success "Cleaned up ${count} audit log(s) older than ${DAYS} days"
+}
+
+###############################################################################
+# Command: logs-export — Export audit logs to CSV
+###############################################################################
+cmd_logs_export() {
+    ensure_env
+    require_services
+    log_step "Exporting Audit Logs"
+
+    local DAYS=90
+    local OUTPUT=""
+    local USERNAME=""
+    local ACTION=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --days)     DAYS="${2:-90}"; shift 2 ;;
+            --output)   OUTPUT="$2"; shift 2 ;;
+            --username) USERNAME="$2"; shift 2 ;;
+            --action)   ACTION="$2"; shift 2 ;;
+            *) shift ;;
+        esac
+    done
+
+    local BACKUP_DIR="${SCRIPT_DIR}/backups"
+    mkdir -p "${BACKUP_DIR}"
+
+    if [ -z "$OUTPUT" ]; then
+        local TIMESTAMP
+        TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+        OUTPUT="${BACKUP_DIR}/audit_export_${TIMESTAMP}.csv"
+    fi
+
+    local db_user
+    db_user=$(get_env "DB_USER" || echo "tam_admin")
+
+    # Build query with optional filters (escape single quotes to prevent SQL injection)
+    local where_clause="timestamp >= NOW() - INTERVAL '${DAYS} days'"
+    if [ -n "$USERNAME" ]; then
+        local safe_username
+        safe_username="${USERNAME//\'/\'\'}"
+        where_clause="${where_clause} AND username = '${safe_username}'"
+    fi
+    if [ -n "$ACTION" ]; then
+        local safe_action
+        safe_action="${ACTION//\'/\'\'}"
+        where_clause="${where_clause} AND action = '${safe_action}'"
+    fi
+
+    local count
+    count=$(dc exec -T postgres psql -U "${db_user}" -d tam_db -t -c \
+        "SELECT COUNT(*) FROM audit_logs WHERE ${where_clause};" 2>/dev/null | tr -d ' ')
+
+    if [[ -z "$count" || "$count" == "0" ]]; then
+        echo "No audit logs found matching the criteria"
+        return 0
+    fi
+
+    echo "Exporting ${count} audit log(s) to ${OUTPUT}..."
+
+    dc exec -T postgres psql -U "${db_user}" -d tam_db -c \
+        "COPY (SELECT * FROM audit_logs WHERE ${where_clause} ORDER BY timestamp DESC) TO STDOUT WITH CSV HEADER" \
+        > "$OUTPUT" 2>/dev/null
+
+    if [ -f "$OUTPUT" ] && [ -s "$OUTPUT" ]; then
+        local size
+        size=$(du -h "$OUTPUT" | cut -f1)
+        log_success "Exported ${count} record(s) to ${OUTPUT} (${size})"
+    else
+        log_error "Export failed (empty or missing file)"
+        rm -f "$OUTPUT"
+        return 1
+    fi
 }
 
 ###############################################################################
@@ -1391,6 +1625,49 @@ cmd_update() {
     log_success "Update complete (local code rebuilt)"
     log_info "Check logs: ./manage.sh logs"
     log_info "Run health: ./manage.sh health"
+}
+
+###############################################################################
+# Command: rebuild — Rebuild specific services
+###############################################################################
+cmd_rebuild() {
+    local target="${1:-}"
+
+    ensure_env
+
+    case "$target" in
+        frontend)
+            log_step "Rebuilding Frontend Only"
+            log_info "Building frontend container..."
+            dc up -d --build --force-recreate frontend
+            log_info "Frontend container rebuilt"
+            log_info "Note: Frontend exits after build (status=0). Nginx serves the built files."
+            log_success "Frontend rebuild complete"
+            ;;
+        backend)
+            log_step "Rebuilding Backend Only"
+            auto_backup "pre_rebuild_backend"
+            dc up -d --build --force-recreate backend
+            wait_healthy backend 60 || true
+            log_success "Backend rebuild complete"
+            ;;
+        nginx)
+            log_step "Rebuilding Nginx Only"
+            dc up -d --build --force-recreate nginx
+            sleep 2
+            dc exec nginx nginx -s reload 2>/dev/null || true
+            log_success "Nginx rebuild complete"
+            ;;
+        *)
+            echo -e "${BOLD}Rebuild Specific Services:${NC}"
+            echo ""
+            echo -e "  ${CYAN}rebuild frontend${NC}    Rebuild frontend container only"
+            echo -e "  ${CYAN}rebuild backend${NC}     Rebuild backend container only"
+            echo -e "  ${CYAN}rebuild nginx${NC}       Rebuild nginx container only"
+            echo ""
+            echo -e "  ${DIM}To rebuild all services: ./manage.sh update${NC}"
+            ;;
+    esac
 }
 
 ###############################################################################
@@ -1657,6 +1934,13 @@ cmd_init() {
     wait_healthy backend 60 || true
     dc exec -T backend python cli.py setup
     save_state 'db_initialized' 'true'
+
+    # Save default admin password to .env for CLI operations
+    if [ -z "$(get_env ADMIN_PASSWORD)" ]; then
+        set_env "ADMIN_PASSWORD" "Admin123"
+        log_warn "ADMIN_PASSWORD set to default 'Admin123' — change it after first login"
+    fi
+
     log_success "Database initialized"
 }
 
@@ -1676,9 +1960,13 @@ cmd_migrate() {
     if [ "$revision" = "head" ]; then
         echo -e "${YELLOW}${BOLD}⚠ Database Migration Notice:${NC}"
         echo -e "  • Schema changes may be ${RED}irreversible${NC} (no automatic downgrade)"
-        echo -e "  • Recommended: run './manage.sh backup' before migration"
         echo -e "  • To check current state: './manage.sh shell db'"
         echo ""
+
+        # Offer backup before migration
+        interactive_backup "pre_migrate" "Database migration — schema changes may be irreversible"
+        echo ""
+
         if ! confirm "Run database migration to '${revision}'?"; then
             log_info "Cancelled"
             return 0
@@ -1785,6 +2073,10 @@ cmd_backup() {
     ensure_env
     require_services
 
+    # Pre-check: verify database connectivity and disk space
+    check_db_connection || exit 1
+    check_disk_space 2 || log_warn "Low disk space, backup may fail"
+
     mkdir -p "${BACKUP_DIR}"
 
     # Generate filename if not provided
@@ -1801,7 +2093,9 @@ cmd_backup() {
     fi
 
     log_step "Backing Up Database"
-    dc exec -T postgres pg_dump -U tam_admin tam_db > "$backup_file"
+    local db_user
+    db_user=$(get_env "DB_USER" || echo "tam_admin")
+    dc exec -T postgres pg_dump -U "${db_user}" tam_db > "$backup_file"
 
     if [ -f "$backup_file" ] && [ -s "$backup_file" ]; then
         local size
@@ -1815,18 +2109,35 @@ cmd_backup() {
 
     # Backup Redis
     local TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+    local redis_pass
+    redis_pass=$(get_env "REDIS_PASSWORD")
     echo "  Backing up Redis..."
-    docker exec tam_redis env REDISCLI_AUTH="${REDIS_PASSWORD}" redis-cli BGSAVE
+    dc exec -T redis env REDISCLI_AUTH="${redis_pass}" redis-cli BGSAVE 2>/dev/null || true
     sleep 2
-    docker cp tam_redis:/data/dump.rdb "${BACKUP_DIR}/redis_${TIMESTAMP}.rdb" 2>/dev/null || echo "  [WARN] Redis backup failed (data may be empty)"
+    local redis_container
+    redis_container=$(dc ps -q redis 2>/dev/null | head -1)
+    if [ -n "$redis_container" ]; then
+        docker cp "${redis_container}":/data/dump.rdb "${BACKUP_DIR}/redis_${TIMESTAMP}.rdb" 2>/dev/null || echo "  [WARN] Redis backup failed (data may be empty)"
+    else
+        echo "  [WARN] Redis container not found, skipping Redis backup"
+    fi
 
-    # Clean old backups (keep last 10)
+    # Clean old backups (keep last 10 SQL + 10 RDB)
+    local retain_count
+    retain_count=$(get_env "BACKUP_RETAIN_COUNT" 2>/dev/null || echo "10")
     local count
     count=$(find "${BACKUP_DIR}" -name "backup_*.sql" | wc -l)
-    if [ "$count" -gt 10 ]; then
+    if [ "$count" -gt "$retain_count" ]; then
         find "${BACKUP_DIR}" -name "backup_*.sql" -printf '%T+ %p\n' \
-            | sort | head -n -$((count - 10)) | awk '{print $2}' | xargs rm -f
-        log_info "Cleaned old backups (kept last 10)"
+            | sort | head -n -$((count - retain_count)) | awk '{print $2}' | xargs rm -f
+        log_info "Cleaned old SQL backups (kept last ${retain_count})"
+    fi
+    local rdb_count
+    rdb_count=$(find "${BACKUP_DIR}" -name "redis_*.rdb" | wc -l)
+    if [ "$rdb_count" -gt "$retain_count" ]; then
+        find "${BACKUP_DIR}" -name "redis_*.rdb" -printf '%T+ %p\n' \
+            | sort | head -n -$((rdb_count - retain_count)) | awk '{print $2}' | xargs rm -f
+        log_info "Cleaned old Redis backups (kept last ${retain_count})"
     fi
 }
 
@@ -1852,6 +2163,25 @@ cmd_restore() {
         log_error "File not found: ${backup_file}"
         exit 1
     fi
+
+    # Pre-check: verify backup file integrity
+    local file_size
+    file_size=$(stat -c%s "$backup_file" 2>/dev/null || echo "0")
+    if [ "$file_size" -eq 0 ]; then
+        log_error "Backup file is empty: ${backup_file}"
+        exit 1
+    fi
+    if ! head -5 "$backup_file" 2>/dev/null | grep -qi "postgresql\|pg_dump\|INSERT\|CREATE"; then
+        log_warn "Backup file does not appear to be a valid PostgreSQL dump"
+        log_warn "Proceed with caution — file may be corrupted"
+        if ! confirm "Continue with potentially invalid backup file?"; then
+            log_info "Cancelled"
+            exit 0
+        fi
+    fi
+
+    # Pre-check: disk space
+    check_disk_space 5 || exit 1
 
     ensure_env
     require_services
@@ -1882,13 +2212,15 @@ cmd_restore() {
 
     # Drop and recreate the database to ensure clean restore
     log_info "Recreating database for clean restore..."
+    local db_user
+    db_user=$(get_env "DB_USER" || echo "tam_admin")
     # Terminate all connections to the target database first
-    dc exec -T postgres psql -U tam_admin -d postgres -c \
+    dc exec -T postgres psql -U "${db_user}" -d postgres -c \
         "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'tam_db' AND pid <> pg_backend_pid();" 2>/dev/null || true
-    dc exec -T postgres psql -U tam_admin -d postgres -c "DROP DATABASE IF EXISTS tam_db;" 2>/dev/null || true
-    dc exec -T postgres psql -U tam_admin -d postgres -c "CREATE DATABASE tam_db;" 2>/dev/null || true
+    dc exec -T postgres psql -U "${db_user}" -d postgres -c "DROP DATABASE IF EXISTS tam_db;" 2>/dev/null || true
+    dc exec -T postgres psql -U "${db_user}" -d postgres -c "CREATE DATABASE tam_db;" 2>/dev/null || true
 
-    cat "$backup_file" | dc exec -T postgres psql -U tam_admin -d tam_db
+    cat "$backup_file" | dc exec -T postgres psql -U "${db_user}" -d tam_db
     dc restart backend
     # Restore Redis data
     local BACKUP_DIR_PATH
@@ -1899,10 +2231,21 @@ cmd_restore() {
         log_info "Restoring Redis data from: ${REDIS_RDB}"
         dc stop redis 2>/dev/null || true
         sleep 1
-        docker cp "${REDIS_RDB}" tam_redis:/data/dump.rdb 2>/dev/null || {
-            log_warn "Failed to copy Redis RDB file, skipping Redis restore"
-            dc start redis 2>/dev/null || true
-        }
+        local redis_container
+        redis_container=$(dc ps -q redis 2>/dev/null | head -1)
+        if [ -z "$redis_container" ]; then
+            # Redis is stopped, start it temporarily to get container ID
+            dc up -d redis 2>/dev/null || true
+            sleep 2
+            redis_container=$(dc ps -q redis 2>/dev/null | head -1)
+        fi
+        if [ -n "$redis_container" ]; then
+            docker cp "${REDIS_RDB}" "${redis_container}":/data/dump.rdb 2>/dev/null || {
+                log_warn "Failed to copy Redis RDB file, skipping Redis restore"
+            }
+        else
+            log_warn "Could not find Redis container, skipping Redis restore"
+        fi
         dc start redis 2>/dev/null || true
         wait_healthy redis 30 || true
         log_info "Redis data restored"
@@ -1939,7 +2282,7 @@ cmd_backup_schedule() {
             crontab -l | grep "$cron_marker" || true
             ;;
         disable)
-            crontab -l 2>/dev/null | grep -v "$cron_marker" || true | crontab -
+            crontab -l 2>/dev/null | { grep -v "$cron_marker" || true; } | crontab -
             echo "✓ Auto backup disabled"
             ;;
         status)
@@ -1980,7 +2323,9 @@ cmd_shell() {
             ;;
         db|database|postgres|p)
             log_info "Opening database shell..."
-            dc exec postgres psql -U tam_admin -d tam_db
+            local db_user
+            db_user=$(get_env "DB_USER" || echo "tam_admin")
+            dc exec postgres psql -U "${db_user}" -d tam_db
             ;;
         redis|r)
             log_info "Opening Redis CLI..."
@@ -2077,21 +2422,50 @@ _config_get_admin_token() {
         return 1
     fi
 
+    # Check for authentication error
+    local error_detail
+    error_detail=$(echo "$response" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('detail',''))" 2>/dev/null || echo "")
+    if [ -n "$error_detail" ] && echo "$error_detail" | grep -qi "incorrect\|invalid\|unauthorized\|wrong"; then
+        log_error "Admin login failed (wrong password)"
+        log_error "If you changed the admin password, update ADMIN_PASSWORD in .env:"
+        log_error "  ./manage.sh config ADMIN_PASSWORD <your_password>"
+        log_error "Or reset the admin password:"
+        log_error "  ./manage.sh password reset admin"
+        return 1
+    fi
+
     local token
     token=$(echo "$response" | python3 -c "import sys,json; print(json.load(sys.stdin).get('access_token',''))" 2>/dev/null || echo "")
 
     if [ -z "$token" ]; then
-        log_error "Failed to obtain admin token (check ADMIN_PASSWORD in .env)"
+        log_error "Failed to obtain admin token"
+        log_error "If you changed the admin password, update ADMIN_PASSWORD in .env:"
+        log_error "  ./manage.sh config ADMIN_PASSWORD <your_password>"
         return 1
     fi
 
     echo "$token"
 }
 
-# Prompt user to restart services after config change
+# Keys that require service restart to take effect
+_RESTART_REQUIRED_KEYS="SECRET_KEY|ENCRYPTION_KEY|DATABASE_URL|DB_PASSWORD|REDIS_PASSWORD|CORS_ORIGINS"
+
+# Prompt user to restart services after config change (only for keys that need it)
 _config_prompt_restart() {
+    local changed_key="${1:-}"
+
+    # Check if the changed key requires a restart
+    if [ -n "$changed_key" ] && ! echo "$changed_key" | grep -qE "${_RESTART_REQUIRED_KEYS}"; then
+        # Hot-reloadable config: no restart needed
+        log_info "Configuration updated (hot-reload: changes take effect immediately)"
+        return 0
+    fi
+
     echo ""
-    if confirm "Configuration updated. Restart services to apply changes?" "default_yes"; then
+    if [ -n "$changed_key" ]; then
+        echo -e "${YELLOW}⚠ '${changed_key}' requires a service restart to take effect${NC}"
+    fi
+    if confirm "Restart services to apply changes?" "default_yes"; then
         cmd_restart
     else
         log_info "Restart manually: ./manage.sh restart"
@@ -2325,7 +2699,7 @@ except:
         log_success "Set ${key} = ${value}"
     fi
 
-    _config_prompt_restart
+    _config_prompt_restart "${key}"
 }
 
 # Subcommand: config branding — View/set branding configuration
@@ -2427,7 +2801,7 @@ except:
     fi
 
     log_success "Branding updated: ${key} = ${value}"
-    _config_prompt_restart
+    _config_prompt_restart "${key}"
 }
 
 # Subcommand: config upload <purpose> <file> — Upload branding resource
@@ -2497,7 +2871,7 @@ except:
     fi
 
     log_success "Uploaded ${purpose}: ${file}"
-    _config_prompt_restart
+    _config_prompt_restart "branding_upload"
 }
 
 cmd_config() {
@@ -2741,6 +3115,38 @@ cmd_redis() {
             echo -e "    • Scheduler pause states will be cleared (all tasks resume)"
             echo -e "    • Compliance/whitelist caches will be rebuilt on next access"
             echo ""
+
+            # Offer Redis backup
+            echo -e "${CYAN}${BOLD}Backup Recommendation:${NC}"
+            echo -e "  ${YELLOW}Backing up Redis data before flush is recommended${NC}"
+            echo ""
+            local do_redis_backup="yes"
+            if ! ${YES_FLAG}; then
+                echo -e "Backup Redis data before flush? ${GREEN}[Y/n]${NC}"
+                read -rp "> " do_redis_backup
+                do_redis_backup="${do_redis_backup:-yes}"
+            fi
+            case "$do_redis_backup" in
+                [Nn]|[Nn][Oo])
+                    log_warn "Redis backup skipped"
+                    ;;
+                *)
+                    mkdir -p "${BACKUP_DIR}"
+                    local redis_ts
+                    redis_ts=$(date +%Y%m%d_%H%M%S)
+                    dc exec -T redis env REDISCLI_AUTH="${redis_pass}" redis-cli BGSAVE 2>/dev/null || true
+                    sleep 2
+                    local redis_container
+                    redis_container=$(dc ps -q redis 2>/dev/null | head -1)
+                    if [ -n "$redis_container" ]; then
+                        docker cp "${redis_container}":/data/dump.rdb "${BACKUP_DIR}/redis_pre_flush_${redis_ts}.rdb" 2>/dev/null && \
+                            log_success "Redis backup saved: ${BACKUP_DIR}/redis_pre_flush_${redis_ts}.rdb" || \
+                            log_warn "Redis backup failed (data may be empty)"
+                    fi
+                    ;;
+            esac
+            echo ""
+
             if ! confirm "Flush Redis database ${db_num}? This deletes ALL keys!"; then
                 log_info "Cancelled"
                 return 0
@@ -2758,6 +3164,112 @@ cmd_redis() {
             echo -e "  ${CYAN}get${NC} <key>        Get key value"
             echo -e "  ${CYAN}del${NC} <key>        Delete a key"
             echo -e "  ${CYAN}flush${NC} [db]       Flush a Redis database (default: 0)"
+            ;;
+    esac
+}
+
+###############################################################################
+# Command: password — Password management
+###############################################################################
+cmd_password() {
+    local subcmd="${1:-}"
+
+    case "$subcmd" in
+        reset)
+            local username="${2:-}"
+            if [ -z "$username" ]; then
+                log_error "Usage: ./manage.sh password reset <username> [--password <new_password>]"
+                return 1
+            fi
+            ensure_env
+            require_services
+            wait_healthy backend 30 || true
+
+            echo -e "${YELLOW}${BOLD}⚠ Password Reset:${NC}"
+            echo -e "  • User '${username}' password will be changed"
+            echo -e "  • If this is the admin user, update ADMIN_PASSWORD in .env"
+            echo ""
+
+            shift 2
+            dc exec -T backend python cli.py password reset "$username" "$@"
+            ;;
+        *)
+            echo -e "${BOLD}Password Management:${NC}"
+            echo ""
+            echo -e "  ${CYAN}reset${NC} <username> [--password <pw>]   Reset a user's password"
+            echo ""
+            echo -e "  ${DIM}Examples:${NC}"
+            echo -e "    ${DIM}./manage.sh password reset admin${NC}"
+            echo -e "    ${DIM}./manage.sh password reset admin --password NewPass123${NC}"
+            ;;
+    esac
+}
+
+###############################################################################
+# Command: user — User management
+###############################################################################
+cmd_user() {
+    local subcmd="${1:-}"
+
+    case "$subcmd" in
+        list)
+            ensure_env
+            require_services
+            wait_healthy backend 30 || true
+            dc exec -T backend python cli.py user list
+            ;;
+        unlock)
+            local username="${2:-}"
+            if [ -z "$username" ]; then
+                log_error "Usage: ./manage.sh user unlock <username>"
+                return 1
+            fi
+            ensure_env
+            require_services
+            wait_healthy backend 30 || true
+            dc exec -T backend python cli.py user unlock "$username"
+            ;;
+        *)
+            echo -e "${BOLD}User Management:${NC}"
+            echo ""
+            echo -e "  ${CYAN}list${NC}              List all users"
+            echo -e "  ${CYAN}unlock${NC} <username> Unlock a locked user account"
+            echo ""
+            echo -e "  ${DIM}Examples:${NC}"
+            echo -e "    ${DIM}./manage.sh user list${NC}"
+            echo -e "    ${DIM}./manage.sh user unlock admin${NC}"
+            ;;
+    esac
+}
+
+###############################################################################
+# Command: role — Role and permission management
+###############################################################################
+cmd_role() {
+    local subcmd="${1:-}"
+
+    case "$subcmd" in
+        list)
+            ensure_env
+            require_services
+            wait_healthy backend 30 || true
+            dc exec -T backend python cli.py role list
+            ;;
+        permissions)
+            ensure_env
+            require_services
+            wait_healthy backend 30 || true
+            dc exec -T backend python cli.py role permissions
+            ;;
+        *)
+            echo -e "${BOLD}Role Management:${NC}"
+            echo ""
+            echo -e "  ${CYAN}list${NC}              List all roles"
+            echo -e "  ${CYAN}permissions${NC}       List all permissions grouped by module"
+            echo ""
+            echo -e "  ${DIM}Examples:${NC}"
+            echo -e "    ${DIM}./manage.sh role list${NC}"
+            echo -e "    ${DIM}./manage.sh role permissions${NC}"
             ;;
     esac
 }
@@ -3071,6 +3583,12 @@ cmd_clean() {
     echo -e "  ${RED}This action CANNOT be undone!${NC}"
     echo ""
 
+    # Offer backup before clean
+    if services_running; then
+        interactive_backup "pre_clean" "Full cleanup — all data will be destroyed"
+        echo ""
+    fi
+
     if ! confirm "Type 'yes' to confirm destructive cleanup"; then
         log_info "Cancelled"
         return 0
@@ -3107,6 +3625,7 @@ cmd_help() {
     echo -e "${BOLD}Options:${NC}"
     echo -e "  -y, --yes       Skip confirmation prompts (non-interactive)"
     echo -e "  -v, --verbose   Enable verbose/debug output"
+    echo -e "  --log           Enable file logging (also via TAM_LOG_ENABLED in .env)"
     echo -e "  -h, --help      Show this help message"
     echo ""
     echo -e "${BOLD}Lifecycle:${NC}"
@@ -3129,6 +3648,8 @@ cmd_help() {
     echo -e "  ${YELLOW}backup${NC} [file]             Backup database to SQL file"
     echo -e "  ${YELLOW}backup-schedule${NC}           Configure automatic backup schedule (enable/disable/status)"
     echo -e "  ${YELLOW}restore${NC} <file>            Restore database from SQL file"
+    echo -e "  ${YELLOW}logs-export${NC} [--days N] [--output file]  Export audit logs to CSV"
+    echo -e "  ${YELLOW}audit-cleanup${NC} [--days N] [--archive]    Clean old audit logs"
     echo ""
     echo -e "${BOLD}Development:${NC}"
     echo ""
@@ -3155,6 +3676,11 @@ cmd_help() {
     echo -e "  ${CYAN}scheduler resume${NC} <task>  Resume a paused task"
     echo -e "  ${CYAN}scheduler trigger${NC} <task> Manually trigger a task"
     echo -e "  ${CYAN}scheduler intervals${NC}      Show configured intervals"
+    echo -e "  ${CYAN}password reset${NC} <user>   Reset a user's password"
+    echo -e "  ${CYAN}user list${NC}               List all users"
+    echo -e "  ${CYAN}user unlock${NC} <user>      Unlock a locked user account"
+    echo -e "  ${CYAN}role list${NC}               List all roles"
+    echo -e "  ${CYAN}role permissions${NC}        List all permissions by module"
     echo -e "  ${CYAN}ssl${NC} [--force]              Generate SSL certificates (idempotent)"
     echo -e "  ${CYAN}clean${NC}                     Remove ALL containers, volumes, data"
     echo -e "  ${CYAN}version${NC}                   Show version information"
@@ -3213,6 +3739,10 @@ main() {
                 VERBOSE_FLAG=true
                 shift
                 ;;
+            --log)
+                _LOG_ENABLED=true
+                shift
+                ;;
             -h|--help)
                 cmd_help
                 exit 0
@@ -3223,11 +3753,26 @@ main() {
         esac
     done
 
+    # Initialize logging: check .env for TAM_LOG_ENABLED if not set via --log
+    if [ "${_LOG_ENABLED:-}" != "true" ] && [ -f "${ENV_FILE}" ]; then
+        local env_log
+        env_log=$(get_env "TAM_LOG_ENABLED" 2>/dev/null || echo "")
+        if [ "${env_log}" = "true" ] || [ "${env_log}" = "1" ] || [ "${env_log}" = "yes" ]; then
+            _LOG_ENABLED=true
+        fi
+    fi
+
+    # Clean old log files
+    _log_cleanup
+
     local command="${1:-help}"
     shift 2>/dev/null || true
 
     # Always cd to script directory
     cd "${SCRIPT_DIR}"
+
+    # Log command execution
+    _log_to_file "CMD" "Command: $command $*"
 
     case "$command" in
         deploy)       cmd_deploy "$@" ;;
@@ -3240,7 +3785,9 @@ main() {
         logs-cleanup) cmd_logs_cleanup "$@" ;;
         logs-archive) cmd_logs_archive "$@" ;;
         audit-cleanup) cmd_audit_cleanup "$@" ;;
+        logs-export)  cmd_logs_export "$@" ;;
         update)       cmd_update "$@" ;;
+        rebuild)      cmd_rebuild "$@" ;;
         upgrade)      cmd_upgrade "$@" ;;
         init)         cmd_init ;;
         migrate)      cmd_migrate "$@" ;;
@@ -3254,6 +3801,9 @@ main() {
         config)       cmd_config "$@" ;;
         redis)        cmd_redis "$@" ;;
         scheduler)    cmd_scheduler "$@" ;;
+        password)     cmd_password "$@" ;;
+        user)         cmd_user "$@" ;;
+        role)         cmd_role "$@" ;;
         validate)     cmd_validate ;;
         clean)        cmd_clean ;;
         version)      cmd_version ;;

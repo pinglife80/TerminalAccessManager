@@ -88,6 +88,14 @@ async def _run_setup():
     print(_green("✓ Database initialized"))
     print()
 
+    print("Seeding RBAC preset data...")
+    from app.core.database import async_session_maker
+    async with async_session_maker() as db:
+        await _ensure_rbac_seed(db)
+        await db.commit()
+    print(_green("✓ RBAC preset data seeded"))
+    print()
+
     print("Creating admin user...")
     await _create_admin_user()
     print()
@@ -106,6 +114,171 @@ async def _run_setup():
 def cmd_setup(_args):
     """Handle the *setup* sub-command."""
     asyncio.run(_run_setup())
+
+
+# ---------------------------------------------------------------------------
+# password reset command
+# ---------------------------------------------------------------------------
+async def _password_reset(username: str, new_password: str):
+    """Reset a user's password."""
+    from sqlalchemy import select
+    from app.core.database import async_session_maker
+    from app.core.security import hash_password
+    from app.models.user import User
+
+    async with async_session_maker() as db:
+        result = await db.execute(select(User).where(User.username == username))
+        user = result.scalar_one_or_none()
+
+        if not user:
+            print(_red(f"✗ User '{username}' not found"))
+            return False
+
+        user.hashed_password = hash_password(new_password)
+        user.failed_login_attempts = 0
+        user.locked_until = None
+        await db.commit()
+
+        print(_green(f"✓ Password reset for user '{username}'"))
+        print("  Remember to update ADMIN_PASSWORD in .env if this is the admin user")
+        return True
+
+
+def cmd_password_reset(args):
+    """Handle password reset command."""
+    username = args.username
+    new_password = args.password
+
+    if not new_password:
+        import getpass
+        new_password = getpass.getpass(f"Enter new password for '{username}': ")
+        confirm_pw = getpass.getpass("Confirm new password: ")
+        if new_password != confirm_pw:
+            print(_red("✗ Passwords do not match"))
+            sys.exit(1)
+
+    if len(new_password) < 8:
+        print(_red("✗ Password must be at least 8 characters"))
+        sys.exit(1)
+
+    asyncio.run(_password_reset(username, new_password))
+
+
+# ---------------------------------------------------------------------------
+# user management commands
+# ---------------------------------------------------------------------------
+async def _list_users():
+    """List all users."""
+    from sqlalchemy import select
+    from app.core.database import async_session_maker
+    from app.models.user import User
+
+    async with async_session_maker() as db:
+        result = await db.execute(
+            select(User).order_by(User.id)
+        )
+        users = result.scalars().all()
+
+        if not users:
+            print("No users found")
+            return
+
+        print(f"{'ID':<5} {'Username':<20} {'Email':<30} {'Active':<8} {'Superuser':<10} {'Locked':<8}")
+        print("-" * 85)
+        for u in users:
+            locked = "Yes" if u.locked_until and u.locked_until > datetime.now(timezone.utc) else "No"
+            print(f"{u.id:<5} {u.username:<20} {u.email or 'N/A':<30} {'Yes' if u.is_active else 'No':<8} {'Yes' if u.is_superuser else 'No':<10} {locked:<8}")
+
+
+def cmd_user_list(args):
+    """Handle user list command."""
+    asyncio.run(_list_users())
+
+
+async def _unlock_user(username: str):
+    """Unlock a locked user account."""
+    from sqlalchemy import select
+    from app.core.database import async_session_maker
+    from app.models.user import User
+
+    async with async_session_maker() as db:
+        result = await db.execute(select(User).where(User.username == username))
+        user = result.scalar_one_or_none()
+
+        if not user:
+            print(_red(f"✗ User '{username}' not found"))
+            return False
+
+        user.failed_login_attempts = 0
+        user.locked_until = None
+        user.is_active = True
+        await db.commit()
+
+        print(_green(f"✓ User '{username}' unlocked"))
+        return True
+
+
+def cmd_user_unlock(args):
+    """Handle user unlock command."""
+    asyncio.run(_unlock_user(args.username))
+
+
+# ---------------------------------------------------------------------------
+# role management commands
+# ---------------------------------------------------------------------------
+async def _list_roles():
+    """List all roles."""
+    from sqlalchemy import select
+    from app.core.database import async_session_maker
+    from app.models.role import Role
+
+    async with async_session_maker() as db:
+        result = await db.execute(select(Role).order_by(Role.id))
+        roles = result.scalars().all()
+
+        if not roles:
+            print("No roles found. Run 'python cli.py setup' to seed default roles.")
+            return
+
+        print(f"{'ID':<5} {'Name':<20} {'Display Name':<25} {'Description':<40} {'Built-in':<10}")
+        print("-" * 105)
+        for r in roles:
+            builtin = "Yes" if r.is_builtin else "No"
+            print(f"{r.id:<5} {r.name:<20} {r.display_name or 'N/A':<25} {(r.description or 'N/A')[:40]:<40} {builtin:<10}")
+
+
+def cmd_role_list(args):
+    """Handle role list command."""
+    asyncio.run(_list_roles())
+
+
+async def _list_permissions():
+    """List all permissions grouped by module."""
+    from sqlalchemy import select
+    from app.core.database import async_session_maker
+    from app.models.role import Permission
+
+    async with async_session_maker() as db:
+        result = await db.execute(
+            select(Permission).order_by(Permission.module, Permission.id)
+        )
+        perms = result.scalars().all()
+
+        if not perms:
+            print("No permissions found. Run 'python cli.py setup' to seed default permissions.")
+            return
+
+        current_module = ""
+        for p in perms:
+            if p.module != current_module:
+                current_module = p.module
+                print(f"\n  [{current_module.upper()}]")
+            print(f"    {p.code:<40} {p.name}")
+
+
+def cmd_role_permissions(args):
+    """Handle role permissions command."""
+    asyncio.run(_list_permissions())
 
 
 # ---------------------------------------------------------------------------
@@ -1432,6 +1605,36 @@ def build_parser():
     # setup
     sp_setup = subparsers.add_parser("setup", help="Initialize database and create admin user")
     sp_setup.set_defaults(func=cmd_setup)
+
+    # password reset
+    sp_password = subparsers.add_parser("password", help="Password management")
+    pw_sub = sp_password.add_subparsers(dest="pw_command", help="Password operations")
+
+    sp_pw_reset = pw_sub.add_parser("reset", help="Reset a user's password")
+    sp_pw_reset.add_argument("username", help="Username to reset password for")
+    sp_pw_reset.add_argument("--password", "-p", help="New password (will prompt if not provided)")
+    sp_pw_reset.set_defaults(func=cmd_password_reset)
+
+    # user management
+    sp_user = subparsers.add_parser("user", help="User management")
+    user_sub = sp_user.add_subparsers(dest="user_command", help="User operations")
+
+    sp_user_list = user_sub.add_parser("list", help="List all users")
+    sp_user_list.set_defaults(func=cmd_user_list)
+
+    sp_user_unlock = user_sub.add_parser("unlock", help="Unlock a locked user account")
+    sp_user_unlock.add_argument("username", help="Username to unlock")
+    sp_user_unlock.set_defaults(func=cmd_user_unlock)
+
+    # role management
+    sp_role = subparsers.add_parser("role", help="Role and permission management")
+    role_sub = sp_role.add_subparsers(dest="role_command", help="Role operations")
+
+    sp_role_list = role_sub.add_parser("list", help="List all roles")
+    sp_role_list.set_defaults(func=cmd_role_list)
+
+    sp_role_perms = role_sub.add_parser("permissions", help="List all permissions")
+    sp_role_perms.set_defaults(func=cmd_role_permissions)
 
     # mock (with sub-subcommands)
     sp_mock = subparsers.add_parser("mock", help="Manage mock/demo data")
