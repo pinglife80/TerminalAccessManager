@@ -48,7 +48,7 @@ const Blacklist: React.FC = () => {
   const [autoRefresh, setAutoRefresh] = useState<number>(0);
 
   // Debounce search term
-  const debouncedSearch = useDebounce(searchTerm, 300);
+  const debouncedSearch = useDebounce(searchTerm, 500);
 
   const { data: blacklistData, isLoading, refetch } = useBlacklist({
     search: debouncedSearch || undefined,

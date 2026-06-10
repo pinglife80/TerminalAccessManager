@@ -44,7 +44,7 @@ const Terminals: React.FC = () => {
   const [autoRefresh, setAutoRefresh] = useState<number>(0);
 
   // Debounce search term
-  const debouncedSearch = useDebounce(searchTerm, 300);
+  const debouncedSearch = useDebounce(searchTerm, 500);
 
   // Loading states for operations
   const [blockingId, setBlockingId] = useState<number | null>(null);

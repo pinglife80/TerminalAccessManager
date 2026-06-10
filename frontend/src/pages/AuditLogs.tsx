@@ -168,7 +168,7 @@ const AuditLogs: React.FC = () => {
   const [endDate, setEndDate] = useState('');
 
   // Debounce search term
-  const debouncedSearch = useDebounce(searchTerm, 300);
+  const debouncedSearch = useDebounce(searchTerm, 500);
 
   // Get available actions for the selected category
   const availableActions = useMemo(() => {

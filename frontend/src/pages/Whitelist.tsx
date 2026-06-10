@@ -35,7 +35,7 @@ const Whitelist: React.FC = () => {
   const [endDate, setEndDate] = useState('');
 
   // Debounce search term
-  const debouncedSearch = useDebounce(searchTerm, 300);
+  const debouncedSearch = useDebounce(searchTerm, 500);
 
   const { data: whitelistData, isLoading, refetch } = useWhitelist({
     search: debouncedSearch || undefined,
