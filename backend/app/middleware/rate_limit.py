@@ -24,7 +24,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             self._redis = aioredis.from_url(
                 self.redis_url,
                 encoding="utf-8",
-                decode_responses=True
+                decode_responses=True,
+                socket_timeout=5,
+                socket_connect_timeout=5,
+                retry_on_timeout=True,
             )
         return self._redis
 

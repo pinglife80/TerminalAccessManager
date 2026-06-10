@@ -34,6 +34,8 @@ class ArpCollectorService:
         Connects to the switch, runs the configured command (e.g. 'show arp'),
         parses the output, and processes the entries.
         """
+        import asyncio
+
         config = source.config
         host = config.get("host", "")
         port = config.get("port", 22)
@@ -41,7 +43,8 @@ class ArpCollectorService:
         password = config.get("password", "")
         command = config.get("command", "show arp")
 
-        try:
+        def _ssh_collect() -> str:
+            """Synchronous SSH operation - runs in thread pool to avoid blocking event loop."""
             import paramiko
 
             client = paramiko.SSHClient()
@@ -60,6 +63,11 @@ class ArpCollectorService:
             stdin, stdout, stderr = client.exec_command(command, timeout=30)
             output = stdout.read().decode("utf-8", errors="replace")
             client.close()
+            return output
+
+        try:
+            # Run blocking SSH operations in a thread pool to avoid blocking the event loop
+            output = await asyncio.to_thread(_ssh_collect)
 
             # Parse ARP table
             entries = self._parse_arp_output(output, source.type)

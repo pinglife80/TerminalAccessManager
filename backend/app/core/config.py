@@ -55,8 +55,8 @@ class Settings(BaseSettings):
     BACKEND_CORS_ORIGINS: List[str] = ["http://localhost", "http://localhost:80"]
 
     # Rate Limiting
-    RATE_LIMIT_PER_MINUTE: int = 60
-    AUTH_RATE_LIMIT_PER_MINUTE: int = 5
+    RATE_LIMIT_PER_MINUTE: int = 120
+    AUTH_RATE_LIMIT_PER_MINUTE: int = 10
 
     # Account Lockout
     MAX_LOGIN_ATTEMPTS: int = 5
