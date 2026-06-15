@@ -58,7 +58,10 @@ class DataSourceService:
 
     async def update_data_source(self, source_id: int, data: DataSourceUpdate) -> Optional[DataSource]:
         """Update an existing data source"""
-        source = await self.get_data_source_by_id(source_id)
+        # Query directly without expunge — source must stay in session for updates
+        stmt = select(DataSource).where(DataSource.id == source_id)
+        result = await self.db.execute(stmt)
+        source = result.scalar_one_or_none()
         if not source:
             return None
 
@@ -88,11 +91,20 @@ class DataSourceService:
         await self.db.commit()
         await self.db.refresh(source)
         logger.info(f"Updated data source: {source.name} (id={source.id})")
+
+        # Decrypt config for response (expunge after commit to avoid writing back)
+        if source.config:
+            self.db.expunge(source)
+            source.config = decrypt_config(source.config)
+
         return source
 
     async def delete_data_source(self, source_id: int) -> bool:
         """Delete a data source by ID"""
-        source = await self.get_data_source_by_id(source_id)
+        # Query directly without expunge — source must stay in session for deletion
+        stmt = select(DataSource).where(DataSource.id == source_id)
+        result = await self.db.execute(stmt)
+        source = result.scalar_one_or_none()
         if not source:
             return False
 
@@ -115,6 +127,9 @@ class DataSourceService:
         result = await self.db.execute(stmt)
         source = result.scalar_one_or_none()
         if source and source.config:
+            # Use expunge to detach from session before modifying config,
+            # preventing decrypted config from being written back to DB on commit
+            self.db.expunge(source)
             source.config = decrypt_config(source.config)
         return source
 
@@ -124,6 +139,7 @@ class DataSourceService:
         result = await self.db.execute(stmt)
         source = result.scalar_one_or_none()
         if source and source.config:
+            self.db.expunge(source)
             source.config = decrypt_config(source.config)
         return source
 
@@ -143,6 +159,7 @@ class DataSourceService:
         sources = result.scalars().all()
         for source in sources:
             if source.config:
+                self.db.expunge(source)
                 source.config = decrypt_config(source.config)
         return sources
 
@@ -150,7 +167,10 @@ class DataSourceService:
         self, source_id: int, status: str, error: Optional[str] = None
     ) -> None:
         """Update the last sync status of a data source"""
-        source = await self.get_data_source_by_id(source_id)
+        # Read directly from DB without expunge, so changes are tracked by session
+        stmt = select(DataSource).where(DataSource.id == source_id)
+        result = await self.db.execute(stmt)
+        source = result.scalar_one_or_none()
         if source:
             from datetime import datetime, timezone
             source.last_sync_at = datetime.now(timezone.utc)

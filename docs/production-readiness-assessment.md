@@ -1,7 +1,7 @@
 # TerminalAccessManager (TAM) 生产环境交付可行性评估报告
 
 **评估日期：** 2026-06-10
-**评估版本：** v3.2.0-r2
+**评估版本：** v3.2.0-r3
 **评估方法：** 10 维度深度代码审查 + 架构分析 + 安全扫描 + 业务链验证
 **修复状态：** 阶段一~三已完成 + 6项高风险修复已完成，3 Critical + 7 High + 8 Medium = 18 项安全问题已修复，6 项高风险问题已修复；v3.2.0 新增：Request-ID 链路追踪、时区全局控制、日志格式函数化、Docker 安全加固注释化
 **综合评分：** **9.0/10** — 达到生产交付就绪状态
@@ -423,10 +423,11 @@ v3.2.0 对 docker-compose.yml 中的生产加固项采用了注释化策略：
 |------|:-------:|------|
 | ~~Token 黑名单 Redis fail-closed~~ | ~~高~~ | ~~已修复：fail-open 降级，Redis 不可用时允许请求~~ |
 | ~~登录锁定 Redis fail-closed~~ | ~~高~~ | ~~已修复：fail-open 降级，Redis 不可时允许登录~~ |
-| 缺少全局异常处理中间件 | 中 | 未配置 FastAPI exception_handler |
+| 缺少全局异常处理中间件 | 中 | ~~已修复：已配置 FastAPI exception_handler，返回 `{message, error_id}` 格式~~ |
 | 定时任务锁无 owner 标识 | 中 | 任务超时后锁可能被误删 |
 | 关闭无超时机制 | 低 | 某任务不响应取消时关闭可能挂起 |
 | init_db() 与 Alembic 可能冲突 | 低 | create_all 不处理列修改和删除 |
+| ~~ORM expunge 导致数据不一致~~ | ~~高~~ | ~~已修复：decrypt_config 前先 expunge 隔离，update/delete 直接查询避免 DetachedInstanceError~~ |
 
 ---
 

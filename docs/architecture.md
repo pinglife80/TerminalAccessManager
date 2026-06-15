@@ -1,6 +1,6 @@
 # TerminalAccessManager 系统架构设计文档
 
-> 文档版本：v3.2.0-r2 | 更新日期：2026-06-11
+> 文档版本：v3.2.0-r3 | 更新日期：2026-06-11
 
 ## 1. 系统概述
 
@@ -25,7 +25,7 @@ TerminalAccessManager 是基于 MAC 地址和 IP 地址的网络终端准入管�
 | ORM | SQLAlchemy 2.0 (async) |
 | 认证 | JWT (python-jose) + bcrypt + RBAC |
 | HTTP 客户端 | httpx (async) |
-| SSH 客户端 | paramiko |
+| SSH 客户端 | netmiko |
 | 监控 | Prometheus (可选) |
 
 ---
@@ -293,7 +293,7 @@ ARP 数据采集          合规判定              准入执行
 
 | 数据流 | 方向 | 协议/方式 | 说明 |
 |--------|------|-----------|------|
-| 交换机 → ARP 采集服务 | 入站 | SSH (paramiko) / HTTP API (httpx) | 定时采集 ARP 表，支持 Cisco/Huawei/H3C 格式解析 |
+| 交换机 → ARP 采集服务 | 入站 | SSH (netmiko) / HTTP API (httpx) | 定时采集 ARP 表，支持 Cisco/Huawei/H3C 格式解析 |
 | 合规基准 → 合规检查引擎 | 入站 | 数据库直连 (asyncpg) | 定时同步 IP+MAC 基准数据到 Redis 缓存 |
 | 白名单 → 合规检查引擎 | 入站 | 内存加载 (Redis 缓存) | 白名单数据加载到内存进行 IP/MAC 匹配 |
 | 合规检查引擎 → 深信服防火墙 | 出站 | REST API (httpx) | 封禁/解封 IP 地址 |
@@ -635,7 +635,7 @@ WHERE mac_address_normalized ILIKE 'AABBCCDDEEFF%'
 
 | 类型 | 说明 | 采集方式 |
 |------|------|----------|
-| `arp_ssh` | 交换机 SSH 采集 | paramiko SSH 连接，执行命令解析 ARP 表 |
+| `arp_ssh` | 交换机 SSH 采集 | netmiko SSH 连接，自动分页和设备类型检测，解析 ARP 表 |
 | `arp_api` | 交换机 API 采集 | httpx HTTP 请求，解析 JSON 响应 |
 | `sangfor` | 深信服防火墙 | httpx HTTP 请求，REST API 封禁/解封 |
 

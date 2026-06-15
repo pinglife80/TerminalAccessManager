@@ -1,6 +1,6 @@
 # TerminalAccessManager 后端实现文档
 
-> 文档版本：v3.2.0-r2 | 更新日期：2026-06-11
+> 文档版本：v3.2.0-r3 | 更新日期：2026-06-11
 
 ## 1. 概述
 
@@ -744,6 +744,7 @@ def _normalize_mac_raw(mac: str) -> str:
 
 - 从 `ComplianceBaseline` 表查找合规基准数据。
 - 使用 `asyncpg` 直连外部数据库，查询终端信息。
+- 定时任务中使用 `decrypt_config(config)` 解密配置后再连接外部数据库。
 - 结果缓存到 Redis，键 `compliance_baseline:{source_tag}`，TTL 10 分钟。
 - 更新 `DataSource.last_sync_status`。
 
@@ -754,7 +755,7 @@ def _normalize_mac_raw(mac: str) -> str:
 1. 查找该 ARP 来源下 `compliance_status=non_compliant` 且未封锁的终端。
 2. 排除已在黑名单中的 IP。
 3. 通过 `DataSourceBinding` 查找关联的防火墙标签。
-4. 对每个关联防火墙调用封锁 API。
+4. 使用 `decrypt_config(config)` 解密防火墙配置后再调用封锁 API。
 5. 创建 `Blacklist` 记录（`is_auto_blocked=True`），每个防火墙一条。
 6. 支持 `dry_run` 模式（仅模拟，不实际封锁）。
 
@@ -764,7 +765,7 @@ def _normalize_mac_raw(mac: str) -> str:
 
 1. 查找 `is_auto_blocked=True` 且 `auto_unblocked=False` 的黑名单条目。
 2. 检查该 IP+MAC 是否已合规（白名单或合规基准匹配）。
-3. 合规则调用防火墙解封 API，标记 `auto_unblocked=True`。
+3. 合规则使用 `decrypt_config(config)` 解密防火墙配置后调用解封 API，标记 `auto_unblocked=True`。
 4. 白名单匹配的终端 `compliance_status` 设为 `bypass`，合规基准匹配的设为 `compliant`。
 
 #### 缓存策略
@@ -785,10 +786,12 @@ def _normalize_mac_raw(mac: str) -> str:
 
 `collect_from_ssh(source)`：
 
-- 使用 `paramiko` 连接交换机。
-- 执行配置的命令（默认 `show arp`）。
-- 超时 30 秒。
+- 使用 `netmiko` 连接交换机（支持 Huawei/H3C/Cisco 自动设备类型检测与回退）。
+- 自动处理分页（`--More--`）和提示符检测。
+- 执行配置的命令（默认 `display arp` 或 `show arp`）。
+- 超时 30 秒（连接）+ 60 秒（读取）。
 - 解析输出后调用 `process_arp_entries` 处理。
+- entries 为空时也更新 `last_sync_status="success"`。
 
 #### API 采集
 
@@ -832,11 +835,29 @@ def _normalize_mac_raw(mac: str) -> str:
 `run_scheduled_collection()`：
 
 - 查找所有启用的 ARP 数据源（`arp_ssh` + `arp_api`）。
+- 使用 `decrypt_config(source.config)` 解密配置后再执行采集。
 - 依次执行采集（SSH 或 API）。
 
 ---
 
-### 4.4 ConfigService (services/config_service.py)
+### 4.4 DataSourceService (services/data_source_service.py)
+
+#### 配置加解密机制
+
+数据源 `config` 字段中的敏感值（`password`、`secret_key` 等）使用 Fernet 加密存储，读取时解密。
+
+**expunge 隔离策略**：`decrypt_config` 修改 config 前先 `db.expunge(source)` 分离对象，防止解密后的明文在 session commit 时回写数据库。关键操作：
+
+| 操作 | expunge 时机 | 说明 |
+|------|-------------|------|
+| 读取数据源 | 解密前 expunge | `get_data_source_by_id`、`get_data_source_by_tag`、`list_data_sources` |
+| 更新数据源 | commit 后 expunge + 解密 | 先 commit 保存加密值，再 expunge + 解密用于响应返回 |
+| 删除数据源 | 无需 expunge | 直接删除，无需返回解密数据 |
+| 更新同步状态 | 直接查询（不 expunge） | `update_sync_status` 需要修改字段并 commit，对象必须留在 session 中 |
+
+---
+
+### 4.5 ConfigService (services/config_service.py)
 
 #### DEFAULT_CONFIGS
 

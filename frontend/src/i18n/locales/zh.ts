@@ -154,8 +154,8 @@ const zh = {
     complianceStatusValues: {
       compliant: '正常',
       bypass: '绕过',
-      non_compliant: '已封禁',
-      unknown: '待定',
+      non_compliant: '不合规',
+      unknown: '待判定',
     },
   },
   dashboard: {

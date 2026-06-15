@@ -154,7 +154,7 @@ const ja = {
     complianceStatusValues: {
       compliant: '正常',
       bypass: 'バイパス',
-      non_compliant: 'ブロック済み',
+      non_compliant: '非準拠',
       unknown: '保留中',
     },
   },

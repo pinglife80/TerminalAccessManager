@@ -1,6 +1,6 @@
 # 版本跟踪记录
 
-> 文档版本：v3.2.0-r2 | 更新日期：2026-06-11
+> 文档版本：v3.2.0-r3 | 更新日期：2026-06-11
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
@@ -26,6 +26,58 @@
 | 9100a8d | fix(search): increase debounce delay from 300ms to 500ms across all pages |
 | 2f2add5 | fix: prevent superadmin role modification and fix Users search flickering |
 | 0b36d78 | docs: update RBAC documentation to v3.0 with current implementation |
+
+---
+
+## [v3.2.0-r3] - 2026-06-11
+
+**发布类型**：Bug 修复 + 文案修正 | **合并方式**：Fast-forward
+
+### 变更概要
+
+修复数据源服务层多个 Bug（expunge 导致更新/删除失败、明文密码回写、定时任务未解密配置），SSH 采集从 paramiko 迁移到 netmiko，前端错误处理和合规状态标签修正。
+
+### 变更明细
+
+#### Bug 修复
+
+| 变更项 | 文件 | 说明 |
+|--------|------|------|
+| SSH 采集库迁移 | `arp_collector_service.py` | paramiko → netmiko，支持自动分页、多设备类型回退（Huawei/H3C/Cisco） |
+| update/delete expunge Bug | `data_source_service.py` | `update_data_source`/`delete_data_source` 不再通过 `get_data_source_by_id` 获取对象（expunge 导致 DetachedInstanceError），改为直接查询 |
+| decrypt_config 明文回写 | `data_source_service.py` | 解密前先 `db.expunge(source)` 分离对象，防止明文密码在 commit 时回写数据库 |
+| update_sync_status expunge Bug | `data_source_service.py` | 改为直接查询 DB，避免 expunge 后 session 不可用 |
+| 定时任务未解密配置 | `compliance_service.py` | 3 处添加 `decrypt_config`：IPGuard 同步、防火墙封堵、防火墙解封 |
+| ARP 采集 entries=0 状态未更新 | `arp_collector_service.py` | entries 为空时也调用 `update_sync_status(source.id, "success")` |
+| 定时采集未解密配置 | `arp_collector_service.py` | `run_scheduled_collection` 添加 `decrypt_config(source.config)` |
+| 前端 getErrorMessage 对象渲染 | `utils.ts` | 处理 `detail` 为对象（`{message, error_id}`）的情况，修复 React #31 错误 |
+
+#### 文案修正
+
+| 变更项 | 文件 | 说明 |
+|--------|------|------|
+| 合规状态标签 | `en.ts`/`zh.ts`/`ja.ts` | `non_compliant`：已封禁/Blocked → 不合规/Non-compliant；`unknown`：待定 → 待判定 |
+
+#### 文档更新
+
+| 变更项 | 文件 | 说明 |
+|--------|------|------|
+| 相似命令对比 | `manage-sh-reference.md` | 新增第九章：9 组相似命令差异化对比 |
+| 数据源生命周期 | `datasource-lifecycle.md` | 新增完整数据源生命周期文档 |
+
+### 影响文件
+
+```
+backend/app/services/arp_collector_service.py  | 113 ++++++++++++++---
+backend/app/services/compliance_service.py      |  10 ++
+backend/app/services/data_source_service.py     |  26 ++++-
+frontend/src/lib/utils.ts                       |   2 +-
+frontend/src/i18n/locales/en.ts                 |   2 +-
+frontend/src/i18n/locales/ja.ts                 |   2 +-
+frontend/src/i18n/locales/zh.ts                 |   4 +-
+docs/manage-sh-reference.md                     | 134 ++++++++++++++++++
+docs/datasource-lifecycle.md                    | new file
+```
 
 ---
 

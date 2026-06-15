@@ -167,6 +167,10 @@ class ComplianceService:
             raise ValueError(f"Compliance baseline '{source_tag}' is disabled")
 
         config = baseline.config
+        # Decrypt config if values are encrypted
+        from app.core.crypto import decrypt_config
+        if config:
+            config = decrypt_config(config)
         entries = []
 
         try:
@@ -698,7 +702,10 @@ class ComplianceService:
                 return False
 
             from app.services.sangfor_service import SangforService
+            from app.core.crypto import decrypt_config
             config = fw_source.config
+            if config:
+                config = decrypt_config(config)
             svc = SangforService(
                 base_url=config.get("base_url", ""),
                 username=config.get("username", ""),
@@ -729,7 +736,10 @@ class ComplianceService:
                 return False
 
             from app.services.sangfor_service import SangforService
+            from app.core.crypto import decrypt_config
             config = fw_source.config
+            if config:
+                config = decrypt_config(config)
             svc = SangforService(
                 base_url=config.get("base_url", ""),
                 username=config.get("username", ""),

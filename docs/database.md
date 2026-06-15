@@ -1,6 +1,6 @@
 # TerminalAccessManager 数据库设计文档
 
-> 文档版本：v3.2.0-r2 | 更新日期：2026-06-11
+> 文档版本：v3.2.0-r3 | 更新日期：2026-06-11
 
 ## 1. 概述
 
@@ -433,7 +433,7 @@ docker-compose.yml 中 PostgreSQL 的 `command` 参数列表如下：
 | name | VARCHAR(100) | UNIQUE, NOT NULL | — | 数据源名称 |
 | type | VARCHAR(20) | NOT NULL | — | 数据源类型 |
 | tag | VARCHAR(50) | UNIQUE, NOT NULL, INDEX | — | 数据源唯一标签 |
-| config | JSON | NOT NULL | `{}` | 连接配置（JSON 格式） |
+| config | JSON | NOT NULL | `{}` | 连接配置（JSON 格式，敏感字段 Fernet 加密存储，读取时通过 `db.expunge` + `decrypt_config` 解密） |
 | enabled | BOOLEAN | | TRUE | 是否启用 |
 | last_sync_at | TIMESTAMP WITH TZ | | NULL | 最近同步时间 |
 | last_sync_status | VARCHAR(20) | | NULL | 最近同步状态 |

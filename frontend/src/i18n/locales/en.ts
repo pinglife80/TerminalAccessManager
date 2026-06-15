@@ -154,7 +154,7 @@ const en = {
     complianceStatusValues: {
       compliant: 'Compliant',
       bypass: 'Bypass',
-      non_compliant: 'Blocked',
+      non_compliant: 'Non-compliant',
       unknown: 'Pending',
     },
   },

@@ -1,6 +1,6 @@
 # TerminalAccessManager API 文档
 
-> 文档版本：v3.2.0-r2 | 更新日期：2026-06-11
+> 文档版本：v3.2.0-r3 | 更新日期：2026-06-11
 
 > 基于 MAC 地址和 IP 地址的网络终端准入管理平台
 
@@ -71,6 +71,8 @@ Authorization: Bearer <access_token>
   "detail": "错误描述信息"
 }
 ```
+
+> **注意**：未捕获异常的 `detail` 可能为对象格式 `{"message": "错误描述", "error_id": "xxx"}`，前端 `getErrorMessage` 已处理此情况。
 
 ### 分页参数
 
@@ -1466,7 +1468,7 @@ curl -X POST https://<HOST_IP>:8443/api/v1/data-sources/1/test \
 
 - 数据源必须处于启用状态
 - 不同类型数据源的同步行为不同：
-  - `arp_ssh`：通过 SSH 收集 ARP 表
+  - `arp_ssh`：通过 SSH（netmiko）收集 ARP 表，支持 Huawei/H3C/Cisco 自动设备类型检测
   - `arp_api`：通过 API 收集 ARP 表
   - `sangfor`：测试连接
 

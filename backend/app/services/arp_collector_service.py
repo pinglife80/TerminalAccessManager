@@ -45,24 +45,85 @@ class ArpCollectorService:
 
         def _ssh_collect() -> str:
             """Synchronous SSH operation - runs in thread pool to avoid blocking event loop."""
-            import paramiko
+            from netmiko import ConnectHandler
 
-            client = paramiko.SSHClient()
-            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            # Determine device type from the command pattern
+            # Huawei uses 'display', Cisco uses 'show'
+            device_type = "autodetect"
+            if command.strip().lower().startswith("display"):
+                device_type = "huawei"
+            elif command.strip().lower().startswith("show"):
+                device_type = "cisco_ios"
 
-            client.connect(
-                hostname=host,
-                port=port,
-                username=username,
-                password=password,
-                timeout=30,
-                look_for_keys=False,
-                allow_agent=False,
+            device = {
+                "device_type": device_type,
+                "host": host,
+                "port": port,
+                "username": username,
+                "password": password,
+                "timeout": 30,
+                "conn_timeout": 30,
+            }
+
+            # Debug: log connection parameters (mask password)
+            masked_pw = password[:2] + "***" + password[-2:] if password and len(password) > 4 else "***"
+            logger.info(
+                f"netmiko connecting to {host}:{port} as {username}, "
+                f"device_type={device_type}, command=[{command}], "
+                f"password_masked={masked_pw}"
             )
 
-            stdin, stdout, stderr = client.exec_command(command, timeout=30)
-            output = stdout.read().decode("utf-8", errors="replace")
-            client.close()
+            # If autodetect, try Huawei first then Cisco
+            output = ""
+            tried_types = []
+
+            for dtype in [device_type, "huawei", "huawei_vrpv8", "cisco_ios", "cisco_xe"]:
+                if dtype == "autodetect":
+                    continue
+                if dtype in tried_types:
+                    continue
+                tried_types.append(dtype)
+
+                try:
+                    device["device_type"] = dtype
+                    logger.info(f"netmiko trying device_type={dtype} for {host}")
+                    conn = ConnectHandler(**device)
+
+                    # netmiko's send_command automatically handles:
+                    # - Pagination (--More--) by sending space
+                    # - Prompt detection
+                    # Keep strip_command=False to see command echo for diagnosis
+                    output = conn.send_command(
+                        command,
+                        read_timeout=60,
+                        strip_prompt=True,
+                        strip_command=False,
+                    )
+                    conn.disconnect()
+
+                    has_ip = bool(re.search(r'\d+\.\d+\.\d+\.\d+', output))
+                    logger.info(
+                        f"netmiko device_type={dtype} output length={len(output)}, "
+                        f"has_ip={has_ip}, content=[{output[:300]}]"
+                    )
+
+                    # If we got output with IP addresses, we're done
+                    if output.strip() and re.search(r'\d+\.\d+\.\d+\.\d+', output):
+                        break
+
+                except Exception as e:
+                    logger.warning(f"netmiko connect with device_type={dtype} failed: {e}")
+                    continue
+
+            # Clean up any remaining ANSI escape codes
+            output = re.sub(r'\x1b\[[0-9;]*[a-zA-Z]', '', output)
+
+            # Debug: log raw output content for diagnosis
+            logger.info(
+                f"netmiko final output for {host}: len={len(output)}, "
+                f"content=[{output[:300]}]"
+            )
+
             return output
 
         try:
@@ -73,6 +134,16 @@ class ArpCollectorService:
             entries = self._parse_arp_output(output, source.type)
 
             if not entries:
+                from app.services.data_source_service import DataSourceService
+                ds_service = DataSourceService(self.db)
+                await ds_service.update_sync_status(source.id, "success")
+
+                logger.warning(
+                    f"No ARP entries parsed from '{source.tag}'. "
+                    f"Raw output length: {len(output)} chars. "
+                    f"First 500 chars: {output[:500]}"
+                )
+
                 return SyncResult(
                     success=True,
                     message="No ARP entries found in output",
@@ -150,6 +221,10 @@ class ArpCollectorService:
             entries = self._parse_api_response(data)
 
             if not entries:
+                from app.services.data_source_service import DataSourceService
+                ds_service = DataSourceService(self.db)
+                await ds_service.update_sync_status(source.id, "success")
+
                 return SyncResult(
                     success=True,
                     message="No ARP entries found in API response",
@@ -324,6 +399,8 @@ class ArpCollectorService:
     # ------------------------------------------------------------------
     async def run_scheduled_collection(self):
         """Run scheduled ARP collection for all enabled ARP sources"""
+        from app.core.crypto import decrypt_config
+
         stmt = select(DataSource).where(
             (DataSource.type.in_(["arp_ssh", "arp_api"])) &
             (DataSource.enabled == True)
@@ -333,6 +410,10 @@ class ArpCollectorService:
 
         for source in sources:
             try:
+                # Decrypt config before using it for SSH/API connections
+                if source.config:
+                    source.config = decrypt_config(source.config)
+
                 logger.info(f"Starting scheduled collection for '{source.tag}'")
                 if source.type == "arp_ssh":
                     sync_result = await self.collect_from_ssh(source)
