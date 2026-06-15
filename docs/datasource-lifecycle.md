@@ -1,6 +1,6 @@
 # 数据源全生命周期技术文档
 
-> 文档版本：v3.2.0-r6 | 更新日期：2026-06-16
+> 文档版本：v3.2.0-r7 | 更新日期：2026-06-16
 
 本文档详细描述 TerminalAccessManager 系统中数据源从配置、采集、解析、合规判定到自动处置的完整生命周期，涵盖架构设计、数据格式、输入输出规范和定时调度机制。
 
@@ -1284,7 +1284,7 @@ decrypt_config(config)
 | 层次 | 文件路径 | 职责 |
 |------|----------|------|
 | 前端页面 | `frontend/src/pages/DataSources.tsx` | 数据源管理主页面（三Tab） |
-| 前端组件 | `frontend/src/components/datasources/DataSourcesTab.tsx` | 数据源 CRUD + 测试 + 同步 |
+| 前端组件 | `frontend/src/components/datasources/DataSourcesTab.tsx` | 数据源 CRUD + 测试 + 同步（Sangfor 类型隐藏同步按钮） |
 | 前端组件 | `frontend/src/components/datasources/BindingsTab.tsx` | ARP-防火墙绑定管理 |
 | 前端组件 | `frontend/src/components/datasources/ComplianceBaselinesTab.tsx` | 合规基线 CRUD + 测试 + 同步 |
 | 前端共享 | `frontend/src/components/datasources/shared.ts` | 配置字段定义、类型徽章、工具函数 |
@@ -1438,6 +1438,8 @@ asyncpg.connect(host, port, username, password, database)
 ### 16.5 防火墙（Sangfor）安全性
 
 > **这是系统中唯一对外部系统执行写操作的数据源，危险性最高。**
+>
+> **同步说明**：Sangfor 为推送型防火墙，仅执行封堵/解封命令，不涉及数据采集。因此"同步"操作对 Sangfor 无意义——前端已隐藏 Sangfor 类型的同步按钮，后端 `POST /data-sources/{id}/sync` 对 sangfor 类型返回"Sync is not applicable"提示。Sangfor 的可用性通过"测试连接"按钮验证。
 
 #### 16.5.1 封堵调用流程
 

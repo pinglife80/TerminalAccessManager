@@ -1,6 +1,6 @@
 # TerminalAccessManager API 文档
 
-> 文档版本：v3.2.0-r6 | 更新日期：2026-06-16
+> 文档版本：v3.2.0-r7 | 更新日期：2026-06-16
 
 > 基于 MAC 地址和 IP 地址的网络终端准入管理平台
 
@@ -1486,7 +1486,7 @@ curl -X POST https://<HOST_IP>:8443/api/v1/data-sources/1/test \
 - 不同类型数据源的同步行为不同：
   - `arp_ssh`：通过 SSH（netmiko）收集 ARP 表，支持 Huawei/H3C/Cisco 自动设备类型检测
   - `arp_api`：通过 API 收集 ARP 表
-  - `sangfor`：测试连接
+  - `sangfor`：不适用。Sangfor 为推送型防火墙，无数据同步语义；前端已隐藏同步按钮，接口返回"Sync is not applicable"提示
 
 **成功响应** `200`
 

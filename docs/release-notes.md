@@ -1,6 +1,6 @@
 # 版本跟踪记录
 
-> 文档版本：v3.2.0-r6 | 更新日期：2026-06-16
+> 文档版本：v3.2.0-r7 | 更新日期：2026-06-16
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
@@ -26,6 +26,28 @@
 | 9100a8d | fix(search): increase debounce delay from 300ms to 500ms across all pages |
 | 2f2add5 | fix: prevent superadmin role modification and fix Users search flickering |
 | 0b36d78 | docs: update RBAC documentation to v3.0 with current implementation |
+
+---
+
+## [v3.2.0-r7] - 2026-06-16
+
+### Changed
+
+- Sangfor 数据源移除"同步"按钮：Sangfor 为推送型防火墙，无数据同步语义，前端按 `ds.type !== 'sangfor'` 条件隐藏同步按钮
+- Sangfor 同步接口行为调整：`POST /data-sources/{id}/sync` 对 sangfor 类型不再调用 `test_connection`，改为返回"Sync is not applicable"提示信息
+
+### 提交记录
+
+| 提交 | 说明 |
+|------|------|
+| 8dae3d4 | fix(datasource): remove sync button for Sangfor firewalls |
+
+### 文件变更列表
+
+| 文件 | 变更 |
+|------|------|
+| frontend/src/components/datasources/DataSourcesTab.tsx | Sangfor 类型隐藏同步按钮 |
+| backend/app/api/v1/endpoints/data_sources.py | sangfor 同步接口返回不适用提示 |
 
 ---
 

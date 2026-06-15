@@ -1,7 +1,7 @@
 # TerminalAccessManager (TAM) 生产环境交付可行性评估报告
 
 **评估日期：** 2026-06-10
-**评估版本：** v3.2.0-r6
+**评估版本：** v3.2.0-r7
 **评估方法：** 10 维度深度代码审查 + 架构分析 + 安全扫描 + 业务链验证
 **修复状态：** 阶段一~三已完成 + 6项高风险修复已完成，3 Critical + 7 High + 8 Medium = 18 项安全问题已修复，6 项高风险问题已修复；v3.2.0 新增：Request-ID 链路追踪、时区全局控制、日志格式函数化、Docker 安全加固注释化
 **综合评分：** **9.0/10** — 达到生产交付就绪状态
@@ -57,8 +57,8 @@
 | Dashboard | 295 | 统计卡片、快捷操作、系统状态监控（后端/DB/深信服/扫描器） |
 | Terminals | 814 | MAC/IP 搜索、状态/合规过滤、日期范围、自动刷新、分页、CSV 导出、封禁/解封/加白/详情 |
 | Whitelist | 642 | 搜索、日期过滤、添加（MAC/IP/CIDR/Range）、MAC 格式校验与规范化、CSV 导出 |
-| Blacklist | 760 | 搜索、日期过滤、自动刷新、添加（含原因/时长/防火墙选择）、解封、过期标记、CSV 导出 |
-| DataSources | 146 | 三 Tab 切换（数据源/绑定/基线）、CRUD、连接测试、同步 |
+| Blacklist | 760 | 搜索、日期过滤、自动刷新、解封、过期标记、CSV 导出（审计视图，封堵操作从终端管理发起） |
+| DataSources | 146 | 三 Tab 切换（数据源/绑定/基线）、CRUD、连接测试、同步（Sangfor 类型隐藏同步按钮） |
 | AuditLogs | 651 | 搜索、7 大类过滤、动作过滤、日期范围、CSV 导出、JSON 详情弹窗 |
 | Profile | 260 | 账户信息、邮箱更新、密码修改（含强度指示器） |
 | Users | 576 | 用户 CRUD、搜索、角色切换、激活/停用、解锁、重置密码 |
@@ -517,11 +517,11 @@ v3.2.0-r4 将终端 `status` 字段从 6 值枚举（active/inactive/frozen/pend
 | branding.md | v3.2.0 | ✅ |
 | changelog.md | v3.2.0 | ✅ |
 | frontend/implementation.md | v3.2.0 | ✅ |
-| production-readiness-assessment.md | v3.2.0-r6 | ✅ |
-| datasource-lifecycle.md | v3.2.0-r6 | ✅ |
+| production-readiness-assessment.md | v3.2.0-r7 | ✅ |
+| datasource-lifecycle.md | v3.2.0-r7 | ✅ |
 | RBAC.md | v3.2.0-r6 | ✅ |
 
-**文档版本号统一为 v3.2.0-r6 ✅**
+**文档版本号统一为 v3.2.0-r7 ✅**
 
 ### 10.2 配置文件完整性
 
