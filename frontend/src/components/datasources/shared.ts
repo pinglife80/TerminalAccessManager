@@ -46,11 +46,16 @@ export const TYPE_BADGE: Record<string, { label: string; className: string }> = 
 
 export const BASELINE_CONFIG_FIELDS: Record<string, ConfigFieldDef[]> = {
   ipguard: [
+    { key: 'db_type', label: 'Database Type', type: 'select', options: [
+      { value: 'mssql', label: 'SQL Server' },
+      { value: 'mysql', label: 'MySQL / MariaDB' },
+      { value: 'postgresql', label: 'PostgreSQL' },
+    ], defaultValue: 'mssql' },
     { key: 'host', label: 'Host', type: 'text', placeholder: '192.168.1.100' },
-    { key: 'port', label: 'Port', type: 'number', placeholder: '3306', defaultValue: '3306' },
+    { key: 'port', label: 'Port', type: 'number', placeholder: '1433', defaultValue: '1433' },
     { key: 'username', label: 'Username', type: 'text', placeholder: 'admin' },
     { key: 'password', label: 'Password', type: 'password', placeholder: '********' },
-    { key: 'database', label: 'Database', type: 'text', placeholder: 'ipguard' },
+    { key: 'database', label: 'Database', type: 'text', placeholder: 'OCULAR3' },
   ],
 };
 

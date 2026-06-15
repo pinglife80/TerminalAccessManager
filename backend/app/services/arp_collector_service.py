@@ -303,6 +303,13 @@ class ArpCollectorService:
                     existing.timestamp = datetime.now(timezone.utc)
                     existing.source_tag = source_tag
                     existing.source = "arp"
+                    # Reset compliance_status to "unknown" so the next
+                    # compliance check will re-evaluate it with current
+                    # whitelist/IPGuard data. This ensures terminals that
+                    # were previously non_compliant can become compliant
+                    # if the baseline data has changed.
+                    existing.compliance_status = "unknown"
+                    existing.wl_match_type = None
                     updated += 1
                 else:
                     # Create new entry
@@ -310,7 +317,7 @@ class ArpCollectorService:
                         ip_address=ip_addr,
                         mac_address=mac_normalized,
                         mac_address_normalized=mac_normalized.replace('-', '').replace(':', '').replace('.', '').upper(),
-                        status=TerminalStatus.UNFROZEN.value,
+                        status=TerminalStatus.UNBLOCKED.value,
                         source="arp",
                         source_tag=source_tag,
                         compliance_status="unknown",

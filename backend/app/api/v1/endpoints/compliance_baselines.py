@@ -161,19 +161,52 @@ async def test_baseline_connection(
 
     if baseline.type == "ipguard":
         try:
-            import asyncpg
+            from app.core.crypto import decrypt_config
             config = baseline.config
-            conn = await asyncpg.connect(
-                host=config.get("host", ""),
-                port=config.get("port", 3306),
-                user=config.get("username", ""),
-                password=config.get("password", ""),
-                database=config.get("database", "ipguard"),
-                timeout=10,
-            )
-            await conn.execute("SELECT 1")
-            await conn.close()
-            return ConnectionTestResult(success=True, message="Connection successful")
+            if config:
+                config = decrypt_config(config)
+            db_type = config.get("db_type", "postgresql")
+            host = config.get("host", "")
+            port = config.get("port", 3306)
+            username = config.get("username", "")
+            password = config.get("password", "")
+            database = config.get("database", "ipguard")
+
+            if db_type == "mssql":
+                import pyodbc
+                conn_str = (
+                    f"DRIVER={{FreeTDS}};"
+                    f"SERVER={host};"
+                    f"PORT={port};"
+                    f"DATABASE={database};"
+                    f"UID={username};"
+                    f"PWD={password};"
+                    f"TDS_Version=7.3;"
+                )
+                conn = pyodbc.connect(conn_str, timeout=10)
+                cursor = conn.cursor()
+                cursor.execute("SELECT 1")
+                conn.close()
+            elif db_type == "mysql":
+                import aiomysql
+                conn = await aiomysql.connect(
+                    host=host, port=int(port),
+                    user=username, password=password,
+                    db=database, connect_timeout=10,
+                )
+                async with conn.cursor() as cur:
+                    await cur.execute("SELECT 1")
+                conn.close()
+            else:
+                import asyncpg
+                conn = await asyncpg.connect(
+                    host=host, port=int(port),
+                    user=username, password=password,
+                    database=database, timeout=10,
+                )
+                await conn.execute("SELECT 1")
+                await conn.close()
+            return ConnectionTestResult(success=True, message=f"Connection successful ({db_type})")
         except Exception as e:
             return ConnectionTestResult(success=False, message=f"Connection failed: {str(e)}")
     else:

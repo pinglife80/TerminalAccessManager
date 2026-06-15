@@ -36,7 +36,8 @@ fakeredis[lua]==2.23.2
 # Network Operations
 netmiko==4.1.2
 paramiko==3.4.0
-# pymssql==2.2.10  # Removed - causes build issues on Alpine, not needed for demo
+pyodbc==5.2.0
+aiomysql==0.2.0
 
 # Monitoring
 prometheus-fastapi-instrumentator==6.1.0

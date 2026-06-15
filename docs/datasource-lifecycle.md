@@ -1,6 +1,6 @@
 # 数据源全生命周期技术文档
 
-> 文档版本：v1.2 | 更新日期：2026-06-15
+> 文档版本：v3.2.0-r5 | 更新日期：2026-06-15
 
 本文档详细描述 TerminalAccessManager 系统中数据源从配置、采集、解析、合规判定到自动处置的完整生命周期，涵盖架构设计、数据格式、输入输出规范和定时调度机制。
 
@@ -23,6 +23,7 @@
 - [13. API 接口](#13-api-接口)
 - [14. 错误处理与容错](#14-错误处理与容错)
 - [15. 核心业务流程总览](#15-核心业务流程总览)
+- [16. 数据源安全性评估](#16-数据源安全性评估)
 
 ---
 
@@ -1202,7 +1203,7 @@ decrypt_config(config)
      ├── 通过绑定关系查找防火墙
      ├── 调用 Sangfor API 封堵 IP
      ├── 创建 Blacklist 记录
-     └── 更新 Terminal.status = "frozen"
+     └── 更新 Terminal.status = "blocked"
 
 阶段 5: 持续监控
 ━━━━━━━━━━━━━━━━
@@ -1211,7 +1212,7 @@ decrypt_config(config)
   ⑫ 自动解封已恢复合规的终端
      ├── 调用 Sangfor API 解封 IP
      ├── 标记 Blacklist.auto_unblocked = True
-     └── 更新 Terminal.status = "unfrozen"
+     └── 更新 Terminal.status = "unblocked"
 ```
 
 ### 15.2 数据流转图
@@ -1294,3 +1295,299 @@ decrypt_config(config)
 | 后端服务 | `backend/app/services/sangfor_service.py` | Sangfor AF API 交互（封堵/解封/认证） |
 | 后端加密 | `backend/app/core/crypto.py` | Fernet 字段级加密/解密 |
 | 后端调度 | `backend/app/main.py` | 5 个后台定时任务 + 分布式锁 + 暂停控制 |
+
+---
+
+## 16. 数据源安全性评估
+
+本章对各数据源的操作类型、对外部系统的影响、现有安全防护措施及缺失防护进行全面评估。
+
+### 16.1 安全性总览
+
+| 数据源 | 调用方向 | 操作类型 | 对外部系统影响 | 危险等级 | 关键防护 | 关键缺失 |
+|--------|---------|---------|---------------|---------|---------|---------|
+| SSH 交换机 | 出站 | 只读 | 无 | 低 | 密码脱敏、超时、权限 | 命令白名单校验 |
+| API 数据源 | 出站 | 配置决定（默认只读） | 取决于目标 API | 低-中 | 超时、权限 | method 白名单、POST body 校验 |
+| IPGuard | 出站 | 只读 | 无 | 低 | 凭据加密、SQL 硬编码、权限 | 连接池、查询超时 |
+| 防火墙（Sangfor） | 出站 | **写操作** | **修改防火墙 ACL 规则** | **高** | dry_run、权限、审计 | 封堵上限/速率限制、二次确认、回滚机制、关键 IP 保护白名单 |
+| 数据源配置 CRUD | 内部 | 读写 | 间接影响外部交互 | 中 | RBAC、审计 | 删除前依赖检查、变更审批 |
+| 合规基准 CRUD | 内部 | 读写 | 间接影响合规判定 | 低-中 | RBAC、唯一性校验、审计 | 删除前影响评估、级联合规重算 |
+
+### 16.2 SSH 交换机安全性
+
+#### 16.2.1 调用流程
+
+```
+netmiko.ConnectHandler(host, port, username, password, device_type)
+    → conn.send_command(command, read_timeout=60)
+    → conn.disconnect()
+    → 解析输出 → upsert Terminal → 合规检查
+```
+
+#### 16.2.2 操作类型
+
+**只读**。`send_command` 是 netmiko 的只读命令方法，仅发送命令并读取输出，不会进入配置模式。执行的命令（`display arp` / `show arp`）均为查询命令。
+
+#### 16.2.3 风险点
+
+| 风险 | 说明 | 严重程度 |
+|------|------|---------|
+| 命令注入 | `config.command` 由管理员配置，理论上可执行任意命令（含写操作如 `system-view`、`acl` 等） | 中 |
+| 凭据泄露 | 运行时需解密为明文，日志中已做脱敏处理 | 低 |
+| 连接占用 | 长时间采集可能占用交换机 SSH 会话资源 | 低 |
+
+#### 16.2.4 现有防护
+
+- 密码日志脱敏：`password[:2] + "***" + password[-2:]`
+- 连接超时：`timeout=30`, `conn_timeout=30`
+- 读取超时：`read_timeout=60`
+- 权限控制：API 端点需 `datasource:sync` 权限
+- 多设备类型回退：尝试失败自动切换下一个 device_type
+
+#### 16.2.5 缺失防护
+
+| 缺失项 | 建议措施 | 优先级 |
+|--------|---------|--------|
+| 命令白名单 | 限制 `config.command` 只允许 `display arp`、`show arp` 等只读命令，拒绝包含 `system-view`、`configure`、`acl`、`interface` 等配置模式关键字 | 高 |
+| SSH 会话数限制 | 限制同一交换机的并发 SSH 连接数 | 低 |
+
+### 16.3 API 数据源安全性
+
+#### 16.3.1 调用流程
+
+```
+httpx.AsyncClient
+    → 构建 headers（bearer / header 认证）
+    → client.get(url) 或 client.post(url)
+    → 解析 JSON 响应 → upsert Terminal → 合规检查
+```
+
+#### 16.3.2 操作类型
+
+**配置决定，默认只读**。`method` 默认为 `GET`，但支持 `POST`。POST 请求不携带 body 参数。
+
+#### 16.3.3 风险点
+
+| 风险 | 说明 | 严重程度 |
+|------|------|---------|
+| 非预期写操作 | 某些 API 仅凭 POST 调用即触发操作（如重启设备、下发配置） | 中 |
+| URL 注入 | `config.url` 由管理员配置，可指向内网任意服务 | 中 |
+| Header 注入 | `config.header_name` 和 `config.token` 可构造任意 HTTP Header | 低 |
+
+#### 16.3.4 现有防护
+
+- 请求超时：30 秒
+- HTTP 状态码检查：`response.raise_for_status()`
+- 权限控制：API 端点需 `datasource:sync` 权限
+- 认证信息加密存储
+
+#### 16.3.5 缺失防护
+
+| 缺失项 | 建议措施 | 优先级 |
+|--------|---------|--------|
+| method 白名单 | 限制 `config.method` 只允许 `GET`，如需 `POST` 需额外确认 | 高 |
+| URL 域名校验 | 限制 `config.url` 只允许配置预设域名或 IP 段，防止 SSRF | 中 |
+| POST body 审计 | 如支持 POST，记录请求 body 到审计日志 | 低 |
+
+### 16.4 IPGuard 合规基准安全性
+
+#### 16.4.1 调用流程
+
+```
+asyncpg.connect(host, port, username, password, database)
+    → SELECT ip_address, mac_address FROM terminal_info WHERE ...
+    → conn.close()
+    → 缓存 Redis (TTL 600s)
+    → 更新 ComplianceBaseline 同步状态
+```
+
+#### 16.4.2 操作类型
+
+**只读**。仅执行硬编码的 `SELECT` 查询，不涉及任何 `INSERT`/`UPDATE`/`DELETE`。
+
+#### 16.4.3 风险点
+
+| 风险 | 说明 | 严重程度 |
+|------|------|---------|
+| 数据库连接泄露 | 每次同步创建新连接而非使用连接池 | 低 |
+| 查询无超时 | asyncpg 查询未设置 `statement_timeout`，可能长时间挂起 | 低 |
+| 凭据泄露 | 运行时需解密为明文 | 低 |
+
+#### 16.4.4 现有防护
+
+- SQL 语句硬编码：不存在 SQL 注入风险
+- 凭据加密存储：Fernet 字段级加密
+- 连接超时：30 秒
+- 异常处理完善：失败时更新同步状态并记录错误
+- 权限控制：API 端点需 `baseline:sync` 权限
+- 测试连接仅执行 `SELECT 1`：不暴露表结构
+
+#### 16.4.5 缺失防护
+
+| 缺失项 | 建议措施 | 优先级 |
+|--------|---------|--------|
+| 连接池 | 使用 `asyncpg.create_pool` 替代每次新建连接 | 中 |
+| 查询超时 | 设置 `statement_timeout` 防止长时间挂起 | 中 |
+| 只读用户校验 | 测试连接时验证数据库用户是否为只读角色 | 低 |
+
+### 16.5 防火墙（Sangfor）安全性
+
+> **这是系统中唯一对外部系统执行写操作的数据源，危险性最高。**
+
+#### 16.5.1 封堵调用流程
+
+```
+查找防火墙数据源 → decrypt_config(config)
+    → SangforService(base_url, username, password)
+    → svc._authenticate()  [POST /v1/namespaces/public/login]
+    → svc.block_ip(ip_list) [POST /batch/v1/namespaces/public/blockip]
+       payload: {"ipType": "SRC", "srcIP": [ip_list], "blockTime": "30d"}
+    → svc.close()
+    → 更新 Terminal.status = "blocked"
+    → 创建 Blacklist 记录
+```
+
+#### 16.5.2 解封调用流程
+
+```
+查找防火墙数据源 → decrypt_config(config)
+    → SangforService(base_url, username, password)
+    → svc._authenticate()
+    → svc.unblock_ip(ip_address) [POST /batch/v1/namespaces/public/blockip?_method=DELETE]
+       payload: [{"srcIP": ip_address}]
+    → svc.close()
+    → 更新 Terminal.status = "unblocked"
+    → 标记 Blacklist.auto_unblocked = True
+```
+
+#### 16.5.3 操作类型
+
+**写操作**。直接修改防火墙的访问控制策略：
+- **封堵**：在防火墙上创建 IP 封堵规则
+- **解封**：从防火墙删除 IP 封堵规则
+
+#### 16.5.4 风险点
+
+| 风险 | 说明 | 严重程度 |
+|------|------|---------|
+| 误封合法用户 | 错误封堵导致合法用户无法访问网络 | **高** |
+| 误封关键基础设施 | 封堵网关、DNS、DHCP 等关键 IP 导致大面积断网 | **高** |
+| 批量封堵失控 | `block_ip` 接受 IP 列表，一次可封堵大量 IP | **高** |
+| 自动封堵无回滚 | `asyncio.create_task` 触发后难以撤回 | **高** |
+| 错误解封 | 不合规设备恢复网络访问 | 中 |
+| 封堵规则残留 | 删除数据源或绑定后，已下发的防火墙规则不会自动清理 | 中 |
+
+#### 16.5.5 现有防护
+
+| 防护措施 | 说明 |
+|---------|------|
+| dry_run 模式 | `auto_block_non_compliant(dry_run=True)` 仅记录不执行 |
+| 权限控制 | 需 `datasource:compliance` 权限 |
+| 防火墙启用检查 | 封堵前检查 `fw_source.enabled` |
+| 封堵结果验证 | 检查 `response.get("code") == 0` |
+| 审计日志 | 所有封堵/解封操作记录到 audit_log |
+| 绑定关系 | ARP 源必须绑定到防火墙才会触发自动封堵 |
+
+#### 16.5.6 缺失防护
+
+| 缺失项 | 建议措施 | 优先级 |
+|--------|---------|--------|
+| 关键 IP 保护白名单 | 维护不可封堵的 IP 列表（网关、DNS、DHCP、核心服务器），封堵前检查 | **高** |
+| 单次封堵数量上限 | 限制 `block_ip` 单次最多封堵 N 个 IP（建议 50） | **高** |
+| 封堵速率限制 | 限制单位时间内的封堵操作频率（如 10 次/分钟） | **高** |
+| 封堵前二次确认 | 自动封堵前记录 dry_run 日志，首次封堵需人工确认 | 中 |
+| 自动回滚机制 | 封堵后 N 分钟内如检测到异常（如大量封堵），自动解封 | 中 |
+| 数据源删除清理 | 删除防火墙数据源前检查并清理已下发的封堵规则 | 中 |
+| 封堵有效期策略 | 支持配置封堵时长（当前硬编码 `30d`），过期自动解封 | 低 |
+
+### 16.6 数据源配置 CRUD 安全性
+
+#### 16.6.1 操作类型
+
+| 操作 | 端点 | 对外部系统影响 | 权限 |
+|------|------|---------------|------|
+| 创建数据源 | `POST /data-sources/` | 无直接影响 | `datasource:write` |
+| 更新数据源 | `PUT /data-sources/{id}` | 修改 SSH 命令/API URL 可改变外部交互行为 | `datasource:write` |
+| 删除数据源 | `DELETE /data-sources/{id}` | 已下发的防火墙规则不会自动清理 | `datasource:write` |
+| 创建绑定 | `POST /data-sources/bindings/` | 直接影响自动封堵的目标防火墙 | `datasource:write` |
+| 删除绑定 | `DELETE /data-sources/bindings/{id}` | 解除 ARP-防火墙关联，影响自动封堵流程 | `datasource:write` |
+
+#### 16.6.2 风险点
+
+| 风险 | 说明 | 严重程度 |
+|------|------|---------|
+| 删除数据源遗留封堵规则 | 删除防火墙数据源后，已封堵的 IP 规则残留在防火墙上 | **高** |
+| 删除绑定中断封堵流程 | 删除绑定后，不合规终端无法自动封堵 | 中 |
+| 修改 SSH 命令 | 将只读命令改为写操作命令 | 中 |
+| 修改 API URL | 将 URL 指向其他服务 | 中 |
+
+#### 16.6.3 现有防护
+
+- RBAC 权限控制（`require_permission`）
+- 所有写操作有审计日志
+- 配置字段加密存储
+
+#### 16.6.4 缺失防护
+
+| 缺失项 | 建议措施 | 优先级 |
+|--------|---------|--------|
+| 删除前依赖检查 | 删除数据源前检查是否有活跃绑定、是否有未解封的封堵规则 | **高** |
+| 删除前清理提示 | 删除防火墙数据源时提示用户手动清理已下发的封堵规则 | **高** |
+| 关键配置变更审批 | 修改 SSH 命令、API URL 等关键字段时需二次确认 | 中 |
+| 绑定删除影响提示 | 删除绑定时显示受影响的终端数量 | 中 |
+
+### 16.7 合规基准 CRUD 安全性
+
+#### 16.7.1 操作类型
+
+| 操作 | 端点 | 对外部系统影响 | 权限 |
+|------|------|---------------|------|
+| 创建基准 | `POST /compliance-baselines/` | 无直接影响 | `baseline:write` |
+| 更新基准 | `PUT /compliance-baselines/{id}` | 修改数据库连接参数可能导致同步失败或获取错误数据 | `baseline:write` |
+| 删除基准 | `DELETE /compliance-baselines/{id}` | 依赖该基准的合规判断失效，可能导致大量终端变为 non_compliant | `baseline:write` |
+| 手动同步 | `POST /compliance-baselines/{id}/sync` | 对 IPGuard 数据库只读 | `baseline:sync` |
+
+#### 16.7.2 风险点
+
+| 风险 | 说明 | 严重程度 |
+|------|------|---------|
+| 删除基准触发级联封堵 | 依赖该基准的终端变为 non_compliant，如启用自动封堵则触发防火墙操作 | **高** |
+| 禁用基准效果等同删除 | 禁用基准后合规判断失效，效果与删除相同 | 中 |
+| 修改数据库连接参数 | 连接到错误的 IPGuard 实例，获取不准确的基线数据 | 中 |
+
+#### 16.7.3 现有防护
+
+- RBAC 权限控制
+- name/tag 唯一性校验
+- 审计日志
+- 连接测试端点
+
+#### 16.7.4 缺失防护
+
+| 缺失项 | 建议措施 | 优先级 |
+|--------|---------|--------|
+| 删除前影响评估 | 显示依赖该基准的终端数量，警告可能的级联封堵 | **高** |
+| 删除/禁用后合规重算 | 自动触发 `recalculate_all_compliance()`，确保终端状态与最新基准配置一致 | **高** |
+| 关键配置变更确认 | 修改数据库连接参数时需二次确认 | 中 |
+
+### 16.8 安全防护优先级矩阵
+
+按风险等级和实施难度排列：
+
+| 优先级 | 防护项 | 影响数据源 | 风险场景 |
+|--------|--------|-----------|---------|
+| **P0** | 关键 IP 保护白名单 | 防火墙 | 防止误封网关/DNS/核心服务器 |
+| **P0** | 删除数据源前依赖检查 | 数据源 CRUD | 防止遗留防火墙规则 |
+| **P0** | 删除基准前影响评估 | 合规基准 CRUD | 防止级联封堵 |
+| **P1** | 单次封堵数量上限 | 防火墙 | 防止批量封堵失控 |
+| **P1** | 封堵速率限制 | 防火墙 | 防止封堵风暴 |
+| **P1** | SSH 命令白名单 | SSH 交换机 | 防止执行写操作命令 |
+| **P1** | 删除/禁用基准后合规重算 | 合规基准 CRUD | 确保终端状态一致 |
+| **P2** | API method 白名单 | API 数据源 | 限制只读请求 |
+| **P2** | 封堵前二次确认 | 防火墙 | 首次封堵人工确认 |
+| **P2** | 删除防火墙数据源清理提示 | 数据源 CRUD | 提醒用户手动清理 |
+| **P2** | 关键配置变更审批 | 数据源/基准 CRUD | 防止误修改 |
+| **P3** | 自动回滚机制 | 防火墙 | 异常检测后自动解封 |
+| **P3** | IPGuard 连接池 | IPGuard | 优化连接管理 |
+| **P3** | 查询超时设置 | IPGuard | 防止长时间挂起 |
+| **P3** | 封堵有效期策略 | 防火墙 | 支持配置封堵时长 |

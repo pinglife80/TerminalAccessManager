@@ -1,6 +1,6 @@
 # TerminalAccessManager 系统架构设计文档
 
-> 文档版本：v3.2.0-r4 | 更新日期：2026-06-15
+> 文档版本：v3.2.0-r5 | 更新日期：2026-06-15
 
 ## 1. 系统概述
 
@@ -158,13 +158,14 @@ ARP 数据采集          合规判定              准入执行
 
 **详细步骤：**
 
-1. **ARP 数据采集** -- 定时任务通过 SSH 或 API 从交换机获取 ARP 表，解析后写入 `Terminal` 表（`compliance_status=unknown`）
+1. **ARP 数据采集** -- 定时任务通过 SSH 或 API 从交换机获取 ARP 表，解析后写入 `Terminal` 表（`compliance_status=unknown`）；已有终端更新时重置 `compliance_status=unknown` 确保重新评估
 2. **合规判定** -- 合规检查引擎依次执行：
    - 白名单匹配（IP 精确匹配 / CIDR 匹配 / IP 范围匹配 + MAC 精确匹配）→ `bypass`，记录 `wl_match_type`（`mac` / `ip` / `both`）
    - 合规基准匹配（IP + MAC 同时匹配）→ `compliant`
    - 均不匹配 → `non_compliant`
-3. **自动封禁** -- `non_compliant` 终端按 `DataSourceBinding` 路由到对应防火墙，调用深信服 API 封禁，创建 `Blacklist` 记录（`is_auto_blocked=True`），终端状态置为 `blocked`
-4. **自动解封** -- 已封禁终端若恢复合规或匹配白名单，调用防火墙解封 API，更新 `Blacklist.auto_unblocked=True`，终端状态置为 `unblocked`
+3. **自动封禁** -- `non_compliant` 终端按 `DataSourceBinding` 路由到对应防火墙，调用深信服 AF 黑白名单 API 永久封禁（`type=BLACK`，description 带 `TAM-` 前缀），创建 `Blacklist` 记录（`is_auto_blocked=True`），终端状态置为 `blocked`，`comments` 记录封堵信息
+4. **自动解封** -- 已封禁终端若恢复合规或匹配白名单，调用深信服 AF 黑白名单 API 按 IP 精确删除，更新 `Blacklist.auto_unblocked=True`，终端状态置为 `unblocked`，`comments` 记录解封信息
+5. **合规重算** -- 白名单增删、IPGuard 同步后触发 `recalculate_all_compliance`，批量重算所有终端合规状态，合规变更联动封堵/解封
 
 **Terminal 状态模型：**
 
@@ -338,8 +339,8 @@ Status 描述的是终端在网络层的实际封堵情况，Compliance 描述�
 |------|--------|----------|------|
 | 过期黑名单清理 | `scheduler_firewall_query_interval` | 300s（DEFAULT_CONFIGS 种子值；代码 fallback 为 3600s） | 清理已过期的 Blacklist 记录 |
 | ARP 数据采集 | `scheduler_arp_collection_interval` | 300s | 遍历所有启用的 ARP 数据源，采集并处理 |
-| 合规基准数据同步 | `scheduler_ipguard_sync_interval` | 600s | 遍历所有启用的合规基准数据源，同步基准数据到 Redis |
-| 合规检查 | `scheduler_compliance_check_interval` | 300s | 遍历所有 ARP 源中 `compliance_status=unknown` 的记录，执行批量合规判定 |
+| 合规基准数据同步 | `scheduler_ipguard_sync_interval` | 600s | 遍历所有启用的合规基准数据源，同步基准数据到 Redis；同步完成后自动触发合规重算 |
+| 合规检查 | `scheduler_compliance_check_interval` | 300s | 遍历所有 ARP 源中 `compliance_status=unknown` 的记录，执行批量合规判定；发现 `non_compliant` 终端后自动触发封堵 |
 | 自动解封 | `scheduler_auto_unblock_interval` | 600s | 检查已自动封禁的终端，若恢复合规则调用防火墙解封 |
 
 **调度方式特点：**
@@ -652,7 +653,7 @@ WHERE mac_address_normalized ILIKE 'AABBCCDDEEFF%'
 |------|------|----------|----------|
 | `arp_ssh` | 交换机 SSH 采集 | netmiko SSH 连接，自动分页和设备类型检测，解析 ARP 表 | password（SSH 用户名+密码） |
 | `arp_api` | 交换机 API 采集 | httpx HTTP 请求，解析 JSON 响应 | basic / bearer / header（自定义 Header 名+值） |
-| `sangfor` | 深信服防火墙 | httpx HTTP 请求，REST API 封禁/解封 | basic / bearer / header（自定义 Header 名+值） |
+| `sangfor` | 深信服防火墙 | httpx HTTP 请求，黑白名单 API 永久封堵/解封 | basic / bearer / header（自定义 Header 名+值） |
 
 合规基准数据通过独立的 `ComplianceBaseline` 模型管理，支持 CRUD、测试连接和手动同步操作。
 

@@ -24,7 +24,7 @@ async def get_invalid_mac_addresses(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_permission("terminal:read"))
 ):
-    """Get invalid (unfrozen) MAC addresses with pagination"""
+    """Get unblocked MAC addresses with pagination"""
     service = TerminalService(db)
     macs = await service.get_invalid_macs(skip=skip, limit=limit)
     return macs

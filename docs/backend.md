@@ -1,6 +1,6 @@
 # TerminalAccessManager 后端实现文档
 
-> 文档版本：v3.2.0-r4 | 更新日期：2026-06-15
+> 文档版本：v3.2.0-r5 | 更新日期：2026-06-15
 
 ## 1. 概述
 
@@ -607,13 +607,13 @@ model.mac_address_normalized.ilike(f'{_escape_like(mac_clean)}%')
 
 - `block_ip(ip_address, mac_address, username, block_time, firewall_tag)`：
   - 通过 `firewall_tag` 查找对应的 `DataSource`（type=sangfor）获取防火墙服务实例。
-  - 调用深信服 API 封锁 IP。
-  - 更新 `Terminal.status` 为 `frozen`，`compliance_status` 为 `non_compliant`。
+  - 调用深信服 AF 黑白名单 API 永久封锁 IP（`POST /api/v1/namespaces/public/whiteblacklist`，`type=BLACK`）。
+  - 更新 `Terminal.status` 为 `blocked`，`compliance_status` 为 `non_compliant`。
   - 创建 `Blacklist` 记录（`source_tag="manual"`，`is_auto_blocked=False`）。
   - 记录审计日志。
 
 - `unblock_ip(ip_address, username, firewall_tag)`：
-  - 调用深信服 API 解封 IP。
+  - 调用深信服 AF 黑白名单 API 解封 IP（`DELETE /api/v1/namespaces/public/whiteblacklist/{ip}`）。
   - 恢复 `Terminal.status` 为 `unblocked`，`compliance_status` 为 `unknown`。
   - 删除对应 `Blacklist` 记录。
   - 记录审计日志。
@@ -720,7 +720,7 @@ def _normalize_mac_raw(mac: str) -> str:
 
 - 一次性加载全部白名单和合规基准数据到内存，避免逐条查询。
 - 返回 `ComplianceCheckResult`：`total_checked`、`compliant`、`bypass`、`non_compliant`、`details`。
-- `details` 仅在条目数 <= 1000 时返回。
+- `details` 始终返回（包含 compliant/bypass/non_compliant 分类列表）。
 
 #### 白名单匹配规则
 
@@ -740,13 +740,17 @@ def _normalize_mac_raw(mac: str) -> str:
 
 #### 合规基准数据同步
 
-`sync_compliance_baseline_data(source_tag)`：
+`sync_ipguard_data(source_tag)`：
 
 - 从 `ComplianceBaseline` 表查找合规基准数据。
-- 使用 `asyncpg` 直连外部数据库，查询终端信息。
+- 支持三种数据库类型：
+  - **MSSQL**（默认）：使用 `pyodbc` + FreeTDS 连接 SQL Server，查询 `AGENT.AGT_IP_MAC_STR` 字段（IPGuard OCULAR3 格式）
+  - **MySQL/MariaDB**：使用 `aiomysql` 连接，查询 `terminal_info` 表
+  - **PostgreSQL**：使用 `asyncpg` 连接，查询 `terminal_info` 表
 - 定时任务中使用 `decrypt_config(config)` 解密配置后再连接外部数据库。
-- 结果缓存到 Redis，键 `compliance_baseline:{source_tag}`，TTL 10 分钟。
-- 更新 `DataSource.last_sync_status`。
+- 结果缓存到 Redis，键 `ipguard:{source_tag}`，TTL 10 分钟。
+- 更新 `ComplianceBaseline.last_sync_status`。
+- IPGuard 同步完成后自动触发 `recalculate_all_compliance()`，确保终端合规状态及时更新。
 
 #### 自动封锁
 
@@ -772,10 +776,13 @@ def _normalize_mac_raw(mac: str) -> str:
 
 `recalculate_all_compliance()`：
 
-- 白名单增删后批量重算所有终端合规状态。
+- 白名单增删后、IPGuard 同步后批量重算所有终端合规状态。
 - 合规重算联动封堵/解封：
   - 终端从 `non_compliant` 变为 `bypass`/`compliant` 时自动解封（`status` → `unblocked`）。
   - 终端从 `bypass` 变为 `non_compliant` 时自动封堵（`status` → `blocked`）。
+- 封堵/解封通过 `terminal.source_tag` → `DataSourceBinding` 查找关联防火墙标签。
+- 封堵时创建 `Blacklist` 记录（审计追踪 + 后续自动解封）。
+- 封堵/解封时更新 `Terminal.comments` 字段记录操作信息。
 
 #### 缓存策略
 
@@ -816,7 +823,7 @@ def _normalize_mac_raw(mac: str) -> str:
 
 `process_arp_entries(entries, source_tag)`：
 
-1. **Upsert**：按 IP+MAC 查找，存在则更新时间戳和来源，不存在则新建（`compliance_status="unknown"`）。
+1. **Upsert**：按 IP+MAC 查找，存在则更新时间戳和来源并重置 `compliance_status="unknown"`（确保基线变更后重新评估），不存在则新建（`compliance_status="unknown"`）。
 2. **批量合规检查**：对 `compliance_status="unknown"` 的条目执行 `batch_check_compliance`。
 3. **更新合规状态**：根据检查结果更新 `compliance_status` 和 `wl_match_type`。
 4. **触发自动封锁**：若存在 `non_compliant` 条目，异步触发 `auto_block_non_compliant`（fire-and-forget）。
@@ -836,8 +843,9 @@ def _normalize_mac_raw(mac: str) -> str:
 `_parse_api_response(data)` 支持多种结构：
 
 - 直接列表：`[{ip, mac}, ...]`
-- 包装结构：`{data/entries/results: [{...}, ...]}`
-- 字段名兼容：`ip_address` / `ip` / `ipAddress`，`mac_address` / `mac` / `macAddress`
+- 包装结构：`{data/entries/results/arp/devices/records: [{...}, ...]}`
+- 字段名兼容：`ip_address` / `ipv4_address` / `ip` / `ipAddress`，`mac_address` / `mac` / `macAddress`
+- 认证方式：Bearer Token / Basic Auth / Custom Header（`X-Auth-Token` 等）
 
 #### 定时采集
 

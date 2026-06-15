@@ -274,12 +274,12 @@ class DataSourceService:
                 verify_ssl=config.get("verify_ssl", True),
                 ca_bundle=config.get("ca_bundle", ""),
             )
-            stats = await svc.get_system_stats()
+            result = await svc.test_connection()
             await svc.close()
             return ConnectionTestResult(
-                success=True,
-                message="Sangfor AF connection successful",
-                details={"cpu": stats.get("cpu"), "memory": stats.get("memory")},
+                success=result["success"],
+                message=result.get("message", "Sangfor AF connection test"),
+                details=result.get("details"),
             )
         except Exception as e:
             return ConnectionTestResult(

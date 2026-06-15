@@ -687,11 +687,11 @@ async def _create_mock_terminals(db, users):
 
             # Set status based on compliance
             if compliance == 'non_compliant':
-                status = random.choice(['frozen', 'active'])
+                status = 'blocked'
             elif compliance == 'bypass':
-                status = 'active'
+                status = 'unblocked'
             else:
-                status = random.choice(['active', 'inactive'])
+                status = 'unblocked'
 
             # Set wl_match_type for bypass entries
             wl_match_type = None
@@ -903,7 +903,7 @@ async def _create_mock_blacklist(db, mac_records, users):
             )
             db.add(blacklist_entry)
 
-            # Update corresponding terminal to non_compliant + frozen
+            # Update corresponding terminal to non_compliant + blocked
             mac_record.compliance_status = "non_compliant"
             mac_record.status = "blocked"
 

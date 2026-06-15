@@ -143,7 +143,7 @@ class ComplianceService:
                 "compliant": compliant_list,
                 "non_compliant": non_compliant_list,
                 "bypass": bypass_list,
-            } if len(entries) <= 1000 else None,
+            },
         )
 
     # ------------------------------------------------------------------
@@ -173,42 +173,96 @@ class ComplianceService:
             config = decrypt_config(config)
         entries = []
 
+        # Determine database type (default: postgresql for backward compatibility)
+        db_type = config.get("db_type", "postgresql")
+        host = config.get("host", "")
+        port = config.get("port", 3306)
+        username = config.get("username", "")
+        password = config.get("password", "")
+        database = config.get("database", "ipguard")
+
         try:
-            # Connect to IPGuard database and fetch data
-            # IPGuard typically uses MySQL/MariaDB or SQL Server
-            # We use asyncpg for PostgreSQL-compatible or raw connection
-            import asyncpg
+            if db_type == "mssql":
+                # SQL Server (IPGuard OCULAR3 typically uses this)
+                # IPGuard OCULAR3 stores IP+MAC in AGENT.AGT_IP_MAC_STR
+                # Format: "MAC(IP),MAC(),MAC()" — only pairs with IP are useful
+                import pyodbc
+                import re
+                conn_str = (
+                    f"DRIVER={{FreeTDS}};"
+                    f"SERVER={host};"
+                    f"PORT={port};"
+                    f"DATABASE={database};"
+                    f"UID={username};"
+                    f"PWD={password};"
+                    f"TDS_Version=7.3;"
+                )
+                conn = pyodbc.connect(conn_str, timeout=30)
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT AGT_IP_MAC_STR FROM AGENT "
+                    "WHERE AGT_IP_MAC_STR IS NOT NULL AND AGT_IP_MAC_STR <> ''"
+                )
+                # Parse MAC(IP) pairs from AGT_IP_MAC_STR
+                mac_ip_pattern = re.compile(
+                    r'([0-9A-Fa-f]{2}[:-][0-9A-Fa-f]{2}[:-][0-9A-Fa-f]{2}[:-]'
+                    r'[0-9A-Fa-f]{2}[:-][0-9A-Fa-f]{2}[:-][0-9A-Fa-f]{2})\(([^)]*)\)'
+                )
+                for row in cursor:
+                    ip_mac_str = row[0] or ""
+                    for mac, ip in mac_ip_pattern.findall(ip_mac_str):
+                        if ip:  # Only entries with an IP address
+                            entries.append({
+                                "ip_address": ip.strip(),
+                                "mac_address": mac.strip(),
+                            })
+                conn.close()
 
-            host = config.get("host", "")
-            port = config.get("port", 3306)
-            username = config.get("username", "")
-            password = config.get("password", "")
-            database = config.get("database", "ipguard")
+            elif db_type == "mysql":
+                # MySQL / MariaDB
+                import aiomysql
+                conn = await aiomysql.connect(
+                    host=host,
+                    port=int(port),
+                    user=username,
+                    password=password,
+                    db=database,
+                    connect_timeout=30,
+                )
+                async with conn.cursor() as cur:
+                    await cur.execute(
+                        "SELECT ip_address, mac_address FROM terminal_info "
+                        "WHERE ip_address IS NOT NULL AND mac_address IS NOT NULL"
+                    )
+                    rows = await cur.fetchall()
+                    for row in rows:
+                        entries.append({
+                            "ip_address": str(row[0]),
+                            "mac_address": str(row[1]),
+                        })
+                conn.close()
 
-            conn = await asyncpg.connect(
-                host=host,
-                port=port,
-                user=username,
-                password=password,
-                database=database,
-                timeout=30,
-            )
-
-            # Query IP+MAC mappings from IPGuard
-            # The actual table/column names may vary by IPGuard version
-            # This is a common schema for OCULAR3
-            rows = await conn.fetch(
-                "SELECT ip_address, mac_address FROM terminal_info "
-                "WHERE ip_address IS NOT NULL AND mac_address IS NOT NULL"
-            )
-
-            for row in rows:
-                entries.append({
-                    "ip_address": str(row["ip_address"]),
-                    "mac_address": str(row["mac_address"]),
-                })
-
-            await conn.close()
+            else:
+                # PostgreSQL (default)
+                import asyncpg
+                conn = await asyncpg.connect(
+                    host=host,
+                    port=int(port),
+                    user=username,
+                    password=password,
+                    database=database,
+                    timeout=30,
+                )
+                rows = await conn.fetch(
+                    "SELECT ip_address, mac_address FROM terminal_info "
+                    "WHERE ip_address IS NOT NULL AND mac_address IS NOT NULL"
+                )
+                for row in rows:
+                    entries.append({
+                        "ip_address": str(row["ip_address"]),
+                        "mac_address": str(row["mac_address"]),
+                    })
+                await conn.close()
 
             # Cache to Redis
             redis = await _get_redis()
@@ -345,6 +399,13 @@ class ComplianceService:
             if all_success:
                 # Update MAC status
                 entry.status = "blocked"
+                # Update comments with block info
+                fw_info = ",".join(firewall_tags)
+                block_comment = f"Auto-blocked by TAM on firewall [{fw_info}]"
+                if entry.comments:
+                    entry.comments = f"{entry.comments}; {block_comment}"
+                else:
+                    entry.comments = block_comment
 
                 # Create a separate Blacklist record for each firewall
                 import re
@@ -464,6 +525,21 @@ class ComplianceService:
                         )
                         skipped += 1
                         continue
+                else:
+                    # No firewall_tag on blacklist entry — try to find binding
+                    # via the terminal's source_tag
+                    if bl_entry.source_tag:
+                        fw_tag = await self._get_bound_firewall_tag(bl_entry.source_tag)
+                        if fw_tag:
+                            try:
+                                success = await self._unblock_on_firewall(ip_addr, fw_tag)
+                                if not success:
+                                    logger.warning(f"Failed to unblock {ip_addr} on firewall '{fw_tag}' (resolved from binding)")
+                            except Exception as e:
+                                logger.warning(f"Error unblocking {ip_addr} on firewall '{fw_tag}': {e}")
+                    # If still no firewall, the IP may not be blocked on any
+                    # firewall (e.g., blocked via global config), so we
+                    # proceed with marking as unblocked in the database
 
                 # Mark as auto-unblocked
                 bl_entry.auto_unblocked = True
@@ -477,6 +553,13 @@ class ComplianceService:
                         record.status = "unblocked"
                         record.compliance_status = "bypass" if wl_match else "compliant"
                         record.wl_match_type = wl_match if wl_match else None
+                        # Update comments with unblock info
+                        resolved_fw = fw_tag or "N/A"
+                        unblock_comment = f"Auto-unblocked by TAM from firewall [{resolved_fw}]"
+                        if record.comments:
+                            record.comments = f"{record.comments}; {unblock_comment}"
+                        else:
+                            record.comments = unblock_comment
 
                 unblocked += 1
                 details.append({
@@ -687,9 +770,10 @@ class ComplianceService:
     # Firewall Operations
     # ------------------------------------------------------------------
     async def _block_on_firewall(
-        self, ip_address: str, firewall_tag: str, block_time: str = "30d"
+        self, ip_address: str, firewall_tag: str, block_time: str = "30d",
+        reason: str = "Auto-blocked: non-compliant"
     ) -> bool:
-        """Block an IP on the specified firewall"""
+        """Block an IP on the specified firewall via permanent blacklist"""
         try:
             stmt = select(DataSource).where(
                 (DataSource.tag == firewall_tag) & (DataSource.type == "sangfor")
@@ -714,7 +798,9 @@ class ComplianceService:
                 ca_bundle=config.get("ca_bundle", ""),
             )
 
-            response = await svc.block_ip([ip_address], block_time=block_time)
+            response = await svc.block_ip(
+                [ip_address], source_tag=firewall_tag, reason=reason
+            )
             await svc.close()
 
             return response.get("code") == 0
@@ -773,11 +859,11 @@ class ComplianceService:
         Called after whitelist changes (add/delete) to update terminal
         compliance_status in real-time instead of waiting for next sync.
         Also handles auto-unblock for terminals that become compliant
-        while currently frozen (blocked on firewall).
+        while currently blocked on firewall.
 
         Returns:
             dict with counts: total, bypass, compliant, non_compliant,
-            unchanged, unblocked (auto-unblocked from frozen state)
+            unchanged, unblocked (auto-unblocked from blocked state)
         """
         # Load fresh whitelist and IPGuard data (cache already invalidated by caller)
         whitelist_data = await self._load_whitelist_cache()
@@ -831,35 +917,62 @@ class ComplianceService:
                 else:
                     non_compliant_count += 1
 
-                # Auto-unblock: if terminal was frozen and now becomes compliant/bypass
+                # Auto-unblock: if terminal was blocked and now becomes compliant/bypass
                 if terminal.status == "blocked" and new_compliance in ("bypass", "compliant"):
-                    # Try to unblock on firewall
-                    fw_tag = getattr(terminal, "firewall_tag", None)
+                    # Find firewall tag via terminal's source_tag -> DataSourceBinding
+                    fw_tag = await self._get_bound_firewall_tag(terminal.source_tag)
                     if fw_tag:
                         try:
                             success = await self._unblock_on_firewall(ip_addr, fw_tag)
                             if success:
                                 terminal.status = "unblocked"
                                 unblocked_count += 1
+                                # Update comments with unblock info
+                                unblock_comment = f"Auto-unblocked by TAM from firewall [{fw_tag}]"
+                                if terminal.comments:
+                                    terminal.comments = f"{terminal.comments}; {unblock_comment}"
+                                else:
+                                    terminal.comments = unblock_comment
                                 logger.info(f"Auto-unblocked {ip_addr} (now {new_compliance}) from firewall '{fw_tag}'")
                             else:
                                 logger.warning(f"Failed to auto-unblock {ip_addr} on firewall '{fw_tag}'")
                         except Exception as e:
                             logger.warning(f"Error auto-unblocking {ip_addr}: {e}")
                     else:
-                        # No firewall tag, just update status
+                        # No firewall binding, just update status
                         terminal.status = "unblocked"
                         unblocked_count += 1
 
                 # Auto-block: if terminal becomes non_compliant and has a bound firewall
                 if new_compliance == "non_compliant" and terminal.status != "blocked":
-                    # Check if there's a firewall data source bound
-                    fw_tag = await self._get_bound_firewall_tag(ip_addr)
+                    # Find firewall tag via terminal's source_tag -> DataSourceBinding
+                    fw_tag = await self._get_bound_firewall_tag(terminal.source_tag)
                     if fw_tag:
                         try:
-                            success = await self._block_on_firewall(ip_addr, fw_tag)
+                            success = await self._block_on_firewall(
+                                ip_addr, fw_tag,
+                                reason="Auto-blocked: compliance recalculation"
+                            )
                             if success:
                                 terminal.status = "blocked"
+                                # Update comments with block info
+                                block_comment = f"Auto-blocked by TAM on firewall [{fw_tag}]"
+                                if terminal.comments:
+                                    terminal.comments = f"{terminal.comments}; {block_comment}"
+                                else:
+                                    terminal.comments = block_comment
+                                # Create Blacklist record for audit trail and future unblock
+                                from app.models.blacklist import Blacklist
+                                bl_entry = Blacklist(
+                                    ip_address=ip_addr,
+                                    mac_address=mac_addr,
+                                    reason="Auto-blocked: non-compliant (compliance recalculation)",
+                                    source_tag=terminal.source_tag,
+                                    firewall_tag=fw_tag,
+                                    is_auto_blocked=True,
+                                    auto_unblocked=False,
+                                )
+                                self.db.add(bl_entry)
                                 logger.info(f"Auto-blocked {ip_addr} (now non_compliant) on firewall '{fw_tag}'")
                         except Exception as e:
                             logger.warning(f"Error auto-blocking {ip_addr}: {e}")
@@ -884,16 +997,20 @@ class ComplianceService:
             "unblocked": unblocked_count,
         }
 
-    async def _get_bound_firewall_tag(self, ip_address: str) -> Optional[str]:
-        """Find the firewall data source tag that covers the given IP's subnet."""
+    async def _get_bound_firewall_tag(self, source_tag: str) -> Optional[str]:
+        """Find the firewall data source tag bound to the given ARP source tag.
+
+        Uses DataSourceBinding table to find the correct firewall for
+        a terminal's ARP source, ensuring the right firewall is used
+        for block/unblock operations.
+        """
         try:
-            from app.models.data_source import DataSource
-            stmt = select(DataSource).where(DataSource.source_type == "sangfor_firewall")
+            from app.models.data_source import DataSourceBinding
+            stmt = select(DataSourceBinding.firewall_tag).where(
+                DataSourceBinding.arp_source_tag == source_tag
+            )
             result = await self.db.execute(stmt)
-            firewalls = result.scalars().all()
-            if not firewalls:
-                return None
-            # Return the first available firewall tag
-            return firewalls[0].tag if firewalls else None
+            row = result.first()
+            return row[0] if row else None
         except Exception:
             return None

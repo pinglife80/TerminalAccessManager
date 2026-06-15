@@ -1,6 +1,6 @@
 # 版本跟踪记录
 
-> 文档版本：v3.2.0-r4 | 更新日期：2026-06-15
+> 文档版本：v3.2.0-r5 | 更新日期：2026-06-15
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
@@ -26,6 +26,63 @@
 | 9100a8d | fix(search): increase debounce delay from 300ms to 500ms across all pages |
 | 2f2add5 | fix: prevent superadmin role modification and fix Users search flickering |
 | 0b36d78 | docs: update RBAC documentation to v3.0 with current implementation |
+
+---
+
+## [v3.2.0-r5] - 2026-06-15
+
+### Added
+
+- Sangfor AF API 完全重写：从临时 `blockip` API 迁移到 `whiteblacklist` 永久封堵 API
+  - 封堵：`POST /api/v1/namespaces/public/whiteblacklist`（`type=BLACK`，永久生效）
+  - 解封：`DELETE /api/v1/namespaces/public/whiteblacklist/{ip}`（按 IP 精确删除）
+  - 查询：`GET /api/v1/namespaces/public/whiteblacklist?type=BLACK`
+  - TAM 描述前缀机制（`TAM-{tag}-{reason}`）实现幂等操作和安全删除
+  - `_sanitize_description` 过滤 AF 禁止的特殊字符
+  - `_find_blacklist_entry` 封堵前查询，确保幂等性
+  - Token 保活：`GET /api/v1/namespaces/public/keepalive`
+  - 独立 `test_connection()` 方法，分步验证认证+API
+- 合规基准多数据库类型支持：MSSQL（pyodbc+FreeTDS）、MySQL（aiomysql）、PostgreSQL（asyncpg）
+- IPGuard OCULAR3 数据库解析：从 `AGENT.AGT_IP_MAC_STR` 字段提取 IP+MAC 映射
+- IPGuard 同步后自动触发合规重算（`recalculate_all_compliance`）
+- `scheduled_compliance_check` 发现 non_compliant 终端后自动触发封堵
+- 封堵/解封操作更新 Terminal `comments` 字段，记录防火墙标签和操作信息
+- `datasource-lifecycle.md` 新增第 16 章「数据源安全性评估」
+
+### Changed
+
+- 所有 Sangfor AF API URL 添加 `/api` 前缀（根因修复：缺少前缀导致 302 重定向）
+- `_get_bound_firewall_tag` 改用 `DataSourceBinding` 表查询（修复字段名/值错误）
+- `recalculate_all_compliance` 自动解封/封堵通过 `terminal.source_tag` 查找 `DataSourceBinding` 获取防火墙标签
+- `batch_check_compliance` 移除 1000 条限制，始终返回 details
+- `cleanup_expired_blacklist` 解封后重置 `compliance_status` 为 `unknown`
+- ARP 采集更新已有终端时重置 `compliance_status` 为 `unknown`，确保重新评估
+- `auto_unblock_compliant` 处理 `firewall_tag=None`：通过 `DataSourceBinding` 回退查询
+
+### Fixed
+
+- Sangfor AF 登录 302 重定向（API URL 缺少 `/api` 前缀）
+- `_get_bound_firewall_tag` 使用错误字段名 `source_type`/`sangfor_firewall`（应为 `type`/`sangfor`）
+- `recalculate_all_compliance` 读取不存在的 `terminal.firewall_tag` 属性
+- `recalculate_all_compliance` 封堵后不创建 Blacklist 记录（导致后续无法自动解封）
+- `batch_check_compliance` 超 1000 条时 `details=None` 导致 `AttributeError`
+- Sangfor AF description 包含禁止字符（冒号等）导致添加黑名单失败
+- UNFROZEN/FROZEN 状态值残留（`arp_collector_service.py`、`terminal_service.py`、`cli.py`、`terminals.py`）
+
+### 提交记录
+
+| 提交 | 说明 |
+|------|------|
+| TBD | feat(sangfor): rewrite Sangfor AF API with whiteblacklist permanent blocking |
+| TBD | feat(compliance): add multi-database support for IPGuard baseline sync |
+| TBD | fix(compliance): fix firewall binding lookup and Blacklist record creation |
+| TBD | fix(compliance): remove 1000-entry limit in batch_check_compliance |
+| TBD | fix(sangfor): sanitize description to remove AF forbidden characters |
+| TBD | fix(terminal): replace UNFROZEN/FROZEN with UNBLOCKED/BLOCKED in all files |
+| TBD | feat(scheduler): trigger compliance recalculation after IPGuard sync |
+| TBD | feat(scheduler): trigger auto-block after scheduled compliance check |
+| TBD | fix(cleanup): reset compliance_status to unknown after blacklist expiry |
+| TBD | fix(arp): reset compliance_status on existing terminal update |
 
 ---
 

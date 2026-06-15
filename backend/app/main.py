@@ -146,6 +146,13 @@ async def scheduled_ipguard_sync():
                         try:
                             await service.sync_ipguard_data(baseline.tag)
                             logger.info(f"Synced IPGuard data for baseline: {baseline.tag} [source=scheduler]")
+                            # Trigger compliance re-evaluation after IPGuard data update
+                            try:
+                                result = await service.recalculate_all_compliance()
+                                if result.get("non_compliant", 0) > 0 or result.get("bypass", 0) > 0 or result.get("compliant", 0) > 0:
+                                    logger.info(f"Compliance re-evaluated after IPGuard sync: {result} [source=scheduler]")
+                            except Exception as re:
+                                logger.error(f"Error re-evaluating compliance after IPGuard sync: {type(re).__name__}: {re} [source=scheduler]")
                         except Exception as e:
                             logger.error(f"Error syncing IPGuard data for {baseline.tag}: {type(e).__name__}: {e} [source=scheduler]")
             finally:
@@ -213,6 +220,14 @@ async def scheduled_compliance_check():
                                 await db.commit()
                                 if result.non_compliant > 0 or result.bypass > 0:
                                     logger.info(f"Compliance check for {source.tag}: {result.compliant} compliant, {result.bypass} bypass, {result.non_compliant} non-compliant")
+                                    # Trigger auto-block for non-compliant terminals
+                                    if result.non_compliant > 0:
+                                        try:
+                                            block_result = await service.auto_block_non_compliant(source.tag)
+                                            if block_result.blocked > 0:
+                                                logger.info(f"Auto-blocked {block_result.blocked} non-compliant terminals from {source.tag} [source=scheduler]")
+                                        except Exception as be:
+                                            logger.error(f"Error auto-blocking for {source.tag}: {type(be).__name__}: {be} [source=scheduler]")
                         except Exception as e:
                             logger.error(f"Error in compliance check for {source.tag}: {type(e).__name__}: {e} [source=scheduler]")
             finally:
