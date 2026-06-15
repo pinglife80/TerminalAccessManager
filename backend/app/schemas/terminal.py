@@ -31,6 +31,7 @@ class TerminalResponse(TerminalBase):
     source_tag: Optional[str] = None
     compliance_status: str = Field("unknown", description="Compliance status: compliant/bypass/non_compliant/unknown")
     wl_match_type: Optional[str] = Field(None, description="Whitelist match type: mac/ip/both/null")
+    firewall_tag: Optional[str] = Field(None, description="Firewall tag from block operation")
 
     class Config:
         from_attributes = True
@@ -42,6 +43,8 @@ class TerminalQuery(BaseModel):
     mac: Optional[str] = None
     status: Optional[str] = None
     compliance_status: Optional[str] = Field(None, description="Filter by compliance status")
+    source_tag: Optional[str] = Field(None, description="Filter by source tag")
+    firewall_tag: Optional[str] = Field(None, description="Filter by firewall tag (via blacklist)")
     start_date: Optional[str] = Field(None, description="Filter by start date (YYYY-MM-DD)")
     end_date: Optional[str] = Field(None, description="Filter by end date (YYYY-MM-DD)")
     skip: int = Field(0, ge=0)
@@ -170,8 +173,6 @@ class DashboardStats(BaseModel):
 class SangforStatus(BaseModel):
     """Sangfor AF system status"""
     connected: bool = False
-    cpu: Optional[float] = None
-    memory: Optional[float] = None
     error: Optional[str] = None
 
 

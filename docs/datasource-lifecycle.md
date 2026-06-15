@@ -1,6 +1,6 @@
 # 数据源全生命周期技术文档
 
-> 文档版本：v3.2.0-r5 | 更新日期：2026-06-15
+> 文档版本：v3.2.0-r6 | 更新日期：2026-06-16
 
 本文档详细描述 TerminalAccessManager 系统中数据源从配置、采集、解析、合规判定到自动处置的完整生命周期，涵盖架构设计、数据格式、输入输出规范和定时调度机制。
 
@@ -584,6 +584,7 @@ ComplianceService.sync_ipguard_data(source_tag)
 
 ```
 1. 白名单匹配 → compliance_status = "bypass"
+   bypass 终端自动同步白名单 comments 到 Terminal.comments（格式：`Whitelist: {comments}`）
 2. IP-Guard 基线匹配 → compliance_status = "compliant"
 3. 都不匹配 → compliance_status = "non_compliant"
 ```
@@ -739,6 +740,8 @@ ComplianceService.auto_block_non_compliant(arp_source_tag, block_time="30d")
     │      ├── 调用 SangforService.block_ip([ip], block_time)
     │      ├── 封堵成功:
     │      │   ├── Terminal.status = "frozen"
+    │      │   ├── Terminal.firewall_tag = fw_tag（记录执行封堵的防火墙标签）
+    │      │   ├── Terminal.comments = "Auto-blocked by TAM on firewall [{fw_tag}]"
     │      │   └── 为每个防火墙创建 Blacklist 记录
     │      │       is_auto_blocked=True, auto_unblocked=False
     │      │       expires_at = now + block_time
@@ -848,6 +851,8 @@ ComplianceService.auto_unblock_compliant()
     │      │   ├── 调用防火墙 API 解封
     │      │   ├── Blacklist.auto_unblocked = True
     │      │   ├── Terminal.status = "unfrozen"
+    │      │   ├── Terminal.firewall_tag = None
+    │      │   ├── Terminal.comments = "Auto-unblocked by TAM from firewall [{fw_tag}]"
     │      │   └── Terminal.compliance_status = "bypass" 或 "compliant"
     │      └── 仍然不合规: 跳过
     │

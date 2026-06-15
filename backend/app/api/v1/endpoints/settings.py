@@ -135,6 +135,7 @@ async def invalidate_config_cache(
 
 @router.post("/upload", response_model=dict)
 async def upload_branding_asset(
+    request: Request,
     file: UploadFile = File(...),
     purpose: str = Query(..., description="Purpose: 'login_bg' or 'favicon'"),
     current_user: User = Depends(require_permission("settings:upload")),
@@ -184,7 +185,7 @@ async def upload_branding_asset(
     ts = TerminalService(db)
     await ts.log_action(current_user.username, "upload_branding", "system", config_key,
                         {"message": "Uploaded branding asset", "purpose": purpose, "url": url_path},
-                        ip_address=None)
+                        ip_address=request.client.host if request.client else None)
 
     return {
         "url": url_path,

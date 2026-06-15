@@ -1,6 +1,6 @@
 # 版本跟踪记录
 
-> 文档版本：v3.2.0-r5 | 更新日期：2026-06-15
+> 文档版本：v3.2.0-r6 | 更新日期：2026-06-16
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
@@ -26,6 +26,67 @@
 | 9100a8d | fix(search): increase debounce delay from 300ms to 500ms across all pages |
 | 2f2add5 | fix: prevent superadmin role modification and fix Users search flickering |
 | 0b36d78 | docs: update RBAC documentation to v3.0 with current implementation |
+
+---
+
+## [v3.2.0-r6] - 2026-06-16
+
+### Added
+
+- Terminal 模型新增 `firewall_tag` 字段，封堵操作时同步写入防火墙标签，解封时清除
+- 数据库迁移脚本 `007_firewall_tag.py`：terminals 表新增 firewall_tag 列
+- 终端管理搜索栏支持 `source` 和 `firewall_tag` 过滤（后端 TerminalQuery 新增 source_tag/firewall_tag 参数）
+- 封堵/解封操作支持 `comments` 参数，写入 Terminal.comments 字段
+- 审计日志分类体系补全：新增 `role`（角色管理）和 `compliance`（合规基线）分类
+- 审计日志 action 枚举补全 15 个缺失项（login_failed、token_refresh、change_password、bind/unbind_datasource、role_change、assign_role、create/update/delete_role、create/update/delete_baseline、upload_branding、export_audit_logs）
+- 审计日志详情 key 翻译映射（23 个 key：ip→IP地址、mac→MAC地址 等）
+
+### Changed
+
+- 终端管理操作按钮矩阵重构：compliant+unblocked 仅查看，non_compliant+blocked 仅查看，各状态组合操作明确
+- 封堵/解封/移出黑名单操作新增确认对话框，支持 comment 填写
+- 黑名单管理页面移除手动添加功能，定位为审计视图（封堵操作统一从终端管理发起）
+- 审计日志 details 列从图标按钮改为 message 文本预览（点击展开完整 Modal）
+- 审计日志统计卡片优化：移除"独立用户数"和"独立操作数"，替换为"安全事件"统计
+- 审计日志 IP 列：系统操作（username=system）显示"系统"而非"-"
+- 审计日志 resource_id 格式化：数字 ID 类型显示为"类型名 #ID"（如"用户 #3"）
+- 白名单 comments 自动同步到终端（bypass 终端 comments 显示 `Whitelist: {comments}`）
+- Comments 超长内容支持鼠标悬浮显示完整文本（title 属性）
+- Dashboard 系统状态动态检测（Sangfor AF 和 ARP 数据源状态实时查询）
+
+### Fixed
+
+- `token_refresh`、`change_password`、`upload_branding` 操作 IP 地址未记录（`ip_address=None`）
+- blocked 终端 `firewall_tag` 为空（封堵操作未写入 Terminal.firewall_tag）
+- 封堵/解封操作未更新 Terminal.comments（手动封堵/解封缺少操作记录）
+- 白名单 comments 与终端 comments 不一致（bypass 终端未同步白名单备注）
+
+### 提交记录
+
+| 提交 | 说明 |
+|------|------|
+| (pending) | feat: 终端操作矩阵重构+firewall_tag字段+审计日志优化+黑名单审计视图 (v3.2.0-r6) |
+
+### 文件变更列表
+
+| 文件 | 变更 |
+|------|------|
+| backend/app/models/terminal.py | 新增 firewall_tag 字段 |
+| backend/app/schemas/terminal.py | TerminalQuery 新增 source_tag/firewall_tag；TerminalResponse 新增 firewall_tag |
+| backend/app/api/v1/endpoints/terminals.py | block/unblock 新增 comments 参数；搜索新增 source_tag/firewall_tag |
+| backend/app/api/v1/endpoints/auth.py | refresh_token/change_password 新增 Request 参数记录 IP |
+| backend/app/api/v1/endpoints/settings.py | upload_branding_asset 新增 Request 参数记录 IP |
+| backend/app/services/terminal_service.py | search_macs 新增过滤；block/unblock 写入 firewall_tag+comments |
+| backend/app/services/compliance_service.py | 封堵/解封写入 firewall_tag；bypass 同步白名单 comments |
+| backend/alembic/versions/007_firewall_tag.py | 新增迁移脚本 |
+| frontend/src/pages/Terminals.tsx | 操作矩阵重构+确认对话框+搜索过滤+comments tooltip |
+| frontend/src/pages/Blacklist.tsx | 移除手动添加功能 |
+| frontend/src/pages/AuditLogs.tsx | 分类补全+详情预览+统计优化+key翻译 |
+| frontend/src/pages/Dashboard.tsx | 系统状态动态检测 |
+| frontend/src/hooks/useTerminalData.ts | TerminalSearchParams 新增字段 |
+| frontend/src/i18n/locales/zh.ts | 新增 40+ 翻译键 |
+| frontend/src/i18n/locales/en.ts | 新增 40+ 翻译键 |
+| frontend/src/i18n/locales/ja.ts | 新增 40+ 翻译键 |
 
 ---
 

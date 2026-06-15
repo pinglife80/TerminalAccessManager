@@ -1,6 +1,6 @@
 # TerminalAccessManager 后端实现文档
 
-> 文档版本：v3.2.0-r5 | 更新日期：2026-06-15
+> 文档版本：v3.2.0-r6 | 更新日期：2026-06-16
 
 ## 1. 概述
 
@@ -533,6 +533,23 @@ IP 地址解析工具类，支持以下输入格式：
 - `detect_pattern_type(ip_input)` — 检测输入类型（`single_ip` / `cidr` / `ip_range`）。
 - `validate_ip(ip)` — 验证单个 IP 地址合法性。
 
+#### Terminal 模型字段 (models/terminal.py)
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `id` | Integer, PK | 主键 |
+| `ip_address` | String(45), NOT NULL | IP 地址 |
+| `mac_address` | String(17), NOT NULL | MAC 地址 |
+| `mac_address_normalized` | String(12), nullable | 标准化 MAC（去除分隔符的大写 12 位字符串） |
+| `status` | String(20) | 终端状态：`blocked` / `unblocked` |
+| `comments` | Text, nullable | 备注 |
+| `timestamp` | DateTime(timezone=True) | 记录时间 |
+| `source` | String(50) | 数据来源：`arp` / `ipguard` / `whitelist` / `manual` |
+| `source_tag` | String(50), nullable | 数据源标签 |
+| `compliance_status` | String(20) | 合规状态：`compliant` / `bypass` / `non_compliant` / `unknown` |
+| `wl_match_type` | String(10), nullable | 白名单匹配类型：`mac` / `ip` / `both` / null |
+| `firewall_tag` | String(50), nullable | 封堵操作时写入的防火墙标签，解封时清除为 None |
+
 #### 搜索与分页
 
 4个搜索方法均返回 `PaginatedResponse`（含 `items`、`total`、`skip`、`limit`），支持服务端分页。
@@ -540,9 +557,28 @@ IP 地址解析工具类，支持以下输入格式：
 | 方法 | 说明 |
 |------|------|
 | `search_terminals(ip, mac, compliance_status, status, start_date, end_date, skip, limit)` | 搜索终端，IP/MAC 使用 ILIKE 模糊搜索 + OR 逻辑（任一匹配即可），支持 `compliance_status` 过滤 |
+| `search_macs(query)` | 搜索 MAC 地址，支持多种过滤条件（见下方详细说明），返回 `List[Terminal]` |
+| `search_macs_count(query)` | 统计 `search_macs` 搜索结果总数 |
 | `get_whitelist(query, start_date, end_date, skip, limit)` | 查询白名单，支持搜索（MAC/IP/备注）和日期范围。MAC 搜索使用格式无关匹配（`func.replace` 去除分隔符后 ILIKE） |
 | `get_blacklist(query, start_date, end_date, skip, limit)` | 查询黑名单，支持搜索和日期范围。MAC 搜索使用格式无关匹配（`func.replace` 去除分隔符后 ILIKE） |
 | `search_audit_logs(username, action, search, start_date, end_date, skip, limit)` | 搜索审计日志，支持用户名、操作类型、关键词、日期范围 |
+
+**search_macs 过滤条件：**
+
+`search_macs(query: TerminalQuery)` 接受 `TerminalQuery` 对象，支持以下过滤条件：
+
+| 参数 | 说明 |
+|------|------|
+| `ip` | IP 地址模糊搜索（ILIKE） |
+| `mac` | MAC 地址格式无关模糊搜索（标准化列 ILIKE） |
+| `status` | 终端状态精确匹配（`blocked` / `unblocked`） |
+| `compliance_status` | 合规状态精确匹配（`compliant` / `bypass` / `non_compliant` / `unknown`） |
+| `source_tag` | 按 `Terminal.source_tag` 过滤终端数据来源 |
+| `firewall_tag` | 按 `Blacklist.firewall_tag` 过滤终端（通过 Blacklist 子查询匹配 `Terminal.ip_address`） |
+| `start_date` / `end_date` | 日期范围过滤 |
+
+- IP 和 MAC 同时提供时使用 OR 逻辑（任一匹配即返回）。
+- `firewall_tag` 过滤通过 Blacklist 子查询实现：`Terminal.ip_address IN (SELECT ip_address FROM blacklist WHERE firewall_tag = :fw_tag)`。
 
 **PaginatedResponse 结构：**
 
@@ -605,16 +641,20 @@ model.mac_address_normalized.ilike(f'{_escape_like(mac_clean)}%')
 
 封锁/解封操作：
 
-- `block_ip(ip_address, mac_address, username, block_time, firewall_tag)`：
+- `block_ip(ip_address, mac_address, username, block_time, firewall_tag, comments)`：
   - 通过 `firewall_tag` 查找对应的 `DataSource`（type=sangfor）获取防火墙服务实例。
   - 调用深信服 AF 黑白名单 API 永久封锁 IP（`POST /api/v1/namespaces/public/whiteblacklist`，`type=BLACK`）。
   - 更新 `Terminal.status` 为 `blocked`，`compliance_status` 为 `non_compliant`。
+  - 写入 `firewall_tag` 到 Terminal 记录（`Terminal.firewall_tag = firewall_tag`）。
+  - 若提供 `comments` 参数，更新 `Terminal.comments` 为提供的备注内容。
   - 创建 `Blacklist` 记录（`source_tag="manual"`，`is_auto_blocked=False`）。
   - 记录审计日志。
 
-- `unblock_ip(ip_address, username, firewall_tag)`：
+- `unblock_ip(ip_address, username, firewall_tag, comments)`：
   - 调用深信服 AF 黑白名单 API 解封 IP（`DELETE /api/v1/namespaces/public/whiteblacklist/{ip}`）。
   - 恢复 `Terminal.status` 为 `unblocked`，`compliance_status` 为 `unknown`。
+  - 清除 `firewall_tag` 为 None（`Terminal.firewall_tag = None`）。
+  - 若提供 `comments` 参数，更新 `Terminal.comments` 为提供的备注内容。
   - 删除对应 `Blacklist` 记录。
   - 记录审计日志。
 
@@ -782,7 +822,14 @@ def _normalize_mac_raw(mac: str) -> str:
   - 终端从 `bypass` 变为 `non_compliant` 时自动封堵（`status` → `blocked`）。
 - 封堵/解封通过 `terminal.source_tag` → `DataSourceBinding` 查找关联防火墙标签。
 - 封堵时创建 `Blacklist` 记录（审计追踪 + 后续自动解封）。
-- 封堵/解封时更新 `Terminal.comments` 字段记录操作信息。
+- 封堵/解封时写入 `firewall_tag` 到 Terminal 记录：
+  - 封堵时设置 `Terminal.firewall_tag = fw_tag`。
+  - 解封时清除 `Terminal.firewall_tag = None`。
+- 封堵/解封时更新 `Terminal.comments` 字段记录操作信息：
+  - 封堵操作：`Terminal.comments` 更新为 `Auto-blocked by TAM on firewall [{fw_tag}]`。
+  - 解封操作：`Terminal.comments` 更新为 `Auto-unblocked by TAM from firewall [{fw_tag}]`。
+- 白名单备注同步：当终端合规状态为 `bypass` 时，自动将白名单备注同步到终端（格式：`Whitelist: {comments}`），已有备注则追加。
+- 历史数据回填：对已封锁但缺少 `firewall_tag` 的终端，自动回填关联防火墙标签。
 
 #### 缓存策略
 
@@ -1165,6 +1212,8 @@ python -m pytest tests/test_security.py -v
 |------|-------------|------|
 | `POST /auth/login` | `login` | 用户登录成功时记录，details 包含登录用户名 |
 | `POST /auth/logout` | `logout` | 用户登出时记录，details 包含登出用户名 |
+| `POST /auth/refresh` | `token_refresh` | Token 刷新时记录，正确记录请求来源 IP 地址 |
+| `PUT /auth/me/password` | `change_password` | 用户修改密码时记录，正确记录请求来源 IP 地址 |
 
 **认证端点参数变更：**
 
@@ -1197,3 +1246,4 @@ python -m pytest tests/test_security.py -v
 | 端点 | 审计 action | 说明 |
 |------|-------------|------|
 | `PUT /settings/` | `update_config` | 更新系统配置 |
+| `POST /settings/upload` | `upload_branding` | 上传品牌资源（登录背景图/Favicon），正确记录请求来源 IP 地址 |

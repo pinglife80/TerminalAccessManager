@@ -64,10 +64,10 @@ class ComplianceService:
         wl_match_type = None
 
         # 1. Check whitelist
-        whitelist_match = await self._check_whitelist(ip_address, mac_address)
-        if whitelist_match:
+        whitelist_result = await self._check_whitelist(ip_address, mac_address)
+        if whitelist_result:
             whitelisted = True
-            wl_match_type = whitelist_match
+            wl_match_type = whitelist_result.get("match_type")
             matched_sources.append("whitelist")
 
         # 2. Check IPGuard baseline
@@ -117,14 +117,14 @@ class ComplianceService:
             source_tag = entry.get("source_tag", "")
 
             # Check whitelist
-            wl_match = self._match_whitelist_in_memory(whitelist_data, ip_addr, mac_addr)
+            wl_result = self._match_whitelist_in_memory(whitelist_data, ip_addr, mac_addr)
 
             # Check IPGuard
             ig_match = self._match_ipguard_in_memory(ipguard_data, ip_addr, mac_addr)
 
-            if wl_match:
+            if wl_result:
                 entry["compliance_status"] = "bypass"
-                entry["wl_match_type"] = wl_match  # "mac" or "ip" or "both"
+                entry["wl_match_type"] = wl_result.get("match_type")  # "mac" or "ip" or "both"
                 bypass_list.append(entry)
             elif ig_match:
                 entry["compliance_status"] = "compliant"
@@ -399,6 +399,7 @@ class ComplianceService:
             if all_success:
                 # Update MAC status
                 entry.status = "blocked"
+                entry.firewall_tag = firewall_tags[0] if len(firewall_tags) == 1 else ",".join(firewall_tags)
                 # Update comments with block info
                 fw_info = ",".join(firewall_tags)
                 block_comment = f"Auto-blocked by TAM on firewall [{fw_info}]"
@@ -551,8 +552,9 @@ class ComplianceService:
                     mac_records = mac_result.scalars().all()
                     for record in mac_records:
                         record.status = "unblocked"
+                        record.firewall_tag = None  # Clear firewall tag on unblock
                         record.compliance_status = "bypass" if wl_match else "compliant"
-                        record.wl_match_type = wl_match if wl_match else None
+                        record.wl_match_type = wl_match.get("match_type") if isinstance(wl_match, dict) else wl_match
                         # Update comments with unblock info
                         resolved_fw = fw_tag or "N/A"
                         unblock_comment = f"Auto-unblocked by TAM from firewall [{resolved_fw}]"
@@ -585,21 +587,22 @@ class ComplianceService:
     # ------------------------------------------------------------------
     # Whitelist Matching
     # ------------------------------------------------------------------
-    async def _check_whitelist(self, ip_address: str, mac_address: str) -> Optional[str]:
-        """Check if IP+MAC matches any whitelist entry. Returns match type or None."""
+    async def _check_whitelist(self, ip_address: str, mac_address: str) -> Optional[dict]:
+        """Check if IP+MAC matches any whitelist entry. Returns match result dict or None."""
         whitelist_data = await self._load_whitelist_cache()
         return self._match_whitelist_in_memory(whitelist_data, ip_address, mac_address)
 
     def _match_whitelist_in_memory(
         self, whitelist_data: List[dict], ip_address: str, mac_address: str
-    ) -> Optional[str]:
+    ) -> Optional[dict]:
         """Match IP+MAC against in-memory whitelist data.
-        Returns match type string ("mac", "ip", "both") or None if no match."""
+        Returns dict with "match_type" ("mac"/"ip"/"both") and "comments" (str or None),
+        or None if no match."""
         for entry in whitelist_data:
             # MAC-only whitelist entry: match by MAC only
             if entry.get("pattern_type") == "mac_only":
                 if entry.get("mac_address") and entry["mac_address"].upper() == mac_address.upper().replace(":", "-"):
-                    return "mac"
+                    return {"match_type": "mac", "comments": entry.get("comments")}
                 continue
 
             # Check IP pattern match
@@ -617,13 +620,13 @@ class ComplianceService:
             # If only MAC is specified, MAC must match
             if entry.get("ip_pattern") and entry.get("mac_address"):
                 if ip_match and mac_match:
-                    return "both"
+                    return {"match_type": "both", "comments": entry.get("comments")}
             elif entry.get("ip_pattern"):
                 if ip_match:
-                    return "ip"
+                    return {"match_type": "ip", "comments": entry.get("comments")}
             elif entry.get("mac_address"):
                 if mac_match:
-                    return "mac"
+                    return {"match_type": "mac", "comments": entry.get("comments")}
 
         return None
 
@@ -712,6 +715,7 @@ class ComplianceService:
                 "mac_address": entry.mac_address,
                 "ip_pattern": entry.ip_pattern,
                 "pattern_type": entry.pattern_type,
+                "comments": entry.comments,
             })
 
         # Cache to Redis
@@ -888,23 +892,35 @@ class ComplianceService:
             mac_addr = terminal.mac_address or ""
 
             # Determine new compliance status
-            wl_match = self._match_whitelist_in_memory(whitelist_data, ip_addr, mac_addr)
+            wl_result = self._match_whitelist_in_memory(whitelist_data, ip_addr, mac_addr)
             ig_match = self._match_ipguard_in_memory(ipguard_data, ip_addr, mac_addr)
 
-            if wl_match:
+            if wl_result:
                 new_compliance = "bypass"
-                new_wl_match_type = wl_match
+                new_wl_match_type = wl_result.get("match_type")
+                wl_comments = wl_result.get("comments")
             elif ig_match:
                 new_compliance = "compliant"
                 new_wl_match_type = None
+                wl_comments = None
             else:
                 new_compliance = "non_compliant"
                 new_wl_match_type = None
+                wl_comments = None
 
             compliance_changed = (
                 terminal.compliance_status != new_compliance
                 or terminal.wl_match_type != new_wl_match_type
             )
+
+            # Sync whitelist comments to terminal when bypass (even if unchanged)
+            if new_compliance == "bypass" and wl_comments:
+                wl_comment_str = f"Whitelist: {wl_comments}"
+                if not terminal.comments or "Whitelist: " not in terminal.comments:
+                    if terminal.comments:
+                        terminal.comments = f"{terminal.comments}; {wl_comment_str}"
+                    else:
+                        terminal.comments = wl_comment_str
 
             if compliance_changed:
                 terminal.compliance_status = new_compliance
@@ -926,6 +942,7 @@ class ComplianceService:
                             success = await self._unblock_on_firewall(ip_addr, fw_tag)
                             if success:
                                 terminal.status = "unblocked"
+                                terminal.firewall_tag = None  # Clear firewall tag on unblock
                                 unblocked_count += 1
                                 # Update comments with unblock info
                                 unblock_comment = f"Auto-unblocked by TAM from firewall [{fw_tag}]"
@@ -941,6 +958,7 @@ class ComplianceService:
                     else:
                         # No firewall binding, just update status
                         terminal.status = "unblocked"
+                        terminal.firewall_tag = None  # Clear firewall tag on unblock
                         unblocked_count += 1
 
                 # Auto-block: if terminal becomes non_compliant and has a bound firewall
@@ -955,6 +973,7 @@ class ComplianceService:
                             )
                             if success:
                                 terminal.status = "blocked"
+                                terminal.firewall_tag = fw_tag  # Set firewall tag on block
                                 # Update comments with block info
                                 block_comment = f"Auto-blocked by TAM on firewall [{fw_tag}]"
                                 if terminal.comments:
@@ -978,6 +997,11 @@ class ComplianceService:
                             logger.warning(f"Error auto-blocking {ip_addr}: {e}")
             else:
                 unchanged_count += 1
+                # Backfill firewall_tag for blocked terminals missing it (historical data)
+                if terminal.status == "blocked" and not terminal.firewall_tag:
+                    fw_tag = await self._get_bound_firewall_tag(terminal.source_tag)
+                    if fw_tag:
+                        terminal.firewall_tag = fw_tag
 
         await self.db.commit()
 

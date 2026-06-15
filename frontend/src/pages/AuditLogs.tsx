@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Search, Filter, Download, Clock, User, AlertCircle, X, FileText, RefreshCw, ChevronDown } from 'lucide-react';
+import { Search, Filter, Download, Clock, User, X, FileText, RefreshCw, ChevronDown } from 'lucide-react';
 import { useAuditLogs, AuditLog as AuditLogType } from '@/hooks/useTerminalData';
 import { apiClient } from '@/lib/api';
 import { toast } from 'sonner';
@@ -22,7 +22,7 @@ const ACTION_CATEGORIES = [
   {
     key: 'auth',
     labelKey: 'auditLogs.categories.auth',
-    actions: ['login', 'logout'],
+    actions: ['login', 'login_failed', 'logout', 'token_refresh', 'change_password'],
   },
   {
     key: 'terminal',
@@ -42,23 +42,36 @@ const ACTION_CATEGORIES = [
   {
     key: 'datasource',
     labelKey: 'auditLogs.categories.datasource',
-    actions: ['create_datasource', 'update_datasource', 'delete_datasource', 'test_datasource', 'sync_datasource'],
+    actions: ['create_datasource', 'update_datasource', 'delete_datasource', 'test_datasource', 'sync_datasource', 'bind_datasource', 'unbind_datasource'],
   },
   {
     key: 'user',
     labelKey: 'auditLogs.categories.user',
-    actions: ['create_user', 'update_user', 'delete_user', 'reset_password', 'unlock_user'],
+    actions: ['create_user', 'update_user', 'delete_user', 'reset_password', 'unlock_user', 'role_change', 'assign_role'],
+  },
+  {
+    key: 'role',
+    labelKey: 'auditLogs.categories.role',
+    actions: ['create_role', 'update_role', 'delete_role'],
+  },
+  {
+    key: 'compliance',
+    labelKey: 'auditLogs.categories.compliance',
+    actions: ['create_baseline', 'update_baseline', 'delete_baseline'],
   },
   {
     key: 'system',
     labelKey: 'auditLogs.categories.system',
-    actions: ['update_config'],
+    actions: ['update_config', 'upload_branding', 'export_audit_logs'],
   },
 ] as const;
 
 const actionLabelKeys: Record<string, string> = {
   login: 'auditLogs.actionLabels.login',
+  login_failed: 'auditLogs.actionLabels.login_failed',
   logout: 'auditLogs.actionLabels.logout',
+  token_refresh: 'auditLogs.actionLabels.token_refresh',
+  change_password: 'auditLogs.actionLabels.change_password',
   block_terminal: 'auditLogs.actionLabels.block_terminal',
   unblock_terminal: 'auditLogs.actionLabels.unblock_terminal',
   add_whitelist: 'auditLogs.actionLabels.add_whitelist',
@@ -71,12 +84,24 @@ const actionLabelKeys: Record<string, string> = {
   delete_datasource: 'auditLogs.actionLabels.delete_datasource',
   test_datasource: 'auditLogs.actionLabels.test_datasource',
   sync_datasource: 'auditLogs.actionLabels.sync_datasource',
+  bind_datasource: 'auditLogs.actionLabels.bind_datasource',
+  unbind_datasource: 'auditLogs.actionLabels.unbind_datasource',
   create_user: 'auditLogs.actionLabels.create_user',
   update_user: 'auditLogs.actionLabels.update_user',
   delete_user: 'auditLogs.actionLabels.delete_user',
   reset_password: 'auditLogs.actionLabels.reset_password',
   unlock_user: 'auditLogs.actionLabels.unlock_user',
+  role_change: 'auditLogs.actionLabels.role_change',
+  assign_role: 'auditLogs.actionLabels.assign_role',
+  create_role: 'auditLogs.actionLabels.create_role',
+  update_role: 'auditLogs.actionLabels.update_role',
+  delete_role: 'auditLogs.actionLabels.delete_role',
+  create_baseline: 'auditLogs.actionLabels.create_baseline',
+  update_baseline: 'auditLogs.actionLabels.update_baseline',
+  delete_baseline: 'auditLogs.actionLabels.delete_baseline',
   update_config: 'auditLogs.actionLabels.update_config',
+  upload_branding: 'auditLogs.actionLabels.upload_branding',
+  export_audit_logs: 'auditLogs.actionLabels.export_audit_logs',
   // Legacy action names (backward compatibility)
   block_ip: 'auditLogs.actionLabels.block_terminal',
   unblock_ip: 'auditLogs.actionLabels.unblock_terminal',
@@ -86,7 +111,10 @@ const actionLabelKeys: Record<string, string> = {
 
 const ACTION_CATEGORY_MAP: Record<string, string> = {
   login: 'auth',
+  login_failed: 'auth',
   logout: 'auth',
+  token_refresh: 'auth',
+  change_password: 'auth',
   block_terminal: 'terminal',
   unblock_terminal: 'terminal',
   add_whitelist: 'whitelist',
@@ -99,12 +127,24 @@ const ACTION_CATEGORY_MAP: Record<string, string> = {
   delete_datasource: 'datasource',
   test_datasource: 'datasource',
   sync_datasource: 'datasource',
+  bind_datasource: 'datasource',
+  unbind_datasource: 'datasource',
   create_user: 'user',
   update_user: 'user',
   delete_user: 'user',
   reset_password: 'user',
   unlock_user: 'user',
+  role_change: 'user',
+  assign_role: 'user',
+  create_role: 'role',
+  update_role: 'role',
+  delete_role: 'role',
+  create_baseline: 'compliance',
+  update_baseline: 'compliance',
+  delete_baseline: 'compliance',
   update_config: 'system',
+  upload_branding: 'system',
+  export_audit_logs: 'system',
   // Legacy action names
   block_ip: 'terminal',
   unblock_ip: 'terminal',
@@ -119,6 +159,8 @@ const CATEGORY_BADGE_STYLES: Record<string, string> = {
   blacklist: 'bg-red-100 text-red-800',
   datasource: 'bg-purple-100 text-purple-800',
   user: 'bg-cyan-100 text-cyan-800',
+  role: 'bg-indigo-100 text-indigo-800',
+  compliance: 'bg-teal-100 text-teal-800',
   system: 'bg-gray-100 text-gray-800',
 };
 
@@ -131,11 +173,20 @@ const getResourceDisplay = (log: AuditLogType, t: (key: string) => string) => {
     blacklist: t('auditLogs.resourceTypes.blacklist'),
     datasource: t('auditLogs.resourceTypes.datasource'),
     user: t('auditLogs.resourceTypes.user'),
+    role: t('auditLogs.resourceTypes.role'),
+    compliance: t('auditLogs.resourceTypes.compliance'),
     system: t('auditLogs.resourceTypes.system'),
   };
 
   const typeLabel = typeLabels[log.resource_type || ''] || log.resource_type || '-';
-  const resourceId = log.resource_id || '';
+
+  // Format resource_id based on resource_type
+  let resourceId = log.resource_id || '';
+  if (resourceId && ['auth', 'user', 'datasource', 'role', 'compliance'].includes(log.resource_type || '')) {
+    // Numeric IDs: show as "Type #ID"
+    const typeName = typeLabels[log.resource_type || ''] || log.resource_type || '';
+    resourceId = `${typeName} #${resourceId}`;
+  }
 
   return { typeLabel, resourceId };
 };
@@ -151,6 +202,32 @@ const parseDetails = (details: string | null | undefined) => {
   } catch {
     return { message: details };
   }
+};
+
+const DETAIL_KEY_LABELS: Record<string, string> = {
+  message: 'auditLogs.detailKeys.message',
+  ip: 'auditLogs.detailKeys.ip',
+  mac: 'auditLogs.detailKeys.mac',
+  duration: 'auditLogs.detailKeys.duration',
+  reason: 'auditLogs.detailKeys.reason',
+  name: 'auditLogs.detailKeys.name',
+  type: 'auditLogs.detailKeys.type',
+  tag: 'auditLogs.detailKeys.tag',
+  success: 'auditLogs.detailKeys.success',
+  count: 'auditLogs.detailKeys.count',
+  key: 'auditLogs.detailKeys.key',
+  username: 'auditLogs.detailKeys.username',
+  role: 'auditLogs.detailKeys.role',
+  old_role: 'auditLogs.detailKeys.old_role',
+  new_role: 'auditLogs.detailKeys.new_role',
+  target_user: 'auditLogs.detailKeys.target_user',
+  match_type: 'auditLogs.detailKeys.match_type',
+  ip_pattern: 'auditLogs.detailKeys.ip_pattern',
+  arp_source_tag: 'auditLogs.detailKeys.arp_source_tag',
+  firewall_tag: 'auditLogs.detailKeys.firewall_tag',
+  purpose: 'auditLogs.detailKeys.purpose',
+  url: 'auditLogs.detailKeys.url',
+  record_count: 'auditLogs.detailKeys.record_count',
 };
 
 const AuditLogs: React.FC = () => {
@@ -287,7 +364,7 @@ const AuditLogs: React.FC = () => {
       return <p className="text-foreground whitespace-pre-wrap">{String(parsed.message)}</p>;
     }
 
-    // If it's a JSON object, render key-value pairs
+    // If it's a JSON object, render key-value pairs with translated keys
     const message = parsed.message;
     const otherEntries = Object.entries(parsed).filter(([key]) => key !== 'message');
 
@@ -300,7 +377,9 @@ const AuditLogs: React.FC = () => {
           <div className="space-y-1.5">
             {otherEntries.map(([key, value]) => (
               <div key={key} className="flex gap-2 text-sm">
-                <span className="text-muted-foreground min-w-fit">{key}:</span>
+                <span className="text-muted-foreground min-w-fit">
+                  {DETAIL_KEY_LABELS[key] ? t(DETAIL_KEY_LABELS[key]) : key}:
+                </span>
                 <span className="text-foreground font-mono break-all">
                   {typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value)}
                 </span>
@@ -445,7 +524,7 @@ const AuditLogs: React.FC = () => {
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-6">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-6">
         <div className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden">
           <div className="p-4 text-center">
             <div className="text-xl sm:text-2xl font-bold text-foreground">{totalFromServer}</div>
@@ -455,21 +534,12 @@ const AuditLogs: React.FC = () => {
         </div>
         <div className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden">
           <div className="p-4 text-center">
-            <div className="text-xl sm:text-2xl font-bold text-blue-600">
-              {new Set(filteredLogs.map((l) => l.username)).size || 0}
+            <div className="text-xl sm:text-2xl font-bold text-red-600">
+              {filteredLogs.filter((l) => ['login_failed', 'block_terminal', 'block_blacklist'].includes(l.action)).length}
             </div>
-            <div className="text-xs sm:text-sm text-muted-foreground mt-1">{t('auditLogs.uniqueUsers')}</div>
+            <div className="text-xs sm:text-sm text-muted-foreground mt-1">{t('auditLogs.securityEvents')}</div>
           </div>
-          <div className="h-1 bg-gradient-to-r from-blue-400 to-blue-600" />
-        </div>
-        <div className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden">
-          <div className="p-4 text-center">
-            <div className="text-xl sm:text-2xl font-bold text-green-600">
-              {new Set(filteredLogs.map((l) => l.action)).size || 0}
-            </div>
-            <div className="text-xs sm:text-sm text-muted-foreground mt-1">{t('auditLogs.uniqueActions')}</div>
-          </div>
-          <div className="h-1 bg-gradient-to-r from-green-400 to-green-600" />
+          <div className="h-1 bg-gradient-to-r from-red-400 to-red-600" />
         </div>
       </div>
 
@@ -543,19 +613,25 @@ const AuditLogs: React.FC = () => {
                         )}
                       </td>
                       <td className="px-4 sm:px-6 py-4 whitespace-nowrap font-mono text-sm text-muted-foreground">
-                        {log.ip_address || '-'}
+                        {log.username === 'system' ? t('auditLogs.systemLabel') : (log.ip_address || '-')}
                       </td>
-                      <td className="px-4 sm:px-6 py-4 whitespace-nowrap">
-                        <IconButton
-                          icon={AlertCircle}
-                          variant="primary"
-                          size="sm"
-                          title={log.details ? t('terminal.viewDetails') : t('common.noDetails')}
+                      <td className="px-4 sm:px-6 py-4">
+                        <div
+                          className="text-sm text-muted-foreground truncate max-w-[200px] cursor-pointer hover:text-foreground transition-colors"
+                          title={(() => {
+                            const parsed = parseDetails(log.details);
+                            return parsed?.message || t('common.noDetails');
+                          })()}
                           onClick={() => {
                             setSelectedLog(log);
                             setShowModal(true);
                           }}
-                        />
+                        >
+                          {(() => {
+                            const parsed = parseDetails(log.details);
+                            return parsed?.message || '-';
+                          })()}
+                        </div>
                       </td>
                     </tr>
                   );
@@ -626,7 +702,9 @@ const AuditLogs: React.FC = () => {
 
               <div className="flex justify-between items-center py-2 border-b border-border">
                 <span className="text-muted-foreground">{t('auditLogs.ip')}</span>
-                <span className="font-mono text-foreground">{selectedLog.ip_address || '-'}</span>
+                <span className="font-mono text-foreground">
+                  {selectedLog.username === 'system' ? t('auditLogs.systemLabel') : (selectedLog.ip_address || '-')}
+                </span>
               </div>
 
               <div className="py-2">

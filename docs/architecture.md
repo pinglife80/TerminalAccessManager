@@ -1,6 +1,6 @@
 # TerminalAccessManager 系统架构设计文档
 
-> 文档版本：v3.2.0-r5 | 更新日期：2026-06-15
+> 文档版本：v3.2.0-r6 | 更新日期：2026-06-16
 
 ## 1. 系统概述
 
@@ -181,6 +181,25 @@ Terminal 模型包含两个正交维度——**Status**（封堵状态）和 **C
 | | | `bypass` | 白名单放行 |
 
 Status 描述的是终端在网络层的实际封堵情况，Compliance 描述的是终端的合规判定结果。二者正交：一个 `non_compliant` 终端可能因防火墙不可用而仍为 `unblocked`；一个 `blocked` 终端可能因合规基准更新后变为 `compliant` 而触发解封。
+
+**终端管理页面操作按钮矩阵：**
+
+终端管理页面根据终端的合规状态与封堵状态组合，动态显示不同的操作按钮：
+
+| 合规状态 | 封堵状态 | 附加条件 | 可用操作 |
+|----------|----------|----------|----------|
+| compliant | unblocked | — | 仅查看详情，无操作按钮 |
+| compliant | blocked | — | 查看 + 解封（含确认+comment） |
+| bypass | unblocked | — | 查看 + 移出白名单（含确认） |
+| non_compliant | blocked | — | 仅查看详情，无操作按钮 |
+| non_compliant | unblocked | 在黑名单 | 查看 + 移出黑名单（含确认+comment） |
+| non_compliant | unblocked | — | 查看 + 封锁（含确认+comment） |
+| unknown | unblocked | — | 查看 + 加白名单（含comment）+ 封锁（含确认+comment） |
+| unknown | blocked | — | 查看 + 解封（含确认+comment） |
+
+**黑名单管理页面定位：**
+
+黑名单管理页面定位为审计视图，仅提供黑名单记录的查看与搜索功能，移除了手动添加黑名单功能。封堵操作统一从终端管理页面发起，确保操作入口唯一、审计链路完整。
 
 ### 3.2 数据源路由机制
 
@@ -786,9 +805,9 @@ WHERE mac_address_normalized ILIKE 'AABBCCDDEEFF%'
 | `unlock_user` | 解锁用户 |
 | `update_config` | 更新系统配置 |
 
-### 14.2 8 类分类体系
+### 14.2 10 类分类体系
 
-前端审计日志按 8 个分类进行过滤展示：
+前端审计日志按 10 个分类进行过滤展示：
 
 | 分类 | 包含的 action | badge 颜色 |
 |------|---------------|------------|
@@ -798,6 +817,8 @@ WHERE mac_address_normalized ILIKE 'AABBCCDDEEFF%'
 | 认证 | login, logout | 紫色/灰色 |
 | 数据源 | create_datasource, update_datasource, delete_datasource, test_datasource, sync_datasource | 青色 |
 | 用户管理 | create_user, update_user, delete_user, reset_password, unlock_user | 橙色 |
+| 角色 | create_role, update_role, delete_role, assign_role, remove_role | 靛色 |
+| 合规 | compliance_check, compliance_recalculate | 棕色 |
 | 系统配置 | update_config | 黄色 |
 | 定时任务 | cleanup_expired | 灰色 |
 
@@ -809,9 +830,18 @@ WHERE mac_address_normalized ILIKE 'AABBCCDDEEFF%'
 {"message": "Blocked terminal 192.168.1.100", "ip_address": "192.168.1.100", "mac_address": "AA-BB-CC-DD-EE-FF"}
 ```
 
-前端审计日志页面解析 `details` 字段时，对 JSON 格式内容进行解析并格式化展示。
+前端审计日志页面解析 `details` 字段时，对 JSON 格式内容进行解析并格式化展示。详情 key 支持翻译显示，通过 i18n 映射将 key（如 `ip_address`、`mac_address`）翻译为当前语言的标签。
 
-### 14.4 log_action 公共函数
+### 14.4 统计卡片
+
+审计日志页面顶部统计卡片优化为两个核心指标：
+
+| 卡片 | 说明 |
+|------|------|
+| 日志总数 | 当前筛选条件下的审计日志总量 |
+| 安全事件 | 封堵/解封/黑名单等安全相关操作的数量统计 |
+
+### 14.5 log_action 公共函数
 
 `TerminalService._log_action` 改为公共函数 `log_action`，新增 `ip_address` 参数：
 

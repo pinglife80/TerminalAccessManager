@@ -1,7 +1,7 @@
 # TerminalAccessManager (TAM) 生产环境交付可行性评估报告
 
 **评估日期：** 2026-06-10
-**评估版本：** v3.2.0-r5
+**评估版本：** v3.2.0-r6
 **评估方法：** 10 维度深度代码审查 + 架构分析 + 安全扫描 + 业务链验证
 **修复状态：** 阶段一~三已完成 + 6项高风险修复已完成，3 Critical + 7 High + 8 Medium = 18 项安全问题已修复，6 项高风险问题已修复；v3.2.0 新增：Request-ID 链路追踪、时区全局控制、日志格式函数化、Docker 安全加固注释化
 **综合评分：** **9.0/10** — 达到生产交付就绪状态
@@ -508,18 +508,20 @@ v3.2.0-r4 将终端 `status` 字段从 6 值枚举（active/inactive/frozen/pend
 
 | 文档 | 版本号 | 评估 |
 |------|:------:|:----:|
-| architecture.md | v3.2.0 | ✅ |
-| backend.md | v3.2.0 | ✅ |
-| api.md | v3.2.0 | ✅ |
-| database.md | v3.2.0 | ✅ |
-| deployment.md | v3.2.0 | ✅ |
-| manage-sh-reference.md | v3.2.0 | ✅ |
+| architecture.md | v3.2.0-r6 | ✅ |
+| backend.md | v3.2.0-r6 | ✅ |
+| api.md | v3.2.0-r6 | ✅ |
+| database.md | v3.2.0-r6 | ✅ |
+| deployment.md | v3.2.0-r6 | ✅ |
+| manage-sh-reference.md | v3.2.0-r6 | ✅ |
 | branding.md | v3.2.0 | ✅ |
 | changelog.md | v3.2.0 | ✅ |
 | frontend/implementation.md | v3.2.0 | ✅ |
-| production-readiness-assessment.md | v3.2.0 | ✅ |
+| production-readiness-assessment.md | v3.2.0-r6 | ✅ |
+| datasource-lifecycle.md | v3.2.0-r6 | ✅ |
+| RBAC.md | v3.2.0-r6 | ✅ |
 
-**文档版本号统一为 v3.2.0 ✅**
+**文档版本号统一为 v3.2.0-r6 ✅**
 
 ### 10.2 配置文件完整性
 

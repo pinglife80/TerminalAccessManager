@@ -32,6 +32,7 @@ class Terminal(Base):
     source_tag = Column(String(50), nullable=True, index=True)  # Data source tag
     compliance_status = Column(String(20), default="unknown", index=True)  # compliant / bypass / non_compliant / unknown
     wl_match_type = Column(String(10), nullable=True)  # "mac" / "ip" / "both" / null (whitelist match type)
+    firewall_tag = Column(String(50), nullable=True, index=True)  # Firewall tag from block operation
 
     # Composite index for efficient queries
     __table_args__ = (

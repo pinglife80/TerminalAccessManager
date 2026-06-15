@@ -1,6 +1,6 @@
 # TerminalAccessManager API 文档
 
-> 文档版本：v3.2.0-r5 | 更新日期：2026-06-15
+> 文档版本：v3.2.0-r6 | 更新日期：2026-06-16
 
 > 基于 MAC 地址和 IP 地址的网络终端准入管理平台
 
@@ -769,6 +769,8 @@ curl "https://<HOST_IP>:8443/api/v1/terminals/?skip=0&limit=20" \
 | end_date | Query | string | 否 | 截止日期（YYYY-MM-DD） |
 | skip | Query | int | 0 | 跳过记录数 |
 | limit | Query | int | 50 | 每页记录数（1-200） |
+| source_tag | Query | string | 否 | 按数据源标签过滤终端 |
+| firewall_tag | Query | string | 否 | 按防火墙标签过滤终端（通过 Blacklist 子查询） |
 
 > IP 和 MAC 参数使用 ILIKE 模糊搜索，同时提供时使用 OR 逻辑（任一匹配即返回）。
 
@@ -819,6 +821,7 @@ curl "https://<HOST_IP>:8443/api/v1/terminals/search?ip=192.168.1&compliance_sta
 | mac_address | Query | string | 是 | 关联的 MAC 地址 |
 | block_time | Query | string | 否 | 封锁时长，默认 `30d`（如 30d/15d/7d/1h） |
 | firewall_tag | Query | string | 否 | 防火墙标签，指定路由到哪个防火墙 |
+| comments | Query | string | 否 | 封堵备注，写入 Terminal.comments 字段 |
 
 **成功响应** `200`
 
@@ -856,6 +859,7 @@ curl -X POST "https://<HOST_IP>:8443/api/v1/terminals/block/192.168.1.100?mac_ad
 |------|------|------|------|------|
 | ip_address | Path | string | 是 | 要解封的 IP 地址 |
 | firewall_tag | Query | string | 否 | 防火墙标签 |
+| comments | Query | string | 否 | 解封备注，写入 Terminal.comments 字段 |
 
 **成功响应** `200`
 
@@ -2079,26 +2083,38 @@ curl "https://<HOST_IP>:8443/api/v1/logs/?skip=0&limit=20" \
 | 认证 | `login` | 登录成功 |
 | 认证 | `login_failed` | 登录失败 |
 | 认证 | `logout` | 登出 |
+| 认证 | `token_refresh` | 刷新令牌 |
+| 认证 | `change_password` | 修改密码 |
 | 终端操作 | `block_terminal` | 封锁终端 |
 | 终端操作 | `unblock_terminal` | 解封终端 |
 | 白名单 | `add_whitelist` | 添加白名单 |
 | 白名单 | `remove_whitelist` | 移除白名单 |
-| 黑名单 | `add_blacklist` | 添加黑名单 |
-| 黑名单 | `remove_blacklist` | 移除黑名单 |
-| 用户管理 | `create_user` | 创建用户 |
-| 用户管理 | `update_user` | 更新用户 |
-| 用户管理 | `delete_user` | 删除用户 |
-| 用户管理 | `reset_password` | 重置密码 |
-| 用户管理 | `unlock_user` | 解锁用户 |
+| 黑名单 | `block_blacklist` | 添加黑名单 |
+| 黑名单 | `unblock_blacklist` | 移除黑名单 |
+| 黑名单 | `cleanup_expired` | 清理过期条目 |
 | 数据源 | `create_datasource` | 创建数据源 |
 | 数据源 | `update_datasource` | 更新数据源 |
 | 数据源 | `delete_datasource` | 删除数据源 |
 | 数据源 | `test_datasource` | 测试数据源连接 |
 | 数据源 | `sync_datasource` | 同步数据源 |
-| 合规 | `compliance_check` | 合规检查 |
-| 合规 | `auto_block` | 自动封禁 |
-| 合规 | `auto_unblock` | 自动解封 |
-| 配置变更 | `update_config` | 更新系统配置 |
+| 数据源 | `bind_datasource` | 绑定数据源 |
+| 数据源 | `unbind_datasource` | 解绑数据源 |
+| 用户管理 | `create_user` | 创建用户 |
+| 用户管理 | `update_user` | 更新用户 |
+| 用户管理 | `delete_user` | 删除用户 |
+| 用户管理 | `reset_password` | 重置密码 |
+| 用户管理 | `unlock_user` | 解锁用户 |
+| 用户管理 | `role_change` | 角色变更 |
+| 用户管理 | `assign_role` | 分配角色 |
+| 角色 | `create_role` | 创建角色 |
+| 角色 | `update_role` | 更新角色 |
+| 角色 | `delete_role` | 删除角色 |
+| 合规 | `create_baseline` | 创建合规基准 |
+| 合规 | `update_baseline` | 更新合规基准 |
+| 合规 | `delete_baseline` | 删除合规基准 |
+| 系统 | `update_config` | 更新系统配置 |
+| 系统 | `upload_branding` | 上传品牌资源 |
+| 系统 | `export_audit_logs` | 导出审计日志 |
 
 > 后端启动时自动迁移旧版 action 值（如 `block_ip` → `block_terminal`、`add_to_whitelist` → `add_whitelist` 等），确保历史数据与新命名一致。
 

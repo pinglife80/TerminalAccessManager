@@ -1,6 +1,6 @@
 # TerminalAccessManager 数据库设计文档
 
-> 文档版本：v3.2.0-r5 | 更新日期：2026-06-15
+> 文档版本：v3.2.0-r6 | 更新日期：2026-06-16
 
 ## 1. 概述
 
@@ -196,6 +196,7 @@ docker-compose.yml 中 PostgreSQL 的 `command` 参数列表如下：
 | compliance_status | VARCHAR(20) | INDEX | 'unknown' | 合规状态 |
 | wl_match_type | VARCHAR(10) | | NULL | 白名单匹配类型 |
 | mac_address_normalized | VARCHAR(12) | INDEX | NULL | MAC 地址标准化（去除分隔符的大写 12 位字符串，如 AABBCCDDEEFF） |
+| firewall_tag | VARCHAR(50) | | NULL | 封堵操作时写入的防火墙标签，解封时清除 |
 
 **索引：**
 
@@ -746,6 +747,8 @@ docker-compose.yml 中 PostgreSQL 的 `command` 参数列表如下：
 | 003_search_indexes.py | 搜索优化索引：whitelist.created_at、blacklist.blocked_at、blacklist.expires_at、audit_logs.ip_address |
 | 004_terminal_unique_constraint.py | terminals 表联合唯一约束 uq_terminal_ip_mac + 迁移前去重 |
 | 005_mac_normalized_column.py | terminals/whitelist/blacklist 三张表添加 mac_address_normalized 列，回填历史数据，创建索引 |
+| 006_rbac_tables.py | RBAC 权限控制表（roles、permissions、user_roles、role_permissions）及种子数据 |
+| 007_firewall_tag.py | terminals 表新增 firewall_tag 列（VARCHAR(50), nullable, default NULL） |
 
 ### 003_search_indexes.py 详情
 

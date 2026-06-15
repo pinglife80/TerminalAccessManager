@@ -236,30 +236,72 @@ class TerminalService:
             raise
 
     async def get_system_status(self) -> dict:
-        """Get system status including Sangfor AF connectivity"""
-        sangfor_status = {"connected": False, "cpu": None, "memory": None, "error": None}
+        """Get system status including Sangfor AF and data source connectivity"""
+        # Check Sangfor AF connectivity via DataSource table
+        sangfor_status = {"connected": False, "error": None}
+        try:
+            from app.models.data_source import DataSource
+            from app.core.crypto import decrypt_config
 
-        if self.sangfor.base_url:
-            try:
-                stats = await self.sangfor.get_system_stats()
-                sangfor_status = {
-                    "connected": True,
-                    "cpu": stats.get("cpu"),
-                    "memory": stats.get("memory"),
-                    "error": None,
-                }
-            except Exception as e:
-                sangfor_status["error"] = str(e)
-            finally:
-                await self.sangfor.close()
-        else:
-            sangfor_status["error"] = "Sangfor API not configured"
+            stmt = select(DataSource).where(DataSource.type == "sangfor", DataSource.enabled == True)
+            result = await self.db.execute(stmt)
+            sangfor_sources = result.scalars().all()
+
+            if sangfor_sources:
+                for source in sangfor_sources:
+                    try:
+                        config = source.config
+                        if config:
+                            config = decrypt_config(config)
+                        svc = SangforService(
+                            base_url=config.get("base_url", ""),
+                            username=config.get("username", ""),
+                            password=config.get("password", ""),
+                        )
+                        connected = await svc.test_connection()
+                        if connected:
+                            sangfor_status = {"connected": True, "error": None}
+                            await svc.close()
+                            break
+                        else:
+                            sangfor_status["error"] = f"Connection test failed for '{source.tag}'"
+                        await svc.close()
+                    except Exception as e:
+                        sangfor_status["error"] = f"Sangfor '{source.tag}': {str(e)}"
+            else:
+                sangfor_status["error"] = "No Sangfor AF data source configured"
+        except Exception as e:
+            sangfor_status["error"] = str(e)
+
+        # Check network scanner (ARP data source) status
+        network_scanner_status = "pending"
+        try:
+            from app.models.data_source import DataSource as DS
+
+            stmt = select(DS).where(
+                DS.type.in_(["arp_ssh", "arp_api"]),
+                DS.enabled == True,
+            )
+            result = await self.db.execute(stmt)
+            arp_sources = result.scalars().all()
+
+            if arp_sources:
+                # If any ARP source has synced successfully, mark as connected
+                any_synced = any(s.last_sync_status == "success" for s in arp_sources)
+                if any_synced:
+                    network_scanner_status = "connected"
+                else:
+                    network_scanner_status = "error"
+            else:
+                network_scanner_status = "pending"
+        except Exception:
+            pass
 
         return {
             "backend_api": "connected",
             "database": "connected",
             "sangfor": sangfor_status,
-            "network_scanner": "pending",
+            "network_scanner": network_scanner_status,
         }
 
     # ------------------------------------------------------------------
@@ -306,6 +348,18 @@ class TerminalService:
             if query.compliance_status:
                 conditions.append(Terminal.compliance_status == query.compliance_status)
 
+            if query.source_tag:
+                conditions.append(Terminal.source_tag == query.source_tag)
+
+            # Firewall tag filter via Blacklist subquery
+            if query.firewall_tag:
+                fw_subquery = (
+                    select(Blacklist.ip_address)
+                    .where(Blacklist.firewall_tag == query.firewall_tag)
+                    .correlate(Terminal)
+                )
+                conditions.append(Terminal.ip_address.in_(fw_subquery))
+
             # Date range filtering
             date_conditions = _parse_date_range(query.start_date, query.end_date)
             for dc in date_conditions:
@@ -349,6 +403,18 @@ class TerminalService:
             if query.compliance_status:
                 conditions.append(Terminal.compliance_status == query.compliance_status)
 
+            if query.source_tag:
+                conditions.append(Terminal.source_tag == query.source_tag)
+
+            # Firewall tag filter via Blacklist subquery
+            if query.firewall_tag:
+                fw_subquery = (
+                    select(Blacklist.ip_address)
+                    .where(Blacklist.firewall_tag == query.firewall_tag)
+                    .correlate(Terminal)
+                )
+                conditions.append(Terminal.ip_address.in_(fw_subquery))
+
             # Date range filtering
             date_conditions = _parse_date_range(query.start_date, query.end_date)
             for dc in date_conditions:
@@ -367,12 +433,14 @@ class TerminalService:
             raise
 
     async def block_ip(self, ip_address: str, mac_address: str, username: str,
-                        block_time: str = "30d", firewall_tag: Optional[str] = None) -> dict:
+                        block_time: str = "30d", firewall_tag: Optional[str] = None,
+                        comments: Optional[str] = None) -> dict:
         """Block an IP address via Sangfor API and update database.
 
         Args:
             firewall_tag: If provided, use the specified firewall DataSource.
                          If None, fall back to global Sangfor config.
+            comments: Optional comment to set on the terminal record.
         """
         try:
             sangfor_svc = None
@@ -413,6 +481,9 @@ class TerminalService:
                 if mac_record:
                     mac_record.status = TerminalStatus.BLOCKED.value
                     mac_record.compliance_status = "non_compliant"
+                    mac_record.firewall_tag = firewall_tag
+                    if comments is not None:
+                        mac_record.comments = comments
 
                 # Add to blacklist with configurable expiration
                 expires_at = datetime.now(timezone.utc) + _parse_block_time(block_time)
@@ -449,12 +520,14 @@ class TerminalService:
             raise
 
     async def unblock_ip(self, ip_address: str, username: str,
-                          firewall_tag: Optional[str] = None) -> dict:
+                          firewall_tag: Optional[str] = None,
+                          comments: Optional[str] = None) -> dict:
         """Unblock an IP address via Sangfor API and update database.
 
         Args:
             firewall_tag: If provided, use the specified firewall DataSource.
                          If None, fall back to global Sangfor config.
+            comments: Optional comment to set on the terminal record.
         """
         try:
             sangfor_svc = None
@@ -491,6 +564,9 @@ class TerminalService:
                 for record in mac_records:
                     record.status = TerminalStatus.UNBLOCKED.value
                     record.compliance_status = "unknown"
+                    record.firewall_tag = None  # Clear firewall tag on unblock
+                    if comments is not None:
+                        record.comments = comments
 
                 # Remove from blacklist (filter by firewall_tag if specified)
                 stmt = select(Blacklist).where(Blacklist.ip_address == ip_address)

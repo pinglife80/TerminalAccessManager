@@ -36,6 +36,8 @@ async def search_mac_addresses(
     mac: str = Query(None, description="Filter by MAC address"),
     status_filter: str = Query(None, alias="status", description="Filter by status"),
     compliance_status: str = Query(None, description="Filter by compliance status"),
+    source_tag: str = Query(None, description="Filter by source tag"),
+    firewall_tag: str = Query(None, description="Filter by firewall tag (via blacklist)"),
     start_date: str = Query(None, description="Filter by start date (YYYY-MM-DD)"),
     end_date: str = Query(None, description="Filter by end date (YYYY-MM-DD)"),
     skip: int = Query(0, ge=0),
@@ -49,6 +51,8 @@ async def search_mac_addresses(
         mac=mac,
         status=status_filter,
         compliance_status=compliance_status,
+        source_tag=source_tag,
+        firewall_tag=firewall_tag,
         start_date=start_date,
         end_date=end_date,
         skip=skip,
@@ -67,13 +71,15 @@ async def block_ip_address(
     mac_address: str = Query(..., description="MAC address associated with IP"),
     block_time: str = Query("30d", description="Block duration (e.g. 30d, 15d, 7d, 1h)"),
     firewall_tag: Optional[str] = Query(None, description="Firewall tag to route block operation"),
+    comments: Optional[str] = Query(None, description="Comment for the block action"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_permission("terminal:write"))
 ):
     """Block an IP address via Sangfor API"""
     service = TerminalService(db)
     result = await service.block_ip(ip_address, mac_address, current_user.username,
-                                     block_time=block_time, firewall_tag=firewall_tag)
+                                     block_time=block_time, firewall_tag=firewall_tag,
+                                     comments=comments)
 
     if not result["success"]:
         raise HTTPException(
@@ -88,12 +94,14 @@ async def block_ip_address(
 async def unblock_ip_address(
     ip_address: str,
     firewall_tag: Optional[str] = Query(None, description="Firewall tag to route unblock operation"),
+    comments: Optional[str] = Query(None, description="Comment for the unblock action"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_permission("terminal:write"))
 ):
     """Unblock an IP address via Sangfor API"""
     service = TerminalService(db)
-    result = await service.unblock_ip(ip_address, current_user.username, firewall_tag=firewall_tag)
+    result = await service.unblock_ip(ip_address, current_user.username,
+                                       firewall_tag=firewall_tag, comments=comments)
 
     if not result["success"]:
         raise HTTPException(

@@ -319,6 +319,7 @@ async def get_current_user_info(
 
 @router.post("/refresh", response_model=Token)
 async def refresh_token(
+    request: Request,
     refresh_token: str = Body(..., embed=True),
     db: AsyncSession = Depends(get_db)
 ):
@@ -385,7 +386,7 @@ async def refresh_token(
         ts = TerminalService(db)
         await ts.log_action(username, "token_refresh", "auth", str(user.id),
                             {"message": "Token refreshed"},
-                            ip_address=None)
+                            ip_address=request.client.host if request.client else None)
 
         return {
             "access_token": access_token,
@@ -468,6 +469,7 @@ async def update_profile(
 @router.put("/me/password", response_model=ResponseMessage)
 async def change_password(
     data: PasswordChange,
+    request: Request,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -490,7 +492,7 @@ async def change_password(
     ts = TerminalService(db)
     await ts.log_action(current_user.username, "change_password", "auth", str(current_user.id),
                         {"message": "User changed their own password"},
-                        ip_address=None)
+                        ip_address=request.client.host if request.client else None)
 
     return {"message": "Password changed successfully", "success": True}
 

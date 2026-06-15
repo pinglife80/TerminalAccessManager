@@ -80,6 +80,7 @@ export const useStats = () => {
       const response = await apiClient.get('/stats/');
       return response.data as DashboardStats;
     },
+    refetchInterval: 30000, // Refresh every 30 seconds
   });
 };
 
@@ -102,6 +103,8 @@ export interface TerminalSearchParams {
   mac?: string;
   status?: string;
   compliance_status?: string;
+  source_tag?: string;
+  firewall_tag?: string;
   start_date?: string;
   end_date?: string;
   skip?: number;

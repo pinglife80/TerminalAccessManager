@@ -104,7 +104,7 @@ const Dashboard: React.FC = () => {
       status: (systemStatus?.sangfor?.connected ? 'connected' : 'pending') as 'connected' | 'pending',
       icon: Shield,
       detail: systemStatus?.sangfor?.connected
-        ? `CPU: ${systemStatus.sangfor.cpu ?? '-'}% | Mem: ${systemStatus.sangfor.memory ?? '-'}%`
+        ? t('dashboard.running')
         : (systemStatus?.sangfor?.error || t('dashboard.notConfigured')),
     },
     {
