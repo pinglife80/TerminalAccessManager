@@ -144,12 +144,8 @@ const zh = {
     removedFromBlacklist: '已移出封禁列表',
     failedToRemoveFromBlacklist: '移出封禁列表失败',
     status: {
-      active: '活跃',
-      inactive: '未活跃',
-      frozen: '已封禁',
-      pending: '待定',
-      unfrozen: '已解封',
-      bypass: '绕过',
+      blocked: '已封堵',
+      unblocked: '未封堵',
     },
     complianceStatusValues: {
       compliant: '正常',

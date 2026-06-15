@@ -291,7 +291,10 @@ const DataSourcesTab = forwardRef<{ openAddModal: () => void }, DataSourcesTabPr
   // Config form for add modal
   const renderConfigFields = () => {
     const fields = CONFIG_FIELDS[dsForm.type] || [];
-    return fields.map((field) => (
+    return fields.filter((field) => {
+      if (!field.showWhen) return true;
+      return Object.entries(field.showWhen).every(([key, val]) => dsConfig[key] === val);
+    }).map((field) => (
       <div key={field.key}>
         <label className="block text-sm font-medium text-muted-foreground mb-1">{field.label}</label>
         {field.type === 'select' ? (
@@ -566,7 +569,10 @@ const DataSourcesTab = forwardRef<{ openAddModal: () => void }, DataSourcesTabPr
               className="w-full px-4 py-2.5 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
             />
           </div>
-          {(CONFIG_FIELDS[editDsForm.type] || []).map((field) => (
+          {(CONFIG_FIELDS[editDsForm.type] || []).filter((field) => {
+            if (!field.showWhen) return true;
+            return Object.entries(field.showWhen).every(([key, val]) => editDsConfig[key] === val);
+          }).map((field) => (
             <div key={field.key}>
               <label className="block text-sm font-medium text-muted-foreground mb-1">{field.label}</label>
               {field.type === 'select' ? (

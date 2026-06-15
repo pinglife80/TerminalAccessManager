@@ -1,6 +1,6 @@
 # 品牌自定义指南
 
-> 文档版本：v3.2.0-r3 | 更新日期：2026-06-11
+> 文档版本：v3.2.0-r4 | 更新日期：2026-06-15
 
 ## 概述
 
@@ -616,6 +616,28 @@ docker compose up -d --build frontend
 
 - 副标题：i18n 键 `auth.signInToAccount` → branding 配置 `login.subheading` 作为回退值
 - 页脚文字：i18n 键 `auth.secureAuthFooter` → branding 配置 `login.footerText` 作为回退值
+
+## Terminal 状态标签
+
+终端状态在界面中以标签（Badge）形式展示，当前支持以下两种状态：
+
+| 状态值 | 中文标签 | 英文标签 | 说明 |
+|--------|---------|---------|------|
+| `blocked` | 已封堵 | Blocked | 终端已被防火墙阻断 |
+| `unblocked` | 未封堵 | Unblocked | 终端未被封堵（默认状态） |
+
+> **v3.2.0-r4 变更说明：** 终端状态从 6 值（active/inactive/frozen/pending/unfrozen）精简为 2 值（blocked/unblocked），标签文案同步更新。合规状态由 `compliance_status` 字段独立追踪，不再混入终端状态。
+
+## 数据源配置表单
+
+数据源配置表单中，`arp_api` 类型支持以下认证方式：
+
+| 认证方式 | auth_type 值 | 表单字段 | 说明 |
+|---------|-------------|---------|------|
+| Basic Auth | `basic`（默认） | 用户名 + 密码 | HTTP 基本认证 |
+| Custom Header | `header` | Header 名称 + Header 值 | 自定义请求头认证（如 `X-API-Key`），选择此项后需填写 `header_name` 字段指定 Header 名称 |
+
+> **Custom Header 认证说明：** 当 `auth_type=header` 时，系统在请求 API 时会将 `header_name` 指定的 Header 名称和密码字段中的值作为请求头发送，适用于基于 API Key 等非标准认证方式的数据源。
 
 ## 常见问题
 

@@ -1,10 +1,6 @@
 export const STATUS_CONFIG: Record<string, { label: string; className: string }> = {
-  active: { label: 'Active', className: 'bg-green-100 text-green-800' },
-  inactive: { label: 'Inactive', className: 'bg-muted text-foreground' },
-  frozen: { label: 'Blocked', className: 'bg-red-100 text-red-800' },
-  pending: { label: 'Pending', className: 'bg-yellow-100 text-yellow-800' },
-  unfrozen: { label: 'Unblocked', className: 'bg-blue-100 text-blue-800' },
-  bypass: { label: 'Bypass', className: 'bg-purple-100 text-purple-800' },
+  blocked: { label: 'Blocked', className: 'bg-red-100 text-red-800' },
+  unblocked: { label: 'Unblocked', className: 'bg-blue-100 text-blue-800' },
 };
 
 export const NAV_ITEMS = [

@@ -1,6 +1,6 @@
 # 版本跟踪记录
 
-> 文档版本：v3.2.0-r3 | 更新日期：2026-06-11
+> 文档版本：v3.2.0-r4 | 更新日期：2026-06-15
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
@@ -26,6 +26,36 @@
 | 9100a8d | fix(search): increase debounce delay from 300ms to 500ms across all pages |
 | 2f2add5 | fix: prevent superadmin role modification and fix Users search flickering |
 | 0b36d78 | docs: update RBAC documentation to v3.0 with current implementation |
+
+---
+
+## [v3.2.0-r4] - 2026-06-15
+
+### Added
+- API 数据源响应解析扩展：支持 `arp`/`devices`/`records` 包装键和 `ipv4_address` 字段兼容
+- API 数据源认证增强：新增 `header` 类型，支持自定义 Header 名+值（如 `X-Auth-Token`）
+- 前端数据源配置：Auth Type 新增 "Custom Header" 选项，`header_name` 字段条件显示（`showWhen` 属性）
+- 白名单增删后自动触发合规状态批量重算（`recalculate_all_compliance`）
+- 合规重算联动封堵/解封：状态变更时自动调用防火墙 API
+
+### Changed
+- Terminal STATUS 字段精简：6 值（`active`/`inactive`/`frozen`/`pending`/`unfrozen`/`bypass`）→ 2 值（`blocked`/`unblocked`）
+- Dashboard 统计字段精简：移除 `active`/`inactive`/`pending`，新增 `unblocked`
+- 白名单添加不再删除终端记录，改为合规状态重算
+
+### Fixed
+- 白名单增删后终端合规状态和封堵状态不更新的问题
+
+### Migration
+- 数据库 `terminals` 表 `status` 字段：`frozen`→`blocked`，`unfrozen`→`unblocked`，其他遗留值→`unblocked`
+
+### 提交记录
+
+| 提交 | 说明 |
+|------|------|
+| TBD | feat(datasource): extend API response parsing and add header auth type |
+| TBD | fix(compliance): recalculate compliance on whitelist changes |
+| TBD | refactor(terminal): simplify status enum to blocked/unblocked |
 
 ---
 

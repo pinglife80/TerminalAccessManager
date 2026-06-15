@@ -144,12 +144,8 @@ const ja = {
     removedFromBlacklist: 'ブラックリストから削除しました',
     failedToRemoveFromBlacklist: 'ブラックリストからの削除に失敗しました',
     status: {
-      active: 'アクティブ',
-      inactive: '非アクティブ',
-      frozen: 'ブロック済み',
-      pending: '保留中',
-      unfrozen: 'ブロック解除済み',
-      bypass: 'バイパス',
+      blocked: 'ブロック済み',
+      unblocked: 'ブロック解除',
     },
     complianceStatusValues: {
       compliant: '正常',

@@ -224,10 +224,8 @@ class TerminalService:
             return {
                 "total": total,
                 "whitelisted": whitelisted,
-                "blocked": status_counts.get(TerminalStatus.FROZEN.value, 0),
-                "active": status_counts.get(TerminalStatus.ACTIVE.value, 0),
-                "inactive": status_counts.get(TerminalStatus.INACTIVE.value, 0),
-                "pending": status_counts.get(TerminalStatus.PENDING.value, 0),
+                "blocked": status_counts.get(TerminalStatus.BLOCKED.value, 0),
+                "unblocked": status_counts.get(TerminalStatus.UNBLOCKED.value, 0),
                 "compliant": compliance_counts.get("compliant", 0),
                 "bypass": compliance_counts.get("bypass", 0),
                 "non_compliant": compliance_counts.get("non_compliant", 0),
@@ -656,22 +654,15 @@ class TerminalService:
                 )
                 self.db.add(whitelist_entry)
 
-            # Remove terminal record from terminals when whitelisted
-            if normalized_mac:
-                stmt = select(Terminal).where(Terminal.mac_address == normalized_mac)
-                result = await self.db.execute(stmt)
-                mac_record = result.scalar_one_or_none()
-
-                if mac_record:
-                    await self.db.delete(mac_record)
-
-            # Invalidate whitelist cache
+            # Invalidate whitelist cache and recalculate compliance for all terminals
             try:
                 from app.services.compliance_service import ComplianceService
                 compliance_svc = ComplianceService(self.db)
                 await compliance_svc.invalidate_whitelist_cache()
-            except Exception:
-                pass
+                recalc_result = await compliance_svc.recalculate_all_compliance()
+                logger.info(f"Whitelist add triggered compliance recalculation: {recalc_result}")
+            except Exception as e:
+                logger.warning(f"Failed to recalculate compliance after whitelist add: {e}")
 
             # Build log details
             if ip_address and mac_address:
@@ -726,13 +717,15 @@ class TerminalService:
             if whitelist_entry:
                 await self.db.delete(whitelist_entry)
 
-                # Invalidate whitelist cache
+                # Invalidate whitelist cache and recalculate compliance for all terminals
                 try:
                     from app.services.compliance_service import ComplianceService
                     compliance_svc = ComplianceService(self.db)
                     await compliance_svc.invalidate_whitelist_cache()
-                except Exception:
-                    pass
+                    recalc_result = await compliance_svc.recalculate_all_compliance()
+                    logger.info(f"Whitelist delete triggered compliance recalculation: {recalc_result}")
+                except Exception as e:
+                    logger.warning(f"Failed to recalculate compliance after whitelist delete: {e}")
 
                 log_details_parts = []
                 if whitelist_entry.mac_address:

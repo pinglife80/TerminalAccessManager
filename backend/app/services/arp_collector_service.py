@@ -206,6 +206,10 @@ class ArpCollectorService:
         token = config.get("token", "")
         if auth_type == "bearer" and token:
             headers["Authorization"] = f"Bearer {token}"
+        elif auth_type == "header" and token:
+            # Custom header auth: header_name + token
+            header_name = config.get("header_name", "X-Auth-Token")
+            headers[header_name] = token
 
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
@@ -514,16 +518,19 @@ class ArpCollectorService:
 
         Supports various response formats:
         - List of dicts with ip/mac fields
-        - Dict with a 'data' key containing the list
+        - Dict with a wrapper key containing the list (data/entries/results/arp/devices/records)
         """
         entries = []
 
         if isinstance(data, list):
             items = data
         elif isinstance(data, dict):
-            # Try common wrapper keys
-            items = data.get("data", data.get("entries", data.get("results", [])))
-            if not isinstance(items, list):
+            # Try common wrapper keys in order of likelihood
+            for key in ("data", "entries", "results", "arp", "devices", "records"):
+                items = data.get(key)
+                if isinstance(items, list):
+                    break
+            else:
                 items = []
         else:
             return entries
@@ -534,6 +541,7 @@ class ArpCollectorService:
 
             ip_addr = (
                 item.get("ip_address") or
+                item.get("ipv4_address") or
                 item.get("ip") or
                 item.get("ipAddress") or
                 ""

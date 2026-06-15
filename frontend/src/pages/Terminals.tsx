@@ -277,12 +277,15 @@ const Terminals: React.FC = () => {
   // Helper to get status label via i18n
   const getStatusLabel = (status: string): string => {
     const keyMap: Record<string, string> = {
-      active: 'terminal.status.active',
-      inactive: 'terminal.status.inactive',
-      frozen: 'terminal.status.frozen',
-      pending: 'terminal.status.pending',
-      unfrozen: 'terminal.status.unfrozen',
-      bypass: 'terminal.status.bypass',
+      blocked: 'terminal.status.blocked',
+      unblocked: 'terminal.status.unblocked',
+      // Legacy values mapping
+      frozen: 'terminal.status.blocked',
+      unfrozen: 'terminal.status.unblocked',
+      active: 'terminal.status.unblocked',
+      inactive: 'terminal.status.unblocked',
+      pending: 'terminal.status.unblocked',
+      bypass: 'terminal.status.unblocked',
     };
     return keyMap[status] ? t(keyMap[status]) : (STATUS_CONFIG[status]?.label || status);
   };
@@ -354,12 +357,8 @@ const Terminals: React.FC = () => {
                   className="bg-transparent py-1.5 text-sm text-muted-foreground focus:outline-none focus:ring-0 cursor-pointer font-medium min-w-[6rem]"
                 >
                   <option value="all">{t('terminal.allStatus')}</option>
-                  <option value="active">{t('terminal.status.active')}</option>
-                  <option value="inactive">{t('terminal.status.inactive')}</option>
-                  <option value="frozen">{t('terminal.status.frozen')}</option>
-                  <option value="pending">{t('terminal.status.pending')}</option>
-                  <option value="unfrozen">{t('terminal.status.unfrozen')}</option>
-                  <option value="bypass">{t('terminal.status.bypass')}</option>
+                  <option value="blocked">{t('terminal.status.blocked')}</option>
+                  <option value="unblocked">{t('terminal.status.unblocked')}</option>
                 </select>
               </div>
 
@@ -635,7 +634,7 @@ const Terminals: React.FC = () => {
                               loading={whitelistId === mac.id}
                               onClick={() => handleAddToWhitelist(mac)}
                             />
-                            {mac.status !== 'frozen' ? (
+                            {mac.status !== 'blocked' ? (
                               <IconButton
                                 icon={Shield}
                                 variant="danger"
@@ -783,7 +782,7 @@ const Terminals: React.FC = () => {
                   onClick={() => { if (selectedTerminal) handleAddToWhitelist(selectedTerminal); }}
                   className="flex-1"
                 />
-                {selectedTerminal?.status !== 'frozen' ? (
+                {selectedTerminal?.status !== 'blocked' ? (
                   <PrimaryButton
                     icon={Shield}
                     label={t('terminal.blockTerminal')}

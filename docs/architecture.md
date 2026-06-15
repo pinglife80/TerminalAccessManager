@@ -1,6 +1,6 @@
 # TerminalAccessManager 系统架构设计文档
 
-> 文档版本：v3.2.0-r3 | 更新日期：2026-06-11
+> 文档版本：v3.2.0-r4 | 更新日期：2026-06-15
 
 ## 1. 系统概述
 
@@ -146,13 +146,13 @@ ARP 数据采集          合规判定              准入执行
                  │              │     │     non_compliant │
                  └──────┬───────┘     └────────┬─────────┘
                         │                      │
-              ┌─────────▼─────────┐    ┌───────▼────────┐
+              ┌───────────────────┐    ┌────────────────┐
               │ 自动封禁          │    │ 自动解封        │
               │ non_compliant     │    │ 已合规/白名单   │
               │ → 防火墙封禁 API  │    │ → 防火墙解封 API│
               │ → Blacklist 记录  │    │ → 更新状态      │
-              │ → status=frozen   │    │ → status=       │
-              └───────────────────┘    │   unfrozen      │
+              │ → status=blocked  │    │ → status=       │
+              └───────────────────┘    │   unblocked     │
                                        └────────────────┘
 ```
 
@@ -163,8 +163,23 @@ ARP 数据采集          合规判定              准入执行
    - 白名单匹配（IP 精确匹配 / CIDR 匹配 / IP 范围匹配 + MAC 精确匹配）→ `bypass`，记录 `wl_match_type`（`mac` / `ip` / `both`）
    - 合规基准匹配（IP + MAC 同时匹配）→ `compliant`
    - 均不匹配 → `non_compliant`
-3. **自动封禁** -- `non_compliant` 终端按 `DataSourceBinding` 路由到对应防火墙，调用深信服 API 封禁，创建 `Blacklist` 记录（`is_auto_blocked=True`），终端状态置为 `frozen`
-4. **自动解封** -- 已封禁终端若恢复合规或匹配白名单，调用防火墙解封 API，更新 `Blacklist.auto_unblocked=True`，终端状态置为 `unfrozen`
+3. **自动封禁** -- `non_compliant` 终端按 `DataSourceBinding` 路由到对应防火墙，调用深信服 API 封禁，创建 `Blacklist` 记录（`is_auto_blocked=True`），终端状态置为 `blocked`
+4. **自动解封** -- 已封禁终端若恢复合规或匹配白名单，调用防火墙解封 API，更新 `Blacklist.auto_unblocked=True`，终端状态置为 `unblocked`
+
+**Terminal 状态模型：**
+
+Terminal 模型包含两个正交维度——**Status**（封堵状态）和 **Compliance**（合规状态），二者独立变化：
+
+| 维度 | 字段 | 取值 | 说明 |
+|------|------|------|------|
+| Status | `status` | `blocked` | 已被防火墙封堵 |
+| | | `unblocked` | 未被封堵（默认） |
+| Compliance | `compliance_status` | `unknown` | 待检查 |
+| | | `compliant` | 合规（匹配合规基准） |
+| | | `non_compliant` | 不合规 |
+| | | `bypass` | 白名单放行 |
+
+Status 描述的是终端在网络层的实际封堵情况，Compliance 描述的是终端的合规判定结果。二者正交：一个 `non_compliant` 终端可能因防火墙不可用而仍为 `unblocked`；一个 `blocked` 终端可能因合规基准更新后变为 `compliant` 而触发解封。
 
 ### 3.2 数据源路由机制
 
@@ -295,7 +310,7 @@ ARP 数据采集          合规判定              准入执行
 |--------|------|-----------|------|
 | 交换机 → ARP 采集服务 | 入站 | SSH (netmiko) / HTTP API (httpx) | 定时采集 ARP 表，支持 Cisco/Huawei/H3C 格式解析 |
 | 合规基准 → 合规检查引擎 | 入站 | 数据库直连 (asyncpg) | 定时同步 IP+MAC 基准数据到 Redis 缓存 |
-| 白名单 → 合规检查引擎 | 入站 | 内存加载 (Redis 缓存) | 白名单数据加载到内存进行 IP/MAC 匹配 |
+| 白名单 → 合规检查引擎 | 入站 | 内存加载 (Redis 缓存) | 白名单数据加载到内存进行 IP/MAC 匹配；白名单增删后触发合规状态批量重算（`recalculate_all_compliance`），合规状态变更联动封堵/解封操作 |
 | 合规检查引擎 → 深信服防火墙 | 出站 | REST API (httpx) | 封禁/解封 IP 地址 |
 | 深信服防火墙 → 合规检查引擎 | 入站 | REST API 响应 | 封禁/解封结果确认 |
 
@@ -633,11 +648,11 @@ WHERE mac_address_normalized ILIKE 'AABBCCDDEEFF%'
 
 当前支持类型：
 
-| 类型 | 说明 | 采集方式 |
-|------|------|----------|
-| `arp_ssh` | 交换机 SSH 采集 | netmiko SSH 连接，自动分页和设备类型检测，解析 ARP 表 |
-| `arp_api` | 交换机 API 采集 | httpx HTTP 请求，解析 JSON 响应 |
-| `sangfor` | 深信服防火墙 | httpx HTTP 请求，REST API 封禁/解封 |
+| 类型 | 说明 | 采集方式 | 认证方式 |
+|------|------|----------|----------|
+| `arp_ssh` | 交换机 SSH 采集 | netmiko SSH 连接，自动分页和设备类型检测，解析 ARP 表 | password（SSH 用户名+密码） |
+| `arp_api` | 交换机 API 采集 | httpx HTTP 请求，解析 JSON 响应 | basic / bearer / header（自定义 Header 名+值） |
+| `sangfor` | 深信服防火墙 | httpx HTTP 请求，REST API 封禁/解封 | basic / bearer / header（自定义 Header 名+值） |
 
 合规基准数据通过独立的 `ComplianceBaseline` 模型管理，支持 CRUD、测试连接和手动同步操作。
 

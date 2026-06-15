@@ -1,6 +1,6 @@
 # TerminalAccessManager 后端实现文档
 
-> 文档版本：v3.2.0-r3 | 更新日期：2026-06-11
+> 文档版本：v3.2.0-r4 | 更新日期：2026-06-15
 
 ## 1. 概述
 
@@ -595,7 +595,7 @@ model.mac_address_normalized.ilike(f'{_escape_like(mac_clean)}%')
 仪表盘统计，按 `compliance_status` 和 `status` 分组计数：
 
 - 仅统计 `source='arp'` 的终端。
-- 返回：`total`、`whitelisted`、`blocked`、`active`、`inactive`、`pending`、`compliant`、`bypass`、`non_compliant`、`unknown`。
+- 返回：`total`、`whitelisted`、`blocked`、`unblocked`、`compliant`、`bypass`、`non_compliant`、`unknown`。
 
 #### get_system_status
 
@@ -614,7 +614,7 @@ model.mac_address_normalized.ilike(f'{_escape_like(mac_clean)}%')
 
 - `unblock_ip(ip_address, username, firewall_tag)`：
   - 调用深信服 API 解封 IP。
-  - 恢复 `Terminal.status` 为 `unfrozen`，`compliance_status` 为 `unknown`。
+  - 恢复 `Terminal.status` 为 `unblocked`，`compliance_status` 为 `unknown`。
   - 删除对应 `Blacklist` 记录。
   - 记录审计日志。
 
@@ -768,6 +768,15 @@ def _normalize_mac_raw(mac: str) -> str:
 3. 合规则使用 `decrypt_config(config)` 解密防火墙配置后调用解封 API，标记 `auto_unblocked=True`。
 4. 白名单匹配的终端 `compliance_status` 设为 `bypass`，合规基准匹配的设为 `compliant`。
 
+#### 合规重算
+
+`recalculate_all_compliance()`：
+
+- 白名单增删后批量重算所有终端合规状态。
+- 合规重算联动封堵/解封：
+  - 终端从 `non_compliant` 变为 `bypass`/`compliant` 时自动解封（`status` → `unblocked`）。
+  - 终端从 `bypass` 变为 `non_compliant` 时自动封堵（`status` → `blocked`）。
+
 #### 缓存策略
 
 | 缓存 | Redis 键 | TTL |
@@ -854,6 +863,25 @@ def _normalize_mac_raw(mac: str) -> str:
 | 更新数据源 | commit 后 expunge + 解密 | 先 commit 保存加密值，再 expunge + 解密用于响应返回 |
 | 删除数据源 | 无需 expunge | 直接删除，无需返回解密数据 |
 | 更新同步状态 | 直接查询（不 expunge） | `update_sync_status` 需要修改字段并 commit，对象必须留在 session 中 |
+
+#### API 数据源响应解析
+
+API 数据源响应解析支持以下包装键，自动从 JSON 响应中提取设备列表：
+
+`data` / `entries` / `results` / `arp` / `devices` / `records`
+
+#### IP 字段兼容
+
+API 响应中 IP 字段名兼容以下写法：
+
+`ip_address` / `ipv4_address` / `ip` / `ipAddress`
+
+#### 认证类型
+
+| 认证类型 | 说明 |
+|----------|------|
+| `bearer` | 通过 Bearer Token 传递认证信息 |
+| `header` | 通过自定义 Header 名（默认 `X-Auth-Token`）+ Token 值传递认证信息 |
 
 ---
 
@@ -954,7 +982,7 @@ def _normalize_mac_raw(mac: str) -> str:
 
 | # | 函数名 | 配置项 | 默认间隔 | Fallback | 业务逻辑 |
 |---|--------|--------|----------|----------|----------|
-| 1 | `cleanup_expired_blacklist` | `scheduler_firewall_query_interval` | 300s | 3600（代码 fallback，DEFAULT_CONFIGS 种子值为 300） | 查找 `expires_at < now` 的黑名单条目，恢复 MAC 状态为 `unfrozen`，调用防火墙解封 API，删除黑名单记录，记录审计日志 |
+| 1 | `cleanup_expired_blacklist` | `scheduler_firewall_query_interval` | 300s | 3600（代码 fallback，DEFAULT_CONFIGS 种子值为 300） | 查找 `expires_at < now` 的黑名单条目，恢复 MAC 状态为 `unblocked`，调用防火墙解封 API，删除黑名单记录，记录审计日志 |
 | 2 | `scheduled_arp_collection` | `scheduler_arp_collection_interval` | 300s | 300s | 查找所有启用的 ARP 数据源（`arp_ssh` + `arp_api`），依次执行 SSH/API 采集 |
 | 3 | `scheduled_ipguard_sync` | `scheduler_ipguard_sync_interval` | 600s | 600s | 查找所有启用的合规基准数据源，逐个调用 `sync_compliance_baseline_data` 同步基线数据到 Redis |
 | 4 | `scheduled_compliance_check` | `scheduler_compliance_check_interval` | 300s | 300s | 查找所有启用的 ARP 数据源，对每个来源下 `compliance_status="unknown"` 的条目执行批量合规检查，更新合规状态 |

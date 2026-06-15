@@ -6,12 +6,12 @@ from app.core.database import Base
 
 
 class TerminalStatus(str, enum.Enum):
-    """Terminal status enum - unified with frontend STATUS_CONFIG"""
-    ACTIVE = "active"        # Device is online and operating normally
-    INACTIVE = "inactive"    # Device is offline or disconnected
-    FROZEN = "frozen"        # Device has been blocked due to security concerns
-    PENDING = "pending"      # Device is awaiting review or verification
-    UNFROZEN = "unfrozen"    # Previously blocked, now restored
+    """Terminal status enum - represents firewall block state only.
+
+    Compliance state is tracked separately via compliance_status field.
+    """
+    BLOCKED = "blocked"      # Device has been blocked on firewall
+    UNBLOCKED = "unblocked"  # Device is not blocked (default)
 
 
 class Terminal(Base):
@@ -24,8 +24,8 @@ class Terminal(Base):
     mac_address = Column(String(17), nullable=False, index=True)
     mac_address_normalized = Column(String(12), nullable=True, index=True)
     status = Column(
-        String(20), default=TerminalStatus.UNFROZEN.value, index=True
-    )  # active, inactive, frozen, pending, unfrozen
+        String(20), default=TerminalStatus.UNBLOCKED.value, index=True
+    )  # blocked, unblocked
     comments = Column(Text, nullable=True)
     timestamp = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True)
     source = Column(String(50), default="arp")  # arp, ipguard, whitelist, manual

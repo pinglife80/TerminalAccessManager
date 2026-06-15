@@ -1,6 +1,6 @@
 # 数据源全生命周期技术文档
 
-> 文档版本：v1.1 | 更新日期：2026-06-11
+> 文档版本：v1.2 | 更新日期：2026-06-15
 
 本文档详细描述 TerminalAccessManager 系统中数据源从配置、采集、解析、合规判定到自动处置的完整生命周期，涵盖架构设计、数据格式、输入输出规范和定时调度机制。
 
@@ -143,7 +143,8 @@
 | `url` | text | 是 | — | API 地址 |
 | `method` | select | 是 | `GET` | HTTP 方法：GET / POST |
 | `headers` | text(JSON) | 否 | — | 自定义请求头（JSON 格式） |
-| `auth_type` | select | 是 | `none` | 认证方式：none / bearer / basic |
+| `auth_type` | select | 是 | `none` | 认证方式：none / bearer / basic / header |
+| `header_name` | text | 否 | `X-Auth-Token` | 自定义 Header 名（auth_type=header 时生效） |
 | `token` | password | 否 | — | Token 或密码（加密存储） |
 
 **创建请求示例**：
@@ -435,6 +436,7 @@ ArpCollectorService.collect_from_api(source)
     │
     ├── 2. 构建认证头
     │      auth_type=bearer → headers["Authorization"] = "Bearer {token}"
+    │      auth_type=header → headers[config.header_name 或 "X-Auth-Token"] = token
     │
     ├── 3. 发起 HTTP 请求 (httpx.AsyncClient, timeout=30s)
     │
@@ -465,6 +467,9 @@ ArpCollectorService.collect_from_api(source)
 {"data": [...]}       // data 键
 {"entries": [...]}    // entries 键
 {"results": [...]}    // results 键
+{"arp": [...]}        // arp 键
+{"devices": [...]}    // devices 键
+{"records": [...]}    // records 键
 ```
 
 #### 字段名兼容
@@ -472,8 +477,9 @@ ArpCollectorService.collect_from_api(source)
 | 优先级 | IP 字段名 | MAC 字段名 |
 |--------|----------|-----------|
 | 1 | `ip_address` | `mac_address` |
-| 2 | `ip` | `mac` |
-| 3 | `ipAddress` | `macAddress` |
+| 2 | `ipv4_address` | — |
+| 3 | `ip` | `mac` |
+| 4 | `ipAddress` | `macAddress` |
 
 ### 5.6 条目处理流程 (process_arp_entries)
 
@@ -607,6 +613,38 @@ ComplianceService.sync_ipguard_data(source_tag)
   ├── 同时指定 ip_pattern + mac_address: IP 和 MAC 都必须匹配 → "both"
   ├── 仅指定 ip_pattern: IP 匹配即可 → "ip"
   └── 仅指定 mac_address: MAC 匹配即可 → "mac"
+```
+
+#### 白名单变更联动流程
+
+白名单的添加或删除会触发合规状态重算，并联动封堵/解封操作：
+
+```
+白名单添加/删除
+    │
+    ▼
+失效白名单缓存
+    │  删除 Redis key "whitelist:all"，确保下次读取最新数据
+    │
+    ▼
+recalculate_all_compliance()
+    │  重新加载白名单 + IP-Guard 基线
+    │  对所有终端重新执行合规判定
+    │  更新 compliance_status（bypass / compliant / non_compliant）
+    │
+    ▼
+合规状态更新
+    │  ├── 新增 bypass：原 non_compliant → bypass（免检）
+    │  ├── 新增 compliant：原 non_compliant → compliant（合规）
+    │  ├── 移除 bypass：原 bypass → compliant 或 non_compliant（重新判定）
+    │  └── 移除 compliant（仅白名单）：原 compliant → non_compliant（不合规）
+    │
+    ▼
+联动封堵/解封
+    │  ├── 新 non_compliant 终端 → 触发自动封堵（auto_block_non_compliant）
+    │  │   调用 Sangfor API 封堵 IP → Terminal.status = "frozen"
+    │  └── 恢复合规终端 → 触发自动解封（auto_unblock_compliant）
+    │       调用 Sangfor API 解封 IP → Terminal.status = "unfrozen"
 ```
 
 ### 7.3 IP-Guard 基线匹配规则

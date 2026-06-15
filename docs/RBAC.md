@@ -1,7 +1,7 @@
 # RBAC 角色管理与用户访问控制
 
-**版本**: v3.2.0-r3
-**更新日期**: 2026-06-11  
+**版本**: v3.2.0-r4
+**更新日期**: 2026-06-15  
 **变更说明**: 合规状态标签修正（non_compliant: "已封禁"→"不合规"，unknown: "待定"→"待判定"）
 
 ---
@@ -135,6 +135,8 @@ graph TB
 |--------|------|------|
 | `terminal:read` | 查看终端 | 查看终端列表和详情 |
 | `terminal:write` | 操作终端 | 封禁/解封终端 |
+
+> **终端状态枚举（v3.2.0-r4）：** 终端 `status` 字段仅包含 `blocked`（已封堵）和 `unblocked`（未封堵）两个值。`terminal:write` 权限控制封禁（blocked）和解封（unblocked）操作，合规状态由 `compliance_status` 字段独立追踪。
 
 #### 白名单管理 (whitelist)
 

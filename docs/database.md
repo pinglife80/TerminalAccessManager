@@ -1,6 +1,6 @@
 # TerminalAccessManager 数据库设计文档
 
-> 文档版本：v3.2.0-r3 | 更新日期：2026-06-11
+> 文档版本：v3.2.0-r4 | 更新日期：2026-06-15
 
 ## 1. 概述
 
@@ -188,7 +188,7 @@ docker-compose.yml 中 PostgreSQL 的 `command` 参数列表如下：
 | id | INTEGER | PK, INDEX | 自增 | 主键 |
 | ip_address | VARCHAR(45) | NOT NULL, INDEX | — | IPv4/IPv6 地址 |
 | mac_address | VARCHAR(17) | NOT NULL, INDEX | — | MAC 地址（格式 XX-XX-XX-XX-XX-XX） |
-| status | VARCHAR(20) | INDEX | 'unfrozen' | 终端状态 |
+| status | VARCHAR(20) | INDEX | 'unblocked' | 终端状态（blocked/unblocked） |
 | comments | TEXT | | NULL | 备注 |
 | timestamp | TIMESTAMP WITH TZ | INDEX | utcnow | 记录时间 |
 | source | VARCHAR(50) | | 'arp' | 数据来源 |
@@ -215,11 +215,8 @@ docker-compose.yml 中 PostgreSQL 的 `command` 参数列表如下：
 
 | 值 | 说明 |
 |---|---|
-| active | 在线活跃 |
-| inactive | 离线失活 |
-| frozen | 已冻结（被防火墙阻断） |
-| pending | 待处理 |
-| unfrozen | 已解冻（默认初始状态） |
+| blocked | 已封堵（被防火墙阻断） |
+| unblocked | 未封堵（默认初始状态） |
 
 **数据字典 — source：**
 
@@ -564,11 +561,15 @@ docker-compose.yml 中 PostgreSQL 的 `command` 参数列表如下：
 
 | 枚举值 | 适用表 | 说明 |
 |---|---|---|
-| active | terminals.status | 在线活跃 |
-| inactive | terminals.status | 离线失活 |
-| frozen | terminals.status | 已冻结（被防火墙阻断） |
-| pending | terminals.status | 待处理 |
-| unfrozen | terminals.status | 已解冻（默认初始状态） |
+| blocked | terminals.status | 终端已被防火墙封堵 |
+| unblocked | terminals.status | 终端未被封堵（默认值） |
+
+> **说明**：`status` 字段现在只表示防火墙封堵状态，合规状态由 `compliance_status` 字段独立追踪。
+>
+> **v3.2.0-r4 数据迁移说明：** 终端状态从 6 值枚举精简为 2 值枚举，迁移规则如下：
+> - `frozen` → `blocked`
+> - `unfrozen` → `unblocked`
+> - 其他遗留值（`active`、`inactive`、`pending`）→ `unblocked`
 
 ### 4.2 ComplianceStatus（合规状态）
 

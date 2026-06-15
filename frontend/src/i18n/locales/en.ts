@@ -144,12 +144,8 @@ const en = {
     removedFromBlacklist: 'Removed from blacklist',
     failedToRemoveFromBlacklist: 'Failed to remove from blacklist',
     status: {
-      active: 'Active',
-      inactive: 'Inactive',
-      frozen: 'Blocked',
-      pending: 'Pending',
-      unfrozen: 'Unblocked',
-      bypass: 'Bypass',
+      blocked: 'Blocked',
+      unblocked: 'Unblocked',
     },
     complianceStatusValues: {
       compliant: 'Compliant',

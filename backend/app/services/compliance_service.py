@@ -275,7 +275,7 @@ class ComplianceService:
             .where(
                 (Terminal.source_tag == arp_source_tag) &
                 (Terminal.compliance_status == "non_compliant") &
-                (Terminal.status != "frozen")
+                (Terminal.status != "blocked")
             )
         )
         result = await self.db.execute(stmt)
@@ -344,7 +344,7 @@ class ComplianceService:
 
             if all_success:
                 # Update MAC status
-                entry.status = "frozen"
+                entry.status = "blocked"
 
                 # Create a separate Blacklist record for each firewall
                 import re
@@ -474,7 +474,7 @@ class ComplianceService:
                     mac_result = await self.db.execute(mac_stmt)
                     mac_records = mac_result.scalars().all()
                     for record in mac_records:
-                        record.status = "unfrozen"
+                        record.status = "unblocked"
                         record.compliance_status = "bypass" if wl_match else "compliant"
                         record.wl_match_type = wl_match if wl_match else None
 
@@ -766,3 +766,134 @@ class ComplianceService:
             await redis.delete(WHITELIST_CACHE_KEY)
         except Exception:
             pass
+
+    async def recalculate_all_compliance(self) -> dict:
+        """Recalculate compliance status for all existing terminals.
+
+        Called after whitelist changes (add/delete) to update terminal
+        compliance_status in real-time instead of waiting for next sync.
+        Also handles auto-unblock for terminals that become compliant
+        while currently frozen (blocked on firewall).
+
+        Returns:
+            dict with counts: total, bypass, compliant, non_compliant,
+            unchanged, unblocked (auto-unblocked from frozen state)
+        """
+        # Load fresh whitelist and IPGuard data (cache already invalidated by caller)
+        whitelist_data = await self._load_whitelist_cache()
+        ipguard_data = await self._load_all_ipguard_cache()
+
+        # Query all terminals
+        stmt = select(Terminal)
+        result = await self.db.execute(stmt)
+        terminals = result.scalars().all()
+
+        if not terminals:
+            return {"total": 0, "bypass": 0, "compliant": 0, "non_compliant": 0, "unchanged": 0, "unblocked": 0}
+
+        bypass_count = 0
+        compliant_count = 0
+        non_compliant_count = 0
+        unchanged_count = 0
+        unblocked_count = 0
+
+        for terminal in terminals:
+            ip_addr = terminal.ip_address or ""
+            mac_addr = terminal.mac_address or ""
+
+            # Determine new compliance status
+            wl_match = self._match_whitelist_in_memory(whitelist_data, ip_addr, mac_addr)
+            ig_match = self._match_ipguard_in_memory(ipguard_data, ip_addr, mac_addr)
+
+            if wl_match:
+                new_compliance = "bypass"
+                new_wl_match_type = wl_match
+            elif ig_match:
+                new_compliance = "compliant"
+                new_wl_match_type = None
+            else:
+                new_compliance = "non_compliant"
+                new_wl_match_type = None
+
+            compliance_changed = (
+                terminal.compliance_status != new_compliance
+                or terminal.wl_match_type != new_wl_match_type
+            )
+
+            if compliance_changed:
+                terminal.compliance_status = new_compliance
+                terminal.wl_match_type = new_wl_match_type
+
+                if new_compliance == "bypass":
+                    bypass_count += 1
+                elif new_compliance == "compliant":
+                    compliant_count += 1
+                else:
+                    non_compliant_count += 1
+
+                # Auto-unblock: if terminal was frozen and now becomes compliant/bypass
+                if terminal.status == "blocked" and new_compliance in ("bypass", "compliant"):
+                    # Try to unblock on firewall
+                    fw_tag = getattr(terminal, "firewall_tag", None)
+                    if fw_tag:
+                        try:
+                            success = await self._unblock_on_firewall(ip_addr, fw_tag)
+                            if success:
+                                terminal.status = "unblocked"
+                                unblocked_count += 1
+                                logger.info(f"Auto-unblocked {ip_addr} (now {new_compliance}) from firewall '{fw_tag}'")
+                            else:
+                                logger.warning(f"Failed to auto-unblock {ip_addr} on firewall '{fw_tag}'")
+                        except Exception as e:
+                            logger.warning(f"Error auto-unblocking {ip_addr}: {e}")
+                    else:
+                        # No firewall tag, just update status
+                        terminal.status = "unblocked"
+                        unblocked_count += 1
+
+                # Auto-block: if terminal becomes non_compliant and has a bound firewall
+                if new_compliance == "non_compliant" and terminal.status != "blocked":
+                    # Check if there's a firewall data source bound
+                    fw_tag = await self._get_bound_firewall_tag(ip_addr)
+                    if fw_tag:
+                        try:
+                            success = await self._block_on_firewall(ip_addr, fw_tag)
+                            if success:
+                                terminal.status = "blocked"
+                                logger.info(f"Auto-blocked {ip_addr} (now non_compliant) on firewall '{fw_tag}'")
+                        except Exception as e:
+                            logger.warning(f"Error auto-blocking {ip_addr}: {e}")
+            else:
+                unchanged_count += 1
+
+        await self.db.commit()
+
+        logger.info(
+            f"Compliance recalculation complete: {len(terminals)} total, "
+            f"{bypass_count} → bypass, {compliant_count} → compliant, "
+            f"{non_compliant_count} → non_compliant, {unchanged_count} unchanged, "
+            f"{unblocked_count} auto-unblocked"
+        )
+
+        return {
+            "total": len(terminals),
+            "bypass": bypass_count,
+            "compliant": compliant_count,
+            "non_compliant": non_compliant_count,
+            "unchanged": unchanged_count,
+            "unblocked": unblocked_count,
+        }
+
+    async def _get_bound_firewall_tag(self, ip_address: str) -> Optional[str]:
+        """Find the firewall data source tag that covers the given IP's subnet."""
+        try:
+            from app.models.data_source import DataSource
+            stmt = select(DataSource).where(DataSource.source_type == "sangfor_firewall")
+            result = await self.db.execute(stmt)
+            firewalls = result.scalars().all()
+            if not firewalls:
+                return None
+            # Return the first available firewall tag
+            return firewalls[0].tag if firewalls else None
+        except Exception:
+            return None

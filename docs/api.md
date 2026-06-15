@@ -1,6 +1,6 @@
 # TerminalAccessManager API 文档
 
-> 文档版本：v3.2.0-r3 | 更新日期：2026-06-11
+> 文档版本：v3.2.0-r4 | 更新日期：2026-06-15
 
 > 基于 MAC 地址和 IP 地址的网络终端准入管理平台
 
@@ -731,7 +731,7 @@ curl -X POST https://<HOST_IP>:8443/api/v1/auth/users/2/unlock \
     "id": 1,
     "ip_address": "192.168.1.100",
     "mac_address": "AA:BB:CC:DD:EE:FF",
-    "status": "unfrozen",
+    "status": "unblocked",
     "timestamp": "2025-06-01T10:00:00Z",
     "source": "arp",
     "source_tag": "switch-1f",
@@ -764,7 +764,7 @@ curl "https://<HOST_IP>:8443/api/v1/terminals/?skip=0&limit=20" \
 | ip | Query | string | 否 | 按 IP 地址模糊搜索（ILIKE） |
 | mac | Query | string | 否 | 按 MAC 地址模糊搜索（ILIKE） |
 | compliance_status | Query | string | 否 | 按合规状态过滤（compliant/bypass/non_compliant/unknown） |
-| status | Query | string | 否 | 按状态过滤（active/inactive/frozen/pending/unfrozen） |
+| status | Query | string | 否 | 按状态过滤（blocked/unblocked） |
 | start_date | Query | string | 否 | 起始日期（YYYY-MM-DD） |
 | end_date | Query | string | 否 | 截止日期（YYYY-MM-DD） |
 | skip | Query | int | 0 | 跳过记录数 |
@@ -781,7 +781,7 @@ curl "https://<HOST_IP>:8443/api/v1/terminals/?skip=0&limit=20" \
       "id": 1,
       "ip_address": "192.168.1.100",
       "mac_address": "AA:BB:CC:DD:EE:FF",
-      "status": "unfrozen",
+      "status": "unblocked",
       "timestamp": "2025-06-01T10:00:00Z",
       "source": "arp",
       "source_tag": "switch-1f",
@@ -1268,8 +1268,20 @@ curl "https://<HOST_IP>:8443/api/v1/data-sources/?type=arp_ssh&enabled=true" \
 | name | string | 是 | 最长100字符 | 数据源名称（唯一） |
 | type | string | 是 | - | 类型：arp_ssh / arp_api / sangfor |
 | tag | string | 是 | 最长50字符 | 唯一标签标识符 |
-| config | object | 否 | JSON 对象 | 连接配置 |
+| config | object | 否 | JSON 对象 | 连接配置（见下方 config 参数说明） |
 | enabled | bool | 否 | 默认 true | 是否启用 |
+
+**config 参数说明：**
+
+| 参数 | 类型 | 适用类型 | 说明 |
+|------|------|---------|------|
+| host | string | arp_ssh / arp_api | 主机地址 |
+| port | int | arp_ssh / arp_api | 端口号（SSH 默认 22，API 默认 443） |
+| username | string | arp_ssh / arp_api | 用户名 |
+| password | string | arp_ssh / arp_api | 密码（Fernet 加密存储） |
+| base_url | string | sangfor | 防火墙 API 地址 |
+| auth_type | string | arp_api | 认证方式：`basic`（默认）/ `header`（Custom Header 认证） |
+| header_name | string | arp_api | 自定义认证 Header 名称（`auth_type=header` 时必填，如 `X-API-Key`） |
 
 **成功响应** `201`
 
@@ -2172,9 +2184,7 @@ curl "https://<HOST_IP>:8443/api/v1/logs/export?start_date=2025-06-01&end_date=2
   "total": 500,
   "whitelisted": 120,
   "blocked": 35,
-  "active": 300,
-  "inactive": 80,
-  "pending": 85,
+  "unblocked": 465,
   "compliant": 280,
   "bypass": 100,
   "non_compliant": 45,

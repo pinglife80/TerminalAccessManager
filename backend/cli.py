@@ -905,7 +905,7 @@ async def _create_mock_blacklist(db, mac_records, users):
 
             # Update corresponding terminal to non_compliant + frozen
             mac_record.compliance_status = "non_compliant"
-            mac_record.status = "frozen"
+            mac_record.status = "blocked"
 
             label = "auto" if is_auto else "manual"
             print(f"  ✓ Blacklisted ({label}): {mac_record.mac_address} → fw:{firewall_tag}")
