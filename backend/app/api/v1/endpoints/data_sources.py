@@ -222,11 +222,11 @@ async def sync_data_source(
         result = await arp_service.collect_from_api(source)
         return result
     elif source.type == "sangfor":
-        # For Sangfor, just test the connection
-        test_result = await service.test_connection(source_id)
+        # Sangfor is a push-type firewall, not a data collection source.
+        # "Sync" has no meaning for Sangfor; use "Test Connection" instead.
         return SyncResult(
-            success=test_result.success,
-            message=test_result.message,
+            success=True,
+            message="Sync is not applicable for Sangfor firewalls. Use 'Test Connection' to verify connectivity.",
         )
     else:
         raise HTTPException(

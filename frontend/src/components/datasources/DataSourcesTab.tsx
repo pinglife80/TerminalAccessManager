@@ -394,14 +394,16 @@ const DataSourcesTab = forwardRef<{ openAddModal: () => void }, DataSourcesTabPr
                           title={t('dataSources.editDataSource')}
                           onClick={() => openEditDsModal(ds)}
                         />
-                        <IconButton
-                          icon={RefreshCw}
-                          variant="secondary"
-                          size="md"
-                          title={t('dataSources.syncDataSource')}
-                          onClick={() => handleSyncDs(ds)}
-                          loading={syncingId === ds.id}
-                        />
+                        {ds.type !== 'sangfor' && (
+                          <IconButton
+                            icon={RefreshCw}
+                            variant="secondary"
+                            size="md"
+                            title={t('dataSources.syncDataSource')}
+                            onClick={() => handleSyncDs(ds)}
+                            loading={syncingId === ds.id}
+                          />
+                        )}
                         <IconButton
                           icon={Trash2}
                           variant="danger"
