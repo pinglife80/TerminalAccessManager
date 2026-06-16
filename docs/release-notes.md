@@ -1,6 +1,6 @@
 # 版本跟踪记录
 
-> 文档版本：v3.2.0-r12 | 更新日期：2026-06-17
+> 文档版本：v3.3.0 | 更新日期：2026-06-17
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
@@ -8,30 +8,18 @@
 
 ---
 
-## [Unreleased] - RBAC 权限控制
+## [v3.3.0] - 2026-06-17
 
-### 提交记录
+### RBAC 权限控制 + 审计日志优化 + 生产就绪改进
 
-| 提交 | 说明 |
-|------|------|
-| af1960c | feat(rbac): add RBAC data models, migration and role management API |
-| 48735ac | feat(rbac): implement permission control across all endpoints and frontend |
-| 82ec0e0 | docs(rbac): update role and access control documentation to v2.0 |
-| 707eefb | fix(search): fix search returning empty results on whitelist/blacklist/audit-logs |
-| 3c5b758 | fix(perf): resolve API blocking and improve rate limit config |
-| 7b4a0dc | fix(rbac): enforce superadmin protection and single-role-per-user model |
-| d7a5838 | fix(frontend): improve UX and fix CSP/307 redirect issue |
-| 06dbe11 | fix(i18n): complete i18n coverage for zh/en/ja locales |
-| 253acb6 | test: add RBAC tests and fix security test assertions |
-| 9100a8d | fix(search): increase debounce delay from 300ms to 500ms across all pages |
-| 2f2add5 | fix: prevent superadmin role modification and fix Users search flickering |
-| 0b36d78 | docs: update RBAC documentation to v3.0 with current implementation |
-
----
-
-## [v3.2.0-r12] - 2026-06-17
-
-### 审计日志优化与生产就绪改进
+#### RBAC 权限控制
+- 4 张核心表（roles/permissions/user_roles/role_permissions），5 个预设角色（superadmin/admin/operator/auditor/viewer），29 个权限码覆盖 10 个功能模块
+- `require_permission` 权限检查工厂函数：FastAPI 依赖注入 + Redis 缓存（TTL 300s）+ superuser 短路
+- 角色 CRUD API：7 个端点（列表/详情/创建/编辑/删除/权限列表/角色用户列表）
+- 前端 `usePermission` Hook + `ProtectedRoute` 路由守卫 + 侧边栏导航过滤
+- 角色管理页面：角色列表、创建/编辑弹窗、权限按模块分组、删除确认
+- 超管隔离机制：非超管不可见/不可管理超管用户
+- 初始管理员 4 层保护：不可删除/降级/停用/角色变更
 
 #### 审计日志优化
 - Action 命名统一为 verb_resource 格式（block_terminal, auto_block_terminal, change_role 等）
@@ -60,46 +48,52 @@
 - firewall_tag 与 DataSourceBinding 绑定关系一致
 - 自动封堵 blocked_by="system"
 
+#### 终端封堵与合规改进
+- 终端封堵绑定验证：封堵终端前强制检查绑定关系，无绑定时显示防火墙选择器和无绑定错误提示
+- 数据源标签页绑定状态列：数据源列表新增绑定状态列，已禁用 ARP 数据源显示"合规状态已冻结"
+- 绑定关系下拉框包含已禁用数据源，以 `[已禁用]` 后缀标识
+- ARP 数据源禁用触发合规重置：禁用 ARP 数据源时自动重置关联终端 compliance_status 为 unknown
+- 两阶段删除机制：数据源、绑定关系、合规基准删除前提供影响预览 API
+- 安全删除：自动解封终端、清理黑名单记录、清理 Redis 缓存、触发合规重算
+- Sangfor 数据源移除"同步"按钮：Sangfor 为推送型防火墙，无数据同步语义
+
+#### 合规生命周期修复
+- 黑名单 mac_address_normalized 字段补全
+- 多防火墙解封原子性
+- 过期清理安全性增强
+- 手动解封触发合规重算
+- 统一解封行为对齐
+
+#### 用户手册
+- 新增用户使用手册（docs/user-guide.md）：12 章完整操作指引
+- 新增快速上手指南（docs/quick-start-guide.md）：8 步核心操作流程
+- 新增发布方案文档（docs/release-plan.md）
+
 ### 提交记录
 
 | 提交 | 说明 |
 |------|------|
+| af1960c | feat(rbac): add RBAC data models, migration and role management API |
+| 48735ac | feat(rbac): implement permission control across all endpoints and frontend |
+| 82ec0e0 | docs(rbac): update role and access control documentation to v2.0 |
+| 707eefb | fix(search): fix search returning empty results on whitelist/blacklist/audit-logs |
+| 3c5b758 | fix(perf): resolve API blocking and improve rate limit config |
+| 7b4a0dc | fix(rbac): enforce superadmin protection and single-role-per-user model |
+| d7a5838 | fix(frontend): improve UX and fix CSP/307 redirect issue |
+| 06dbe11 | fix(i18n): complete i18n coverage for zh/en/ja locales |
+| 253acb6 | test: add RBAC tests and fix security test assertions |
+| 9100a8d | fix(search): increase debounce delay from 300ms to 500ms across all pages |
+| 2f2add5 | fix: prevent superadmin role modification and fix Users search flickering |
+| 0b36d78 | docs: update RBAC documentation to v3.0 with current implementation |
 | da420a4 | fix(audit): unify action naming, add resource_name for meaningful display |
 | c65466b | chore: remove sangfor_api docs and todos.md from git tracking |
 | 3ed025c | feat(production-readiness): P0-P3 improvements for production deployment |
 | 7722146 | refactor(deploy): unify deployment modes to dev/prod, fix mock data business alignment |
+| 42b3f06 | docs: comprehensive documentation update to v3.2.0-r12 |
+| 9f00100 | docs: rewrite README.md as concise project onboarding guide |
 
 ### 文件变更
-- `backend/app/models/log.py` — 新增 resource_name 列
-- `backend/app/schemas/terminal.py` — AuditLogBase 新增 resource_name, AuditLogQuery 新增 cursor, 新增 CursorPaginatedResponse
-- `backend/alembic/versions/008_audit_resource_name.py` — 新增 resource_name 列迁移
-- `backend/alembic/versions/009_audit_keyset_index.py` — keyset 分页复合索引迁移
-- `backend/app/api/v1/endpoints/auth.py` — action 命名统一 + resource_name 设置
-- `backend/app/api/v1/endpoints/data_sources.py` — resource_name 设置
-- `backend/app/api/v1/endpoints/logs.py` — keyset 分页 + CSV 导出新增列
-- `backend/app/api/v1/endpoints/roles.py` — action 命名统一 + resource_name 设置
-- `backend/app/api/v1/endpoints/settings.py` — resource_name 设置
-- `backend/app/api/v1/endpoints/compliance_baselines.py` — resource_name 设置
-- `backend/app/services/sangfor_service.py` — 指数退避重试
-- `backend/app/services/terminal_service.py` — N+1 优化 + action 命名统一
-- `backend/app/services/compliance_service.py` — N+1 优化 + action 命名统一
-- `backend/tests/test_compliance_service.py` — 22 个单元测试
-- `backend/cli.py` — Mock 数据业务对齐
-- `docker-compose.yml` — 健康检查 + 资源限制 + 日志轮转
-- `docker-compose.prod.yml` — 生产安全加固
-- `docker-compose.dev.yml` — 开发环境 override
-- `nginx/etc/conf.d/tam.conf` — 限速调整
-- `nginx/etc/conf.d/tam.dev.conf` — 开发环境 Nginx 配置
-- `manage.sh` — 部署模式统一 + ENVIRONMENT 自动设置 + mock 生产限制
-- `frontend/src/pages/AuditLogs.tsx` — action 分类 + resource_name 展示 + cursor 分页
-- `frontend/src/hooks/useTerminalData.ts` — cursor 分页适配
-- `frontend/src/i18n/locales/zh.ts` — 新增 action 翻译
-- `frontend/src/i18n/locales/en.ts` — 新增 action 翻译
-- `frontend/src/i18n/locales/ja.ts` — 新增 action 翻译
-- `.env.example` — 新增 ENVIRONMENT 变量
-- `.gitignore` — 新增 docs/sangfor_api 和 docs/todos.md
-- `docs/disaster-recovery.md` — 灾难恢复计划
-- `docs/operations-runbook.md` — 运维操作手册
+- 93 个文件，+16288/-2027 行（相比 v3.2.0）
 
 ---
 

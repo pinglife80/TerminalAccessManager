@@ -9,7 +9,7 @@ class Settings(BaseSettings):
 
     # Application
     PROJECT_NAME: str = "Terminal Access Manager"
-    VERSION: str = "3.2.0"
+    VERSION: str = "3.3.0"
     API_V1_STR: str = "/api/v1"
     DEBUG: bool = False
     ENVIRONMENT: str = "development"

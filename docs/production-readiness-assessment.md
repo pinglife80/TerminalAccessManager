@@ -1,7 +1,7 @@
 # TerminalAccessManager (TAM) 生产环境交付可行性评估报告
 
 **评估日期：** 2026-06-10
-**评估版本：** v3.2.0-r12
+**评估版本：** v3.3.0
 **评估方法：** 10 维度深度代码审查 + 架构分析 + 安全扫描 + 业务链验证
 **修复状态：** 阶段一~三已完成 + 6项高风险修复已完成，3 Critical + 7 High + 8 Medium = 18 项安全问题已修复，6 项高风险问题已修复；v3.2.0 新增：Request-ID 链路追踪、时区全局控制、日志格式函数化、Docker 安全加固注释化
 **综合评分：** **9.0/10** — 达到生产交付就绪状态
@@ -508,22 +508,22 @@ v3.2.0-r4 将终端 `status` 字段从 6 值枚举（active/inactive/frozen/pend
 
 | 文档 | 版本号 | 评估 |
 |------|:------:|:----:|
-| architecture.md | v3.2.0-r12 | ✅ |
-| backend.md | v3.2.0-r12 | ✅ |
-| api.md | v3.2.0-r12 | ✅ |
-| database.md | v3.2.0-r12 | ✅ |
-| deployment.md | v3.2.0-r12 | ✅ |
-| manage-sh-reference.md | v3.2.0-r12 | ✅ |
-| logging-guide.md | v3.2.0-r12 | ✅ |
-| git-workflow-guide.md | v3.2.0-r12 | ✅ |
+| architecture.md | v3.3.0 | ✅ |
+| backend.md | v3.3.0 | ✅ |
+| api.md | v3.3.0 | ✅ |
+| database.md | v3.3.0 | ✅ |
+| deployment.md | v3.3.0 | ✅ |
+| manage-sh-reference.md | v3.3.0 | ✅ |
+| logging-guide.md | v3.3.0 | ✅ |
+| git-workflow-guide.md | v3.3.0 | ✅ |
 | branding.md | v3.2.0 | ✅ |
-| changelog.md | v3.2.0-r12 | ✅ |
-| frontend/implementation.md | v3.2.0-r12 | ✅ |
-| production-readiness-assessment.md | v3.2.0-r12 | ✅ |
-| datasource-lifecycle.md | v3.2.0-r12 | ✅ |
-| RBAC.md | v3.2.0-r12 | ✅ |
+| changelog.md | v3.3.0 | ✅ |
+| frontend/implementation.md | v3.3.0 | ✅ |
+| production-readiness-assessment.md | v3.3.0 | ✅ |
+| datasource-lifecycle.md | v3.3.0 | ✅ |
+| RBAC.md | v3.3.0 | ✅ |
 
-**文档版本号统一为 v3.2.0-r12 ✅**
+**文档版本号统一为 v3.3.0 ✅**
 
 ### 10.2 配置文件完整性
 
@@ -662,7 +662,7 @@ v3.2.0-r4 将终端 `status` 字段从 6 值枚举（active/inactive/frozen/pend
 | 3 | 全局异常处理中间件 | 统一错误响应格式 | ✅ 已完成 |
 | 4 | 容器 cap_drop: [ALL] | 安全加固 | ✅ 已完成 |
 
-### 13.2.1 P0-P3 生产就绪改进完成记录（v3.2.0-r12）
+### 13.2.1 P0-P3 生产就绪改进完成记录（v3.3.0）
 
 | 优先级 | 编号 | 改进项 | 完成内容 | 状态 |
 |:------:|:----:|--------|---------|:----:|

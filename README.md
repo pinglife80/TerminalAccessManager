@@ -50,6 +50,9 @@ chmod +x manage.sh
 
 | 我想… | 看这个 |
 |--------|--------|
+| 快速上手操作 | [quick-start-guide.md](docs/quick-start-guide.md) |
+| 查用户操作手册 | [user-guide.md](docs/user-guide.md) |
+| 查发布方案 | [release-plan.md](docs/release-plan.md) |
 | 了解系统架构 | [architecture.md](docs/architecture.md) |
 | 部署上线 | [deployment.md](docs/deployment.md) + [operations-runbook.md](docs/operations-runbook.md) |
 | 开发后端功能 | [backend.md](docs/backend.md) |
