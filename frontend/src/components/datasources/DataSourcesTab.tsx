@@ -93,6 +93,10 @@ const DataSourcesTab = forwardRef<{ openAddModal: () => void }, DataSourcesTabPr
   // Enable without binding warning
   const [showEnableWarning, setShowEnableWarning] = useState(false);
 
+  // Disable impact warning
+  const [showDisableWarning, setShowDisableWarning] = useState(false);
+  const [disablePreviewData, setDisablePreviewData] = useState<any>(null);
+
   // Derived data
   const dsList = dataSources || [];
   const dsTotalPages = Math.max(1, Math.ceil(dsList.length / dsPageSize));
@@ -234,8 +238,9 @@ const DataSourcesTab = forwardRef<{ openAddModal: () => void }, DataSourcesTabPr
       return;
     }
 
-    // Warn when enabling an ARP source without binding
     const currentDs = dataSources?.find((d: DataSourceItem) => d.id === editDsForm.id);
+
+    // Warn when enabling an ARP source without binding
     if (editDsForm.enabled && currentDs && !currentDs.enabled &&
         (editDsForm.type === 'arp_ssh' || editDsForm.type === 'arp_api')) {
       const bindingCount = dsBindings?.filter((b: any) => b.arp_source_tag === editDsForm.tag).length || 0;
@@ -245,12 +250,31 @@ const DataSourcesTab = forwardRef<{ openAddModal: () => void }, DataSourcesTabPr
       }
     }
 
+    // Warn when disabling a data source - show impact preview before action
+    if (!editDsForm.enabled && currentDs && currentDs.enabled) {
+      try {
+        const previewResp = await apiClient.post(`${API_ENDPOINTS.DATA_SOURCES}${editDsForm.id}/disable-preview`);
+        const preview = previewResp.data;
+        if (preview.warnings?.length > 0 || preview.affected_terminals > 0) {
+          setDisablePreviewData(preview);
+          setShowDisableWarning(true);
+          return;
+        }
+      } catch {
+        // Preview failed, proceed with disable anyway
+      }
+    }
+
+    await doUpdateDataSource();
+  };
+
+  const doUpdateDataSource = async () => {
     setIsEditingDs(true);
     try {
       const fields = CONFIG_FIELDS[editDsForm.type] || [];
       const config = buildConfigPayload(fields, editDsConfig);
 
-      const response = await apiClient.put(`${API_ENDPOINTS.DATA_SOURCES}${editDsForm.id}`, {
+      await apiClient.put(`${API_ENDPOINTS.DATA_SOURCES}${editDsForm.id}`, {
         name: editDsForm.name,
         type: editDsForm.type,
         tag: editDsForm.tag,
@@ -258,10 +282,6 @@ const DataSourcesTab = forwardRef<{ openAddModal: () => void }, DataSourcesTabPr
         enabled: editDsForm.enabled,
       });
       toast.success(t('dataSources.dataSourceUpdated'));
-      // Show business risk warnings from backend
-      if (response.data?.warnings?.length > 0) {
-        response.data.warnings.forEach((w: string) => toast.warning(w, { duration: 8000 }));
-      }
       setShowEditDsModal(false);
       dsRefetch();
     } catch (error: unknown) {
@@ -286,28 +306,12 @@ const DataSourcesTab = forwardRef<{ openAddModal: () => void }, DataSourcesTabPr
 
   const confirmEnableWithoutBinding = async () => {
     setShowEnableWarning(false);
-    setIsEditingDs(true);
-    try {
-      const fields = CONFIG_FIELDS[editDsForm.type] || [];
-      const config = buildConfigPayload(fields, editDsConfig);
-      const response = await apiClient.put(`${API_ENDPOINTS.DATA_SOURCES}${editDsForm.id}`, {
-        name: editDsForm.name,
-        type: editDsForm.type,
-        tag: editDsForm.tag,
-        config,
-        enabled: editDsForm.enabled,
-      });
-      toast.success(t('dataSources.dataSourceUpdated'));
-      if (response.data?.warnings?.length > 0) {
-        response.data.warnings.forEach((w: string) => toast.warning(w, { duration: 8000 }));
-      }
-      setShowEditDsModal(false);
-      dsRefetch();
-    } catch (error: unknown) {
-      toast.error(getErrorMessage(error, t('dataSources.failedToUpdate')));
-    } finally {
-      setIsEditingDs(false);
-    }
+    await doUpdateDataSource();
+  };
+
+  const confirmDisable = async () => {
+    setShowDisableWarning(false);
+    await doUpdateDataSource();
   };
 
   // Render helpers
@@ -726,6 +730,55 @@ const DataSourcesTab = forwardRef<{ openAddModal: () => void }, DataSourcesTabPr
             label={t('dataSources.enableAnyway')}
             variant="warning"
             onClick={confirmEnableWithoutBinding}
+            className="flex-1"
+          />
+        </div>
+      </Modal>
+
+      {/* Disable impact warning */}
+      <Modal isOpen={showDisableWarning} onClose={() => setShowDisableWarning(false)} title={t('dataSources.disablePreviewTitle')} size="md">
+        <div className="flex items-center gap-4 mb-4">
+          <div className="w-10 h-10 bg-red-100 rounded-full flex items-center justify-center">
+            <AlertTriangle className="h-5 w-5 text-red-600" />
+          </div>
+          <div>
+            <p className="text-sm font-medium text-foreground">{editDsForm.name}</p>
+            <p className="text-xs text-muted-foreground font-mono">{editDsForm.tag}</p>
+          </div>
+        </div>
+        {disablePreviewData?.warnings?.length > 0 && (
+          <div className="mb-4 space-y-2">
+            {disablePreviewData.warnings.map((w: string, i: number) => (
+              <div key={i} className="p-3 bg-red-50 border border-red-200 rounded-lg">
+                <p className="text-sm text-red-800">{w}</p>
+              </div>
+            ))}
+          </div>
+        )}
+        {disablePreviewData?.actions?.length > 0 && (
+          <div className="mb-4">
+            <p className="text-xs font-medium text-muted-foreground mb-2">{t('dataSources.disableActions')}</p>
+            <ul className="space-y-1">
+              {disablePreviewData.actions.map((a: any, i: number) => (
+                <li key={i} className="text-sm text-foreground flex items-start gap-2">
+                  <span className="text-red-500 mt-0.5">•</span>
+                  <span>{a.description}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+        <div className="flex gap-3">
+          <PrimaryButton
+            label={t('common.cancel')}
+            variant="secondary"
+            onClick={() => setShowDisableWarning(false)}
+            className="flex-1"
+          />
+          <PrimaryButton
+            label={t('dataSources.disableAnyway')}
+            variant="danger"
+            onClick={confirmDisable}
             className="flex-1"
           />
         </div>

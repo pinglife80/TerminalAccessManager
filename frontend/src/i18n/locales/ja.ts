@@ -479,6 +479,9 @@ const ja = {
     enableWithoutBindingTitle: 'バインドなしでデータソースを有効化',
     enableWithoutBindingMsg: 'このARPデータソースはファイアウォールに関連付けられていません。有効化後に収集された端末は自動ブロックできません。有効化する前にバインディングを作成することをお勧めします。',
     enableAnyway: '有効化する',
+    disablePreviewTitle: 'データソース無効化の確認',
+    disableAnyway: '無効化する',
+    disableActions: '無効化後に以下の操作が実行されます：',
     lastSyncStatus: {
       success: '成功',
       failed: '失敗',

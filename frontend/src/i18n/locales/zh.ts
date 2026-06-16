@@ -479,6 +479,9 @@ const zh = {
     enableWithoutBindingTitle: '启用无绑定数据源',
     enableWithoutBindingMsg: '此 ARP 数据源当前未关联任何防火墙。启用后采集的终端将无法自动封堵。建议先创建绑定关系再启用。',
     enableAnyway: '仍然启用',
+    disablePreviewTitle: '禁用数据源影响确认',
+    disableAnyway: '仍然禁用',
+    disableActions: '以下操作将在禁用后执行：',
     lastSyncStatus: {
       success: '成功',
       failed: '失败',

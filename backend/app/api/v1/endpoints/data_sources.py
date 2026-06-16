@@ -97,6 +97,102 @@ async def get_data_source(
     return source
 
 
+@router.post("/{source_id}/disable-preview")
+async def disable_preview_data_source(
+    source_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permission("datasource:read")),
+):
+    """Preview the impact of disabling a data source (read-only, no modifications).
+
+    Returns warnings and affected resource counts to help the user make an
+    informed decision before disabling.
+    """
+    service = DataSourceService(db)
+    source = await service.get_data_source_by_id(source_id)
+    if not source:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Data source not found")
+
+    if not source.enabled:
+        return {"can_disable": True, "warnings": [], "affected_terminals": 0, "actions": []}
+
+    warnings = []
+    actions = []
+    affected_terminals = 0
+
+    if source.type == "sangfor":
+        blocked_stmt = select(Blacklist).where(Blacklist.firewall_tag == source.tag)
+        bl_result = await db.execute(blocked_stmt)
+        blocked_entries = bl_result.scalars().all()
+        if blocked_entries:
+            warnings.append(
+                f"该防火墙下有 {len(blocked_entries)} 条封堵记录，禁用后自动解封将失败，"
+                f"直到防火墙重新启用。已封堵终端将保持封堵状态但无法通过系统解封。"
+            )
+            actions.append({
+                "action": "block_retained",
+                "description": f"{len(blocked_entries)} 条封堵记录将保留但无法自动解封",
+                "firewall_tag": source.tag,
+                "count": len(blocked_entries),
+            })
+
+    elif source.type in ("arp_ssh", "arp_api"):
+        from app.models.terminal import Terminal
+        terminal_stmt = select(Terminal).where(
+            Terminal.source_tag == source.tag,
+            Terminal.compliance_status != "unknown"
+        )
+        t_result = await db.execute(terminal_stmt)
+        affected = t_result.scalars().all()
+        affected_terminals = len(affected)
+
+        if affected:
+            compliant_count = sum(1 for t in affected if t.compliance_status == "compliant")
+            bypass_count = sum(1 for t in affected if t.compliance_status == "bypass")
+            non_compliant_count = sum(1 for t in affected if t.compliance_status == "non_compliant")
+            warnings.append(
+                f"禁用后该数据源下 {affected_terminals} 个终端的合规状态将重置为「待判定」："
+                f"合规 {compliant_count} 个、白名单旁路 {bypass_count} 个、不合规 {non_compliant_count} 个。"
+                f"重新启用后需手动触发合规检查恢复状态。"
+            )
+            actions.append({
+                "action": "compliance_reset",
+                "description": f"{affected_terminals} 个终端合规状态将重置为「待判定」",
+                "count": affected_terminals,
+            })
+
+        # Check for bound firewalls with blocked terminals
+        binding_stmt = select(DataSourceBinding).where(DataSourceBinding.arp_source_tag == source.tag)
+        b_result = await db.execute(binding_stmt)
+        bindings = b_result.scalars().all()
+        if bindings:
+            for binding in bindings:
+                bl_stmt = select(Blacklist).where(
+                    Blacklist.firewall_tag == binding.firewall_tag,
+                    Blacklist.source_tag == source.tag
+                )
+                bl_result = await db.execute(bl_stmt)
+                bl_entries = bl_result.scalars().all()
+                if bl_entries:
+                    warnings.append(
+                        f"该数据源下有 {len(bl_entries)} 个终端在防火墙 [{binding.firewall_tag}] 上被封堵，"
+                        f"禁用后过期自动解封仍可执行，但合规状态变更不会触发自动封堵/解封。"
+                    )
+                    actions.append({
+                        "action": "block_retained",
+                        "description": f"{len(bl_entries)} 个终端在防火墙 [{binding.firewall_tag}] 上保持封堵",
+                        "firewall_tag": binding.firewall_tag,
+                        "count": len(bl_entries),
+                    })
+
+    return {
+        "can_disable": True,
+        "warnings": warnings,
+        "affected_terminals": affected_terminals,
+        "actions": actions,
+    }
+
+
 @router.put("/{source_id}", response_model=DataSourceResponse)
 async def update_data_source(
     source_id: int,
@@ -190,6 +286,17 @@ async def update_data_source(
             audit_details["warnings"] = warnings
         await ts.log_action(current_user.username, "update_datasource", "datasource", str(source.id),
                             audit_details, ip_address=get_client_ip(request))
+
+        # When enabling an ARP source, trigger compliance recalculation for its terminals
+        if data.enabled is True and source.type in ("arp_ssh", "arp_api"):
+            try:
+                from app.services.compliance_service import ComplianceService
+                compliance_svc = ComplianceService(db)
+                await compliance_svc.invalidate_whitelist_cache()
+                recalc_result = await compliance_svc.recalculate_all_compliance()
+                logger.info(f"ARP source '{source.tag}' enabled, compliance recalculation: {recalc_result}")
+            except Exception as e:
+                logger.warning(f"Failed to recalculate compliance after enabling ARP source '{source.tag}': {e}")
 
         # Attach warnings to response
         source_dict = DataSourceResponse.model_validate(source)

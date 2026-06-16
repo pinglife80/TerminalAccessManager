@@ -479,6 +479,9 @@ const en = {
     enableWithoutBindingTitle: 'Enable Data Source Without Binding',
     enableWithoutBindingMsg: 'This ARP data source is not associated with any firewall. Terminals collected after enabling will not be able to auto-block. It is recommended to create a binding before enabling.',
     enableAnyway: 'Enable Anyway',
+    disablePreviewTitle: 'Confirm Disable Data Source',
+    disableAnyway: 'Disable Anyway',
+    disableActions: 'The following actions will be performed after disabling:',
     lastSyncStatus: {
       success: 'Success',
       failed: 'Failed',

@@ -976,6 +976,19 @@ class ComplianceService:
                                 terminal.comments = f"{terminal.comments}; {unblock_comment}"
                             else:
                                 terminal.comments = unblock_comment
+                            # Mark matching Blacklist records as auto-unblocked
+                            mac_norm = mac_addr.replace('-', '').replace(':', '').replace('.', '').upper() if mac_addr else None
+                            for fw_tag in fw_tags:
+                                bl_stmt = select(Blacklist).where(
+                                    (Blacklist.ip_address == ip_addr) &
+                                    (Blacklist.mac_address_normalized == mac_norm) &
+                                    (Blacklist.firewall_tag == fw_tag)
+                                )
+                                bl_result = await self.db.execute(bl_stmt)
+                                bl_entries = bl_result.scalars().all()
+                                for bl_entry in bl_entries:
+                                    if bl_entry.auto_unblocked is False and bl_entry.is_auto_blocked:
+                                        bl_entry.auto_unblocked = True
                             logger.info(f"Auto-unblocked {ip_addr} (now {new_compliance}) from firewall(s) '{fw_info}'")
                         else:
                             logger.warning(f"Partial unblock failure for {ip_addr}, keeping blocked status")
@@ -1050,7 +1063,7 @@ class ComplianceService:
                     if fw_tags:
                         terminal.firewall_tag = fw_tags[0] if len(fw_tags) == 1 else ",".join(fw_tags)
 
-        # Audit log for compliance recalculation (before commit so it's persisted in the same transaction)
+        # Audit log for compliance recalculation
         if non_compliant_count > 0 or unblocked_count > 0:
             await self.log_action("system", "recalculate_compliance", "terminal", None, {
                 "message": f"Compliance recalculation: {len(terminals)} total, "
@@ -1062,7 +1075,9 @@ class ComplianceService:
                 "unblocked": unblocked_count,
             }, ip_address="System")
 
-        await self.db.commit()
+        # Flush changes (caller is responsible for final commit to maintain
+        # transaction atomicity with the triggering operation, e.g. whitelist add)
+        await self.db.flush()
 
         logger.info(
             f"Compliance recalculation complete: {len(terminals)} total, "

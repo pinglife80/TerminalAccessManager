@@ -216,10 +216,12 @@ const Terminals: React.FC = () => {
         firewallTag = info?.firewall_tag || null;
       }
 
-      // Use backend compliance_status, but override with blacklist if needed
+      // Use backend compliance_status as the source of truth.
+      // Only override with blacklist if backend hasn't already determined
+      // the terminal is bypass (whitelist match) - the backend compliance
+      // recalculation already handles auto-unblock for bypass terminals.
       let complianceStatus = mac.compliance_status || 'unknown';
-      // If in blacklist and not already marked non_compliant by backend, mark as non_compliant
-      if (blackMatchType && complianceStatus !== 'non_compliant') {
+      if (blackMatchType && complianceStatus !== 'bypass' && complianceStatus !== 'non_compliant') {
         complianceStatus = 'non_compliant';
       }
 
@@ -354,6 +356,7 @@ const Terminals: React.FC = () => {
       await apiClient.post(API_ENDPOINTS.WHITELIST, payload);
       toast.success(t('terminal.addedToWhitelist'));
       refetch();
+      refetchBlacklist();
     } catch (error: unknown) {
       toast.error(getErrorMessage(error, t('terminal.failedToAddToWhitelist')));
     } finally {
@@ -376,6 +379,7 @@ const Terminals: React.FC = () => {
       await apiClient.delete(`${API_ENDPOINTS.WHITELIST}${identifier}`);
       toast.success(t('terminal.removedFromWhitelist'));
       refetch();
+      refetchBlacklist();
     } catch (error: unknown) {
       toast.error(getErrorMessage(error, t('terminal.failedToRemoveFromWhitelist')));
     } finally {
