@@ -1,6 +1,6 @@
 # RBAC 角色管理与用户访问控制
 
-**版本**: v3.2.0-r10
+**版本**: v3.2.0-r11
 **更新日期**: 2026-06-16  
 **变更说明**: 黑名单管理移除手动添加功能（改为审计视图）；终端操作按钮矩阵重构
 
@@ -150,7 +150,7 @@ graph TB
 | 权限码 | 名称 | 描述 |
 |--------|------|------|
 | `blacklist:read` | 查看封禁列表 | 查看封禁列表 |
-| `blacklist:write` | 管理封禁列表 | 添加/解封黑名单条目 |
+| `blacklist:write` | 管理封禁列表 | 解封黑名单条目 |
 
 #### 数据源管理 (datasource)
 
@@ -528,7 +528,7 @@ flowchart TD
 | 端点 | 方法 | 所需权限 | 说明 |
 |------|------|----------|------|
 | `/blacklist/` | GET | `blacklist:read` | 获取黑名单列表 |
-| `/blacklist/` | POST | `blacklist:write` | 添加黑名单 |
+| `/blacklist/` | POST | `blacklist:write` | ~~添加黑名单~~（已废弃） |
 | `/blacklist/{id}` | DELETE | `blacklist:write` | 删除黑名单 |
 
 ### 5.6 统计端点 (stats)
@@ -555,6 +555,8 @@ flowchart TD
 | `/data-sources/{id}` | GET | `datasource:read` | 获取数据源详情 |
 | `/data-sources/{id}` | PUT | `datasource:write` | 更新数据源 |
 | `/data-sources/{id}` | DELETE | `datasource:write` | 删除数据源 |
+| `/data-sources/{id}/delete-preview` | POST | `datasource:write` | 删除预览 |
+| `/data-sources/{id}/disable-preview` | POST | `datasource:write` | 禁用预览 |
 | `/data-sources/{id}/test` | POST | `datasource:test` | 测试连接 |
 | `/data-sources/{id}/sync` | POST | `datasource:sync` | 同步数据源 |
 | `/data-sources/bindings/` | GET | `datasource:read` | 获取绑定列表 |
@@ -702,7 +704,7 @@ const { hasPermission, hasAnyPermission, hasAllPermissions, hasRole } = usePermi
 |------|---------------|-----------|
 | Terminals | `terminal:write` | 封禁/解封/加入白名单/移出白名单 |
 | Whitelist | `whitelist:write` | 添加白名单/删除白名单 |
-| Blacklist | `blacklist:write` | 封禁终端/解封终端 |
+| Blacklist | `blacklist:write` | 解封终端 |
 | DataSources | `datasource:write` | 创建/编辑/删除数据源和绑定 |
 | DataSources | `datasource:test` | 测试连接 |
 | DataSources | `datasource:sync` | 同步数据源 |

@@ -1,6 +1,6 @@
 # 品牌自定义指南
 
-> 文档版本：v3.2.0-r8 | 更新日期：2026-06-16
+> 文档版本：v3.2.0-r11 | 更新日期：2026-06-16
 
 ## 概述
 
@@ -192,7 +192,7 @@ logo: {
 },
 ```
 
-**支持的图片格式**：SVG（推荐）、PNG、JPG、WebP
+**支持的图片格式**：PNG、JPG、WebP（SVG 不再支持，可嵌入 JavaScript，存在 XSS 风险）
 
 **推荐尺寸**：64×64px 或更大（侧边栏显示为 32×32px，登录页显示为 40×40px）
 
@@ -211,7 +211,7 @@ favicon: '/favicon.ico',
 <link rel="icon" type="image/x-icon" href="/favicon.ico" />
 ```
 
-**支持的格式**：SVG（推荐）、ICO、PNG
+**支持的格式**：ICO、PNG（SVG 不再支持，可嵌入 JavaScript，存在 XSS 风险）
 
 **推荐尺寸**：32×32px 或 64×64px
 
@@ -341,8 +341,8 @@ frontend/public/
 
 | 资源类型 | 推荐格式 | 推荐尺寸 | 最大文件大小 |
 |----------|----------|----------|-------------|
-| Favicon | SVG、ICO | 32×32px | 10KB |
-| Logo | SVG | 64×64px+ | 50KB |
+| Favicon | ICO、PNG | 32×32px | 10KB |
+| Logo | PNG、JPG、WebP | 64×64px+ | 50KB |
 | 登录背景 | WebP、JPG | 1920×1080px+ | 500KB |
 
 ## Lucide 图标参考

@@ -1,6 +1,6 @@
 # TerminalAccessManager API 文档
 
-> 文档版本：v3.2.0-r10 | 更新日期：2026-06-16
+> 文档版本：v3.2.0-r11 | 更新日期：2026-06-16
 
 > 基于 MAC 地址和 IP 地址的网络终端准入管理平台
 
@@ -860,6 +860,7 @@ curl -X POST "https://<HOST_IP>:8443/api/v1/terminals/block/192.168.1.100?mac_ad
 | 参数 | 位置 | 类型 | 必填 | 说明 |
 |------|------|------|------|------|
 | ip_address | Path | string | 是 | 要解封的 IP 地址 |
+| mac_address | Query | string | 否 | 关联的 MAC 地址 |
 | firewall_tag | Query | string | 否 | 防火墙标签 |
 | comments | Query | string | 否 | 解封备注，写入 Terminal.comments 字段 |
 
@@ -906,11 +907,11 @@ curl -X POST "https://<HOST_IP>:8443/api/v1/terminals/unblock/192.168.1.100?fire
   "id": 1,
   "ip_address": "192.168.1.100",
   "mac_address": "AA:BB:CC:DD:EE:FF",
-  "status": "unfrozen",
-  "timestamp": "2025-06-01T10:00:00Z",
-  "source": "arp",
-  "source_tag": "switch-1f",
-  "compliance_status": "compliant",
+  "status": "unblocked",
+    "timestamp": "2025-06-01T10:00:00Z",
+    "source": "arp",
+    "source_tag": "switch-1f",
+    "compliance_status": "compliant",
   "wl_match_type": "mac",
   "comments": null
 }
@@ -1130,6 +1131,8 @@ curl "https://<HOST_IP>:8443/api/v1/blacklist/?search=192.168&start_date=2025-06
 ---
 
 ### 5.2 POST /blacklist/
+
+> **⚠️ 已废弃**: 此端点已废弃，请使用 `POST /terminals/block/{ip_address}` 代替。此端点将在未来版本中移除。
 
 添加黑名单条目，同时在深信服 AF 防火墙上执行封锁。IP 和 MAC 至少提供一项。
 
@@ -1452,6 +1455,44 @@ POST /api/v1/data-sources/{id}/delete-preview
 - `actions` 列出确认删除后后台将执行的操作
 - ARP 数据源删除：解封终端 → 删除黑名单 → 删除绑定 → 清理缓存 → 删除终端 → 删除数据源
 - Sangfor 防火墙删除：检查可达性 → 解封终端 → 删除黑名单 → 删除绑定 → 清理 firewall_tag → 删除数据源
+
+---
+
+### 禁用预览数据源
+
+```
+POST /api/v1/data-sources/{id}/disable-preview
+```
+
+预览禁用数据源的影响，不执行任何实际操作。
+
+**权限**: `datasource:write`
+
+**路径参数**:
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| id | integer | 数据源 ID |
+
+**响应**:
+```json
+{
+  "can_disable": true,
+  "warnings": ["该数据源关联 20 个终端记录", "禁用后终端合规状态将重置为 unknown"],
+  "actions": ["重置 20 个终端的合规状态为 unknown", "禁用数据源 [LAB-ASW01]"],
+  "affected": {
+    "terminals": 20,
+    "compliant_terminals": 15,
+    "non_compliant_terminals": 5
+  },
+  "reason": null
+}
+```
+
+**说明**:
+- `can_disable=false` 时表示无法安全禁用，`reason` 字段说明原因
+- `warnings` 列出受影响的业务数据
+- `actions` 列出确认禁用后后台将执行的操作
+- ARP 数据源禁用后，关联终端的 `compliance_status` 将自动重置为 `unknown`
 
 ---
 
@@ -2446,8 +2487,8 @@ curl https://<HOST_IP>:8443/api/v1/settings/branding
     "refresh_token_expire_days": 7
   },
   "rate_limit": {
-    "rate_limit_per_minute": 60,
-    "auth_rate_limit_per_minute": 5
+    "rate_limit_per_minute": 120,
+    "auth_rate_limit_per_minute": 10
   },
   "network": {
     "sangfor_enabled": true,

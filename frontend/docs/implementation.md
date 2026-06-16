@@ -1,6 +1,6 @@
 # 前端实现总结
 
-> 文档版本：v3.2.0-r10 | 更新日期：2026-06-16
+> 文档版本：v3.2.0-r11 | 更新日期：2026-06-16
 
 ## 概述
 
@@ -369,7 +369,6 @@ logger.clearLogs();    // 清除所有日志
 - MAC 地址格式无关搜索（后端去除分隔符后 ILIKE 匹配，前端 `keepPreviousData` 防搜索闪烁）
 - 日期范围过滤
 - 服务端分页（PaginatedResponse）
-- 添加黑名单条目（MAC 地址、IP 地址、原因、过期时间）
 - 删除黑名单条目（带确认对话框）
 - 查看详情弹窗
 - MAC 地址格式自动标准化
@@ -593,7 +592,7 @@ logger.clearLogs();    // 清除所有日志
 - `POST /api/v1/whitelist/` - 添加到白名单
 - `DELETE /api/v1/whitelist/{mac}` - 从白名单移除
 - `GET /api/v1/blacklist/` - 列出黑名单
-- `POST /api/v1/blacklist/` - 添加到黑名单
+- `POST /api/v1/blacklist/` - 添加到黑名单（⚠️ 已废弃，不再使用）
 - `DELETE /api/v1/blacklist/{id}` - 从黑名单移除
 - `GET /api/v1/logs/` - 列出审计日志
 - `GET /api/v1/logs/search` - 搜索审计日志

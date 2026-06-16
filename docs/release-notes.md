@@ -1,6 +1,6 @@
 # 版本跟踪记录
 
-> 文档版本：v3.2.0-r10 | 更新日期：2026-06-16
+> 文档版本：v3.2.0-r11 | 更新日期：2026-06-16
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
@@ -26,6 +26,24 @@
 | 9100a8d | fix(search): increase debounce delay from 300ms to 500ms across all pages |
 | 2f2add5 | fix: prevent superadmin role modification and fix Users search flickering |
 | 0b36d78 | docs: update RBAC documentation to v3.0 with current implementation |
+
+---
+
+## [v3.2.0-r11] - 2026-06-16
+
+### 综合审计修复
+
+#### 核心业务逻辑修复
+- 黑名单 `mac_address_normalized` 字段补全：封堵/解封操作同步写入标准化 MAC 列，确保 MAC 维度查询一致性
+- 多防火墙解封原子性：`unblock_ip` 改为按 `firewall_tag` 逐个解封并独立处理异常，单个防火墙解封失败不影响其他防火墙
+- 过期清理安全性：`cleanup_expired_blacklist` 增加 `mac_address` 维度匹配，避免同 IP 多终端误解封；Sangfor 解封失败时保留 Blacklist 记录并延长重试
+
+#### 合规生命周期修复
+- 手动解封触发合规重算：`unblock_ip` 解封后自动调用 `recalculate_all_compliance`，确保合规状态及时更新
+- 统一解封行为：手动解封与自动解封行为对齐，均更新 Terminal 状态、清理 Blacklist 记录、重置合规状态
+
+#### 文档一致性修复
+- 32 项文档一致性修复：所有文档版本号统一至 v3.2.0-r11，修正版本号对齐、术语一致性、文档清单补全（logging-guide.md、git-workflow-guide.md）
 
 ---
 

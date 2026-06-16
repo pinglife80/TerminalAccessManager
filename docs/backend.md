@@ -1,6 +1,6 @@
 # TerminalAccessManager 后端实现文档
 
-> 文档版本：v3.2.0-r10 | 更新日期：2026-06-16
+> 文档版本：v3.2.0-r11 | 更新日期：2026-06-16
 
 ## 1. 概述
 
@@ -253,8 +253,8 @@ async def _is_task_paused(task_name: str) -> bool:
 | Redis | `REDIS_URL` | str | `"redis://localhost:6379/0"` | Redis 连接串 |
 | | `REDIS_PASSWORD` | Optional[str] | `None` | Redis 密码 |
 | CORS | `BACKEND_CORS_ORIGINS` | List[str] | `["http://localhost", ...]` | 允许的跨域来源 |
-| 限流 | `RATE_LIMIT_PER_MINUTE` | int | `60` | 通用 API 限流（次/分钟） |
-| | `AUTH_RATE_LIMIT_PER_MINUTE` | int | `5` | 认证端点限流（次/分钟） |
+| 限流 | `RATE_LIMIT_PER_MINUTE` | int | `120` | 通用 API 限流（次/分钟） |
+| | `AUTH_RATE_LIMIT_PER_MINUTE` | int | `10` | 认证端点限流（次/分钟） |
 | 账户锁定 | `MAX_LOGIN_ATTEMPTS` | int | `5` | 最大登录尝试次数 |
 | | `LOCKOUT_DURATION_MINUTES` | int | `15` | 锁定时长（分钟） |
 | | `CAPTCHA_THRESHOLD` | int | `3` | 触发验证码的失败次数 |
@@ -650,7 +650,7 @@ model.mac_address_normalized.ilike(f'{_escape_like(mac_clean)}%')
   - 创建 `Blacklist` 记录（`source_tag="manual"`，`is_auto_blocked=False`）。
   - 记录审计日志。
 
-- `unblock_ip(ip_address, username, firewall_tag, comments)`：
+- `unblock_ip(self, ip_address, username, mac_address=None, firewall_tag=None, comments=None, client_ip=None)`：
   - 调用深信服 AF 黑白名单 API 解封 IP（`DELETE /api/v1/namespaces/public/whiteblacklist/{ip}`）。
   - 恢复 `Terminal.status` 为 `unblocked`，`compliance_status` 为 `unknown`。
   - 清除 `firewall_tag` 为 None（`Terminal.firewall_tag = None`）。
@@ -981,8 +981,8 @@ API 响应中 IP 字段名兼容以下写法：
 
 | 键 | 默认值 | 类型 | 说明 |
 |----|--------|------|------|
-| `rate_limit_per_minute` | `60` | int | 通用 API 限流（次/分钟） |
-| `auth_rate_limit_per_minute` | `5` | int | 认证端点限流（次/分钟） |
+| `rate_limit_per_minute` | `120` | int | 通用 API 限流（次/分钟） |
+| `auth_rate_limit_per_minute` | `10` | int | 认证端点限流（次/分钟） |
 
 **network（网络）**
 

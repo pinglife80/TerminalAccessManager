@@ -1,6 +1,6 @@
 # TerminalAccessManager 系统架构设计文档
 
-> 文档版本：v3.2.0-r10 | 更新日期：2026-06-16
+> 文档版本：v3.2.0-r11 | 更新日期：2026-06-16
 
 ## 1. 系统概述
 
@@ -194,7 +194,7 @@ Status 描述的是终端在网络层的实际封堵情况，Compliance 描述�
 | non_compliant | blocked | — | 仅查看详情，无操作按钮 |
 | non_compliant | unblocked | 在黑名单 | 查看 + 移出黑名单（含确认+comment） |
 | non_compliant | unblocked | — | 查看 + 封锁（含确认+comment） |
-| unknown | unblocked | — | 查看 + 加白名单（含comment）+ 封锁（含确认+comment） |
+| unknown | unblocked | — | 查看 + 加白名单（含comment） |
 | unknown | blocked | — | 查看 + 解封（含确认+comment） |
 
 **黑名单管理页面定位：**

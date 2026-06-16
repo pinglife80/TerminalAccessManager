@@ -1,5 +1,7 @@
 # 更新日志
 
+> 文档版本：v3.2.0-r11  更新日期：2026-06-16
+
 本文件记录 TerminalAccessManager 的所有重要变更。
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，

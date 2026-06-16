@@ -1,6 +1,6 @@
 # 数据源全生命周期技术文档
 
-> 文档版本：v3.2.0-r10 | 更新日期：2026-06-16
+> 文档版本：v3.2.0-r11 | 更新日期：2026-06-16
 
 本文档详细描述 TerminalAccessManager 系统中数据源从配置、采集、解析、合规判定到自动处置的完整生命周期，涵盖架构设计、数据格式、输入输出规范和定时调度机制。
 
@@ -1163,9 +1163,12 @@ decrypt_config(config)
 | POST | `/data-sources/` | `datasource:write` | 创建数据源 |
 | GET | `/data-sources/{source_id}` | `datasource:read` | 获取数据源详情 |
 | PUT | `/data-sources/{source_id}` | `datasource:write` | 更新数据源 |
-| DELETE | `/data-sources/{source_id}` | `datasource:delete` | 删除数据源（同时删除关联绑定） |
+| DELETE | `/data-sources/{source_id}` | `datasource:write` | 删除数据源（同时删除关联绑定） |
 | POST | `/data-sources/{source_id}/test` | `datasource:test` | 测试连接 |
 | POST | `/data-sources/{source_id}/sync` | `datasource:sync` | 手动触发同步 |
+| POST | `/data-sources/{id}/disable-preview` | `datasource:read` | 禁用影响预览 |
+| POST | `/data-sources/{id}/delete-preview` | `datasource:read` | 删除影响预览 |
+| DELETE | `/data-sources/{id}/safe-delete` | `datasource:write` | 安全删除数据源 |
 
 ### 13.2 数据源绑定
 
@@ -1173,7 +1176,9 @@ decrypt_config(config)
 |------|------|------|------|
 | GET | `/data-sources/bindings/` | `datasource:read` | 列出绑定关系 |
 | POST | `/data-sources/bindings/` | `datasource:write` | 创建绑定 |
-| DELETE | `/data-sources/bindings/{binding_id}` | `datasource:delete` | 删除绑定 |
+| DELETE | `/data-sources/bindings/{binding_id}` | `datasource:write` | 删除绑定 |
+| POST | `/data-sources/bindings/{id}/delete-preview` | `datasource:read` | 删除绑定影响预览 |
+| DELETE | `/data-sources/bindings/{id}/safe-delete` | `datasource:write` | 安全删除绑定 |
 
 ### 13.3 合规操作
 
@@ -1191,9 +1196,11 @@ decrypt_config(config)
 | POST | `/compliance-baselines/` | `baseline:write` | 创建合规基线 |
 | GET | `/compliance-baselines/{baseline_id}` | `baseline:read` | 获取基线详情 |
 | PUT | `/compliance-baselines/{baseline_id}` | `baseline:write` | 更新基线 |
-| DELETE | `/compliance-baselines/{baseline_id}` | `baseline:delete` | 删除基线 |
+| DELETE | `/compliance-baselines/{baseline_id}` | `baseline:write` | 删除基线 |
 | POST | `/compliance-baselines/{baseline_id}/test` | `baseline:test` | 测试连接 |
 | POST | `/compliance-baselines/{baseline_id}/sync` | `baseline:sync` | 手动触发同步 |
+| POST | `/compliance-baselines/{id}/delete-preview` | `baseline:read` | 删除基线影响预览 |
+| DELETE | `/compliance-baselines/{id}/safe-delete` | `baseline:write` | 安全删除基线 |
 
 ---
 
