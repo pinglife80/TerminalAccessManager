@@ -11,8 +11,9 @@ import {
   XCircle,
   Pencil,
   Database,
+  AlertTriangle,
 } from 'lucide-react';
-import { useDataSources, DataSourceItem } from '@/hooks/useTerminalData';
+import { useDataSources, useDataSourceBindings, DataSourceItem } from '@/hooks/useTerminalData';
 import { apiClient } from '@/lib/api';
 import { toast } from 'sonner';
 import { API_ENDPOINTS } from '@/lib/constants';
@@ -37,6 +38,7 @@ interface DataSourcesTabProps {
 const DataSourcesTab = forwardRef<{ openAddModal: () => void }, DataSourcesTabProps>(({ onAddClick }, ref) => {
   const { t } = useTranslation();
   const { data: dataSources, isLoading: dsLoading, refetch: dsRefetch } = useDataSources();
+  const { data: dsBindings } = useDataSourceBindings();
 
   // Expose openAddModal to parent via ref
   useImperativeHandle(ref, () => ({
@@ -87,6 +89,9 @@ const DataSourcesTab = forwardRef<{ openAddModal: () => void }, DataSourcesTabPr
 
   // Sync Data Source
   const [syncingId, setSyncingId] = useState<number | null>(null);
+
+  // Enable without binding warning
+  const [showEnableWarning, setShowEnableWarning] = useState(false);
 
   // Derived data
   const dsList = dataSources || [];
@@ -229,6 +234,17 @@ const DataSourcesTab = forwardRef<{ openAddModal: () => void }, DataSourcesTabPr
       return;
     }
 
+    // Warn when enabling an ARP source without binding
+    const currentDs = dataSources?.find((d: DataSourceItem) => d.id === editDsForm.id);
+    if (editDsForm.enabled && currentDs && !currentDs.enabled &&
+        (editDsForm.type === 'arp_ssh' || editDsForm.type === 'arp_api')) {
+      const bindingCount = dsBindings?.filter((b: any) => b.arp_source_tag === editDsForm.tag).length || 0;
+      if (bindingCount === 0) {
+        setShowEnableWarning(true);
+        return;
+      }
+    }
+
     setIsEditingDs(true);
     try {
       const fields = CONFIG_FIELDS[editDsForm.type] || [];
@@ -261,6 +277,29 @@ const DataSourcesTab = forwardRef<{ openAddModal: () => void }, DataSourcesTabPr
       toast.error(getErrorMessage(error, t('dataSources.failedToSync')));
     } finally {
       setSyncingId(null);
+    }
+  };
+
+  const confirmEnableWithoutBinding = async () => {
+    setShowEnableWarning(false);
+    setIsEditingDs(true);
+    try {
+      const fields = CONFIG_FIELDS[editDsForm.type] || [];
+      const config = buildConfigPayload(fields, editDsConfig);
+      await apiClient.put(`${API_ENDPOINTS.DATA_SOURCES}${editDsForm.id}`, {
+        name: editDsForm.name,
+        type: editDsForm.type,
+        tag: editDsForm.tag,
+        config,
+        enabled: editDsForm.enabled,
+      });
+      toast.success(t('dataSources.dataSourceUpdated'));
+      setShowEditDsModal(false);
+      dsRefetch();
+    } catch (error: unknown) {
+      toast.error(getErrorMessage(error, t('dataSources.failedToUpdate')));
+    } finally {
+      setIsEditingDs(false);
     }
   };
 
@@ -308,6 +347,26 @@ const DataSourcesTab = forwardRef<{ openAddModal: () => void }, DataSourcesTabPr
     );
   };
 
+  const getBindingCount = (dsTag: string) => {
+    if (!dsBindings) return 0;
+    return dsBindings.filter((b: any) => b.arp_source_tag === dsTag || b.firewall_tag === dsTag).length;
+  };
+
+  const getBindingInfo = (ds: DataSourceItem) => {
+    if (ds.type === 'sangfor') {
+      const count = dsBindings?.filter((b: any) => b.firewall_tag === ds.tag).length || 0;
+      return count > 0 ? `${count} ${t('bindings.bindingCount')}` : t('bindings.noFirewallBindings');
+    }
+    // arp_ssh or arp_api
+    if (!ds.enabled) {
+      return t('bindings.complianceFrozen');
+    }
+    const count = dsBindings?.filter((b: any) => b.arp_source_tag === ds.tag).length || 0;
+    return count > 0
+      ? `${count} ${t('bindings.boundTo')}${dsBindings?.filter((b: any) => b.arp_source_tag === ds.tag).map((b: any) => b.firewall_tag).join(', ')}`
+      : t('bindings.notBound');
+  };
+
   // Config form for add modal
   const renderConfigFields = () => {
     const fields = CONFIG_FIELDS[dsForm.type] || [];
@@ -352,6 +411,7 @@ const DataSourcesTab = forwardRef<{ openAddModal: () => void }, DataSourcesTabPr
                 <th className="px-4 sm:px-6 py-3.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider">{t('dataSources.type')}</th>
                 <th className="px-4 sm:px-6 py-3.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider">{t('dataSources.tag')}</th>
                 <th className="px-4 sm:px-6 py-3.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider">{t('dataSources.enabled')}</th>
+                <th className="px-4 sm:px-6 py-3.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider">{t('bindings.bindingCount')}</th>
                 <th className="px-4 sm:px-6 py-3.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider">{t('dataSources.lastSync')}</th>
                 <th className="px-4 sm:px-6 py-3.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider">{t('common.actions')}</th>
               </tr>
@@ -359,13 +419,13 @@ const DataSourcesTab = forwardRef<{ openAddModal: () => void }, DataSourcesTabPr
             <tbody className="bg-card divide-y divide-border">
               {dsLoading ? (
                 <tr>
-                  <td colSpan={6}>
+                  <td colSpan={7}>
                     <LoadingState message={t('dataSources.loadingDataSources')} />
                   </td>
                 </tr>
               ) : dsList.length === 0 ? (
                 <tr>
-                  <td colSpan={6}>
+                  <td colSpan={7}>
                     <EmptyState
                       icon={Database}
                       title={t('dataSources.noDataSources')}
@@ -393,6 +453,11 @@ const DataSourcesTab = forwardRef<{ openAddModal: () => void }, DataSourcesTabPr
                     </td>
                     <td className="px-4 sm:px-6 py-4 whitespace-nowrap">
                       {renderEnabledBadge(ds.enabled)}
+                    </td>
+                    <td className="px-4 sm:px-6 py-3.5 whitespace-nowrap">
+                      <span className={`text-xs ${!ds.enabled && (ds.type === 'arp_ssh' || ds.type === 'arp_api') ? 'text-gray-400' : getBindingCount(ds.tag) > 0 ? 'text-green-600' : 'text-amber-600'}`}>
+                        {getBindingInfo(ds)}
+                      </span>
                     </td>
                     <td className="px-4 sm:px-6 py-4 whitespace-nowrap">
                       {renderLastSync(ds)}
@@ -626,6 +691,36 @@ const DataSourcesTab = forwardRef<{ openAddModal: () => void }, DataSourcesTabPr
               className="flex-1"
             />
           </div>
+        </div>
+      </Modal>
+
+      {/* Enable without binding warning */}
+      <Modal isOpen={showEnableWarning} onClose={() => setShowEnableWarning(false)} title={t('dataSources.enableWithoutBindingTitle')} size="sm">
+        <div className="flex items-center gap-4 mb-4">
+          <div className="w-10 h-10 bg-amber-100 rounded-full flex items-center justify-center">
+            <AlertTriangle className="h-5 w-5 text-amber-600" />
+          </div>
+          <div>
+            <p className="text-sm font-medium text-foreground">{editDsForm.name}</p>
+            <p className="text-xs text-muted-foreground font-mono">{editDsForm.tag}</p>
+          </div>
+        </div>
+        <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+          <p className="text-sm text-amber-800">{t('dataSources.enableWithoutBindingMsg')}</p>
+        </div>
+        <div className="flex gap-3">
+          <PrimaryButton
+            label={t('common.cancel')}
+            variant="secondary"
+            onClick={() => setShowEnableWarning(false)}
+            className="flex-1"
+          />
+          <PrimaryButton
+            label={t('dataSources.enableAnyway')}
+            variant="warning"
+            onClick={confirmEnableWithoutBinding}
+            className="flex-1"
+          />
         </div>
       </Modal>
     </>

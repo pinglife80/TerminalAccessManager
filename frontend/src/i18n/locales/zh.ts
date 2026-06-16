@@ -63,6 +63,7 @@ const zh = {
     noComments: '暂无备注',
     cannotBeUndone: '此操作不可撤销',
     dismissError: '关闭错误提示',
+    auto: '自动（根据绑定关系）',
   },
   nav: {
     dashboard: '仪表盘',
@@ -172,6 +173,11 @@ const zh = {
     actionCommentPlaceholder: '操作备注（可选）',
     allSource: '全部来源',
     allFirewallTag: '全部防火墙标签',
+    selectFirewall: '选择目标防火墙',
+    noBindingWarning: '该终端未绑定防火墙',
+    noBindingWarningDetail: '此终端的数据源未关联任何防火墙，自动封堵功能不可用。手动指定防火墙标签可继续操作。',
+    noBindingBlock: '无法封堵：未绑定防火墙',
+    noBindingBlockDetail: '该终端所属数据源未关联任何防火墙，请先在数据源管理中创建绑定关系后再执行封堵操作。',
     status: {
       blocked: '已封堵',
       unblocked: '未封堵',
@@ -470,6 +476,9 @@ const zh = {
     pleaseEnterName: '请输入名称',
     pleaseEnterTag: '请输入标签',
     loadingDataSources: '正在加载数据源...',
+    enableWithoutBindingTitle: '启用无绑定数据源',
+    enableWithoutBindingMsg: '此 ARP 数据源当前未关联任何防火墙。启用后采集的终端将无法自动封堵。建议先创建绑定关系再启用。',
+    enableAnyway: '仍然启用',
     lastSyncStatus: {
       success: '成功',
       failed: '失败',
@@ -498,6 +507,13 @@ const zh = {
     pleaseSelectArpTag: '请选择 ARP 源标签',
     pleaseSelectFirewallTag: '请选择防火墙标签',
     loadingBindings: '正在加载绑定...',
+    bindingCount: '绑定',
+    boundTo: '绑定至 ',
+    noFirewallBindings: '无绑定',
+    notBound: '未绑定（自动封堵不可用）',
+    complianceFrozen: '合规状态已冻结',
+    allArpSourcesDisabled: '所有 ARP 源均已禁用',
+    allFirewallSourcesDisabled: '所有防火墙源均已禁用',
   },
   baselines: {
     title: '合规基线',

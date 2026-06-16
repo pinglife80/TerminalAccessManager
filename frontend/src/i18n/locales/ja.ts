@@ -63,6 +63,7 @@ const ja = {
     noComments: 'コメントはありません',
     cannotBeUndone: 'この操作は取り消せません',
     dismissError: 'エラーを閉じる',
+    auto: '自動（バインディングに基づく）',
   },
   nav: {
     dashboard: 'ダッシュボード',
@@ -172,6 +173,11 @@ const ja = {
     actionCommentPlaceholder: '操作コメント（任意）',
     allSource: 'すべてのソース',
     allFirewallTag: 'すべてのファイアウォールタグ',
+    selectFirewall: 'ターゲットファイアウォールを選択',
+    noBindingWarning: 'この端末はファイアウォールにバインドされていません',
+    noBindingWarningDetail: 'この端末のデータソースはファイアウォールに関連付けられていません。自動ブロック機能は利用できません。ファイアウォールタグを手動で指定して続行できます。',
+    noBindingBlock: 'ブロック不可：ファイアウォール未バインド',
+    noBindingBlockDetail: 'この端末のデータソースはファイアウォールにバインドされていません。先にデータソース管理でバインディングを作成してください。',
     status: {
       blocked: 'ブロック済み',
       unblocked: 'ブロック解除',
@@ -470,6 +476,9 @@ const ja = {
     pleaseEnterName: '名前を入力してください',
     pleaseEnterTag: 'タグを入力してください',
     loadingDataSources: 'データソースを読み込み中...',
+    enableWithoutBindingTitle: 'バインドなしでデータソースを有効化',
+    enableWithoutBindingMsg: 'このARPデータソースはファイアウォールに関連付けられていません。有効化後に収集された端末は自動ブロックできません。有効化する前にバインディングを作成することをお勧めします。',
+    enableAnyway: '有効化する',
     lastSyncStatus: {
       success: '成功',
       failed: '失敗',
@@ -498,6 +507,13 @@ const ja = {
     pleaseSelectArpTag: 'ARPソースタグを選択してください',
     pleaseSelectFirewallTag: 'ファイアウォールタグを選択してください',
     loadingBindings: 'バインディングを読み込み中...',
+    bindingCount: 'バインディング',
+    boundTo: 'バインド先 ',
+    noFirewallBindings: 'バインディングなし',
+    notBound: '未バインド（自動ブロック不可）',
+    complianceFrozen: 'コンプライアンス状態凍結中',
+    allArpSourcesDisabled: 'すべてのARPソースが無効です',
+    allFirewallSourcesDisabled: 'すべてのファイアウォールソースが無効です',
   },
   baselines: {
     title: 'コンプライアンスベースライン',

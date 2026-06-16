@@ -124,6 +124,9 @@ const Terminals: React.FC = () => {
   const [showBlockConfirm, setShowBlockConfirm] = useState(false);
   const [blockTarget, setBlockTarget] = useState<Terminal | null>(null);
   const [blockComment, setBlockComment] = useState('');
+  const [availableFirewallTags, setAvailableFirewallTags] = useState<string[]>([]);
+  const [selectedFirewallTag, setSelectedFirewallTag] = useState<string>('');
+  const [hasNoBinding, setHasNoBinding] = useState(false);
 
   // Confirmation dialogs - Unblock
   const [showUnblockConfirm, setShowUnblockConfirm] = useState(false);
@@ -256,9 +259,29 @@ const Terminals: React.FC = () => {
 
   // --- Action handlers with confirmation dialogs ---
 
-  const handleBlock = (mac: Terminal) => {
+  const handleBlock = async (mac: Terminal) => {
     setBlockTarget(mac);
     setBlockComment('');
+    setSelectedFirewallTag(mac.firewall_tag || '');
+    setHasNoBinding(false);
+    setAvailableFirewallTags([]);
+
+    // Query available firewall tags for this terminal's source_tag
+    if (!mac.source_tag) {
+      setHasNoBinding(true);
+    } else {
+      try {
+        const bindingsResponse = await apiClient.get(`${API_ENDPOINTS.DATA_SOURCE_BINDINGS}?arp_source_tag=${mac.source_tag}`);
+        const bindings = bindingsResponse.data || [];
+        const fwTags = bindings.map((b: any) => b.firewall_tag).filter(Boolean);
+        setAvailableFirewallTags(fwTags);
+        if (fwTags.length === 0) {
+          setHasNoBinding(true);
+        }
+      } catch {
+        // Silently fail - user can still manually specify
+      }
+    }
     setShowBlockConfirm(true);
   };
 
@@ -271,6 +294,7 @@ const Terminals: React.FC = () => {
         block_time: '30d',
       };
       if (blockComment.trim()) params['comments'] = blockComment.trim();
+      if (selectedFirewallTag.trim()) params['firewall_tag'] = selectedFirewallTag.trim();
       await apiClient.post(`${API_ENDPOINTS.TERMINALS_BLOCK}${blockTarget.ip_address}`, null, {
         params
       });
@@ -1130,6 +1154,35 @@ const Terminals: React.FC = () => {
           </div>
         </div>
         {renderTerminalInfo(blockTarget)}
+
+        {/* Firewall tag selector */}
+        {availableFirewallTags.length > 0 && (
+          <div className="mb-3">
+            <label className="block text-sm font-medium text-muted-foreground mb-1">{t('terminal.selectFirewall')}</label>
+            <select
+              value={selectedFirewallTag}
+              onChange={(e) => setSelectedFirewallTag(e.target.value)}
+              className="w-full px-3 py-2 border border-border rounded-lg text-sm bg-background"
+            >
+              <option value="">{t('auto')}</option>
+              {availableFirewallTags.map((tag) => (
+                <option key={tag} value={tag}>{tag}</option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        {/* No binding warning */}
+        {hasNoBinding && (
+          <div className="mb-3 p-2.5 bg-red-50 border border-red-200 rounded-lg flex items-start gap-2">
+            <ShieldOff className="h-4 w-4 text-red-600 mt-0.5 shrink-0" />
+            <div>
+              <p className="text-sm font-medium text-red-800">{t('terminal.noBindingBlock')}</p>
+              <p className="text-xs text-red-700 mt-0.5">{t('terminal.noBindingBlockDetail')}</p>
+            </div>
+          </div>
+        )}
+
         {renderCommentInput(blockComment, setBlockComment)}
         <div className="flex gap-3 mt-4">
           <PrimaryButton
@@ -1144,6 +1197,7 @@ const Terminals: React.FC = () => {
             variant="danger"
             onClick={confirmBlock}
             loading={blockingId === blockTarget?.id}
+            disabled={hasNoBinding}
             className="flex-1"
           />
         </div>

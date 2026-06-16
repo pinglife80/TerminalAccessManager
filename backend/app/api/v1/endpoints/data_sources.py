@@ -1,11 +1,15 @@
 from typing import List, Optional
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 
 from app.core.database import get_db
 from app.core.security import get_current_user, require_permission
 from app.models.user import User
 from app.models.data_source import DataSource, DataSourceBinding
+from app.models.blacklist import Blacklist
 from app.schemas.data_source import (
     DataSourceCreate,
     DataSourceUpdate,
@@ -25,6 +29,8 @@ from app.schemas.data_source import (
 from app.services.data_source_service import DataSourceService
 from app.services.arp_collector_service import ArpCollectorService
 from app.services.compliance_service import ComplianceService
+
+logger = logging.getLogger(__name__)
 
 
 router = APIRouter(prefix="/data-sources", tags=["Data Sources"])
@@ -101,6 +107,38 @@ async def update_data_source(
 ):
     """Update a data source (requires datasource:write permission)"""
     service = DataSourceService(db)
+
+    # Check disable impact for Sangfor firewalls with blocked terminals
+    if data.enabled is False:
+        current_source = await service.get_data_source_by_id(source_id)
+        if current_source and current_source.enabled is True and current_source.type == "sangfor":
+            blocked_stmt = select(Blacklist).where(Blacklist.firewall_tag == current_source.tag)
+            bl_result = await db.execute(blocked_stmt)
+            blocked_count = len(bl_result.scalars().all())
+            if blocked_count > 0:
+                logger.warning(
+                    f"Disabling Sangfor firewall '{current_source.tag}' with {blocked_count} blocked entries. "
+                    f"Auto-unblock will fail until firewall is re-enabled."
+                )
+
+        # Reset compliance status to unknown when disabling ARP source
+        if current_source and current_source.enabled is True and current_source.type in ("arp_ssh", "arp_api"):
+            from app.models.terminal import Terminal, TerminalStatus
+            terminal_stmt = select(Terminal).where(
+                Terminal.source_tag == current_source.tag,
+                Terminal.compliance_status != "unknown"
+            )
+            t_result = await db.execute(terminal_stmt)
+            affected_terminals = t_result.scalars().all()
+            if affected_terminals:
+                for terminal in affected_terminals:
+                    terminal.compliance_status = "unknown"
+                await db.flush()
+                logger.info(
+                    f"Reset compliance status to 'unknown' for {len(affected_terminals)} terminals "
+                    f"under disabled ARP source '{current_source.tag}'"
+                )
+
     try:
         source = await service.update_data_source(source_id, data)
         if not source:

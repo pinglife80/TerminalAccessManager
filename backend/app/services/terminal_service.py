@@ -1121,7 +1121,10 @@ class TerminalService:
                 if fw_tag:
                     sangfor_svc = await self._get_sangfor_service_by_tag(fw_tag)
 
-                svc = sangfor_svc or self.sangfor
+                # Only attempt unblock if we have a valid service instance.
+                # Do NOT fall back to global self.sangfor when firewall is disabled/missing,
+                # as this could cause local DB / firewall state inconsistency.
+                svc = sangfor_svc
 
                 if entry.ip_address and svc and svc.base_url:
                     try:
@@ -1142,6 +1145,14 @@ class TerminalService:
                         failed_unblock_ips.add(entry.ip_address)
                     finally:
                         await svc.close()
+                elif fw_tag and not svc:
+                    # Firewall exists in tag but is disabled or missing — cannot safely unblock
+                    sangfor_unblock_success = False
+                    logger.warning(
+                        f"Cannot unblock {entry.ip_address}: firewall '{fw_tag}' is disabled or missing. "
+                        f"Keeping blacklist entry for consistency."
+                    )
+                    failed_unblock_ips.add(entry.ip_address)
 
                 if sangfor_unblock_success:
                     await self.db.delete(entry)

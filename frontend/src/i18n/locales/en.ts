@@ -63,6 +63,7 @@ const en = {
     noComments: 'No comments',
     cannotBeUndone: 'This action cannot be undone',
     dismissError: 'Dismiss error',
+    auto: 'Auto (based on bindings)',
   },
   nav: {
     dashboard: 'Dashboard',
@@ -172,6 +173,11 @@ const en = {
     actionCommentPlaceholder: 'Action comment (optional)',
     allSource: 'All Sources',
     allFirewallTag: 'All Firewall Tags',
+    selectFirewall: 'Select Target Firewall',
+    noBindingWarning: 'This terminal has no firewall binding',
+    noBindingWarningDetail: 'The data source for this terminal is not associated with any firewall. Auto-blocking is unavailable. You can manually specify a firewall tag to proceed.',
+    noBindingBlock: 'Cannot block: no firewall binding',
+    noBindingBlockDetail: 'The terminal\'s data source has no firewall binding. Please create a binding in Data Sources first.',
     status: {
       blocked: 'Blocked',
       unblocked: 'Unblocked',
@@ -470,6 +476,9 @@ const en = {
     pleaseEnterName: 'Please enter a name',
     pleaseEnterTag: 'Please enter a tag',
     loadingDataSources: 'Loading data sources...',
+    enableWithoutBindingTitle: 'Enable Data Source Without Binding',
+    enableWithoutBindingMsg: 'This ARP data source is not associated with any firewall. Terminals collected after enabling will not be able to auto-block. It is recommended to create a binding before enabling.',
+    enableAnyway: 'Enable Anyway',
     lastSyncStatus: {
       success: 'Success',
       failed: 'Failed',
@@ -498,6 +507,13 @@ const en = {
     pleaseSelectArpTag: 'Please select an ARP source tag',
     pleaseSelectFirewallTag: 'Please select a firewall tag',
     loadingBindings: 'Loading bindings...',
+    bindingCount: 'Bindings',
+    boundTo: 'Bound to ',
+    noFirewallBindings: 'No bindings',
+    notBound: 'Not bound (auto-blocking unavailable)',
+    complianceFrozen: 'Compliance status frozen',
+    allArpSourcesDisabled: 'All ARP sources are disabled',
+    allFirewallSourcesDisabled: 'All firewall sources are disabled',
   },
   baselines: {
     title: 'Compliance Baselines',

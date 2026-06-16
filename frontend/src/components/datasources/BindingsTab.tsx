@@ -63,12 +63,12 @@ const BindingsTab = forwardRef<{ openAddModal: () => void }, BindingsTabProps>((
 
   // ARP sources for binding dropdown (arp_ssh / arp_api)
   const arpSourceOptions = useMemo(
-    () => dsList.filter((ds) => (ds.type === 'arp_ssh' || ds.type === 'arp_api') && ds.enabled),
+    () => dsList.filter((ds) => ds.type === 'arp_ssh' || ds.type === 'arp_api'),
     [dsList],
   );
   // Firewall sources for binding dropdown (sangfor)
   const firewallOptions = useMemo(
-    () => dsList.filter((ds) => ds.type === 'sangfor' && ds.enabled),
+    () => dsList.filter((ds) => ds.type === 'sangfor'),
     [dsList],
   );
 
@@ -226,11 +226,14 @@ const BindingsTab = forwardRef<{ openAddModal: () => void }, BindingsTabProps>((
             >
               <option value="">{t('bindings.selectArpSource')}</option>
               {arpSourceOptions.map((ds) => (
-                <option key={ds.id} value={ds.tag}>
-                  {ds.tag} ({ds.name} - {TYPE_BADGE[ds.type]?.label || ds.type})
+                <option key={ds.id} value={ds.tag} disabled={!ds.enabled}>
+                  {ds.tag} ({ds.name} - {TYPE_BADGE[ds.type]?.label || ds.type}){!ds.enabled ? ` [${t('common.disabled')}]` : ''}
                 </option>
               ))}
             </select>
+            {arpSourceOptions.length > 0 && arpSourceOptions.every(ds => !ds.enabled) && (
+              <p className="mt-1 text-xs text-amber-600">{t('bindings.allArpSourcesDisabled')}</p>
+            )}
             {arpSourceOptions.length === 0 && (
               <p className="mt-1 text-xs text-amber-600">{t('bindings.noArpSourcesAvailable')}</p>
             )}
@@ -244,11 +247,14 @@ const BindingsTab = forwardRef<{ openAddModal: () => void }, BindingsTabProps>((
             >
               <option value="">{t('bindings.selectFirewall')}</option>
               {firewallOptions.map((ds) => (
-                <option key={ds.id} value={ds.tag}>
-                  {ds.tag} ({ds.name})
+                <option key={ds.id} value={ds.tag} disabled={!ds.enabled}>
+                  {ds.tag} ({ds.name}){!ds.enabled ? ` [${t('common.disabled')}]` : ''}
                 </option>
               ))}
             </select>
+            {firewallOptions.length > 0 && firewallOptions.every(ds => !ds.enabled) && (
+              <p className="mt-1 text-xs text-amber-600">{t('bindings.allFirewallSourcesDisabled')}</p>
+            )}
             {firewallOptions.length === 0 && (
               <p className="mt-1 text-xs text-amber-600">{t('bindings.noSangforSourcesAvailable')}</p>
             )}
