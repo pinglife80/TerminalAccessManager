@@ -1,6 +1,6 @@
 # TerminalAccessManager 后端实现文档
 
-> 文档版本：v3.2.0-r8 | 更新日期：2026-06-16
+> 文档版本：v3.2.0-r9 | 更新日期：2026-06-16
 
 ## 1. 概述
 
@@ -938,6 +938,26 @@ API 响应中 IP 字段名兼容以下写法：
 | `bearer` | 通过 Bearer Token 传递认证信息 |
 | `header` | 通过自定义 Header 名（默认 `X-Auth-Token`）+ Token 值传递认证信息 |
 
+#### 核心方法
+
+| 方法 | 说明 |
+|------|------|
+| `create_data_source(data)` | 创建数据源，自动加密敏感配置字段 |
+| `update_data_source(source_id, data)` | 更新数据源，tag 字段不可修改（修改会抛出 ValueError） |
+| `delete_data_source(source_id)` | 删除数据源 |
+| `get_data_source_by_id(source_id)` | 按 ID 获取数据源详情，自动解密配置 |
+| `get_data_source_by_tag(tag)` | 按 tag 获取数据源，自动解密配置 |
+| `list_data_sources(type_filter, enabled_filter)` | 列出数据源，支持类型和启用状态过滤 |
+| `test_connection(source_id)` | 测试数据源连接 |
+| `preview_delete_data_source(source_id)` | 预览数据源删除影响，区分 ARP 源和 Sangfor 防火墙 |
+| `safe_delete_data_source(source_id, username, client_ip)` | 安全删除数据源，自动解封终端、清理黑名单、清理缓存 |
+| `preview_delete_binding(binding_id)` | 预览绑定关系删除影响 |
+| `safe_delete_binding(binding_id, username, client_ip)` | 安全删除绑定关系，自动解封终端、触发合规重算 |
+
+#### tag 修改限制
+
+数据源 `tag` 字段是系统全局标识符，被 Terminal.source_tag、Terminal.firewall_tag、Blacklist.source_tag、Blacklist.firewall_tag、DataSourceBinding.arp_source_tag、DataSourceBinding.firewall_tag 及 Redis 缓存键引用。修改 tag 会导致所有关联数据断裂，因此 `update_data_source` 方法禁止修改 tag 字段，尝试修改会抛出 `ValueError`。如需使用不同的 tag，应创建新数据源、迁移绑定关系、然后删除旧数据源。
+
 ---
 
 ### 4.5 ConfigService (services/config_service.py)
@@ -1230,8 +1250,24 @@ python -m pytest tests/test_security.py -v
 | `DELETE /data-sources/{id}` | `delete_datasource` | 删除数据源 |
 | `POST /data-sources/{id}/test` | `test_datasource` | 测试数据源连接 |
 | `POST /data-sources/{id}/sync` | `sync_datasource` | 同步数据源 |
+| `POST /data-sources/{id}/delete-preview` | `preview_delete_datasource` | 预览数据源删除影响 |
+| `DELETE /data-sources/{id}/safe` | `safe_delete_datasource` | 安全删除数据源（含善后操作） |
+| `POST /data-sources/bindings/{id}/delete-preview` | `preview_delete_binding` | 预览绑定关系删除影响 |
+| `DELETE /data-sources/bindings/{id}/safe` | `safe_delete_binding` | 安全删除绑定关系（含善后操作） |
 
-### 8.3 用户管理端点 (users.py)
+### 8.3 合规基准端点 (compliance_baselines.py)
+
+| 端点 | 审计 action | 说明 |
+|------|-------------|------|
+| `POST /compliance-baselines/` | `create_baseline` | 创建合规基准 |
+| `PUT /compliance-baselines/{id}` | `update_baseline` | 更新合规基准（tag 字段不可修改，修改会抛出 ValueError） |
+| `DELETE /compliance-baselines/{id}` | `delete_baseline` | 删除合规基准 |
+| `POST /compliance-baselines/{id}/test` | `test_baseline` | 测试合规基准连接 |
+| `POST /compliance-baselines/{id}/sync` | `sync_baseline` | 同步合规基准数据 |
+| `POST /compliance-baselines/{id}/delete-preview` | `preview_delete_baseline` | 预览合规基准删除影响 |
+| `DELETE /compliance-baselines/{id}/safe` | `safe_delete_baseline` | 安全删除合规基准（清理缓存 + 触发合规重算） |
+
+### 8.4 用户管理端点 (users.py)
 
 | 端点 | 审计 action | 说明 |
 |------|-------------|------|
@@ -1241,7 +1277,7 @@ python -m pytest tests/test_security.py -v
 | `POST /users/{id}/reset-password` | `reset_password` | 重置用户密码 |
 | `POST /users/{id}/unlock` | `unlock_user` | 解锁用户账户 |
 
-### 8.4 系统配置端点 (settings.py)
+### 8.5 系统配置端点 (settings.py)
 
 | 端点 | 审计 action | 说明 |
 |------|-------------|------|

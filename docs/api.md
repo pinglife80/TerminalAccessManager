@@ -1,6 +1,6 @@
 # TerminalAccessManager API 文档
 
-> 文档版本：v3.2.0-r8 | 更新日期：2026-06-16
+> 文档版本：v3.2.0-r9 | 更新日期：2026-06-16
 
 > 基于 MAC 地址和 IP 地址的网络终端准入管理平台
 
@@ -1368,6 +1368,8 @@ curl https://<HOST_IP>:8443/api/v1/data-sources/1 \
 
 更新数据源。
 
+> **tag 不可修改**: tag 是系统全局标识符，被终端、黑名单、绑定关系等表引用。修改 tag 会导致关联数据断裂。如需更改 tag，请创建新记录并删除旧记录。
+
 - **认证要求**：超管专用
 
 **请求参数**
@@ -1408,9 +1410,52 @@ curl -X PUT https://<HOST_IP>:8443/api/v1/data-sources/1 \
 
 ---
 
+### 删除预览数据源
+
+```
+POST /api/v1/data-sources/{id}/delete-preview
+```
+
+预览删除数据源的影响，不执行任何实际操作。
+
+**权限**: `datasource:write`
+
+**路径参数**:
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| id | integer | 数据源 ID |
+
+**响应**:
+```json
+{
+  "can_delete": true,
+  "warnings": ["该数据源关联 20 个终端记录", "其中 10 个终端当前处于已封堵状态"],
+  "actions": ["从防火墙 [chn] 解封 10 个已封堵终端", "删除 13 条黑名单记录", "删除数据源 [LAB-ASW01]"],
+  "affected": {
+    "terminals": 20,
+    "blocked_terminals": 10,
+    "blacklist_entries": 13,
+    "bindings": 1,
+    "compliant_terminals": 0
+  },
+  "reason": null
+}
+```
+
+**说明**:
+- `can_delete=false` 时表示无法安全删除（如防火墙不可达），`reason` 字段说明原因
+- `warnings` 列出受影响的业务数据
+- `actions` 列出确认删除后后台将执行的操作
+- ARP 数据源删除：解封终端 → 删除黑名单 → 删除绑定 → 清理缓存 → 删除终端 → 删除数据源
+- Sangfor 防火墙删除：检查可达性 → 解封终端 → 删除黑名单 → 删除绑定 → 清理 firewall_tag → 删除数据源
+
+---
+
 ### 6.5 DELETE /data-sources/{source_id}
 
 删除数据源。
+
+> **安全删除**: 此端点执行安全删除，自动处理善后工作（解封终端、清理黑名单、清理缓存）。建议先调用 `delete-preview` 接口查看影响范围。
 
 - **认证要求**：超管专用
 
@@ -1594,9 +1639,29 @@ curl -X POST https://<HOST_IP>:8443/api/v1/data-sources/bindings/ \
 
 ---
 
+### 删除预览绑定关系
+
+```
+POST /api/v1/data-sources/bindings/{id}/delete-preview
+```
+
+预览删除绑定关系的影响。
+
+**权限**: `datasource:write`
+
+**响应**: 同 DeletePreviewResponse 结构
+
+**说明**:
+- 检查该绑定关联的已封堵终端数量
+- 删除后自动解封终端并触发合规重算
+
+---
+
 ### 7.3 DELETE /data-sources/bindings/{binding_id}
 
 删除数据源绑定。
+
+> **安全删除**: 自动解封受影响终端、清理黑名单记录、触发合规重算。
 
 - **认证要求**：超管专用
 
@@ -1912,6 +1977,8 @@ curl https://<HOST_IP>:8443/api/v1/compliance-baselines/1 \
 
 更新合规基准。
 
+> **tag 不可修改**: tag 是系统全局标识符，被终端、黑名单、绑定关系等表引用。修改 tag 会导致关联数据断裂。如需更改 tag，请创建新记录并删除旧记录。
+
 - **认证要求**：`baseline:write`
 
 **请求参数**
@@ -1952,9 +2019,29 @@ curl -X PUT https://<HOST_IP>:8443/api/v1/compliance-baselines/1 \
 
 ---
 
+### 删除预览合规基准
+
+```
+POST /api/v1/compliance-baselines/{id}/delete-preview
+```
+
+预览删除合规基准的影响。
+
+**权限**: `baseline:write`
+
+**响应**: 同 DeletePreviewResponse 结构
+
+**说明**:
+- 检查受影响的合规/不合规终端数量
+- 删除后自动清理 Redis 缓存并触发全量合规重算
+
+---
+
 ### 9.5 DELETE /compliance-baselines/{baseline_id}
 
 删除合规基准。
+
+> **安全删除**: 自动清理 Redis 缓存（ipguard:{tag}）、触发全量合规重算。
 
 - **认证要求**：`baseline:write`
 

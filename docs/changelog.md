@@ -11,6 +11,10 @@
 
 ### 新增
 
+- 两阶段删除机制：数据源、绑定关系、合规基准删除前提供影响预览 API（`POST /{id}/delete-preview`）
+- 安全删除：自动解封终端、清理黑名单记录、清理 Redis 缓存、触发合规重算
+- 前端 DeletePreviewModal 组件：展示影响范围、操作清单、受影响资源统计
+- 数据源 tag 和合规基准 tag 修改禁止（tag 为系统全局标识符，修改会导致关联数据断裂）
 - RBAC 角色权限控制：4张核心表（roles/permissions/user_roles/role_permissions），5个预设角色（superadmin/admin/operator/auditor/viewer），29个权限码覆盖10个功能模块
 - `require_permission` 权限检查工厂函数：FastAPI 依赖注入 + Redis 缓存（TTL 300s）+ superuser 短路
 - 角色 CRUD API：7个端点（列表/详情/创建/编辑/删除/权限列表/角色用户列表）
@@ -27,6 +31,9 @@
 
 ### 改进
 
+- 数据源删除操作从直接删除改为安全删除（先自动善后再删除）
+- 绑定关系删除操作从直接删除改为安全删除（先解封终端再删除绑定）
+- 合规基准删除操作增加 Redis 缓存清理和合规重算步骤
 - Sangfor 数据源移除"同步"按钮：Sangfor 为推送型防火墙，无数据同步语义，前端按类型条件隐藏同步按钮，后端同步接口对 sangfor 类型返回"不适用"提示
 - 合规重算（`recalculate_all_compliance`）自动封堵/解封改为多防火墙路由，与 `auto_block_non_compliant` 行为一致
 - 合规重算创建的 Blacklist 记录补全 `expires_at` 和 `blocked_by` 字段
@@ -45,6 +52,7 @@
 
 ### 修复
 
+- 修复 compliance_service.py 导入错误（`app.models.audit_log` → `app.models.log`）导致后端启动失败
 - 搜索返回空结果（Whitelist/Blacklist/AuditLogs）：`_escape_like` 对已包裹 `%` 的字符串转义导致 LIKE 模式错误
 - AuditLog 搜索缺少 action 字段：搜索只覆盖 ip_address/username/details
 - MAC 搜索从前缀匹配改为包含匹配：`ilike(f"{value}%")` → `ilike(f"%{value}%")`

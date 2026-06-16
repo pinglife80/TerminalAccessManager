@@ -1,6 +1,6 @@
 # 版本跟踪记录
 
-> 文档版本：v3.2.0-r8 | 更新日期：2026-06-16
+> 文档版本：v3.2.0-r9 | 更新日期：2026-06-16
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
@@ -26,6 +26,32 @@
 | 9100a8d | fix(search): increase debounce delay from 300ms to 500ms across all pages |
 | 2f2add5 | fix: prevent superadmin role modification and fix Users search flickering |
 | 0b36d78 | docs: update RBAC documentation to v3.0 with current implementation |
+
+---
+
+## [v3.2.0-r9] - 2026-06-16
+
+#### 新增
+- 两阶段删除机制：数据源、绑定关系、合规基准删除前提供影响预览（delete-preview API）
+- 安全删除：自动解封终端、清理黑名单、清理 Redis 缓存、触发合规重算
+- 前端 DeletePreviewModal 组件：展示影响范围、操作清单、受影响统计
+- 数据源和合规基准 tag 修改禁止（tag 为系统全局标识符）
+
+#### 修复
+- compliance_service.py 导入错误（app.models.audit_log → app.models.log）
+
+#### 文件变更
+- `backend/app/api/v1/endpoints/data_sources.py` — 新增 delete-preview 端点，修改删除端点
+- `backend/app/api/v1/endpoints/compliance_baselines.py` — 新增 delete-preview 端点，修改删除端点，tag 修改禁止
+- `backend/app/schemas/data_source.py` — 新增 DeletePreviewAffected、DeletePreviewResponse Schema
+- `backend/app/services/data_source_service.py` — 新增 preview/safe delete 方法，tag 修改禁止
+- `backend/app/services/compliance_service.py` — 修复导入错误
+- `frontend/src/components/DeletePreviewModal.tsx` — 新建删除预览弹窗组件
+- `frontend/src/components/datasources/DataSourcesTab.tsx` — 集成两阶段删除
+- `frontend/src/components/datasources/BindingsTab.tsx` — 集成两阶段删除
+- `frontend/src/components/datasources/ComplianceBaselinesTab.tsx` — 集成两阶段删除
+- `frontend/src/i18n/locales/{zh,en,ja}.ts` — 新增 deletePreview 翻译
+- `frontend/src/lib/constants.ts` — 新增 API 端点常量
 
 ---
 
