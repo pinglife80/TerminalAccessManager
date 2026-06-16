@@ -1,6 +1,6 @@
 # 版本跟踪记录
 
-> 文档版本：v3.2.0-r9 | 更新日期：2026-06-16
+> 文档版本：v3.2.0-r10 | 更新日期：2026-06-16
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
@@ -26,6 +26,35 @@
 | 9100a8d | fix(search): increase debounce delay from 300ms to 500ms across all pages |
 | 2f2add5 | fix: prevent superadmin role modification and fix Users search flickering |
 | 0b36d78 | docs: update RBAC documentation to v3.0 with current implementation |
+
+---
+
+## [v3.2.0-r10] - 2026-06-16
+
+#### 新增
+- 终端封堵绑定验证：终端封堵前强制检查绑定关系，无绑定时显示防火墙选择器和无绑定错误提示
+- 数据源标签页绑定状态列：数据源列表新增绑定状态列，已禁用 ARP 数据源显示"合规状态已冻结"
+- 启用无绑定数据源确认对话框：启用未绑定防火墙的 ARP 数据源时弹出确认提示
+
+#### 改进
+- 绑定关系下拉框包含已禁用数据源：ARP 和防火墙数据源下拉框现在包含已禁用的数据源，以 `[已禁用]` 后缀标识
+- ARP 数据源禁用触发合规重置：禁用 ARP 数据源时自动重置关联终端 `compliance_status` 为 `unknown`
+
+#### 提交记录
+
+| 提交 | 说明 |
+|------|------|
+| be0a24d | feat: 终端封堵绑定验证+绑定状态列+禁用数据源合规重置 |
+
+#### 文件变更
+- `frontend/src/pages/Terminals.tsx` — 封堵前绑定检查，显示防火墙选择器和无绑定错误
+- `frontend/src/components/datasources/BindingsTab.tsx` — ARP 和防火墙下拉框包含已禁用数据源（`[已禁用]` 后缀）
+- `frontend/src/components/datasources/DataSourcesTab.tsx` — 新增绑定状态列，禁用 ARP 源显示"合规状态已冻结"，启用无绑定确认对话框
+- `backend/app/api/v1/endpoints/data_sources.py` — ARP 数据源禁用时触发合规状态重置
+- `backend/app/services/terminal_service.py` — 合规状态批量重置方法
+- `frontend/src/i18n/locales/zh.ts` — 新增绑定状态、合规冻结、无绑定封堵提示翻译键
+- `frontend/src/i18n/locales/en.ts` — 新增绑定状态、合规冻结、无绑定封堵提示翻译键
+- `frontend/src/i18n/locales/ja.ts` — 新增绑定状态、合规冻结、无绑定封堵提示翻译键
 
 ---
 

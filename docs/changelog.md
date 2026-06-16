@@ -11,6 +11,15 @@
 
 ### 新增
 
+- 终端封堵绑定验证：封堵终端前强制检查绑定关系，无绑定时显示防火墙选择器和无绑定错误提示（Terminals.tsx）
+- 数据源标签页绑定状态列：数据源列表新增绑定状态列，已禁用 ARP 数据源显示"合规状态已冻结"（DataSourcesTab.tsx）
+- 启用无绑定数据源确认对话框：启用未绑定防火墙的 ARP 数据源时弹出确认提示（DataSourcesTab.tsx）
+
+### 改进
+
+- 绑定关系下拉框包含已禁用数据源：ARP 和防火墙数据源下拉框现在包含已禁用的数据源，以 `[已禁用]` 后缀标识（BindingsTab.tsx）
+- ARP 数据源禁用触发合规重置：禁用 ARP 数据源时自动重置关联终端 `compliance_status` 为 `unknown`（data_sources.py、terminal_service.py）
+- i18n 三语言补全：新增绑定状态、合规冻结、无绑定封堵提示等翻译键（zh.ts、en.ts、ja.ts）
 - 两阶段删除机制：数据源、绑定关系、合规基准删除前提供影响预览 API（`POST /{id}/delete-preview`）
 - 安全删除：自动解封终端、清理黑名单记录、清理 Redis 缓存、触发合规重算
 - 前端 DeletePreviewModal 组件：展示影响范围、操作清单、受影响资源统计
