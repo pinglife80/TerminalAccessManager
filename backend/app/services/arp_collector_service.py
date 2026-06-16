@@ -161,7 +161,7 @@ class ArpCollectorService:
             return result
 
         except ImportError:
-            error_msg = "paramiko library not installed"
+            error_msg = "netmiko library not installed"
             from app.services.data_source_service import DataSourceService
             ds_service = DataSourceService(self.db)
             await ds_service.update_sync_status(source.id, "failed", error_msg)

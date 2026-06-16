@@ -478,15 +478,16 @@ class ComplianceService:
         """
         Auto-unblock terminals that have become compliant.
 
-        1. Find Blacklist entries where is_auto_blocked=True and auto_unblocked=False
-        2. Check if the IP+MAC is now compliant
-        3. If compliant, call firewall API to unblock
-        4. Mark auto_unblocked=True
+        1. Find Blacklist entries where auto_unblocked=False (both auto and manual blocked)
+        2. Group entries by (ip_address, mac_address) to handle multi-firewall atomically
+        3. Check if the IP+MAC is now compliant
+        4. If compliant, call firewall API to unblock on ALL firewalls
+        5. Only update Terminal status if ALL firewalls were successfully unblocked
+        6. Mark only successfully unblocked Blacklist entries as auto_unblocked=True
         """
         stmt = (
             select(Blacklist)
             .where(
-                (Blacklist.is_auto_blocked == True) &
                 (Blacklist.auto_unblocked == False)
             )
         )
@@ -504,57 +505,82 @@ class ComplianceService:
         whitelist_data = await self._load_whitelist_cache()
         ipguard_data = await self._load_all_ipguard_cache()
 
+        # Group entries by (ip, mac) so we process all firewalls for a
+        # given terminal atomically — only mark unblocked if ALL firewalls
+        # succeed.
+        from collections import defaultdict
+        entry_groups = defaultdict(list)
+        for entry in auto_blocked_entries:
+            key = (entry.ip_address or "", entry.mac_address or "")
+            entry_groups[key].append(entry)
+
         unblocked = 0
         skipped = 0
         errors = []
         details = []
 
-        for bl_entry in auto_blocked_entries:
-            ip_addr = bl_entry.ip_address or ""
-            mac_addr = bl_entry.mac_address or ""
-
+        for (ip_addr, mac_addr), entries in entry_groups.items():
             # Check if now compliant
             wl_match = self._match_whitelist_in_memory(whitelist_data, ip_addr, mac_addr)
             ig_match = self._match_ipguard_in_memory(ipguard_data, ip_addr, mac_addr)
 
-            if wl_match or ig_match:
-                # Unblock on firewall
+            if not (wl_match or ig_match):
+                skipped += len(entries)
+                continue
+
+            # Try to unblock on ALL firewalls for this terminal
+            all_success = True
+            successfully_unblocked_entries = []
+
+            for bl_entry in entries:
                 fw_tag = bl_entry.firewall_tag
                 if fw_tag:
                     try:
                         success = await self._unblock_on_firewall(ip_addr, fw_tag)
-                        if not success:
+                        if success:
+                            successfully_unblocked_entries.append(bl_entry)
+                        else:
+                            all_success = False
                             errors.append(
                                 f"Failed to unblock {ip_addr} on firewall '{fw_tag}'"
                             )
-                            skipped += 1
-                            continue
                     except Exception as e:
+                        all_success = False
                         errors.append(
                             f"Error unblocking {ip_addr} on firewall '{fw_tag}': {str(e)}"
                         )
-                        skipped += 1
-                        continue
                 else:
                     # No firewall_tag on blacklist entry — try to find binding
                     # via the terminal's source_tag (use multi-firewall method)
                     if bl_entry.source_tag:
                         fw_tags = await self._get_bound_firewall_tags(bl_entry.source_tag)
-                        for fw_tag in fw_tags:
+                        binding_success = True
+                        for ft in fw_tags:
                             try:
-                                success = await self._unblock_on_firewall(ip_addr, fw_tag)
+                                success = await self._unblock_on_firewall(ip_addr, ft)
                                 if not success:
-                                    logger.warning(f"Failed to unblock {ip_addr} on firewall '{fw_tag}' (resolved from binding)")
+                                    binding_success = False
+                                    all_success = False
+                                    errors.append(
+                                        f"Failed to unblock {ip_addr} on firewall '{ft}' (resolved from binding)"
+                                    )
                             except Exception as e:
-                                logger.warning(f"Error unblocking {ip_addr} on firewall '{fw_tag}': {e}")
-                    # If still no firewall, the IP may not be blocked on any
-                    # firewall (e.g., blocked via global config), so we
-                    # proceed with marking as unblocked in the database
+                                binding_success = False
+                                all_success = False
+                                errors.append(
+                                    f"Error unblocking {ip_addr} on firewall '{ft}': {str(e)}"
+                                )
+                        if binding_success:
+                            successfully_unblocked_entries.append(bl_entry)
+                    else:
+                        # No firewall at all, just mark as unblocked in DB
+                        successfully_unblocked_entries.append(bl_entry)
 
-                # Mark as auto-unblocked
-                bl_entry.auto_unblocked = True
+            if all_success:
+                # All firewalls unblocked — update Terminal and mark all entries
+                for bl_entry in successfully_unblocked_entries:
+                    bl_entry.auto_unblocked = True
 
-                # Update MAC status - match by IP+MAC for precision
                 if ip_addr:
                     mac_stmt = select(Terminal).where(
                         Terminal.ip_address == ip_addr,
@@ -568,7 +594,7 @@ class ComplianceService:
                         record.compliance_status = "bypass" if wl_match else "compliant"
                         record.wl_match_type = wl_match.get("match_type") if isinstance(wl_match, dict) else wl_match
                         # Update comments with unblock info
-                        resolved_fw = fw_tag or "N/A"
+                        resolved_fw = entries[0].firewall_tag or "N/A"
                         unblock_comment = f"Auto-unblocked by TAM from firewall [{resolved_fw}]"
                         if record.comments:
                             record.comments = f"{record.comments}; {unblock_comment}"
@@ -583,7 +609,12 @@ class ComplianceService:
                     "reason": "now_compliant",
                 })
             else:
-                skipped += 1
+                # Partial failure — only mark successfully unblocked entries
+                # but leave Terminal status as blocked since some firewalls
+                # still hold the block
+                for bl_entry in successfully_unblocked_entries:
+                    bl_entry.auto_unblocked = True
+                skipped += len(entries) - len(successfully_unblocked_entries)
 
         if unblocked > 0:
             # Audit log for auto-unblock (before commit so it's persisted in the same transaction)
@@ -987,7 +1018,7 @@ class ComplianceService:
                                 bl_result = await self.db.execute(bl_stmt)
                                 bl_entries = bl_result.scalars().all()
                                 for bl_entry in bl_entries:
-                                    if bl_entry.auto_unblocked is False and bl_entry.is_auto_blocked:
+                                    if bl_entry.auto_unblocked is False:
                                         bl_entry.auto_unblocked = True
                             logger.info(f"Auto-unblocked {ip_addr} (now {new_compliance}) from firewall(s) '{fw_info}'")
                         else:
@@ -1041,10 +1072,12 @@ class ComplianceService:
                                     td = timedelta(hours=value)
                                 elif unit == 'm':
                                     td = timedelta(minutes=value)
+                            mac_norm = mac_addr.replace('-', '').replace(':', '').replace('.', '').upper() if mac_addr else None
                             for fw_tag in fw_tags:
                                 bl_entry = Blacklist(
                                     ip_address=ip_addr,
                                     mac_address=mac_addr,
+                                    mac_address_normalized=mac_norm,
                                     reason="Auto-blocked: non-compliant (compliance recalculation)",
                                     blocked_by="system",
                                     expires_at=datetime.now(timezone.utc) + td,

@@ -480,7 +480,6 @@ class TerminalService:
 
                 if mac_record:
                     mac_record.status = TerminalStatus.BLOCKED.value
-                    mac_record.compliance_status = "non_compliant"
                     mac_record.firewall_tag = firewall_tag
                     if comments is not None:
                         mac_record.comments = comments
@@ -581,7 +580,16 @@ class TerminalService:
                 result = await self.db.execute(stmt)
                 blacklist_entries = result.scalars().all()
                 for entry in blacklist_entries:
-                    await self.db.delete(entry)
+                    entry.auto_unblocked = True
+
+                # Trigger compliance recalculation so compliance_status updates immediately
+                try:
+                    from app.services.compliance_service import ComplianceService
+                    compliance_svc = ComplianceService(self.db)
+                    await compliance_svc.recalculate_all_compliance()
+                    logger.info(f"Compliance recalculated after manual unblock of {ip_address}")
+                except Exception as e:
+                    logger.warning(f"Failed to recalculate compliance after unblock of {ip_address}: {e}")
 
                 # Log the action
                 await self.log_action(username, "unblock_terminal", "mac", ip_address,
@@ -952,7 +960,7 @@ class TerminalService:
                 mac_records = result.scalars().all()
                 for record in mac_records:
                     record.status = TerminalStatus.BLOCKED.value
-                    record.compliance_status = "non_compliant"
+                    record.firewall_tag = firewall_tag
 
             if normalized_mac:
                 stmt = select(Terminal).where(Terminal.mac_address == normalized_mac)
@@ -960,7 +968,7 @@ class TerminalService:
                 mac_record = result.scalar_one_or_none()
                 if mac_record:
                     mac_record.status = TerminalStatus.BLOCKED.value
-                    mac_record.compliance_status = "non_compliant"
+                    mac_record.firewall_tag = firewall_tag
 
             # Add to blacklist
             blacklist_entry = Blacklist(
@@ -1095,13 +1103,35 @@ class TerminalService:
         Returns the number of entries cleaned up."""
         try:
             now = datetime.now(timezone.utc)
-            stmt = select(Blacklist).where(Blacklist.expires_at < now)
+            stmt = select(Blacklist).where(
+                (Blacklist.expires_at < now) &
+                (Blacklist.auto_unblocked == False)
+            )
             result = await self.db.execute(stmt)
             expired_entries = result.scalars().all()
 
             count = 0
             failed_unblock_ips = set()  # Track IPs where Sangfor unblock failed
             for entry in expired_entries:
+                # Check if there are still active (non-expired, non-auto-unblocked)
+                # Blacklist entries for the same IP. If so, the IP is still
+                # supposed to be blocked on the firewall — skip the firewall
+                # unblock and just delete the expired entry from DB.
+                if entry.ip_address:
+                    active_stmt = select(Blacklist).where(
+                        (Blacklist.ip_address == entry.ip_address) &
+                        (Blacklist.expires_at >= now) &
+                        (Blacklist.auto_unblocked == False)
+                    )
+                    active_result = await self.db.execute(active_stmt)
+                    active_entries = active_result.scalars().all()
+                    if active_entries:
+                        # IP still has active blocks — don't unblock on firewall,
+                        # just delete the expired entry from DB
+                        await self.db.delete(entry)
+                        count += 1
+                        continue
+
                 # Restore terminal status and reset compliance for re-evaluation
                 if entry.ip_address:
                     mac_stmt = select(Terminal).where(
@@ -1111,10 +1141,11 @@ class TerminalService:
                     mac_result = await self.db.execute(mac_stmt)
                     mac_records = mac_result.scalars().all()
                     for record in mac_records:
-                        record.status = TerminalStatus.UNBLOCKED.value
-                        # Reset compliance_status to "unknown" so the next
-                        # scheduled compliance check will re-evaluate it.
-                        record.compliance_status = "unknown"
+                        if record.status == "blocked":  # Only reset if still blocked
+                            record.status = TerminalStatus.UNBLOCKED.value
+                            # Reset compliance_status to "unknown" so the next
+                            # scheduled compliance check will re-evaluate it.
+                            record.compliance_status = "unknown"
 
                 # Try to unblock on Sangfor
                 fw_tag = entry.firewall_tag
