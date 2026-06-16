@@ -1,6 +1,6 @@
 # TerminalAccessManager API 文档
 
-> 文档版本：v3.2.0-r11 | 更新日期：2026-06-16
+> 文档版本：v3.2.0-r12 | 更新日期：2026-06-17
 
 > 基于 MAC 地址和 IP 地址的网络终端准入管理平台
 
@@ -2226,6 +2226,7 @@ curl -X POST https://<HOST_IP>:8443/api/v1/compliance-baselines/1/sync \
     "action": "block_terminal",
     "resource_type": "terminal",
     "resource_id": "192.168.1.100",
+    "resource_name": "192.168.1.100",
     "details": "{\"ip\": \"192.168.1.100\", \"mac\": \"AA:BB:CC:DD:EE:FF\", \"block_time\": \"30d\", \"firewall_tag\": \"sangfor-af1\"}",
     "ip_address": "10.0.0.50",
     "timestamp": "2025-06-08T10:00:00Z"
@@ -2257,7 +2258,8 @@ curl "https://<HOST_IP>:8443/api/v1/logs/?skip=0&limit=20" \
 | search | Query | string | 否 | 关键词搜索（匹配 IP、用户名、详情） |
 | start_date | Query | string | 否 | 起始日期（YYYY-MM-DD） |
 | end_date | Query | string | 否 | 截止日期（YYYY-MM-DD） |
-| skip | Query | int | 0 | 跳过记录数 |
+| cursor | Query | string | 否 | 游标分页标记（上一页最后一条记录的排序键，Base64 编码）。使用 cursor 时忽略 skip 参数 |
+| skip | Query | int | 0 | 跳过记录数（offset 分页，与 cursor 互斥） |
 | limit | Query | int | 50 | 每页记录数（1-200） |
 
 **action 值列表**
@@ -2313,6 +2315,7 @@ curl "https://<HOST_IP>:8443/api/v1/logs/?skip=0&limit=20" \
       "action": "block_terminal",
       "resource_type": "terminal",
       "resource_id": "192.168.1.100",
+      "resource_name": "192.168.1.100",
       "details": "{\"ip\": \"192.168.1.100\", \"mac\": \"AA:BB:CC:DD:EE:FF\", \"block_time\": \"30d\", \"firewall_tag\": \"sangfor-af1\"}",
       "ip_address": "10.0.0.50",
       "timestamp": "2025-06-08T10:00:00Z"
@@ -2320,16 +2323,26 @@ curl "https://<HOST_IP>:8443/api/v1/logs/?skip=0&limit=20" \
   ],
   "total": 200,
   "skip": 0,
-  "limit": 50
+  "limit": 50,
+  "next_cursor": "eyJpZCI6NTB9"
 }
 ```
 
 > **details 字段**：存储为 JSON 格式字符串，包含操作相关的结构化信息（如 IP 地址、MAC 地址、封锁时长、变更内容等），前端可解析后以格式化方式展示。
+>
+> **resource_name 字段**：存储人类可读的资源名称（如用户名、数据源名称、IP 地址等），优先于 resource_id 展示。当 resource_name 为 null 时，回退显示 resource_id。
+>
+> **cursor 分页**：使用 cursor 参数实现 keyset 分页，适用于大数据量深分页场景。首次请求不传 cursor，后续请求使用响应中的 `next_cursor` 值。当 `next_cursor` 为 null 时表示已到最后一页。
 
 **用例**
 
 ```bash
+# offset 分页
 curl "https://<HOST_IP>:8443/api/v1/logs/search?username=admin&action=block_terminal&start_date=2025-06-01&end_date=2025-06-08" \
+  -H "Authorization: Bearer <access_token>"
+
+# cursor 分页（深分页推荐）
+curl "https://<HOST_IP>:8443/api/v1/logs/search?cursor=eyJpZCI6NTB9&limit=50" \
   -H "Authorization: Bearer <access_token>"
 ```
 
@@ -2357,7 +2370,7 @@ curl "https://<HOST_IP>:8443/api/v1/logs/search?username=admin&action=block_term
 - Content-Type: `text/csv`
 - Content-Disposition: `attachment; filename=audit_logs.csv`
 
-CSV 列：`ID, Timestamp, Username, Action, Resource Type, Resource ID, IP Address, Details`
+CSV 列：`ID, Timestamp, Username, Action, Resource Type, Resource ID, Resource Name, IP Address, Details`
 
 **用例**
 

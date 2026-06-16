@@ -1,6 +1,6 @@
 # TerminalAccessManager 数据库设计文档
 
-> 文档版本：v3.2.0-r11  更新日期：2026-06-16
+> 文档版本：v3.2.0-r12  更新日期：2026-06-17
 
 ## 1. 概述
 
@@ -329,6 +329,7 @@ docker-compose.yml 中 PostgreSQL 的 `command` 参数列表如下：
 | action | VARCHAR(100) | NOT NULL, INDEX | — | 操作类型 |
 | resource_type | VARCHAR(50) | | NULL | 资源类型 |
 | resource_id | VARCHAR(100) | | NULL | 资源标识 |
+| resource_name | VARCHAR(200) | | NULL | 资源的可读名称（如用户名、数据源名称、IP 地址） |
 | details | TEXT | | NULL | 操作详情（JSON 格式，json.dumps 序列化，每个 dict 包含 message 字段） |
 | ip_address | VARCHAR(45) | INDEX | NULL | 请求来源 IP |
 | timestamp | TIMESTAMP WITH TZ | INDEX | utcnow | 操作时间 |
@@ -340,6 +341,7 @@ docker-compose.yml 中 PostgreSQL 的 `command` 参数列表如下：
 | idx_audit_user_timestamp | COMPOSITE | (username, timestamp) |
 | idx_audit_action | COMPOSITE | (action) |
 | idx_audit_ip_address | SINGLE | ip_address |
+| idx_audit_logs_keyset | COMPOSITE | (timestamp DESC, id DESC) |
 
 **数据字典 — resource_type：**
 
@@ -759,6 +761,8 @@ docker-compose.yml 中 PostgreSQL 的 `command` 参数列表如下：
 | 005_mac_normalized_column.py | terminals/whitelist/blacklist 三张表添加 mac_address_normalized 列，回填历史数据，创建索引 |
 | 006_rbac_tables.py | RBAC 权限控制表（roles、permissions、user_roles、role_permissions）及种子数据 |
 | 007_firewall_tag.py | terminals 表新增 firewall_tag 列（VARCHAR(50), nullable, default NULL） |
+| 008_audit_resource_name.py | audit_logs 表新增 resource_name 列 |
+| 009_audit_keyset_index.py | audit_logs 表新增 keyset 分页复合索引 |
 
 ### 003_search_indexes.py 详情
 

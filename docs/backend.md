@@ -1,6 +1,6 @@
 # TerminalAccessManager 后端实现文档
 
-> 文档版本：v3.2.0-r11 | 更新日期：2026-06-16
+> 文档版本：v3.2.0-r12 | 更新日期：2026-06-17
 
 ## 1. 概述
 
@@ -686,7 +686,13 @@ model.mac_address_normalized.ilike(f'{_escape_like(mac_clean)}%')
 | 方法 | 说明 |
 |------|------|
 | `search_audit_logs(username, action, search, start_date, end_date, skip, limit)` | 搜索审计日志，返回 `PaginatedResponse`，支持用户名、操作类型、关键词、日期范围 |
-| `log_action(db, username, action, resource_type, resource_id, details, ip_address)` | 公共审计日志写入函数，`details` 接收 dict 并使用 `json.dumps(details, ensure_ascii=False)` 序列化，`ip_address` 参数记录操作来源 IP |
+| `log_action(db, username, action, resource_type, resource_id, details, ip_address, resource_name=None)` | 公共审计日志写入函数，`details` 接收 dict 并使用 `json.dumps(details, ensure_ascii=False)` 序列化，`ip_address` 参数记录操作来源 IP，`resource_name` 参数记录资源的人类可读名称 |
+
+**resource_name 参数说明：**
+
+- `resource_name`（str, nullable）：可选参数，用于存储资源的人类可读名称。
+- 当设置时，存储资源的可辨识名称（如用户名、数据源名称、IP 地址等），便于审计日志阅读时快速识别资源。
+- 替代了之前仅存储 `resource_id`（如 `#id` 格式）的做法，使审计日志更直观可读。
 
 **action 命名变更对照表：**
 
@@ -1053,6 +1059,31 @@ API 响应中 IP 字段名兼容以下写法：
 
 ---
 
+### 4.6 SangforService (services/sangfor_service.py)
+
+#### 指数退避重试机制
+
+`_request_with_backoff()` 方法封装 `_request_with_retry()`，在请求失败时提供指数退避重试：
+
+| 配置项 | 值 | 说明 |
+|--------|-----|------|
+| 最大重试次数 | 3 | 加上首次请求，共 4 次尝试 |
+| 等待时间公式 | `min(2^attempt, 10)` 秒 | 指数递增，上限 10 秒 |
+| 实际等待序列 | 1s → 2s → 4s | 第 1 次重试等 1s，第 2 次等 2s，第 3 次等 4s |
+
+**重试条件：**
+
+| 异常类型 | 是否重试 | 说明 |
+|----------|---------|------|
+| `ConnectionError` | ✅ 重试 | 网络连接失败 |
+| `TimeoutError` | ✅ 重试 | 请求超时 |
+| `httpx.ConnectError` | ✅ 重试 | httpx 连接错误 |
+| `httpx.TimeoutException` | ✅ 重试 | httpx 超时异常 |
+| HTTP 5xx 响应 | ✅ 重试 | 服务端错误 |
+| HTTP 4xx 响应 | ❌ 不重试 | 客户端错误，重试无意义 |
+
+---
+
 ## 5. 定时任务
 
 | # | 函数名 | 配置项 | 默认间隔 | Fallback | 业务逻辑 |
@@ -1204,8 +1235,9 @@ python cli.py role permissions
 | test_whitelist.py | TestWhitelistModel | 2 | 白名单模型字段 |
 | | TestWhitelistValidation | 1 | 白名单输入验证 |
 | test_blacklist.py | TestBlacklistModel | 2 | 黑名单模型字段 |
+| test_compliance_service.py | TestComplianceService | 22 | 合规服务状态转换、自动封锁/解封、清理、白名单匹配、合规重算 |
 | test_app.py | TestGlobalExceptionHandler | 4 | 全局异常处理器 |
-| **合计** | | **43+** | |
+| **合计** | | **65+** | |
 
 ### 7.3 运行测试
 
@@ -1283,3 +1315,27 @@ python -m pytest tests/test_security.py -v
 |------|-------------|------|
 | `PUT /settings/` | `update_config` | 更新系统配置 |
 | `POST /settings/upload` | `upload_branding` | 上传品牌资源（登录背景图/Favicon），正确记录请求来源 IP 地址 |
+
+---
+
+## 9. 性能优化
+
+### 9.1 N+1 查询优化
+
+针对高频定时任务和批量操作中的 N+1 查询问题，已实施以下优化：
+
+#### cleanup_expired_blacklist 优化
+
+| 优化项 | 优化前 | 优化后 |
+|--------|--------|--------|
+| 加载受影响终端 | 逐条查询 Terminal（N 次查询） | 批量预加载所有受影响 Terminal（1 次查询） |
+| 检查活跃黑名单 | 逐条查询 Blacklist（N 次查询） | 批量检查活跃 Blacklist 记录（1 次查询） |
+| 获取防火墙服务实例 | 每次重新创建 SangforService | 预缓存 SangforService 实例，按 firewall_tag 复用 |
+
+#### batch_check_compliance 优化
+
+| 优化项 | 优化前 | 优化后 |
+|--------|--------|--------|
+| 白名单数据 | 逐条查询白名单匹配 | 一次性加载全部白名单数据到内存 |
+| IPGuard 基线数据 | 逐条查询合规基准匹配 | 一次性加载全部 IPGuard 数据到内存 |
+| 匹配方式 | 每条记录一次数据库查询 | 内存中批量匹配，无需逐条查询 |

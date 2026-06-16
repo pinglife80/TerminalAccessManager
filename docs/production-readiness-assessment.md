@@ -1,7 +1,7 @@
 # TerminalAccessManager (TAM) 生产环境交付可行性评估报告
 
 **评估日期：** 2026-06-10
-**评估版本：** v3.2.0-r11
+**评估版本：** v3.2.0-r12
 **评估方法：** 10 维度深度代码审查 + 架构分析 + 安全扫描 + 业务链验证
 **修复状态：** 阶段一~三已完成 + 6项高风险修复已完成，3 Critical + 7 High + 8 Medium = 18 项安全问题已修复，6 项高风险问题已修复；v3.2.0 新增：Request-ID 链路追踪、时区全局控制、日志格式函数化、Docker 安全加固注释化
 **综合评分：** **9.0/10** — 达到生产交付就绪状态
@@ -22,7 +22,7 @@
 | 6 | 性能负载 | 8.5 | 10% | 0.85 | ✅ 良好 | MAC 标准化列+索引优化，连接池/缓存/代码分割到位 |
 | 7 | 系统鲁棒性 | 8.5 | 10% | 0.85 | ✅ 良好 | Redis fail-open 降级统一，10 个函数异常处理完整 |
 | 8 | 幂等性 | 7.5 | 5% | 0.38 | ⚠️ 良好 | 部署/备份/SSL 幂等，mock 终端和审计日志不幂等 |
-| 9 | 交付件质量 | 8.0 | 8% | 0.64 | ✅ 良好 | CI/CD 流水线已建立，后端 63 测试 + 前端 58 测试通过 |
+| 9 | 交付件质量 | 8.0 | 8% | 0.64 | ✅ 良好 | CI/CD 流水线已建立，后端 85 测试 + 前端 58 测试通过 |
 | 10 | 后期扩展 | 8.0 | 8% | 0.64 | ✅ 良好 | 服务层边界清晰，分布式锁支持，数据源可插件化 |
 | | **综合评分** | | **100%** | **8.64 → 9.0** | | |
 
@@ -40,7 +40,7 @@
 | 生产环境密钥分离 | 必须 | **已就绪** | ✅ |
 | 备份与恢复机制 | 必须 | **已就绪（含Redis）** | ✅ |
 | CI/CD 流水线 | 建议 | **已建立** | ✅ |
-| 核心业务测试覆盖 | ≥30% | **~25%** | ⚠️ |
+| 核心业务测试覆盖 | ≥30% | **~30%** | ⚠️ |
 | 前端测试覆盖 | ≥20% | **~15%** | ⚠️ |
 
 **结论：项目在功能、安全、部署、鲁棒性、性能维度已达到生产交付标准。测试覆盖率持续提升中，CI/CD 流水线已建立，6项高风险问题已全部修复。**
@@ -161,7 +161,7 @@ manage.sh（3,094 行）提供 30+ 命令，覆盖完整运维生命周期：
 | 风险 | 严重程度 | 说明 |
 |------|:-------:|------|
 | postgres/redis 无 restart 策略 | 中 | 容器异常退出后不会自动重启 |
-| 缺少 docker-compose.prod.yml | 中 | 无法针对生产环境做差异化配置 |
+| ~~缺少 docker-compose.prod.yml~~ | ~~中~~ | ~~已创建：docker-compose.prod.yml，含安全加固配置~~ |
 | SSL 证书缺失时 nginx 启动失败 | 中 | 应增加证书存在性检查 |
 | frontend Dockerfile 单阶段构建 | 低 | 镜像体积偏大，含 node_modules 和源码 |
 
@@ -322,7 +322,7 @@ v3.2.0 对 docker-compose.yml 中的生产加固项采用了注释化策略：
 |------|:-------:|------|
 | 旧版无 type 字段 Token 仍被接受 | 低 | 建议设置过渡期后强制验证 |
 | CSP `unsafe-inline` | 中 | Tailwind CSS 需要，削弱 XSS 防护 |
-| 容器未 `cap_drop: [ALL]` 和非 root | 中 | 建议在 docker-compose.yml 中添加 |
+| ~~容器未 `cap_drop: [ALL]` 和非 root~~ | ~~中~~ | ~~已修复：docker-compose.prod.yml 已配置 cap_drop:ALL~~ |
 | sessionStorage Token 可被 XSS 读取 | 低 | 管理类系统可接受，建议 v4.0 改 httpOnly cookie |
 | Redis 无 TLS 连接 | 低 | 容器内网络通信，可考虑启用 |
 | 验证码用 `random` 而非 `secrets` | 低 | 场景不需要密码学安全随机数 |
@@ -508,22 +508,22 @@ v3.2.0-r4 将终端 `status` 字段从 6 值枚举（active/inactive/frozen/pend
 
 | 文档 | 版本号 | 评估 |
 |------|:------:|:----:|
-| architecture.md | v3.2.0-r11 | ✅ |
-| backend.md | v3.2.0-r11 | ✅ |
-| api.md | v3.2.0-r11 | ✅ |
-| database.md | v3.2.0-r11 | ✅ |
-| deployment.md | v3.2.0-r11 | ✅ |
-| manage-sh-reference.md | v3.2.0-r11 | ✅ |
-| logging-guide.md | v3.2.0-r11 | ✅ |
-| git-workflow-guide.md | v3.2.0-r11 | ✅ |
+| architecture.md | v3.2.0-r12 | ✅ |
+| backend.md | v3.2.0-r12 | ✅ |
+| api.md | v3.2.0-r12 | ✅ |
+| database.md | v3.2.0-r12 | ✅ |
+| deployment.md | v3.2.0-r12 | ✅ |
+| manage-sh-reference.md | v3.2.0-r12 | ✅ |
+| logging-guide.md | v3.2.0-r12 | ✅ |
+| git-workflow-guide.md | v3.2.0-r12 | ✅ |
 | branding.md | v3.2.0 | ✅ |
-| changelog.md | v3.2.0-r11 | ✅ |
-| frontend/implementation.md | v3.2.0-r11 | ✅ |
-| production-readiness-assessment.md | v3.2.0-r11 | ✅ |
-| datasource-lifecycle.md | v3.2.0-r11 | ✅ |
-| RBAC.md | v3.2.0-r11 | ✅ |
+| changelog.md | v3.2.0-r12 | ✅ |
+| frontend/implementation.md | v3.2.0-r12 | ✅ |
+| production-readiness-assessment.md | v3.2.0-r12 | ✅ |
+| datasource-lifecycle.md | v3.2.0-r12 | ✅ |
+| RBAC.md | v3.2.0-r12 | ✅ |
 
-**文档版本号统一为 v3.2.0-r11 ✅**
+**文档版本号统一为 v3.2.0-r12 ✅**
 
 ### 10.2 配置文件完整性
 
@@ -547,20 +547,20 @@ v3.2.0-r4 将终端 `status` 字段从 6 值枚举（active/inactive/frozen/pend
 | ~~后端 lint/格式化配置~~ | ~~High~~ | ~~已创建：backend/pyproject.toml (ruff)~~ |
 | ~~pytest.ini~~ | ~~Medium~~ | ~~已配置：backend/pyproject.toml [tool.pytest.ini_options]~~ |
 | **pre-commit 配置** | Medium | 无法在提交前自动检查 |
-| **docker-compose.prod.yml** | Medium | 无生产环境 override 文件 |
+| ~~docker-compose.prod.yml~~ | ~~Medium~~ | ~~已创建：docker-compose.prod.yml，含 no-new-privileges、cap_drop:ALL、read_only 安全加固~~ |
 
 ### 10.4 测试覆盖
 
 | 维度 | 覆盖率 | 说明 |
 |------|:------:|------|
-| 后端模块覆盖 | ~25% | 37 个源文件中 10 个有测试（含新增 4 个测试文件） |
-| 后端用例数 | 63 | test_core(11) + test_auth(14) + test_app(2) + test_security(23) + test_terminals(9) + test_whitelist(3) + test_blacklist(2) |
+| 后端模块覆盖 | ~30% | 37 个源文件中 11 个有测试（含新增 5 个测试文件） |
+| 后端用例数 | 85 | test_core(11) + test_auth(14) + test_app(2) + test_security(23) + test_terminals(9) + test_whitelist(3) + test_blacklist(2) + test_compliance_service(22) |
 | 前端测试 | ~15% | 3 个测试文件：utils(42) + theme(8) + auth(8) = 58 用例 |
 | E2E 测试 | **0%** | 无 Cypress/Playwright |
 | 性能测试 | **0%** | 无 Locust/k6 |
 | 安全测试 | 极低 | 仅少量安全相关单元测试 |
 
-**未覆盖的核心模块：** compliance_service、arp_collector_service、config_service、data_source_service、sangfor_service（占后端代码量 35%）
+**未覆盖的核心模块：** arp_collector_service、config_service、data_source_service、sangfor_service（占后端代码量 25%）
 
 ### 10.5 代码质量
 
@@ -616,7 +616,7 @@ v3.2.0-r4 将终端 `status` 字段从 6 值枚举（active/inactive/frozen/pend
 | 1 | ~~Token 黑名单/登录锁定 Redis fail-closed~~ | 鲁棒性 | ~~高~~ | 中 | v3.1 | ✅ 已修复 |
 | 2 | ~~无 CI/CD 流水线~~ | 交付件 | ~~高~~ | 中 | v3.1 | ✅ 已修复 |
 | 3 | ~~前端零测试覆盖~~ | 交付件 | ~~高~~ | 高 | v3.1-v3.5 | ✅ 已修复(58用例) |
-| 4 | ~~后端核心业务零测试~~ | 交付件 | ~~高~~ | 高 | v3.1-v3.5 | ✅ 部分修复(63用例) |
+| 4 | ~~后端核心业务零测试~~ | 交付件 | ~~高~~ | 高 | v3.1-v3.5 | ✅ 部分修复(85用例) |
 | 5 | ~~MAC 地址 LIKE 搜索全表扫描~~ | 性能 | ~~高~~ | 中 | v3.1 | ✅ 已修复 |
 | 6 | ~~restore 不恢复 Redis 数据~~ | 维护 | ~~高~~ | 低 | v3.1 | ✅ 已修复 |
 | 7 | 缺少 LICENSE 文件 | 交付件 | 中 | 低 | v3.1 | 待修复 |
@@ -626,7 +626,7 @@ v3.2.0-r4 将终端 `status` 字段从 6 值枚举（active/inactive/frozen/pend
 | 11 | 缺少日志聚合方案 | 维护 | 中 | 高 | v3.5 | 待修复 |
 | 12 | 缺少告警系统 | 维护 | 中 | 高 | v3.5 | 待修复 |
 | 13 | audit_logs 无分区策略 | 扩展 | 中 | 中 | v3.5 | 待修复 |
-| 14 | 容器未 cap_drop: [ALL] | 安全 | 中 | 低 | v3.1 | 待修复 |
+| 14 | ~~容器未 cap_drop: [ALL]~~ | 安全 | ~~中~~ | 低 | v3.1 | ✅ 已修复 |
 | 15 | 前端 Dockerfile 单阶段构建 | 部署 | 低 | 低 | v3.5 | 待修复 |
 
 ### 12.2 风险分布
@@ -634,7 +634,7 @@ v3.2.0-r4 将终端 `status` 字段从 6 值枚举（active/inactive/frozen/pend
 ```
 严重程度 ──→
 高    │  ✅ #1-6 全部已修复
-中    │  #7-14 (8项待修复)
+中    │  #7-13 (7项待修复) + ✅ #14 已修复
 低    │  #15+ (1项待修复)
       └──────────────────
         部署  鲁棒性  交付件  性能  维护  安全  扩展
@@ -661,6 +661,18 @@ v3.2.0-r4 将终端 `status` 字段从 6 值枚举（active/inactive/frozen/pend
 | 2 | postgres/redis 添加 restart: unless-stopped | 容器自动恢复 | ✅ 已完成 |
 | 3 | 全局异常处理中间件 | 统一错误响应格式 | ✅ 已完成 |
 | 4 | 容器 cap_drop: [ALL] | 安全加固 | ✅ 已完成 |
+
+### 13.2.1 P0-P3 生产就绪改进完成记录（v3.2.0-r12）
+
+| 优先级 | 编号 | 改进项 | 完成内容 | 状态 |
+|:------:|:----:|--------|---------|:----:|
+| P0 | P0-1 | 容器安全加固 | docker-compose.prod.yml 创建，含 no-new-privileges、cap_drop:ALL、read_only 安全加固 | ✅ 已完成 |
+| P0 | P0-2 | Docker 健康检查 | 为 nginx/backend 服务添加 healthcheck 配置 | ✅ 已完成 |
+| P1 | P1-1 | 核心服务单元测试 | 新增 test_compliance_service.py，22 个测试用例，后端用例数 63→85 | ✅ 已完成 |
+| P1 | P1-2 | 深信服 API 指数退避重试 | sangfor_service 调用添加 exponential backoff retry 机制 | ✅ 已完成 |
+| P2 | P2-1 | N+1 查询优化 | cleanup_expired_blacklist 批量查询替代逐条查询 | ✅ 已完成 |
+| P2 | P2-2 | 灾备方案 + 运维手册 | 灾难恢复计划与运维操作手册文档 | ✅ 已完成 |
+| P3 | P3-1 | 深分页优化 | audit_logs 等大表改用 keyset pagination 替代 offset 分页 | ✅ 已完成 |
 
 ### 13.3 交付后第一迭代（v3.1-v3.5）
 
@@ -695,9 +707,9 @@ v3.2.0-r4 将终端 `status` 字段从 6 值枚举（active/inactive/frozen/pend
 
 ### 核心短板
 
-1. **测试覆盖仍需提升**：后端 ~25%、前端 ~15%，核心业务服务（compliance/arp/config）仍缺测试
+1. **测试覆盖仍需提升**：后端 ~30%、前端 ~15%，核心业务服务（arp/config）仍缺测试
 2. **可观测性不足**：无日志聚合、无告警系统、无生产 APM
-3. **部分交付件缺失**：LICENSE 文件、docker-compose.prod.yml、pre-commit 配置
+3. **部分交付件缺失**：LICENSE 文件、pre-commit 配置
 
 ### 最终评分
 
@@ -715,7 +727,7 @@ v3.2.0-r4 将终端 `status` 字段从 6 值枚举（active/inactive/frozen/pend
 | 后期扩展 | 8.0 | 8% |
 | **综合评分** | **9.0** | **100%** |
 
-**项目已达到生产交付就绪状态。6 项高风险问题已全部修复并验证通过（后端 63 测试 + 前端 58 测试全部通过），CI/CD 流水线已建立。建议正式交付后持续提升测试覆盖率和可观测性。**
+**项目已达到生产交付就绪状态。6 项高风险问题已全部修复并验证通过（后端 85 测试 + 前端 58 测试全部通过），CI/CD 流水线已建立。建议正式交付后持续提升测试覆盖率和可观测性。**
 
 ---
 

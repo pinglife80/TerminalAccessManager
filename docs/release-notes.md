@@ -1,6 +1,6 @@
 # 版本跟踪记录
 
-> 文档版本：v3.2.0-r11 | 更新日期：2026-06-16
+> 文档版本：v3.2.0-r12 | 更新日期：2026-06-17
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
@@ -26,6 +26,80 @@
 | 9100a8d | fix(search): increase debounce delay from 300ms to 500ms across all pages |
 | 2f2add5 | fix: prevent superadmin role modification and fix Users search flickering |
 | 0b36d78 | docs: update RBAC documentation to v3.0 with current implementation |
+
+---
+
+## [v3.2.0-r12] - 2026-06-17
+
+### 审计日志优化与生产就绪改进
+
+#### 审计日志优化
+- Action 命名统一为 verb_resource 格式（block_terminal, auto_block_terminal, change_role 等）
+- 新增 resource_name 列，存储人类可读资源名称
+- 审计日志搜索支持 keyset 分页（cursor 参数）
+- CSV 导出新增 Resource Name 列
+- 前端 AuditLogs.tsx 新增 action 分类体系和 resource_name 优先展示
+
+#### 生产就绪改进
+- Docker 安全加固：docker-compose.prod.yml（no-new-privileges, cap_drop:ALL, read_only）
+- Docker 健康检查：所有服务添加 healthcheck 配置
+- Sangfor API 指数退避重试：最多 3 次重试，指数等待
+- N+1 查询优化：cleanup_expired_blacklist 和 batch_check_compliance 批量预加载
+- 核心服务单元测试：22 个 compliance_service 测试用例
+
+#### 部署模式统一
+- deploy --dev 替代 --demo，自动设置 ENVIRONMENT 变量
+- docker-compose 三层架构：base + dev/prod override
+- Nginx 环境差异化：开发 HTTP+宽松限流 vs 生产 HTTPS+标准限速
+- 生产环境禁止 mock generate
+
+#### Mock 数据业务对齐
+- 28 种 verb_resource action 覆盖所有业务场景
+- JSON 格式 details 替代纯文本
+- resource_name 字段完整设置
+- firewall_tag 与 DataSourceBinding 绑定关系一致
+- 自动封堵 blocked_by="system"
+
+### 提交记录
+
+| 提交 | 说明 |
+|------|------|
+| da420a4 | fix(audit): unify action naming, add resource_name for meaningful display |
+| c65466b | chore: remove sangfor_api docs and todos.md from git tracking |
+| 3ed025c | feat(production-readiness): P0-P3 improvements for production deployment |
+| 7722146 | refactor(deploy): unify deployment modes to dev/prod, fix mock data business alignment |
+
+### 文件变更
+- `backend/app/models/log.py` — 新增 resource_name 列
+- `backend/app/schemas/terminal.py` — AuditLogBase 新增 resource_name, AuditLogQuery 新增 cursor, 新增 CursorPaginatedResponse
+- `backend/alembic/versions/008_audit_resource_name.py` — 新增 resource_name 列迁移
+- `backend/alembic/versions/009_audit_keyset_index.py` — keyset 分页复合索引迁移
+- `backend/app/api/v1/endpoints/auth.py` — action 命名统一 + resource_name 设置
+- `backend/app/api/v1/endpoints/data_sources.py` — resource_name 设置
+- `backend/app/api/v1/endpoints/logs.py` — keyset 分页 + CSV 导出新增列
+- `backend/app/api/v1/endpoints/roles.py` — action 命名统一 + resource_name 设置
+- `backend/app/api/v1/endpoints/settings.py` — resource_name 设置
+- `backend/app/api/v1/endpoints/compliance_baselines.py` — resource_name 设置
+- `backend/app/services/sangfor_service.py` — 指数退避重试
+- `backend/app/services/terminal_service.py` — N+1 优化 + action 命名统一
+- `backend/app/services/compliance_service.py` — N+1 优化 + action 命名统一
+- `backend/tests/test_compliance_service.py` — 22 个单元测试
+- `backend/cli.py` — Mock 数据业务对齐
+- `docker-compose.yml` — 健康检查 + 资源限制 + 日志轮转
+- `docker-compose.prod.yml` — 生产安全加固
+- `docker-compose.dev.yml` — 开发环境 override
+- `nginx/etc/conf.d/tam.conf` — 限速调整
+- `nginx/etc/conf.d/tam.dev.conf` — 开发环境 Nginx 配置
+- `manage.sh` — 部署模式统一 + ENVIRONMENT 自动设置 + mock 生产限制
+- `frontend/src/pages/AuditLogs.tsx` — action 分类 + resource_name 展示 + cursor 分页
+- `frontend/src/hooks/useTerminalData.ts` — cursor 分页适配
+- `frontend/src/i18n/locales/zh.ts` — 新增 action 翻译
+- `frontend/src/i18n/locales/en.ts` — 新增 action 翻译
+- `frontend/src/i18n/locales/ja.ts` — 新增 action 翻译
+- `.env.example` — 新增 ENVIRONMENT 变量
+- `.gitignore` — 新增 docs/sangfor_api 和 docs/todos.md
+- `docs/disaster-recovery.md` — 灾难恢复计划
+- `docs/operations-runbook.md` — 运维操作手册
 
 ---
 

@@ -1,6 +1,6 @@
 # manage.sh 命令行操作手册
 
-> 文档版本：v3.2.0-r11  更新日期：2026-06-16
+> 文档版本：v3.2.0-r12  更新日期：2026-06-17
 
 TerminalAccessManager (TAM) 统一管理脚本，用于项目全生命周期管理。
 
@@ -47,29 +47,33 @@ TerminalAccessManager (TAM) 统一管理脚本，用于项目全生命周期管�
 
 **命令格式：**
 ```bash
-./manage.sh deploy [--demo|--prod]
+./manage.sh deploy [--dev|--prod]
 ```
 
 **参数说明：**
 | 参数 | 说明 |
 |------|------|
-| `--demo` | 演示模式：自动配置 + 生成样例数据 |
-| `--prod` | 生产模式：手动配置向导 |
+| `--dev` | 开发模式：自动配置 + 生成样例数据，自动设置 `ENVIRONMENT=development` |
+| `--prod` | 生产模式：手动配置向导，自动设置 `ENVIRONMENT=production` |
+| `--demo` | ⚠ 已弃用，重定向到 `--dev` |
+
+> **环境变量自动设置：** `deploy --dev` 自动在 `.env` 中设置 `ENVIRONMENT=development`，`deploy --prod` 自动设置 `ENVIRONMENT=production`。该变量影响 `mock generate`、`dc()` 等命令的行为。
 
 **执行效果：**
 1. 检查前置条件（Docker、磁盘空间、端口）
 2. `_check_required_env` 函数：启动前检查 `DB_PASSWORD`、`REDIS_PASSWORD`、`SECRET_KEY` 是否已设置，缺失则中止部署
 3. 生成 SSL 证书
 4. 配置环境变量（.env）
-5. 生产向导（`--prod`）和 Demo 模式（`--demo`）自动生成 `ENCRYPTION_KEY`（Fernet 密钥），用于敏感数据加密
+5. 生产向导（`--prod`）和开发模式（`--dev`）自动生成 `ENCRYPTION_KEY`（Fernet 密钥），用于敏感数据加密
 6. 构建并启动所有服务
 7. 初始化数据库和管理员账户
-8. 演示模式下自动生成 Mock 数据
+8. 开发模式下自动生成 Mock 数据
 
 **示例：**
 ```bash
-./manage.sh deploy --demo          # 快速演示部署
+./manage.sh deploy --dev           # 开发模式部署（含样例数据）
 ./manage.sh deploy --prod          # 生产部署（交互式向导）
+./manage.sh deploy --demo          # 已弃用，等同于 --dev
 ./manage.sh -y deploy --prod       # 非交互式生产部署
 ```
 
@@ -340,6 +344,8 @@ cp .env .env.backup             # 备份配置文件
 **执行效果：** 创建数据源、合规基准、终端、白名单、黑名单、审计日志等样例数据。幂等操作，已有数据不会被覆盖。
 
 > RBAC 种子数据：`mock generate` 自动创建5个预设角色（superadmin/admin/operator/auditor/viewer）和29个权限码，并为演示用户分配对应角色。
+
+> **⚠ 生产环境阻止：** `mock generate` 会检查 `.env` 文件中的 `ENVIRONMENT` 变量，当 `ENVIRONMENT=production` 时拒绝执行并提示错误。此机制防止在生产环境中误操作生成测试数据。如需强制执行，需先将 `ENVIRONMENT` 改为非 `production` 值。
 
 ---
 
@@ -910,12 +916,44 @@ cp .env .env.backup             # 备份配置文件
 
 ---
 
+### 4.11 dc() — Docker Compose 辅助函数
+
+**风险等级：** 🟢 安全
+
+**应用场景：** 简化 docker compose 调用，自动根据环境加载对应的 compose 文件
+
+**命令格式：**
+```bash
+dc [docker_compose_args]
+```
+
+**自动加载规则：**
+
+| `ENVIRONMENT` 值 | 自动加载的 Compose 文件 |
+|-------------------|------------------------|
+| `development` | `docker-compose.dev.yml` |
+| `production` | `docker-compose.prod.yml` |
+| 未设置 / 其他 | `docker-compose.yml`（默认） |
+
+> **说明：** `dc()` 函数读取 `.env` 文件中的 `ENVIRONMENT` 变量，自动选择对应的 compose 文件。用户无需手动通过 `-f` 参数指定 compose 文件，直接使用 `dc up -d`、`dc ps` 等命令即可。
+
+**示例：**
+```bash
+dc up -d            # 根据当前环境启动服务
+dc ps               # 查看服务状态
+dc logs backend     # 查看后端日志
+dc restart nginx    # 重启 Nginx
+```
+
+---
+
 ## 五、环境变量说明
 
 以下环境变量可在 `.env` 文件中配置，影响 `manage.sh` 的行为：
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
+| `ENVIRONMENT` | — | 运行环境标识（`development` / `production`），由 `deploy --dev`/`--prod` 自动设置。影响 `mock generate`（生产环境阻止执行）和 `dc()` 函数（自动选择 compose 文件） |
 | `ADMIN_PASSWORD` | — | 自定义初始管理员密码（在 `deploy`/`init` 时使用） |
 | `BACKUP_RETAIN_COUNT` | 0（保留全部） | 备份文件保留数量，超过此数量自动清理最旧的备份 |
 | `TAM_LOG_ENABLED` | false | 启用 manage.sh 操作日志记录（也可通过 `--log` 选项单次启用） |
@@ -1001,6 +1039,7 @@ cp .env .env.backup             # 备份配置文件
 | `ssl` | 🟢 | SSL 证书 | ✅ |
 | `clean` | 🔴 | 清理所有 | ❌ |
 | `version` | 🟢 | 版本信息 | ✅ |
+| `dc()` | 🟢 | Docker Compose 辅助 | ✅ |
 
 ---
 
@@ -1140,7 +1179,7 @@ cp .env .env.backup             # 备份配置文件
 
 ### 场景 1：首次部署
 ```bash
-./manage.sh deploy --demo       # 演示环境
+./manage.sh deploy --dev        # 开发环境（含样例数据）
 ./manage.sh deploy --prod       # 生产环境
 ```
 

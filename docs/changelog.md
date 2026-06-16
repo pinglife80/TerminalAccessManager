@@ -1,6 +1,6 @@
 # 更新日志
 
-> 文档版本：v3.2.0-r11  更新日期：2026-06-16
+> 文档版本：v3.2.0-r12  更新日期：2026-06-17
 
 本文件记录 TerminalAccessManager 的所有重要变更。
 
@@ -13,6 +13,27 @@
 
 ### 新增
 
+- 审计日志 `resource_name` 字段：存储人类可读资源名称（用户名、数据源名称、IP 地址等），替代无意义的 #id 显示
+- 审计日志 keyset 分页：`/api/v1/logs/search` 新增 cursor 参数，支持深分页高性能查询
+- Docker 安全加固：docker-compose.prod.yml 实现容器安全最佳实践（no-new-privileges、cap_drop:ALL、read_only）
+- Docker 健康检查：所有服务添加 healthcheck 配置，支持容器编排健康探测
+- Sangfor API 指数退避重试：`_request_with_backoff` 方法，最多 3 次重试，等待时间指数增长（1s→2s→4s，上限 10s）
+- 核心服务单元测试：compliance_service 22 个测试用例（状态转换、自动封堵/解封、过期清理、白名单匹配、合规重算）
+- 灾难恢复计划：docs/disaster-recovery.md（故障分级 P0-P3、各组件恢复步骤、RPO/RTO 目标）
+- 运维操作手册：docs/operations-runbook.md（日常巡检、故障排查、定时任务管理、升级回滚）
+- 部署模式统一：`deploy --dev` 替代 `deploy --demo`，自动设置 ENVIRONMENT 变量
+- 开发环境 Nginx 配置：tam.dev.conf（HTTP 直连 + 放宽限流 120r/m+30r/m）
+- docker-compose.dev.yml：开发环境 override 文件，自动加载 tam.dev.conf
+- Mock 数据业务对齐：28 种 verb_resource action、JSON details、resource_name、firewall_tag 绑定关系一致
+
+### 改进
+
+- 审计日志 action 命名统一为 verb_resource 格式：block_ip→block_terminal, unblock_ip→unblock_terminal, auto_block→auto_block_terminal, auto_unblock→auto_unblock_terminal, cleanup_expired→cleanup_expired_blacklist, role_change→change_role
+- N+1 查询优化：cleanup_expired_blacklist 批量预加载 Terminal + 批量检查活跃 Blacklist + 缓存 SangforService；batch_check_compliance 一次性加载白名单和 IPGuard 数据
+- Nginx 生产限速调整：api_limit 30r/m→60r/m，auth_limit 5r/m→10r/m，避免前端正常操作触发限速
+- 生产环境禁止 mock generate：`cmd_mock()` 检测 ENVIRONMENT=production 时拒绝执行
+- Mock 数据 blocked_by 修正：自动封堵 blocked_by="system"，手动封堵使用操作者用户名
+- 从 git 移除 sangfor_api 文件夹和 todos.md：仅保留本地，不再追踪到仓库
 - 终端封堵绑定验证：封堵终端前强制检查绑定关系，无绑定时显示防火墙选择器和无绑定错误提示（Terminals.tsx）
 - 数据源标签页绑定状态列：数据源列表新增绑定状态列，已禁用 ARP 数据源显示"合规状态已冻结"（DataSourcesTab.tsx）
 - 启用无绑定数据源确认对话框：启用未绑定防火墙的 ARP 数据源时弹出确认提示（DataSourcesTab.tsx）
@@ -39,9 +60,6 @@
 - RBAC 后端测试：11个测试用例（权限缓存、权限检查、缓存失效）
 - RBAC 前端测试：20个 usePermission Hook 测试用例
 - RBAC 文档：`docs/RBAC.md`（从"角色管理与用户访问控制说明文档"重命名）
-
-### 改进
-
 - 数据源删除操作从直接删除改为安全删除（先自动善后再删除）
 - 绑定关系删除操作从直接删除改为安全删除（先解封终端再删除绑定）
 - 合规基准删除操作增加 Redis 缓存清理和合规重算步骤
