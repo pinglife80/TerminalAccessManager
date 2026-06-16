@@ -1,0 +1,10 @@
+# Development environment overrides
+# Usage: docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+# Or: ENVIRONMENT=development bash manage.sh deploy --dev
+
+services:
+  nginx:
+    volumes:
+      - ./nginx/etc/conf.d/tam.dev.conf:/etc/nginx/conf.d/default.conf
+      - ./nginx/certs:/etc/nginx/ssl:ro
+      - frontend_dist:/usr/share/nginx/html:ro

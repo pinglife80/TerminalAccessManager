@@ -13,7 +13,7 @@
 #   -h, --help      Show help message
 #
 # Lifecycle Commands:
-#   deploy [--demo|--prod]     Full deployment with initialization wizard
+#   deploy [--dev|--prod]       Full deployment with initialization wizard
 #   start                      Start all services (idempotent)
 #   stop                       Stop all services (idempotent)
 #   restart [service]          Restart all or specific service
@@ -268,6 +268,10 @@ dc() {
     if [ "${ENVIRONMENT}" = "production" ] || [ "${ENVIRONMENT}" = "prod" ]; then
         if [ -f "${SCRIPT_DIR}/docker-compose.prod.yml" ]; then
             compose_files="${compose_files} -f ${SCRIPT_DIR}/docker-compose.prod.yml"
+        fi
+    elif [ "${ENVIRONMENT}" = "development" ] || [ "${ENVIRONMENT}" = "dev" ]; then
+        if [ -f "${SCRIPT_DIR}/docker-compose.dev.yml" ]; then
+            compose_files="${compose_files} -f ${SCRIPT_DIR}/docker-compose.dev.yml"
         fi
     fi
     docker compose --env-file "${ENV_FILE}" ${compose_files} "$@"
@@ -621,8 +625,9 @@ cmd_deploy() {
     # Parse arguments
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --demo)  mode="demo"  ;;
+            --dev)   mode="dev"   ;;
             --prod)  mode="prod"  ;;
+            --demo)  mode="dev"; log_warn "--demo is deprecated, use --dev instead" ;;
             *)       log_error "Unknown option: $1"; cmd_help; exit 1 ;;
         esac
         shift
@@ -634,16 +639,16 @@ cmd_deploy() {
     if [ -z "$mode" ]; then
         echo -e "${BOLD}Select deployment mode:${NC}"
         echo ""
-        echo -e "  ${GREEN}1) Demo${NC}        - Quick start with auto-config and sample data"
+        echo -e "  ${GREEN}1) Development${NC}  - Quick start with auto-config (can generate mock data)"
         echo -e "                  Best for: evaluation, testing, development"
         echo ""
-        echo -e "  ${YELLOW}2) Production${NC}  - Manual configuration, production-ready"
+        echo -e "  ${YELLOW}2) Production${NC}   - Manual configuration, production-ready"
         echo -e "                  Best for: live deployment, real traffic"
         echo ""
         read -rp "Choose [1/2]: " choice
         case "$choice" in
-            1) mode="demo"  ;;
-            2) mode="prod"  ;;
+            1) mode="dev"  ;;
+            2) mode="prod" ;;
             *) log_error "Invalid selection"; exit 1 ;;
         esac
     fi
@@ -694,8 +699,8 @@ cmd_deploy() {
     # ─── Step 4: Environment Configuration ───────────────────────────────
     log_step "Step 3/6: Environment Configuration"
 
-    if [ "$mode" = "demo" ]; then
-        _configure_demo_env
+    if [ "$mode" = "dev" ]; then
+        _configure_dev_env
     else
         _configure_production_wizard
     fi
@@ -772,11 +777,15 @@ cmd_deploy() {
         fi
     fi
 
-    # ─── Demo Data ───────────────────────────────────────────────────────
-    if [ "$mode" = "demo" ]; then
-        log_step "Generating Demo Data"
-        dc exec -T backend python cli.py mock generate
-        log_success "Demo data generated"
+    # ─── Mock Data (development only) ────────────────────────────────────
+    if [ "$mode" = "dev" ]; then
+        if confirm "Generate mock/demo data for testing?" "default_yes"; then
+            log_step "Generating Mock Data"
+            dc exec -T backend python cli.py mock generate
+            log_success "Mock data generated"
+        else
+            log_info "Skipping mock data generation"
+        fi
     fi
 
     # ─── Save deployment state ───────────────────────────────────────────
@@ -812,10 +821,10 @@ cmd_deploy() {
     echo -e "  ${CYAN}HTTP:${NC}   http://localhost:8080 (redirects to HTTPS)"
     echo ""
 
-    if [ "$mode" = "demo" ]; then
+    if [ "$mode" = "dev" ]; then
         echo -e "  ${CYAN}Login:${NC}   admin / Admin123"
         echo ""
-        echo -e "  ${YELLOW}This is a DEMO environment with sample data${NC}"
+        echo -e "  ${YELLOW}This is a DEVELOPMENT environment${NC}"
         echo -e "  ${YELLOW}NOT suitable for production use${NC}"
     else
         echo -e "  ${CYAN}Login:${NC}   admin / [password you set]"
@@ -832,14 +841,14 @@ cmd_deploy() {
     echo ""
 }
 
-_configure_demo_env() {
-    # Demo: always regenerate .env for consistency
+_configure_dev_env() {
+    # Development: always regenerate .env for consistency
     rm -f "${ENV_FILE}"
     cp "${ENV_EXAMPLE}" "${ENV_FILE}"
 
     local db_pass redis_pass secret enc_key
-    db_pass="demo_db_pass_$(openssl rand -hex 4)"
-    redis_pass="demo_redis_$(openssl rand -hex 4)"
+    db_pass="dev_db_pass_$(openssl rand -hex 4)"
+    redis_pass="dev_redis_$(openssl rand -hex 4)"
     secret="$(openssl rand -hex 32)"
     enc_key="$(openssl rand -hex 32)"
 
@@ -848,6 +857,7 @@ _configure_demo_env() {
     set_env "SECRET_KEY" "${secret}"
     set_env "ENCRYPTION_KEY" "${enc_key}"
     set_env "ADMIN_PASSWORD" "Admin123"
+    set_env "ENVIRONMENT" "development"
 
     # Clear optional integrations
     set_env "SANGFOR_BASE_URL" ""
@@ -857,7 +867,7 @@ _configure_demo_env() {
     set_env "SWITCH_USERNAME" ""
     set_env "SWITCH_PASSWORD" ""
 
-    log_success "Demo environment configured (auto-generated passwords)"
+    log_success "Development environment configured (auto-generated passwords)"
 }
 
 _configure_production_wizard() {
@@ -1020,6 +1030,9 @@ _configure_production_wizard() {
     echo ""
 
     log_success "Production environment configured"
+
+    # Set ENVIRONMENT to production (critical for Docker security hardening)
+    set_env "ENVIRONMENT" "production"
 }
 
 _edit_existing_env() {
@@ -2029,6 +2042,16 @@ cmd_test() {
 ###############################################################################
 cmd_mock() {
     local subcmd="${1:-}"
+
+    # Block mock operations in production environment
+    local env_mode
+    env_mode=$(get_env "ENVIRONMENT")
+    if [ "${env_mode}" = "production" ] || [ "${env_mode}" = "prod" ]; then
+        log_error "Mock data operations are not allowed in production environment"
+        log_error "Current ENVIRONMENT=${env_mode}"
+        log_error "If this is a mistake, check your .env file"
+        exit 1
+    fi
 
     case "$subcmd" in
         generate)
@@ -3636,7 +3659,7 @@ cmd_help() {
     echo ""
     echo -e "${BOLD}Lifecycle:${NC}"
     echo ""
-    echo -e "  ${GREEN}deploy${NC} [--demo|--prod]   Full deployment with init wizard"
+    echo -e "  ${GREEN}deploy${NC} [--dev|--prod]   Full deployment with init wizard"
     echo -e "  ${GREEN}start${NC}                    Start all services (idempotent)"
     echo -e "  ${GREEN}stop${NC}                     Stop all services (idempotent)"
     echo -e "  ${GREEN}restart${NC} [service]        Restart all or specific service"
@@ -3693,8 +3716,8 @@ cmd_help() {
     echo ""
     echo -e "${BOLD}Quick Start:${NC}"
     echo ""
-    echo -e "  ${DIM}# Demo deployment (one command)${NC}"
-    echo -e "  ${DIM}./manage.sh deploy --demo${NC}"
+    echo -e "  ${DIM}# Development deployment (one command)${NC}"
+    echo -e "  ${DIM}./manage.sh deploy --dev${NC}"
     echo ""
     echo -e "  ${DIM}# Production deployment (guided wizard)${NC}"
     echo -e "  ${DIM}./manage.sh deploy --prod${NC}"

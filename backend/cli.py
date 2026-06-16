@@ -289,6 +289,7 @@ def _generate_random_mac():
 
 
 def _normalize_mac(mac: str) -> str:
+    """Normalize MAC to XX-XX-XX-XX-XX-XX format (for mac_address column)"""
     mac_clean = mac.replace('-', '').replace(':', '').replace('.', '').upper()
     return '-'.join(mac_clean[i:i + 2] for i in range(0, len(mac_clean), 2))
 
@@ -306,12 +307,6 @@ def _generate_random_ip():
     ]
     r = random.choice(ranges)
     return f"{r[0]}.{r[1]}.{r[2]}.{random.randint(r[3], r[7])}"
-
-
-def _generate_random_hostname():
-    prefixes = ['desktop', 'laptop', 'server', 'printer', 'phone', 'tablet', 'camera', 'ap']
-    departments = ['hr', 'it', 'finance', 'marketing', 'sales', 'engineering', 'support']
-    return f"{random.choice(prefixes)}-{random.choice(departments)}-{random.randint(1, 99):02d}"
 
 
 async def _create_mock_data_sources(db):
@@ -396,12 +391,20 @@ async def _create_mock_data_sources(db):
         existing = result.scalar_one_or_none()
 
         if not existing:
+            last_sync = None
+            sync_status = None
+            if ds_data["enabled"] and ds_data["type"] != "sangfor":
+                last_sync = datetime.now(timezone.utc) - timedelta(hours=random.randint(1, 24))
+                sync_status = "success"
+
             ds = DataSource(
                 name=ds_data["name"],
                 type=ds_data["type"],
                 tag=ds_data["tag"],
                 config=ds_data["config"],
                 enabled=ds_data["enabled"],
+                last_sync_at=last_sync,
+                last_sync_status=sync_status,
             )
             db.add(ds)
             created_sources.append(ds)
@@ -660,6 +663,12 @@ async def _create_mock_terminals(db, users):
     # Realistic distribution: 60% compliant, 15% bypass, 10% non_compliant, 15% unknown
     source_tags = ['switch-bldg-a', 'switch-bldg-b']
 
+    # Binding relationships: source_tag -> firewall_tag
+    binding_map = {
+        'switch-bldg-a': 'sangfor-primary',
+        'switch-bldg-b': 'sangfor-dr',
+    }
+
     mac_records = []
     for i in range(50):
         mac = _generate_random_mac()
@@ -698,6 +707,11 @@ async def _create_mock_terminals(db, users):
             if compliance == 'bypass':
                 wl_match_type = random.choice(['mac', 'ip', 'both'])
 
+            # Set firewall_tag for blocked terminals (matches binding relationship)
+            firewall_tag = None
+            if status == 'blocked':
+                firewall_tag = binding_map.get(source_tag)
+
             mac_record = Terminal(
                 mac_address=_normalize_mac(mac),
                 mac_address_normalized=_normalize_mac_raw(mac),
@@ -709,6 +723,7 @@ async def _create_mock_terminals(db, users):
                 source_tag=source_tag,
                 compliance_status=compliance,
                 wl_match_type=wl_match_type,
+                firewall_tag=firewall_tag,
             )
             db.add(mac_record)
             mac_records.append(mac_record)
@@ -875,7 +890,11 @@ async def _create_mock_blacklist(db, mac_records, users):
     available_macs = [m for m in mac_records if m.mac_address not in whitelisted_macs]
     selected_macs = random.sample(available_macs, min(10, len(available_macs)))
 
-    firewall_tags = ['sangfor-primary', 'sangfor-dr']
+    # Binding relationships: source_tag -> firewall_tag (must match DataSourceBinding)
+    binding_map = {
+        'switch-bldg-a': 'sangfor-primary',
+        'switch-bldg-b': 'sangfor-dr',
+    }
 
     for mac_record in selected_macs:
         stmt = select(Blacklist).where(Blacklist.mac_address == mac_record.mac_address)
@@ -886,7 +905,12 @@ async def _create_mock_blacklist(db, mac_records, users):
             days_ago = random.randint(0, 30)
             created_at = datetime.now(timezone.utc) - timedelta(days=days_ago)
             is_auto = random.choice([True, False, False])  # ~33% auto-blocked
-            firewall_tag = random.choice(firewall_tags)
+
+            # firewall_tag must match binding relationship for the terminal's source_tag
+            firewall_tag = binding_map.get(mac_record.source_tag, 'sangfor-primary')
+
+            # Auto-blocked entries are created by the system
+            blocked_by = "system" if is_auto else random.choice(users).username
 
             blacklist_entry = Blacklist(
                 mac_address=mac_record.mac_address,
@@ -895,8 +919,8 @@ async def _create_mock_blacklist(db, mac_records, users):
                 reason=random.choice(reasons),
                 blocked_at=created_at,
                 expires_at=datetime.now(timezone.utc) + timedelta(days=random.randint(7, 30)),
-                blocked_by=random.choice(users).username,
-                source_tag="manual" if not is_auto else mac_record.source_tag,
+                blocked_by=blocked_by,
+                source_tag=mac_record.source_tag if is_auto else "manual",
                 firewall_tag=firewall_tag,
                 is_auto_blocked=is_auto,
                 auto_unblocked=False,
@@ -906,6 +930,7 @@ async def _create_mock_blacklist(db, mac_records, users):
             # Update corresponding terminal to non_compliant + blocked
             mac_record.compliance_status = "non_compliant"
             mac_record.status = "blocked"
+            mac_record.firewall_tag = firewall_tag
 
             label = "auto" if is_auto else "manual"
             print(f"  ✓ Blacklisted ({label}): {mac_record.mac_address} → fw:{firewall_tag}")
@@ -914,31 +939,123 @@ async def _create_mock_blacklist(db, mac_records, users):
 
 
 async def _create_mock_audit_logs(db, users, mac_records):
+    import json as _json
     from app.models.log import AuditLog
 
     print("\nCreating mock audit logs...")
 
-    actions = [
-        ('login', 'User logged in successfully'),
-        ('logout', 'User logged out'),
-        ('block_ip', f'Blocked IP {_generate_random_ip()}'),
-        ('unblock_ip', f'Unblocked IP {_generate_random_ip()}'),
-        ('add_whitelist', 'Added device to whitelist'),
-        ('remove_whitelist', 'Removed device from whitelist'),
-        ('search_terminal', 'Searched for terminal'),
-        ('update_terminal', 'Updated terminal information'),
-        ('view_logs', 'Viewed audit logs'),
-        ('export_data', 'Exported terminal data'),
+    # Action definitions matching actual business code (verb_resource format)
+    # Each entry: (action, resource_type, resource_name_fn, details_fn)
+    action_templates = [
+        # Authentication actions (resource_type='auth')
+        ('login', 'auth', lambda u: u.username, lambda u: _json.dumps({"method": "password"})),
+        ('login_failed', 'auth', lambda u: u.username, lambda u: _json.dumps({"reason": "Invalid credentials"})),
+        ('logout', 'auth', lambda u: u.username, lambda u: _json.dumps({"method": "manual"})),
+        ('token_refresh', 'auth', lambda u: u.username, lambda u: _json.dumps({"grant_type": "refresh_token"})),
+        ('change_password', 'auth', lambda u: u.username, lambda u: _json.dumps({"changed_by": "self"})),
+
+        # Terminal actions (resource_type='terminal')
+        ('block_terminal', 'terminal',
+         lambda u: random.choice(mac_records).ip_address if mac_records else None,
+         lambda u: _json.dumps({"ip": random.choice(mac_records).ip_address if mac_records else "", "firewall": "sangfor-primary", "reason": random.choice(["Non-compliant", "Security violation"])})),
+        ('unblock_terminal', 'terminal',
+         lambda u: random.choice(mac_records).ip_address if mac_records else None,
+         lambda u: _json.dumps({"ip": random.choice(mac_records).ip_address if mac_records else "", "firewall": "sangfor-primary"})),
+        ('auto_block_terminal', 'terminal',
+         lambda u: random.choice(mac_records).ip_address if mac_records else None,
+         lambda u: _json.dumps({"ip": random.choice(mac_records).ip_address if mac_records else "", "firewall": "sangfor-primary", "trigger": "compliance_check"})),
+        ('auto_unblock_terminal', 'terminal',
+         lambda u: random.choice(mac_records).ip_address if mac_records else None,
+         lambda u: _json.dumps({"ip": random.choice(mac_records).ip_address if mac_records else "", "firewall": "sangfor-primary", "trigger": "compliance_restored"})),
+        ('cleanup_expired_blacklist', 'terminal',
+         lambda u: None,
+         lambda u: _json.dumps({"expired_count": random.randint(1, 5)})),
+
+        # Whitelist actions (resource_type='whitelist')
+        ('add_whitelist', 'whitelist',
+         lambda u: random.choice(mac_records).mac_address if mac_records else None,
+         lambda u: _json.dumps({"pattern": random.choice(mac_records).ip_address if mac_records else "", "type": "single_ip"})),
+        ('remove_whitelist', 'whitelist',
+         lambda u: random.choice(mac_records).mac_address if mac_records else None,
+         lambda u: _json.dumps({"pattern": random.choice(mac_records).ip_address if mac_records else ""})),
+
+        # Blacklist actions (resource_type='blacklist')
+        ('block_blacklist', 'blacklist',
+         lambda u: random.choice(mac_records).ip_address if mac_records else None,
+         lambda u: _json.dumps({"ip": random.choice(mac_records).ip_address if mac_records else "", "firewall": "sangfor-primary"})),
+        ('unblock_blacklist', 'blacklist',
+         lambda u: random.choice(mac_records).ip_address if mac_records else None,
+         lambda u: _json.dumps({"ip": random.choice(mac_records).ip_address if mac_records else "", "firewall": "sangfor-primary"})),
+
+        # User management actions (resource_type='user')
+        ('create_user', 'user',
+         lambda u: f"user_{random.randint(100,999)}",
+         lambda u: _json.dumps({"username": f"user_{random.randint(100,999)}", "role": "operator"})),
+        ('update_user', 'user',
+         lambda u: random.choice(users).username if len(users) > 1 else u.username,
+         lambda u: _json.dumps({"field": random.choice(["email", "is_active", "role"])})),
+        ('change_role', 'user',
+         lambda u: random.choice(users).username if len(users) > 1 else u.username,
+         lambda u: _json.dumps({"old_role": "viewer", "new_role": "operator"})),
+
+        # Data source actions (resource_type='datasource')
+        ('create_datasource', 'datasource',
+         lambda u: random.choice(["Core Switch (Building A)", "Network Monitor API"]),
+         lambda u: _json.dumps({"type": "arp_ssh", "tag": "switch-bldg-a"})),
+        ('test_datasource', 'datasource',
+         lambda u: random.choice(["Core Switch (Building A)", "Sangfor Firewall (Primary)"]),
+         lambda u: _json.dumps({"result": "success", "latency_ms": random.randint(10, 200)})),
+        ('sync_datasource', 'datasource',
+         lambda u: random.choice(["Core Switch (Building A)", "Core Switch (Building B)"]),
+         lambda u: _json.dumps({"new_entries": random.randint(0, 15), "updated_entries": random.randint(0, 5)})),
+        ('bind_datasource', 'datasource',
+         lambda u: "switch-bldg-a → sangfor-primary",
+         lambda u: _json.dumps({"arp_source": "switch-bldg-a", "firewall": "sangfor-primary"})),
+
+        # Compliance baseline actions (resource_type='compliance')
+        ('create_baseline', 'compliance',
+         lambda u: "IPGuard Database",
+         lambda u: _json.dumps({"type": "ipguard", "tag": "ipguard-main"})),
+        ('sync_baseline', 'compliance',
+         lambda u: "IPGuard Database",
+         lambda u: _json.dumps({"matched": random.randint(50, 200), "new": random.randint(0, 10)})),
+
+        # Role actions (resource_type='role')
+        ('create_role', 'role',
+         lambda u: f"custom_role_{random.randint(1,9)}",
+         lambda u: _json.dumps({"permissions_count": random.randint(3, 10)})),
+        ('update_role', 'role',
+         lambda u: random.choice(["operator", "auditor", "viewer"]),
+         lambda u: _json.dumps({"changes": "permissions_updated"})),
+        ('assign_role', 'role',
+         lambda u: random.choice(users).username if users else "admin",
+         lambda u: _json.dumps({"role": random.choice(["operator", "auditor", "viewer"])})),
+
+        # System actions (resource_type='system')
+        ('update_config', 'system',
+         lambda u: None,
+         lambda u: _json.dumps({"key": random.choice(["APP_NAME", "LOGIN_HEADING", "RATE_LIMIT"]), "via": "api"})),
+        ('export_audit_logs', 'system',
+         lambda u: None,
+         lambda u: _json.dumps({"format": "csv", "count": random.randint(50, 500)})),
+        ('recalculate_compliance', 'system',
+         lambda u: None,
+         lambda u: _json.dumps({"total": random.randint(40, 60), "compliant": random.randint(20, 35), "non_compliant": random.randint(3, 8)})),
     ]
 
-    # RBAC-related audit actions
-    rbac_actions = [
-        ('assign_roles', 'Assigned roles to user'),
-        ('update_role', 'Updated role permissions'),
-        ('create_role', 'Created custom role'),
-    ]
-
-    resource_types = ['user', 'terminal', 'whitelist', 'blacklist', 'system', 'role']
+    # Weight distribution: auth actions most common, then terminal, then others
+    weights = []
+    for action, rtype, _, _ in action_templates:
+        if rtype == 'auth':
+            weights.append(30)
+        elif rtype == 'terminal':
+            weights.append(15)
+        elif rtype in ('whitelist', 'blacklist'):
+            weights.append(8)
+        elif rtype == 'user':
+            weights.append(5)
+        else:
+            weights.append(3)
 
     for i in range(100):
         days_ago = random.randint(0, 30)
@@ -949,34 +1066,33 @@ async def _create_mock_audit_logs(db, users, mac_records):
             days=days_ago, hours=hours_ago, minutes=minutes_ago,
         )
 
-        # 10% chance of RBAC-related action
-        if random.random() < 0.1:
-            action, description = random.choice(rbac_actions)
-            resource_type = 'role' if action == 'update_role' or action == 'create_role' else 'user'
-        else:
-            action, description = random.choice(actions)
-            resource_type = random.choice(resource_types)
+        # Weighted random selection
+        action_def = random.choices(action_templates, weights=weights, k=1)[0]
+        action, resource_type, resource_name_fn, details_fn = action_def
 
-        mac_for_action = None
-        if action in ['block_ip', 'unblock_ip', 'search_terminal', 'update_terminal']:
-            mac_for_action = random.choice(mac_records)
-            if mac_for_action:
-                description = description.replace('IP', f"{mac_for_action.ip_address}")
+        user = random.choice(users)
+        resource_name = resource_name_fn(user)
+        details = details_fn(user)
+
+        # Auto-block/unblock/cleanup are system operations
+        if action in ('auto_block_terminal', 'auto_unblock_terminal', 'cleanup_expired_blacklist', 'recalculate_compliance'):
+            username = "system"
+        else:
+            username = user.username
 
         log_entry = AuditLog(
-            user_id=random.choice(users).id,
-            username=random.choice(users).username,
+            username=username,
             action=action,
             resource_type=resource_type,
-            resource_id=str(mac_for_action.id) if mac_for_action else None,
-            details=description,
-            ip_address=_generate_random_ip(),
+            resource_name=resource_name,
+            details=details,
+            ip_address=_generate_random_ip() if username != "system" else "127.0.0.1",
             timestamp=timestamp,
         )
         db.add(log_entry)
 
     await db.commit()
-    print("  ✓ Created 100 audit log entries (including RBAC operations)")
+    print("  ✓ Created 100 audit log entries (matching current business actions)")
 
 
 async def _run_mock_generate():
