@@ -37,7 +37,7 @@ import { DateRangeFilter } from '@/components/DateRangeFilter';
  * - non_compliant + blocked: view only (no actions)
  * - non_compliant + unblocked + in blacklist: view + remove from blacklist
  * - non_compliant + unblocked + not in blacklist: view + block
- * - unknown + unblocked: view + add to whitelist + block
+ * - unknown + unblocked: view + add to whitelist (block disabled - no compliance basis)
  * - unknown + blocked: view + unblock
  */
 function getTerminalActions(terminal: Terminal): {
@@ -74,9 +74,9 @@ function getTerminalActions(terminal: Terminal): {
   if (cs === 'non_compliant' && st !== 'blocked') {
     return { canBlock: true, canUnblock: false, canAddWhitelist: false, canRemoveWhitelist: false, canRemoveBlacklist: false };
   }
-  // unknown + unblocked: can add to whitelist + block
+  // unknown + unblocked: can add to whitelist (block disabled - no compliance basis)
   if (cs === 'unknown' && st !== 'blocked') {
-    return { canBlock: true, canUnblock: false, canAddWhitelist: true, canRemoveWhitelist: false, canRemoveBlacklist: false };
+    return { canBlock: false, canUnblock: false, canAddWhitelist: true, canRemoveWhitelist: false, canRemoveBlacklist: false };
   }
   // unknown + blocked: can unblock
   if (cs === 'unknown' && st === 'blocked') {
