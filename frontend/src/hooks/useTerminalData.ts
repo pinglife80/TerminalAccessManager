@@ -200,6 +200,7 @@ export interface AuditLog {
   action: string;
   resource_type?: string;
   resource_id?: string;
+  resource_name?: string;
   username: string;
   ip_address?: string;
   timestamp: string;

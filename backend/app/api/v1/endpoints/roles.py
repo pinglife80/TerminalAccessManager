@@ -141,7 +141,8 @@ async def create_role(
     ts = TerminalService(db)
     await ts.log_action(current_user.username, "create_role", "role", str(role.id),
                         {"message": "Created role", "name": role.name, "description": role.description},
-                        ip_address=get_client_ip(request))
+                        ip_address=get_client_ip(request),
+                        resource_name=role.name)
 
     # Re-fetch to get full data
     return await get_role(role.id, current_user, db)
@@ -194,7 +195,8 @@ async def update_role(
     changes = list(data.model_dump(exclude_unset=True).keys())
     await ts.log_action(current_user.username, "update_role", "role", str(role_id),
                         {"message": "Updated role", "name": role.name, "changes": changes},
-                        ip_address=get_client_ip(request))
+                        ip_address=get_client_ip(request),
+                        resource_name=role.name)
 
     return await get_role(role_id, current_user, db)
 
@@ -232,7 +234,8 @@ async def delete_role(
     ts = TerminalService(db)
     await ts.log_action(current_user.username, "delete_role", "role", str(role_id),
                         {"message": "Deleted role", "name": deleted_name},
-                        ip_address=get_client_ip(request))
+                        ip_address=get_client_ip(request),
+                        resource_name=deleted_name)
 
     return {"message": f"Role '{deleted_name}' deleted successfully", "success": True}
 
@@ -289,7 +292,8 @@ async def assign_user_roles(
     await ts.log_action(current_user.username, "assign_role", "user", str(user_id),
                         {"message": "Assigned role to user", "username": user.username,
                          "role": role_name, "role_name": role_name},
-                        ip_address=get_client_ip(request))
+                        ip_address=get_client_ip(request),
+                        resource_name=role_name)
 
     return {"message": f"Roles updated for user '{user.username}'", "success": True}
 

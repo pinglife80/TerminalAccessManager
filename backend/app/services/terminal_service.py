@@ -500,7 +500,7 @@ class TerminalService:
                 self.db.add(blacklist_entry)
 
                 # Log the action
-                await self.log_action(username, "block_terminal", "mac", ip_address,
+                await self.log_action(username, "block_terminal", "terminal", ip_address,
                                      {"message": f"Blocked IP {ip_address} (MAC: {mac_address}) for {block_time}",
                                       "ip": ip_address, "mac": mac_address, "duration": block_time},
                                      ip_address=client_ip)
@@ -592,7 +592,7 @@ class TerminalService:
                     logger.warning(f"Failed to recalculate compliance after unblock of {ip_address}: {e}")
 
                 # Log the action
-                await self.log_action(username, "unblock_terminal", "mac", ip_address,
+                await self.log_action(username, "unblock_terminal", "terminal", ip_address,
                                      {"message": f"Unblocked IP {ip_address}",
                                       "ip": ip_address, "mac_address": mac_address,
                                       "firewall_tag": firewall_tag},
@@ -1200,7 +1200,7 @@ class TerminalService:
                     count += 1  # Still count as processed
 
             if count > 0:
-                await self.log_action("system", "cleanup_expired", "blacklist", None,
+                await self.log_action("system", "cleanup_expired_blacklist", "blacklist", None,
                                       {"message": f"Cleaned up {count} expired blacklist entries",
                                        "failed_unblock_ips": list(failed_unblock_ips) if failed_unblock_ips else None,
                                        "count": count, "expired_count": len(expired_entries)})
@@ -1301,13 +1301,14 @@ class TerminalService:
     # ------------------------------------------------------------------
     async def log_action(self, username: str, action: str, resource_type: str,
                          resource_id: str, details: Dict[str, Any],
-                         ip_address: str = None):
+                         ip_address: str = None, resource_name: str = None):
         """Log an audit action with JSON details"""
         audit_log = AuditLog(
             username=username,
             action=action,
             resource_type=resource_type,
             resource_id=resource_id,
+            resource_name=resource_name,
             details=json.dumps(details, ensure_ascii=False),
             ip_address=ip_address,
         )

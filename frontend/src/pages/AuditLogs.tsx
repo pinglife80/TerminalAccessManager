@@ -27,7 +27,7 @@ const ACTION_CATEGORIES = [
   {
     key: 'terminal',
     labelKey: 'auditLogs.categories.terminal',
-    actions: ['block_terminal', 'unblock_terminal'],
+    actions: ['block_terminal', 'unblock_terminal', 'auto_block_terminal', 'auto_unblock_terminal'],
   },
   {
     key: 'whitelist',
@@ -37,7 +37,7 @@ const ACTION_CATEGORIES = [
   {
     key: 'blacklist',
     labelKey: 'auditLogs.categories.blacklist',
-    actions: ['block_blacklist', 'unblock_blacklist', 'cleanup_expired'],
+    actions: ['block_blacklist', 'unblock_blacklist', 'cleanup_expired_blacklist'],
   },
   {
     key: 'datasource',
@@ -47,7 +47,7 @@ const ACTION_CATEGORIES = [
   {
     key: 'user',
     labelKey: 'auditLogs.categories.user',
-    actions: ['create_user', 'update_user', 'delete_user', 'reset_password', 'unlock_user', 'role_change', 'assign_role'],
+    actions: ['create_user', 'update_user', 'delete_user', 'reset_password', 'unlock_user', 'change_role', 'assign_role'],
   },
   {
     key: 'role',
@@ -74,11 +74,13 @@ const actionLabelKeys: Record<string, string> = {
   change_password: 'auditLogs.actionLabels.change_password',
   block_terminal: 'auditLogs.actionLabels.block_terminal',
   unblock_terminal: 'auditLogs.actionLabels.unblock_terminal',
+  auto_block_terminal: 'auditLogs.actionLabels.auto_block_terminal',
+  auto_unblock_terminal: 'auditLogs.actionLabels.auto_unblock_terminal',
   add_whitelist: 'auditLogs.actionLabels.add_whitelist',
   remove_whitelist: 'auditLogs.actionLabels.remove_whitelist',
   block_blacklist: 'auditLogs.actionLabels.block_blacklist',
   unblock_blacklist: 'auditLogs.actionLabels.unblock_blacklist',
-  cleanup_expired: 'auditLogs.actionLabels.cleanup_expired',
+  cleanup_expired_blacklist: 'auditLogs.actionLabels.cleanup_expired_blacklist',
   create_datasource: 'auditLogs.actionLabels.create_datasource',
   update_datasource: 'auditLogs.actionLabels.update_datasource',
   delete_datasource: 'auditLogs.actionLabels.delete_datasource',
@@ -91,7 +93,7 @@ const actionLabelKeys: Record<string, string> = {
   delete_user: 'auditLogs.actionLabels.delete_user',
   reset_password: 'auditLogs.actionLabels.reset_password',
   unlock_user: 'auditLogs.actionLabels.unlock_user',
-  role_change: 'auditLogs.actionLabels.role_change',
+  change_role: 'auditLogs.actionLabels.change_role',
   assign_role: 'auditLogs.actionLabels.assign_role',
   create_role: 'auditLogs.actionLabels.create_role',
   update_role: 'auditLogs.actionLabels.update_role',
@@ -107,6 +109,10 @@ const actionLabelKeys: Record<string, string> = {
   unblock_ip: 'auditLogs.actionLabels.unblock_terminal',
   block: 'auditLogs.actionLabels.block_blacklist',
   unblock: 'auditLogs.actionLabels.unblock_blacklist',
+  auto_block: 'auditLogs.actionLabels.auto_block_terminal',
+  auto_unblock: 'auditLogs.actionLabels.auto_unblock_terminal',
+  cleanup_expired: 'auditLogs.actionLabels.cleanup_expired_blacklist',
+  role_change: 'auditLogs.actionLabels.change_role',
 };
 
 const ACTION_CATEGORY_MAP: Record<string, string> = {
@@ -117,11 +123,13 @@ const ACTION_CATEGORY_MAP: Record<string, string> = {
   change_password: 'auth',
   block_terminal: 'terminal',
   unblock_terminal: 'terminal',
+  auto_block_terminal: 'terminal',
+  auto_unblock_terminal: 'terminal',
   add_whitelist: 'whitelist',
   remove_whitelist: 'whitelist',
   block_blacklist: 'blacklist',
   unblock_blacklist: 'blacklist',
-  cleanup_expired: 'blacklist',
+  cleanup_expired_blacklist: 'blacklist',
   create_datasource: 'datasource',
   update_datasource: 'datasource',
   delete_datasource: 'datasource',
@@ -134,7 +142,7 @@ const ACTION_CATEGORY_MAP: Record<string, string> = {
   delete_user: 'user',
   reset_password: 'user',
   unlock_user: 'user',
-  role_change: 'user',
+  change_role: 'user',
   assign_role: 'user',
   create_role: 'role',
   update_role: 'role',
@@ -150,6 +158,10 @@ const ACTION_CATEGORY_MAP: Record<string, string> = {
   unblock_ip: 'terminal',
   block: 'blacklist',
   unblock: 'blacklist',
+  auto_block: 'terminal',
+  auto_unblock: 'terminal',
+  cleanup_expired: 'blacklist',
+  role_change: 'user',
 };
 
 const CATEGORY_BADGE_STYLES: Record<string, string> = {
@@ -180,7 +192,12 @@ const getResourceDisplay = (log: AuditLogType, t: (key: string) => string) => {
 
   const typeLabel = typeLabels[log.resource_type || ''] || log.resource_type || '-';
 
-  // Format resource_id based on resource_type
+  // Use resource_name when available (human-readable name)
+  if (log.resource_name) {
+    return { typeLabel, resourceId: log.resource_name };
+  }
+
+  // Format resource_id based on resource_type (fallback for legacy records)
   let resourceId = log.resource_id || '';
   if (resourceId && ['auth', 'user', 'datasource', 'role', 'compliance'].includes(log.resource_type || '')) {
     // Numeric IDs: show as "Type #ID"
@@ -535,7 +552,7 @@ const AuditLogs: React.FC = () => {
         <div className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden">
           <div className="p-4 text-center">
             <div className="text-xl sm:text-2xl font-bold text-red-600">
-              {filteredLogs.filter((l) => ['login_failed', 'block_terminal', 'block_blacklist'].includes(l.action)).length}
+              {filteredLogs.filter((l) => ['login_failed', 'block_terminal', 'block_blacklist', 'auto_block_terminal'].includes(l.action)).length}
             </div>
             <div className="text-xs sm:text-sm text-muted-foreground mt-1">{t('auditLogs.securityEvents')}</div>
           </div>

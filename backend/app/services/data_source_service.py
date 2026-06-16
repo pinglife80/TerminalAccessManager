@@ -420,6 +420,7 @@ class DataSourceService:
                 username, "delete_datasource", "datasource", str(source_id),
                 {"message": f"Safely deleted datasource with cleanup", "name": source_name, "tag": tag},
                 ip_address=client_ip,
+                resource_name=source_name,
             )
 
         logger.info(f"Safely deleted data source: {source_name} (tag={tag}, type={source_type})")
@@ -583,6 +584,7 @@ class DataSourceService:
                 username, "unbind_datasource", "datasource", str(binding_id),
                 {"message": "Safely deleted datasource binding with cleanup", "arp_source_tag": arp_tag, "firewall_tag": fw_tag},
                 ip_address=client_ip,
+                resource_name=f"{arp_tag} -> {fw_tag}",
             )
 
         logger.info(f"Safely deleted binding: {arp_tag} -> {fw_tag}")

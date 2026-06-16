@@ -66,7 +66,8 @@ async def create_baseline(
     await ts.log_action(current_user.username, "create_baseline", "compliance", str(baseline.id),
                         {"message": "Created compliance baseline", "name": baseline.name,
                          "type": baseline.type, "tag": baseline.tag},
-                        ip_address=get_client_ip(request))
+                        ip_address=get_client_ip(request),
+                        resource_name=baseline.name)
 
     return baseline
 
@@ -124,7 +125,8 @@ async def update_baseline(
     await ts.log_action(current_user.username, "update_baseline", "compliance", str(baseline.id),
                         {"message": "Updated compliance baseline", "name": baseline.name, "tag": baseline.tag,
                          "changes": list(update_data.keys())},
-                        ip_address=get_client_ip(request))
+                        ip_address=get_client_ip(request),
+                        resource_name=baseline.name)
 
     return baseline
 
@@ -233,7 +235,8 @@ async def delete_baseline(
     ts = TerminalService(db)
     await ts.log_action(current_user.username, "delete_baseline", "compliance", str(baseline_id),
                         {"message": "Safely deleted compliance baseline with cleanup", "name": deleted_name, "tag": deleted_tag},
-                        ip_address=get_client_ip(request))
+                        ip_address=get_client_ip(request),
+                        resource_name=deleted_name)
 
 
 @router.post("/{baseline_id}/test", response_model=ConnectionTestResult)

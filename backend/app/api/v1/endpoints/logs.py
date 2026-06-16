@@ -62,7 +62,7 @@ async def export_audit_logs(
 
     writer.writerow([
         "ID", "Timestamp", "Username", "Action",
-        "Resource Type", "Resource ID", "IP Address", "Details"
+        "Resource Type", "Resource ID", "Resource Name", "IP Address", "Details"
     ])
 
     for log in logs:
@@ -73,6 +73,7 @@ async def export_audit_logs(
             log.action,
             log.resource_type or "",
             log.resource_id or "",
+            log.resource_name or "",
             log.ip_address or "",
             log.details or ""
         ])
@@ -86,7 +87,8 @@ async def export_audit_logs(
                         {"message": "Exported audit logs", "record_count": len(logs),
                          "filters": {"username": username, "action": action, "search": search,
                                      "start_date": start_date, "end_date": end_date, "limit": limit}},
-                        ip_address=get_client_ip(request))
+                        ip_address=get_client_ip(request),
+                        resource_name="audit_logs")
 
     headers = {
         "Content-Disposition": "attachment; filename=audit_logs.csv",

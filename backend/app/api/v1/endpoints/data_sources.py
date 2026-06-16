@@ -70,7 +70,8 @@ async def create_data_source(
         await ts.log_action(current_user.username, "create_datasource", "datasource", str(source.id),
                             {"message": "Created datasource", "name": source.name,
                              "type": source.type, "tag": source.tag},
-                            ip_address=get_client_ip(request))
+                            ip_address=get_client_ip(request),
+                            resource_name=source.name)
 
         return source
     except ValueError as e:
@@ -285,7 +286,8 @@ async def update_data_source(
         if warnings:
             audit_details["warnings"] = warnings
         await ts.log_action(current_user.username, "update_datasource", "datasource", str(source.id),
-                            audit_details, ip_address=get_client_ip(request))
+                            audit_details, ip_address=get_client_ip(request),
+                            resource_name=source.name)
 
         # When enabling an ARP source, trigger compliance recalculation for its terminals
         if data.enabled is True and source.type in ("arp_ssh", "arp_api"):
@@ -374,7 +376,8 @@ async def test_data_source_connection(
     await ts.log_action(current_user.username, "test_datasource", "datasource", str(source_id),
                         {"message": "Tested datasource connection", "name": source.name,
                          "tag": source.tag, "success": result.success},
-                        ip_address=get_client_ip(request))
+                        ip_address=get_client_ip(request),
+                        resource_name=source.name)
 
     return result
 
@@ -406,7 +409,8 @@ async def sync_data_source(
     ts = TerminalService(db)
     await ts.log_action(current_user.username, "sync_datasource", "datasource", str(source_id),
                         {"message": "Synced datasource", "name": source.name, "type": source.type},
-                        ip_address=get_client_ip(request))
+                        ip_address=get_client_ip(request),
+                        resource_name=source.name)
 
     if source.type == "arp_ssh":
         arp_service = ArpCollectorService(db)
@@ -463,7 +467,8 @@ async def create_binding(
         await ts.log_action(current_user.username, "bind_datasource", "datasource", str(binding.id),
                             {"message": "Created datasource binding", "arp_source_tag": data.arp_source_tag,
                              "firewall_tag": data.firewall_tag},
-                            ip_address=get_client_ip(request))
+                            ip_address=get_client_ip(request),
+                            resource_name=f"{data.arp_source_tag} -> {data.firewall_tag}")
 
         return binding
     except ValueError as e:

@@ -130,6 +130,7 @@ class AuditLogBase(BaseModel):
     action: str
     resource_type: Optional[str] = None
     resource_id: Optional[str] = None
+    resource_name: Optional[str] = None
     details: Optional[str] = None
 
 

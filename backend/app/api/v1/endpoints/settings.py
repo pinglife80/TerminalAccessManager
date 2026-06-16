@@ -85,7 +85,8 @@ async def update_configs(
         await ts.log_action(current_user.username, "update_config", "system", update.key,
                             {"message": "Updated system configuration", "key": update.key,
                              "old_value": old_values.get(update.key), "new_value": update.value},
-                            ip_address=get_client_ip(request))
+                            ip_address=get_client_ip(request),
+                            resource_name=update.key)
 
     return results
 
@@ -114,7 +115,8 @@ async def update_single_config(
     await ts.log_action(current_user.username, "update_config", "system", key,
                         {"message": "Updated system configuration", "key": key,
                          "old_value": old_value, "new_value": update.value},
-                        ip_address=get_client_ip(request))
+                        ip_address=get_client_ip(request),
+                        resource_name=key)
 
     return result
 
@@ -195,7 +197,8 @@ async def upload_branding_asset(
     await ts.log_action(current_user.username, "upload_branding", "system", config_key,
                         {"message": "Uploaded branding asset", "purpose": purpose, "url": url_path,
                          "file_size": len(content)},
-                        ip_address=get_client_ip(request))
+                        ip_address=get_client_ip(request),
+                        resource_name=config_key)
 
     return {
         "url": url_path,

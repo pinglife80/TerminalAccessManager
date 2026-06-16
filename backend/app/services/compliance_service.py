@@ -454,7 +454,7 @@ class ComplianceService:
 
         if not dry_run and blocked > 0:
             # Audit log for auto-block (before commit so it's persisted in the same transaction)
-            await self.log_action("system", "auto_block", "terminal", None, {
+            await self.log_action("system", "auto_block_terminal", "terminal", None, {
                 "message": f"Auto-blocked {blocked} non-compliant terminals from source '{arp_source_tag}'",
                 "source_tag": arp_source_tag,
                 "blocked": blocked,
@@ -618,7 +618,7 @@ class ComplianceService:
 
         if unblocked > 0:
             # Audit log for auto-unblock (before commit so it's persisted in the same transaction)
-            await self.log_action("system", "auto_unblock", "terminal", None, {
+            await self.log_action("system", "auto_unblock_terminal", "terminal", None, {
                 "message": f"Auto-unblocked {unblocked} compliant terminals",
                 "unblocked": unblocked,
                 "skipped": skipped,
@@ -1177,13 +1177,14 @@ class ComplianceService:
 
     async def log_action(self, username: str, action: str, resource_type: str,
                          resource_id: Optional[str], details: dict,
-                         ip_address: str = None):
+                         ip_address: str = None, resource_name: str = None):
         """Log an audit action with JSON details"""
         audit_log = AuditLog(
             username=username,
             action=action,
             resource_type=resource_type,
             resource_id=resource_id or "",
+            resource_name=resource_name,
             details=json.dumps(details, ensure_ascii=False),
             ip_address=ip_address,
         )

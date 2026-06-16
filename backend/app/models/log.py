@@ -16,6 +16,7 @@ class AuditLog(Base):
     action = Column(String(100), nullable=False, index=True)
     resource_type = Column(String(50), nullable=True)  # mac, whitelist, blacklist
     resource_id = Column(String(100), nullable=True)
+    resource_name = Column(String(200), nullable=True)  # Human-readable name for the resource
     details = Column(Text, nullable=True)
     ip_address = Column(String(45), nullable=True, index=True)
     timestamp = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True)
