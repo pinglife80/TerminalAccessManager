@@ -86,7 +86,8 @@ services:
   backend:
     build: ./backend
     container_name: tam_backend
-    ports: []
+    ports:
+      - "127.0.0.1:8000:8000"
     environment:
       DATABASE_URL: "postgresql+asyncpg://${DB_USER:-tam_admin}:${DB_PASSWORD}@postgres:5432/tam_db"
       REDIS_URL: "redis://:${REDIS_PASSWORD}@redis:6379/0"
@@ -159,9 +160,10 @@ services:
   nginx:
     image: nginx:alpine
     container_name: tam_nginx
-    ports:
-      - "8080:80"
-      - "8443:443"
+    # Use host network mode to preserve real client IP
+    # Docker NAT replaces client IP with bridge gateway (172.x.x.x),
+    # host mode allows Nginx to see the actual source IP directly
+    network_mode: host
     environment:
       TZ: ${TZ:-Asia/Shanghai}
     volumes:
@@ -171,8 +173,6 @@ services:
     depends_on:
       - backend
       - frontend
-    networks:
-      - tam_network
     restart: unless-stopped
     deploy:
       resources:
