@@ -1,6 +1,6 @@
 # TerminalAccessManager 后端实现文档
 
-> 文档版本：v3.2.0-r6 | 更新日期：2026-06-16
+> 文档版本：v3.2.0-r8 | 更新日期：2026-06-16
 
 ## 1. 概述
 
@@ -368,22 +368,22 @@ async_session_factory = async_session_maker  # 别名，供后台任务使用
 | `get_token_version(user_id)` | 获取用户当前 Token 版本号（Redis key: `token_version:{user_id}`） |
 | `increment_token_version(user_id)` | 递增用户 Token 版本号（密码变更时调用） |
 
-#### Redis fail-open 降级策略
+#### Redis 故障降级策略
 
-所有 Redis 交互函数统一添加 try/except 异常处理，Redis 不可用时按策略降级，避免 Redis 故障导致服务完全不可用：
+所有 Redis 交互函数统一添加 try/except 异常处理，Redis 不可用时按混合策略（fail-closed / fail-open）降级，避免 Redis 故障导致服务完全不可用：
 
-| 函数 | 降级行为 | 说明 |
-|------|---------|------|
-| `is_token_blacklisted(jti)` | 返回 `False` | 黑名单不可用时放行（fail-open） |
-| `get_token_version(user_id)` | 返回 `0` | 版本号不可用时视为初始版本 |
-| `increment_token_version(user_id)` | 返回 `0` | 递增失败静默降级 |
-| `check_login_attempts(username)` | 返回 `False` | 锁定状态不可用时允许登录 |
-| `check_captcha_required(username)` | 返回 `False` | 验证码要求不可用时跳过 |
-| `record_failed_login(username)` | 静默忽略 | 记录失败不影响登录流程 |
-| `reset_login_attempts(username)` | 静默忽略 | 重置失败不影响登录流程 |
-| `verify_captcha(captcha_id, answer)` | 返回 `False` | 验证码不可用时校验失败 |
-| `generate_captcha()` | 抛出异常 | 验证码生成必须依赖 Redis |
-| `add_token_to_blacklist(jti, exp)` | 静默忽略 | 黑名单写入失败不影响登出 |
+| 函数 | 降级行为 | 策略 | 说明 |
+|------|---------|------|------|
+| `is_token_blacklisted(jti)` | 返回 `True` | fail-closed | 黑名单不可用时视为已黑名单，拒绝请求 |
+| `verify_captcha(captcha_id, answer)` | 返回 `False` | fail-closed | 验证码不可用时校验失败，防止绕过验证码保护 |
+| `get_token_version(user_id)` | 返回 `0` | fail-open | 版本号不可用时视为初始版本 |
+| `increment_token_version(user_id)` | 返回 `0` | fail-open | 递增失败静默降级 |
+| `check_login_attempts(username)` | 返回 `False` | fail-open | 锁定状态不可用时允许登录 |
+| `check_captcha_required(username)` | 返回 `False` | fail-open | 验证码要求不可用时跳过 |
+| `record_failed_login(username)` | 静默忽略 | fail-open | 记录失败不影响登录流程 |
+| `reset_login_attempts(username)` | 静默忽略 | fail-open | 重置失败不影响登录流程 |
+| `generate_captcha()` | 抛出异常 | — | 验证码生成必须依赖 Redis |
+| `add_token_to_blacklist(jti, exp)` | 静默忽略 | fail-open | 黑名单写入失败不影响登出 |
 
 #### 鉴权依赖
 

@@ -1,6 +1,6 @@
 # 数据源全生命周期技术文档
 
-> 文档版本：v3.2.0-r7 | 更新日期：2026-06-16
+> 文档版本：v3.2.0-r8 | 更新日期：2026-06-16
 
 本文档详细描述 TerminalAccessManager 系统中数据源从配置、采集、解析、合规判定到自动处置的完整生命周期，涵盖架构设计、数据格式、输入输出规范和定时调度机制。
 
@@ -499,7 +499,7 @@ process_arp_entries(entries, source_tag)
     │   ├── 按 (ip_address, mac_address) 查找现有记录
     │   ├── 已存在: 更新 timestamp + source_tag + source="arp"
     │   └── 不存在: 创建新记录
-    │       status="unfrozen", source="arp", compliance_status="unknown"
+    │       status="unblocked", source="arp", compliance_status="unknown"
     │
     ├── 步骤 3: 批量合规检查
     │   ├── 查找 source_tag 下 compliance_status="unknown" 的记录
@@ -644,9 +644,9 @@ recalculate_all_compliance()
     ▼
 联动封堵/解封
     │  ├── 新 non_compliant 终端 → 触发自动封堵（auto_block_non_compliant）
-    │  │   调用 Sangfor API 封堵 IP → Terminal.status = "frozen"
-    │  └── 恢复合规终端 → 触发自动解封（auto_unblock_compliant）
-    │       调用 Sangfor API 解封 IP → Terminal.status = "unfrozen"
+    │  │   调用 Sangfor API 封堵 IP → Terminal.status = "blocked"
+    │   └── 恢复合规终端 → 触发自动解封（auto_unblock_compliant）
+    │       调用 Sangfor API 解封 IP → Terminal.status = "unblocked"
 ```
 
 ### 7.3 IP-Guard 基线匹配规则
@@ -728,7 +728,7 @@ ComplianceService.auto_block_non_compliant(arp_source_tag, block_time="30d")
     ├── 1. 查找不合规终端
     │      条件: source_tag=arp_source_tag
     │            AND compliance_status="non_compliant"
-    │            AND status!="frozen"
+    │            AND status!="blocked"
     │      排除: 已在黑名单中且未解封的 IP
     │
     ├── 2. 查找关联防火墙
@@ -739,7 +739,7 @@ ComplianceService.auto_block_non_compliant(arp_source_tag, block_time="30d")
     │      对每个终端，在每个关联防火墙上执行封堵:
     │      ├── 调用 SangforService.block_ip([ip], block_time)
     │      ├── 封堵成功:
-    │      │   ├── Terminal.status = "frozen"
+    │      │   ├── Terminal.status = "blocked"
     │      │   ├── Terminal.firewall_tag = fw_tag（记录执行封堵的防火墙标签）
     │      │   ├── Terminal.comments = "Auto-blocked by TAM on firewall [{fw_tag}]"
     │      │   └── 为每个防火墙创建 Blacklist 记录
@@ -764,26 +764,48 @@ ComplianceService.auto_block_non_compliant(arp_source_tag, block_time="30d")
 
 ### 8.4 Sangfor 防火墙 API 交互
 
+使用 Sangfor AF 8.0+ 的 whiteblacklist API（永久黑名单），而非临时 blockip API。
+
 ```
 SangforService
     │
     ├── 认证
-    │   POST {base_url}/v1/namespaces/public/login
+    │   POST {base_url}/api/v1/namespaces/public/login
     │   Body: {"name": username, "password": password}
     │   Response: {"data": {"loginResult": {"token": "..."}}}
     │   → 将 token 设置到 session cookies
     │
-    ├── 封堵
-    │   POST {base_url}/batch/v1/namespaces/public/blockip
-    │   Body: {"ipType": "SRC", "srcIP": ["192.168.1.200"], "blockTime": "30d"}
-    │   Response: {"code": 0, ...}
-    │   → code==0 表示成功
+    ├── 封堵（永久黑名单）
+    │   1. 幂等检查：先查询是否已存在 TAM 管理的条目
+    │      GET {base_url}/api/v1/namespaces/public/whiteblacklist?type=BLACK&url={ip}
+    │      若已存在且描述以 "TAM" 开头 → 跳过
     │
-    └── 解封
-        POST {base_url}/batch/v1/namespaces/public/blockip?_method=DELETE
-        Body: [{"srcIP": "192.168.1.200"}]
-        Response: {"code": 0, ...}
-        → code==0 表示成功
+    │   2. 添加黑名单条目
+    │      POST {base_url}/api/v1/namespaces/public/whiteblacklist
+    │      Body: {"url": ip, "type": "BLACK", "description": desc, "enable": true}
+    │      描述格式: TAM-{source_tag}-{reason}（过滤冒号等特殊字符）
+    │      示例: TAM-lab-Auto-blocked
+    │      Response: {"code": 0, ...}
+    │      → code==0 表示成功，409 表示已存在（跳过）
+    │
+    ├── 解封（删除黑名单条目）
+    │   1. 安全检查：先查询条目，验证描述以 "TAM" 开头
+    │      GET {base_url}/api/v1/namespaces/public/whiteblacklist?type=BLACK&url={ip}
+    │      非 TAM 管理的条目 → 跳过（防止误删 AF 自身安全策略条目）
+    │
+    │   2. 删除黑名单条目
+    │      DELETE {base_url}/api/v1/namespaces/public/whiteblacklist/{ip}
+    │      Response: {"code": 0, ...}
+    │      → code==0 表示成功
+    │
+    ├── 查询黑名单条目
+    │   GET {base_url}/api/v1/namespaces/public/whiteblacklist?type=BLACK&url={ip}
+    │   Response: {"code": 0, "data": {"items": [...]}}
+    │   → 匹配 item.url == ip 的条目
+    │
+    └── 401 自动重试
+        所有 API 请求遇到 401 时自动重新认证后重试
+        (_request_with_retry 机制)
 ```
 
 ### 8.5 自动封堵结果格式
@@ -850,7 +872,7 @@ ComplianceService.auto_unblock_compliant()
     │      ├── 现在合规 (白名单或IP-Guard匹配):
     │      │   ├── 调用防火墙 API 解封
     │      │   ├── Blacklist.auto_unblocked = True
-    │      │   ├── Terminal.status = "unfrozen"
+    │      │   ├── Terminal.status = "unblocked"
     │      │   ├── Terminal.firewall_tag = None
     │      │   ├── Terminal.comments = "Auto-unblocked by TAM from firewall [{fw_tag}]"
     │      │   └── Terminal.compliance_status = "bypass" 或 "compliant"
@@ -1065,7 +1087,7 @@ decrypt_config(config)
 | `ip_address` | String(45) | NOT NULL, INDEX | IP 地址 |
 | `mac_address` | String(17) | NOT NULL, INDEX | MAC 地址（XX-XX-XX-XX-XX-XX） |
 | `mac_address_normalized` | String(12) | INDEX | MAC 地址规范化（XXXXXXXXXXXX） |
-| `status` | String(20) | DEFAULT "unfrozen", INDEX | 状态：active/inactive/frozen/pending/unfrozen |
+| `status` | String(20) | DEFAULT "unblocked", INDEX | 状态：blocked/unblocked |
 | `comments` | Text | NULL | 备注 |
 | `timestamp` | DateTime(TZ) | DEFAULT now(), INDEX | 最后发现时间 |
 | `source` | String(50) | DEFAULT "arp" | 来源：arp/ipguard/whitelist/manual |
@@ -1446,9 +1468,12 @@ asyncpg.connect(host, port, username, password, database)
 ```
 查找防火墙数据源 → decrypt_config(config)
     → SangforService(base_url, username, password)
-    → svc._authenticate()  [POST /v1/namespaces/public/login]
-    → svc.block_ip(ip_list) [POST /batch/v1/namespaces/public/blockip]
-       payload: {"ipType": "SRC", "srcIP": [ip_list], "blockTime": "30d"}
+    → svc._authenticate()  [POST /api/v1/namespaces/public/login]
+    → svc.block_ip(ip_list, source_tag, reason)
+       ├── 幂等检查: GET /api/v1/namespaces/public/whiteblacklist?type=BLACK&url={ip}
+       │   已存在 TAM 管理条目 → 跳过
+       └── 添加黑名单: POST /api/v1/namespaces/public/whiteblacklist
+           payload: {"url": ip, "type": "BLACK", "description": "TAM-{tag}-{reason}", "enable": true}
     → svc.close()
     → 更新 Terminal.status = "blocked"
     → 创建 Blacklist 记录
@@ -1460,8 +1485,10 @@ asyncpg.connect(host, port, username, password, database)
 查找防火墙数据源 → decrypt_config(config)
     → SangforService(base_url, username, password)
     → svc._authenticate()
-    → svc.unblock_ip(ip_address) [POST /batch/v1/namespaces/public/blockip?_method=DELETE]
-       payload: [{"srcIP": ip_address}]
+    → svc.unblock_ip(ip_list)
+       ├── 安全检查: GET /api/v1/namespaces/public/whiteblacklist?type=BLACK&url={ip}
+       │   非 TAM 管理条目 → 跳过（防止误删 AF 安全策略条目）
+       └── 删除黑名单: DELETE /api/v1/namespaces/public/whiteblacklist/{ip}
     → svc.close()
     → 更新 Terminal.status = "unblocked"
     → 标记 Blacklist.auto_unblocked = True

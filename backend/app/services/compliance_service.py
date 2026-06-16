@@ -22,6 +22,7 @@ from app.models.whitelist import Whitelist
 from app.models.blacklist import Blacklist
 from app.models.data_source import DataSource, DataSourceBinding
 from app.models.compliance_baseline import ComplianceBaseline
+from app.models.audit_log import AuditLog
 from app.schemas.data_source import (
     ComplianceCheckResult, AutoBlockResult, AutoUnblockResult,
 )
@@ -452,6 +453,14 @@ class ComplianceService:
                 skipped += 1
 
         if not dry_run and blocked > 0:
+            # Audit log for auto-block (before commit so it's persisted in the same transaction)
+            await self.log_action("system", "auto_block", "terminal", None, {
+                "message": f"Auto-blocked {blocked} non-compliant terminals from source '{arp_source_tag}'",
+                "source_tag": arp_source_tag,
+                "blocked": blocked,
+                "skipped": skipped,
+                "firewall_tags": firewall_tags,
+            }, ip_address="System")
             await self.db.commit()
 
         return AutoBlockResult(
@@ -528,10 +537,10 @@ class ComplianceService:
                         continue
                 else:
                     # No firewall_tag on blacklist entry — try to find binding
-                    # via the terminal's source_tag
+                    # via the terminal's source_tag (use multi-firewall method)
                     if bl_entry.source_tag:
-                        fw_tag = await self._get_bound_firewall_tag(bl_entry.source_tag)
-                        if fw_tag:
+                        fw_tags = await self._get_bound_firewall_tags(bl_entry.source_tag)
+                        for fw_tag in fw_tags:
                             try:
                                 success = await self._unblock_on_firewall(ip_addr, fw_tag)
                                 if not success:
@@ -545,9 +554,12 @@ class ComplianceService:
                 # Mark as auto-unblocked
                 bl_entry.auto_unblocked = True
 
-                # Update MAC status
+                # Update MAC status - match by IP+MAC for precision
                 if ip_addr:
-                    mac_stmt = select(Terminal).where(Terminal.ip_address == ip_addr)
+                    mac_stmt = select(Terminal).where(
+                        Terminal.ip_address == ip_addr,
+                        Terminal.mac_address == mac_addr
+                    )
                     mac_result = await self.db.execute(mac_stmt)
                     mac_records = mac_result.scalars().all()
                     for record in mac_records:
@@ -574,6 +586,12 @@ class ComplianceService:
                 skipped += 1
 
         if unblocked > 0:
+            # Audit log for auto-unblock (before commit so it's persisted in the same transaction)
+            await self.log_action("system", "auto_unblock", "terminal", None, {
+                "message": f"Auto-unblocked {unblocked} compliant terminals",
+                "unblocked": unblocked,
+                "skipped": skipped,
+            }, ip_address="System")
             await self.db.commit()
 
         return AutoUnblockResult(
@@ -935,73 +953,114 @@ class ComplianceService:
 
                 # Auto-unblock: if terminal was blocked and now becomes compliant/bypass
                 if terminal.status == "blocked" and new_compliance in ("bypass", "compliant"):
-                    # Find firewall tag via terminal's source_tag -> DataSourceBinding
-                    fw_tag = await self._get_bound_firewall_tag(terminal.source_tag)
-                    if fw_tag:
-                        try:
-                            success = await self._unblock_on_firewall(ip_addr, fw_tag)
-                            if success:
-                                terminal.status = "unblocked"
-                                terminal.firewall_tag = None  # Clear firewall tag on unblock
-                                unblocked_count += 1
-                                # Update comments with unblock info
-                                unblock_comment = f"Auto-unblocked by TAM from firewall [{fw_tag}]"
-                                if terminal.comments:
-                                    terminal.comments = f"{terminal.comments}; {unblock_comment}"
-                                else:
-                                    terminal.comments = unblock_comment
-                                logger.info(f"Auto-unblocked {ip_addr} (now {new_compliance}) from firewall '{fw_tag}'")
+                    # Find firewall tags via terminal's source_tag -> DataSourceBinding
+                    fw_tags = await self._get_bound_firewall_tags(terminal.source_tag)
+                    if fw_tags:
+                        all_unblock_success = True
+                        for fw_tag in fw_tags:
+                            try:
+                                success = await self._unblock_on_firewall(ip_addr, fw_tag)
+                                if not success:
+                                    all_unblock_success = False
+                                    logger.warning(f"Failed to auto-unblock {ip_addr} on firewall '{fw_tag}'")
+                            except Exception as e:
+                                all_unblock_success = False
+                                logger.warning(f"Error auto-unblocking {ip_addr} on firewall '{fw_tag}': {e}")
+                        if all_unblock_success:
+                            terminal.status = "unblocked"
+                            terminal.firewall_tag = None
+                            unblocked_count += 1
+                            fw_info = ",".join(fw_tags)
+                            unblock_comment = f"Auto-unblocked by TAM from firewall [{fw_info}]"
+                            if terminal.comments:
+                                terminal.comments = f"{terminal.comments}; {unblock_comment}"
                             else:
-                                logger.warning(f"Failed to auto-unblock {ip_addr} on firewall '{fw_tag}'")
-                        except Exception as e:
-                            logger.warning(f"Error auto-unblocking {ip_addr}: {e}")
+                                terminal.comments = unblock_comment
+                            logger.info(f"Auto-unblocked {ip_addr} (now {new_compliance}) from firewall(s) '{fw_info}'")
+                        else:
+                            logger.warning(f"Partial unblock failure for {ip_addr}, keeping blocked status")
                     else:
                         # No firewall binding, just update status
                         terminal.status = "unblocked"
-                        terminal.firewall_tag = None  # Clear firewall tag on unblock
+                        terminal.firewall_tag = None
                         unblocked_count += 1
 
                 # Auto-block: if terminal becomes non_compliant and has a bound firewall
                 if new_compliance == "non_compliant" and terminal.status != "blocked":
-                    # Find firewall tag via terminal's source_tag -> DataSourceBinding
-                    fw_tag = await self._get_bound_firewall_tag(terminal.source_tag)
-                    if fw_tag:
-                        try:
-                            success = await self._block_on_firewall(
-                                ip_addr, fw_tag,
-                                reason="Auto-blocked: compliance recalculation"
-                            )
-                            if success:
-                                terminal.status = "blocked"
-                                terminal.firewall_tag = fw_tag  # Set firewall tag on block
-                                # Update comments with block info
-                                block_comment = f"Auto-blocked by TAM on firewall [{fw_tag}]"
-                                if terminal.comments:
-                                    terminal.comments = f"{terminal.comments}; {block_comment}"
-                                else:
-                                    terminal.comments = block_comment
-                                # Create Blacklist record for audit trail and future unblock
-                                from app.models.blacklist import Blacklist
+                    # Find firewall tags via terminal's source_tag -> DataSourceBinding
+                    fw_tags = await self._get_bound_firewall_tags(terminal.source_tag)
+                    if fw_tags:
+                        all_block_success = True
+                        for fw_tag in fw_tags:
+                            try:
+                                success = await self._block_on_firewall(
+                                    ip_addr, fw_tag,
+                                    reason="Auto-blocked: compliance recalculation"
+                                )
+                                if not success:
+                                    all_block_success = False
+                                    logger.warning(f"Failed to auto-block {ip_addr} on firewall '{fw_tag}'")
+                            except Exception as e:
+                                all_block_success = False
+                                logger.warning(f"Error auto-blocking {ip_addr} on firewall '{fw_tag}': {e}")
+
+                        if all_block_success:
+                            terminal.status = "blocked"
+                            terminal.firewall_tag = fw_tags[0] if len(fw_tags) == 1 else ",".join(fw_tags)
+                            fw_info = ",".join(fw_tags)
+                            block_comment = f"Auto-blocked by TAM on firewall [{fw_info}]"
+                            if terminal.comments:
+                                terminal.comments = f"{terminal.comments}; {block_comment}"
+                            else:
+                                terminal.comments = block_comment
+                            # Create Blacklist record for each firewall with expires_at
+                            import re
+                            from datetime import datetime, timedelta, timezone
+                            block_time = await self._get_block_time()
+                            match = re.match(r'^(\d+)([dhm])$', block_time.lower())
+                            td = timedelta(days=30)
+                            if match:
+                                value = int(match.group(1))
+                                unit = match.group(2)
+                                if unit == 'd':
+                                    td = timedelta(days=value)
+                                elif unit == 'h':
+                                    td = timedelta(hours=value)
+                                elif unit == 'm':
+                                    td = timedelta(minutes=value)
+                            for fw_tag in fw_tags:
                                 bl_entry = Blacklist(
                                     ip_address=ip_addr,
                                     mac_address=mac_addr,
                                     reason="Auto-blocked: non-compliant (compliance recalculation)",
+                                    blocked_by="system",
+                                    expires_at=datetime.now(timezone.utc) + td,
                                     source_tag=terminal.source_tag,
                                     firewall_tag=fw_tag,
                                     is_auto_blocked=True,
                                     auto_unblocked=False,
                                 )
                                 self.db.add(bl_entry)
-                                logger.info(f"Auto-blocked {ip_addr} (now non_compliant) on firewall '{fw_tag}'")
-                        except Exception as e:
-                            logger.warning(f"Error auto-blocking {ip_addr}: {e}")
+                            logger.info(f"Auto-blocked {ip_addr} (now non_compliant) on firewall(s) '{fw_info}'")
             else:
                 unchanged_count += 1
                 # Backfill firewall_tag for blocked terminals missing it (historical data)
                 if terminal.status == "blocked" and not terminal.firewall_tag:
-                    fw_tag = await self._get_bound_firewall_tag(terminal.source_tag)
-                    if fw_tag:
-                        terminal.firewall_tag = fw_tag
+                    fw_tags = await self._get_bound_firewall_tags(terminal.source_tag)
+                    if fw_tags:
+                        terminal.firewall_tag = fw_tags[0] if len(fw_tags) == 1 else ",".join(fw_tags)
+
+        # Audit log for compliance recalculation (before commit so it's persisted in the same transaction)
+        if non_compliant_count > 0 or unblocked_count > 0:
+            await self.log_action("system", "recalculate_compliance", "terminal", None, {
+                "message": f"Compliance recalculation: {len(terminals)} total, "
+                           f"{non_compliant_count} → non_compliant, {unblocked_count} auto-unblocked",
+                "total": len(terminals),
+                "bypass": bypass_count,
+                "compliant": compliant_count,
+                "non_compliant": non_compliant_count,
+                "unblocked": unblocked_count,
+            }, ip_address="System")
 
         await self.db.commit()
 
@@ -1027,6 +1086,9 @@ class ComplianceService:
         Uses DataSourceBinding table to find the correct firewall for
         a terminal's ARP source, ensuring the right firewall is used
         for block/unblock operations.
+
+        Note: Returns only the first matching firewall tag. For multi-firewall
+        support, use _get_bound_firewall_tags() instead.
         """
         try:
             from app.models.data_source import DataSourceBinding
@@ -1038,3 +1100,43 @@ class ComplianceService:
             return row[0] if row else None
         except Exception:
             return None
+
+    async def _get_bound_firewall_tags(self, source_tag: str) -> List[str]:
+        """Find all firewall data source tags bound to the given ARP source tag.
+
+        Uses DataSourceBinding table to find all firewalls for
+        a terminal's ARP source, ensuring block/unblock operations
+        are executed on all bound firewalls.
+        """
+        try:
+            from app.services.data_source_service import DataSourceService
+            ds_service = DataSourceService(self.db)
+            return await ds_service.get_firewall_tags_for_arp(source_tag)
+        except Exception:
+            return []
+
+    async def _get_block_time(self) -> str:
+        """Get the configured block_time for auto-block operations.
+
+        Reads from ConfigService, defaults to '30d'.
+        """
+        try:
+            from app.services.config_service import ConfigService
+            config_service = ConfigService(self.db)
+            return await config_service.get("block_time", "30d")
+        except Exception:
+            return "30d"
+
+    async def log_action(self, username: str, action: str, resource_type: str,
+                         resource_id: Optional[str], details: dict,
+                         ip_address: str = None):
+        """Log an audit action with JSON details"""
+        audit_log = AuditLog(
+            username=username,
+            action=action,
+            resource_type=resource_type,
+            resource_id=resource_id or "",
+            details=json.dumps(details, ensure_ascii=False),
+            ip_address=ip_address,
+        )
+        self.db.add(audit_log)

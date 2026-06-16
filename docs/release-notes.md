@@ -1,6 +1,6 @@
 # 版本跟踪记录
 
-> 文档版本：v3.2.0-r7 | 更新日期：2026-06-16
+> 文档版本：v3.2.0-r8 | 更新日期：2026-06-16
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
@@ -26,6 +26,36 @@
 | 9100a8d | fix(search): increase debounce delay from 300ms to 500ms across all pages |
 | 2f2add5 | fix: prevent superadmin role modification and fix Users search flickering |
 | 0b36d78 | docs: update RBAC documentation to v3.0 with current implementation |
+
+---
+
+## [v3.2.0-r8] - 2026-06-16
+
+### Fixed
+
+- `recalculate_all_compliance` 自动封堵/解封改为多防火墙路由（`_get_bound_firewall_tags`），与 `auto_block_non_compliant` 行为一致
+- `recalculate_all_compliance` 自动封堵创建的 Blacklist 记录补全 `expires_at` 和 `blocked_by` 字段，避免永不过期
+- `cleanup_expired_blacklist` Sangfor 解封失败时保留 Blacklist 记录（延长 30 分钟重试），避免本地与防火墙状态不一致
+- `cleanup_expired_blacklist` Terminal 查询增加 MAC 维度匹配，避免同 IP 多终端误解封
+- `cleanup_expired_blacklist` 完成后触发 `recalculate_all_compliance`，确保不合规终端及时重新封堵
+- `unblock_ip` 增加 `mac_address` 参数，支持按 MAC 精确解封，避免同 IP 多终端误解封
+- `auto_unblock_compliant` Terminal 查询增加 MAC 维度匹配
+- `auto_block_non_compliant` / `auto_unblock_compliant` / `recalculate_all_compliance` 补全审计日志
+- `block_ip` / `unblock_ip` 审计日志补充 `ip_address`（客户端 IP）字段
+- `block_ip` / `unblock_ip` API 端点增加 `Request` 依赖注入，记录操作来源 IP
+
+### Changed
+
+- ComplianceService 新增 `_get_bound_firewall_tags`（多防火墙）、`_get_block_time`、`log_action` 方法
+
+### 文档修复
+
+- database.md：compliance_baselines 表定义从旧 7 字段修正为实际 11 字段，ER 图同步更新
+- api.md：第 9 节合规基准端点全面重写（请求/响应体、权限码、业务规则）
+- datasource-lifecycle.md：frozen/unfrozen 术语替换为 blocked/unblocked；第 8.4 节 Sangfor API 从旧 blockip 更新为 whiteblacklist API
+- architecture.md：Redis 故障策略从 fail-open 修正为混合策略（token 黑名单/验证码 fail-closed，其余 fail-open）
+- backend.md：Redis 故障策略同步修正
+- RBAC.md：审计日志 action 值 block_ip/unblock_ip 修正为 block_terminal/unblock_terminal；锁定时长从 30 分钟修正为 15 分钟（可配置）
 
 ---
 

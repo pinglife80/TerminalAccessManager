@@ -1,6 +1,6 @@
 # TerminalAccessManager 系统架构设计文档
 
-> 文档版本：v3.2.0-r6 | 更新日期：2026-06-16
+> 文档版本：v3.2.0-r8 | 更新日期：2026-06-16
 
 ## 1. 系统概述
 
@@ -409,7 +409,7 @@ Status 描述的是终端在网络层的实际封堵情况，Compliance 描述�
 | 登录计数 | `login_attempts:{username}` | 锁定时长 | 递增计数 | 首次设置时指定过期时间 |
 | 登录锁定 | `login_lock:{username}` | 锁定时长 | 超过阈值时写入 | 值为失败次数 |
 | 暂停控制 | `scheduler:ctrl:{task_name}` | 无（手动管理） | `manage.sh scheduler pause` 写入、`resume` 删除 | 标记定时任务暂停状态，值为 `"paused"`，`_is_task_paused()` 在任务循环中检查 |
-| fail-open 降级 | 所有 Redis 交互 | — | try/except 异常捕获 | Redis 不可用时按策略降级（黑名单放行、版本号返回 0、登录防护放行等），避免 Redis 故障导致服务完全不可用 |
+| Redis 故障降级 | 所有 Redis 交互 | — | try/except 异常捕获 | Redis 不可用时按混合策略降级（黑名单/验证码校验 fail-closed 拒绝，版本号/登录防护 fail-open 放行等），详见 7.7 节 |
 
 **速率限制算法（Sorted Set 滑动窗口）：**
 
@@ -475,17 +475,19 @@ Status 描述的是终端在网络层的实际封堵情况，Compliance 描述�
 
 ### 7.7 Redis 故障降级
 
-系统采用 fail-open 策略处理 Redis 不可用场景，10 个 Redis 交互函数统一添加 try/except 异常处理：
+系统采用混合策略处理 Redis 不可用场景，10 个 Redis 交互函数统一添加 try/except 异常处理，根据安全级别选择 fail-closed 或 fail-open：
 
-| 场景 | 降级行为 | 安全影响 |
-|------|---------|---------|
-| 令牌黑名单不可用 | 放行请求（`is_token_blacklisted` 返回 `False`） | 已注销的 token 短暂可用，但 token 本身仍有有效期限制 |
-| Token 版本号不可用 | 视为初始版本（`get_token_version` 返回 `0`） | 密码变更后旧 token 短暂可用 |
-| 登录防护不可用 | 放行登录（`check_login_attempts`/`check_captcha_required` 返回 `False`） | 暴力破解防护短暂失效 |
-| 验证码生成不可用 | 抛出异常（`generate_captcha` 必须 Redis） | 需要验证码的登录暂时不可用 |
-| 限流不可用 | 放行请求（`RateLimitMiddleware` 降级） | API 限流短暂失效 |
+| 场景 | 降级行为 | 策略 | 安全影响 |
+|------|---------|------|---------|
+| 令牌黑名单不可用 | 拒绝请求（`is_token_blacklisted` 返回 `True`） | fail-closed | 已注销的 token 不可用，但合法 token 也可能被误拒；确保已注销 token 不会被复用 |
+| 验证码校验不可用 | 校验失败（`verify_captcha` 返回 `False`） | fail-closed | 验证码校验不可用时拒绝验证，防止绕过验证码保护 |
+| Token 版本号不可用 | 视为初始版本（`get_token_version` 返回 `0`） | fail-open | 密码变更后旧 token 短暂可用 |
+| Token 版本递增不可用 | 静默降级（`increment_token_version` 返回 `0`） | fail-open | 密码变更后旧 token 短暂可用 |
+| 登录防护不可用 | 放行登录（`check_login_attempts`/`check_captcha_required` 返回 `False`） | fail-open | 暴力破解防护短暂失效 |
+| 验证码生成不可用 | 抛出异常（`generate_captcha` 必须 Redis） | — | 需要验证码的登录暂时不可用 |
+| 限流不可用 | 放行请求（`RateLimitMiddleware` 降级） | fail-open | API 限流短暂失效 |
 
-设计原则：**可用性优先于安全性** — Redis 故障时系统保持可用，安全防护降级而非阻断服务。所有降级行为均记录 `logger.warning` 日志，便于运维发现和排查。
+设计原则：**安全性优先于可用性**（fail-closed）与 **可用性优先于安全性**（fail-open）混合 — 涉及令牌黑名单和验证码校验等关键安全检查采用 fail-closed 策略，确保安全边界不被突破；登录防护、版本号等非关键路径采用 fail-open 策略，避免 Redis 故障导致服务完全不可用。所有降级行为均记录 `logger.warning` 日志，便于运维发现和排查。
 
 ---
 
@@ -949,9 +951,9 @@ Sidebar 菜单项在鼠标 hover 时预加载对应页面的数据（通过 Reac
 
 **error_id 机制：** 未捕获异常生成 8 位 UUID 前缀作为 error_id，同时写入 `logger.error` 日志和响应体，运维可通过 error_id 在日志中快速定位具体异常。
 
-### 16.2 Redis fail-open 降级
+### 16.2 Redis 故障降级
 
-所有 Redis 交互函数采用 try/except + fail-open 策略，异常时记录 `logger.warning` 并按策略降级（详见 7.7 Redis 故障降级）。
+所有 Redis 交互函数采用 try/except + 混合降级策略（fail-closed / fail-open），异常时记录 `logger.warning` 并按策略降级（详见 7.7 Redis 故障降级）。
 
 ---
 

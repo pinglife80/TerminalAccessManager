@@ -28,6 +28,14 @@
 ### 改进
 
 - Sangfor 数据源移除"同步"按钮：Sangfor 为推送型防火墙，无数据同步语义，前端按类型条件隐藏同步按钮，后端同步接口对 sangfor 类型返回"不适用"提示
+- 合规重算（`recalculate_all_compliance`）自动封堵/解封改为多防火墙路由，与 `auto_block_non_compliant` 行为一致
+- 合规重算创建的 Blacklist 记录补全 `expires_at` 和 `blocked_by` 字段
+- 过期黑名单清理 Sangfor 解封失败时保留 Blacklist 记录并延长重试，避免本地与防火墙状态不一致
+- 过期清理完成后触发合规重算，确保不合规终端及时重新封堵
+- `unblock_ip` 增加 `mac_address` 参数，支持按 MAC 精确解封
+- `auto_unblock_compliant` / `cleanup_expired_blacklist` Terminal 查询增加 MAC 维度匹配
+- 自动封堵/解封/合规重算操作补全审计日志
+- `block_ip` / `unblock_ip` 审计日志补充客户端 IP 地址
 - 单角色模型：`role_ids: list[int]` → `role_id: int`，前端 checkbox 多选 → select 单选下拉
 - 搜索防抖统一为 500ms（Terminals/Whitelist/Blacklist/AuditLogs），`keepPreviousData` 防搜索闪屏
 - Redis 客户端添加超时配置（`socket_timeout`/`socket_connect_timeout`），防止无限阻塞

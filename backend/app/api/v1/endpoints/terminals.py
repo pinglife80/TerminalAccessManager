@@ -1,5 +1,5 @@
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, Request, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -73,13 +73,15 @@ async def block_ip_address(
     firewall_tag: Optional[str] = Query(None, description="Firewall tag to route block operation"),
     comments: Optional[str] = Query(None, description="Comment for the block action"),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_permission("terminal:write"))
+    current_user: User = Depends(require_permission("terminal:write")),
+    request: Request = None
 ):
     """Block an IP address via Sangfor API"""
+    client_ip = request.client.host if request else None
     service = TerminalService(db)
     result = await service.block_ip(ip_address, mac_address, current_user.username,
                                      block_time=block_time, firewall_tag=firewall_tag,
-                                     comments=comments)
+                                     comments=comments, client_ip=client_ip)
 
     if not result["success"]:
         raise HTTPException(
@@ -93,15 +95,20 @@ async def block_ip_address(
 @router.post("/unblock/{ip_address}", response_model=ResponseMessage)
 async def unblock_ip_address(
     ip_address: str,
+    mac_address: Optional[str] = Query(None, description="MAC address to unblock (if omitted, unblocks all MACs for this IP)"),
     firewall_tag: Optional[str] = Query(None, description="Firewall tag to route unblock operation"),
     comments: Optional[str] = Query(None, description="Comment for the unblock action"),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_permission("terminal:write"))
+    current_user: User = Depends(require_permission("terminal:write")),
+    request: Request = None
 ):
     """Unblock an IP address via Sangfor API"""
+    client_ip = request.client.host if request else None
     service = TerminalService(db)
     result = await service.unblock_ip(ip_address, current_user.username,
-                                       firewall_tag=firewall_tag, comments=comments)
+                                       mac_address=mac_address,
+                                       firewall_tag=firewall_tag, comments=comments,
+                                       client_ip=client_ip)
 
     if not result["success"]:
         raise HTTPException(

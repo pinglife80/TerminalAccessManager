@@ -1,6 +1,6 @@
 # TerminalAccessManager API 文档
 
-> 文档版本：v3.2.0-r7 | 更新日期：2026-06-16
+> 文档版本：v3.2.0-r8 | 更新日期：2026-06-16
 
 > 基于 MAC 地址和 IP 地址的网络终端准入管理平台
 
@@ -1753,18 +1753,20 @@ curl -X POST https://<HOST_IP>:8443/api/v1/data-sources/compliance/auto-unblock 
 
 ## 9. 合规基准管理 /compliance-baselines
 
+> **审计日志**：合规基准管理操作均记录审计日志，action 值包括 `create_baseline`、`update_baseline`、`delete_baseline`，details 包含基准名称、标签及变更内容。
+
 ### 9.1 GET /compliance-baselines/
 
-获取合规基准列表（分页）。
+获取合规基准列表，支持按类型和启用状态过滤。
 
-- **认证要求**：需认证
+- **认证要求**：`baseline:read`
 
 **请求参数**
 
-| 参数 | 位置 | 类型 | 默认值 | 说明 |
-|------|------|------|--------|------|
-| skip | Query | int | 0 | 跳过记录数 |
-| limit | Query | int | 50 | 每页记录数（1-200） |
+| 参数 | 位置 | 类型 | 必填 | 说明 |
+|------|------|------|------|------|
+| type | Query | string | 否 | 按类型过滤（ipguard） |
+| enabled | Query | bool | 否 | 按启用状态过滤 |
 
 **成功响应** `200`
 
@@ -1772,10 +1774,14 @@ curl -X POST https://<HOST_IP>:8443/api/v1/data-sources/compliance/auto-unblock 
 [
   {
     "id": 1,
-    "ip_address": "192.168.1.100",
-    "mac_address": "AA:BB:CC:DD:EE:FF",
-    "hostname": "PC-100",
-    "source_tag": "ipguard-01",
+    "name": "IPGuard基准",
+    "type": "ipguard",
+    "tag": "ipguard-01",
+    "config": {"db_type": "postgresql", "host": "10.0.0.2", "port": 5432, "username": "readonly", "password": "***", "database": "ipguard"},
+    "enabled": true,
+    "last_sync_at": "2025-06-08T10:00:00Z",
+    "last_sync_status": "success",
+    "last_sync_error": null,
     "created_at": "2025-06-01T10:00:00Z",
     "updated_at": "2025-06-01T10:00:00Z"
   }
@@ -1785,7 +1791,12 @@ curl -X POST https://<HOST_IP>:8443/api/v1/data-sources/compliance/auto-unblock 
 **用例**
 
 ```bash
-curl "https://<HOST_IP>:8443/api/v1/compliance-baselines/?skip=0&limit=20" \
+# 列出所有合规基准
+curl "https://<HOST_IP>:8443/api/v1/compliance-baselines/" \
+  -H "Authorization: Bearer <access_token>"
+
+# 按类型和启用状态过滤
+curl "https://<HOST_IP>:8443/api/v1/compliance-baselines/?type=ipguard&enabled=true" \
   -H "Authorization: Bearer <access_token>"
 ```
 
@@ -1793,30 +1804,46 @@ curl "https://<HOST_IP>:8443/api/v1/compliance-baselines/?skip=0&limit=20" \
 
 ### 9.2 POST /compliance-baselines/
 
-创建合规基准条目。
+创建合规基准。
 
-- **认证要求**：超管专用
+- **认证要求**：`baseline:write`
 
 **请求体**
 
-| 字段 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| ip_address | string | 是 | IP 地址 |
-| mac_address | string | 是 | MAC 地址 |
-| hostname | string | 否 | 主机名 |
-| source_tag | string | 否 | 数据源标签 |
+| 字段 | 类型 | 必填 | 约束 | 说明 |
+|------|------|------|------|------|
+| name | string | 是 | 最长100字符 | 基准名称（唯一） |
+| type | string | 是 | - | 基准类型：ipguard |
+| tag | string | 是 | 最长50字符 | 唯一标签标识符 |
+| config | object | 否 | JSON 对象 | 连接配置（见下方 config 参数说明） |
+| enabled | bool | 否 | 默认 true | 是否启用 |
+
+**config 参数说明（type=ipguard）：**
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| db_type | string | 数据库类型：postgresql / mysql / mssql |
+| host | string | 数据库主机地址 |
+| port | int | 数据库端口 |
+| username | string | 数据库用户名 |
+| password | string | 数据库密码（Fernet 加密存储） |
+| database | string | 数据库名（默认 ipguard） |
 
 **成功响应** `201`
 
 ```json
 {
-  "id": 1,
-  "ip_address": "192.168.1.100",
-  "mac_address": "AA:BB:CC:DD:EE:FF",
-  "hostname": "PC-100",
-  "source_tag": "ipguard-01",
-  "created_at": "2025-06-01T10:00:00Z",
-  "updated_at": "2025-06-01T10:00:00Z"
+  "id": 2,
+  "name": "IPGuard基准-2F",
+  "type": "ipguard",
+  "tag": "ipguard-2f",
+  "config": {"db_type": "postgresql", "host": "10.0.0.3", "port": 5432, "username": "readonly", "password": "***", "database": "ipguard"},
+  "enabled": true,
+  "last_sync_at": null,
+  "last_sync_status": null,
+  "last_sync_error": null,
+  "created_at": "2025-06-08T12:00:00Z",
+  "updated_at": "2025-06-08T12:00:00Z"
 }
 ```
 
@@ -1824,7 +1851,7 @@ curl "https://<HOST_IP>:8443/api/v1/compliance-baselines/?skip=0&limit=20" \
 
 | 状态码 | 说明 |
 |--------|------|
-| 400 | 参数无效或条目已存在 |
+| 400 | 名称或标签重复；参数无效 |
 
 **用例**
 
@@ -1833,10 +1860,18 @@ curl -X POST https://<HOST_IP>:8443/api/v1/compliance-baselines/ \
   -H "Authorization: Bearer <access_token>" \
   -H "Content-Type: application/json" \
   -d '{
-    "ip_address": "192.168.1.100",
-    "mac_address": "AA:BB:CC:DD:EE:FF",
-    "hostname": "PC-100",
-    "source_tag": "ipguard-01"
+    "name": "IPGuard基准",
+    "type": "ipguard",
+    "tag": "ipguard-01",
+    "config": {
+      "db_type": "postgresql",
+      "host": "10.0.0.2",
+      "port": 5432,
+      "username": "readonly",
+      "password": "secret",
+      "database": "ipguard"
+    },
+    "enabled": true
   }'
 ```
 
@@ -1846,7 +1881,7 @@ curl -X POST https://<HOST_IP>:8443/api/v1/compliance-baselines/ \
 
 获取合规基准详情。
 
-- **认证要求**：需认证
+- **认证要求**：`baseline:read`
 
 **请求参数**
 
@@ -1856,7 +1891,7 @@ curl -X POST https://<HOST_IP>:8443/api/v1/compliance-baselines/ \
 
 **成功响应** `200`
 
-返回格式同创建响应。
+返回格式同 [9.2 POST /compliance-baselines/](#92-post-compliance-baselines) 中的单条记录。
 
 **错误响应**
 
@@ -1875,9 +1910,9 @@ curl https://<HOST_IP>:8443/api/v1/compliance-baselines/1 \
 
 ### 9.4 PUT /compliance-baselines/{baseline_id}
 
-更新合规基准条目。
+更新合规基准。
 
-- **认证要求**：超管专用
+- **认证要求**：`baseline:write`
 
 **请求参数**
 
@@ -1889,10 +1924,11 @@ curl https://<HOST_IP>:8443/api/v1/compliance-baselines/1 \
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| ip_address | string | 否 | IP 地址 |
-| mac_address | string | 否 | MAC 地址 |
-| hostname | string | 否 | 主机名 |
-| source_tag | string | 否 | 数据源标签 |
+| name | string | 否 | 基准名称 |
+| type | string | 否 | 基准类型 |
+| tag | string | 否 | 标签标识符 |
+| config | object | 否 | 连接配置 |
+| enabled | bool | 否 | 启用状态 |
 
 **成功响应** `200`
 
@@ -1902,7 +1938,7 @@ curl https://<HOST_IP>:8443/api/v1/compliance-baselines/1 \
 
 | 状态码 | 说明 |
 |--------|------|
-| 400 | 参数无效 |
+| 400 | 名称或标签重复；参数无效 |
 | 404 | 记录不存在 |
 
 **用例**
@@ -1911,16 +1947,16 @@ curl https://<HOST_IP>:8443/api/v1/compliance-baselines/1 \
 curl -X PUT https://<HOST_IP>:8443/api/v1/compliance-baselines/1 \
   -H "Authorization: Bearer <access_token>" \
   -H "Content-Type: application/json" \
-  -d '{"hostname": "PC-100-Updated"}'
+  -d '{"enabled": false}'
 ```
 
 ---
 
 ### 9.5 DELETE /compliance-baselines/{baseline_id}
 
-删除合规基准条目。
+删除合规基准。
 
-- **认证要求**：超管专用
+- **认证要求**：`baseline:write`
 
 **请求参数**
 
@@ -1949,7 +1985,7 @@ curl -X DELETE https://<HOST_IP>:8443/api/v1/compliance-baselines/1 \
 
 测试合规基准连接。
 
-- **认证要求**：超管专用
+- **认证要求**：`baseline:test`
 
 **请求参数**
 
@@ -1957,15 +1993,26 @@ curl -X DELETE https://<HOST_IP>:8443/api/v1/compliance-baselines/1 \
 |------|------|------|------|------|
 | baseline_id | Path | int | 是 | 合规基准 ID |
 
+**业务规则**
+
+- 仅 `ipguard` 类型支持连接测试
+- 根据 config 中的 `db_type` 选择对应驱动连接（postgresql / mysql / mssql）
+
 **成功响应** `200`
 
 ```json
 {
   "success": true,
-  "message": "Connection successful",
+  "message": "Connection successful (postgresql)",
   "details": null
 }
 ```
+
+**错误响应**
+
+| 状态码 | 说明 |
+|--------|------|
+| 404 | 记录不存在 |
 
 **用例**
 
@@ -1980,13 +2027,18 @@ curl -X POST https://<HOST_IP>:8443/api/v1/compliance-baselines/1/test \
 
 手动触发合规基准同步。
 
-- **认证要求**：超管专用
+- **认证要求**：`baseline:sync`
 
 **请求参数**
 
 | 参数 | 位置 | 类型 | 必填 | 说明 |
 |------|------|------|------|------|
 | baseline_id | Path | int | 是 | 合规基准 ID |
+
+**业务规则**
+
+- 合规基准必须处于启用状态
+- 仅 `ipguard` 类型支持同步
 
 **成功响应** `200`
 
@@ -1995,8 +2047,8 @@ curl -X POST https://<HOST_IP>:8443/api/v1/compliance-baselines/1/test \
   "success": true,
   "message": "Sync completed",
   "entries_processed": 120,
-  "entries_added": 5,
-  "entries_updated": 3,
+  "entries_added": 0,
+  "entries_updated": 0,
   "errors": []
 }
 ```
@@ -2005,7 +2057,7 @@ curl -X POST https://<HOST_IP>:8443/api/v1/compliance-baselines/1/test \
 
 | 状态码 | 说明 |
 |--------|------|
-| 400 | 同步失败 |
+| 400 | 合规基准已禁用；不支持同步的类型 |
 | 404 | 记录不存在 |
 
 **用例**

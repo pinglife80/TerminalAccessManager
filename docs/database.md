@@ -1,6 +1,6 @@
 # TerminalAccessManager 数据库设计文档
 
-> 文档版本：v3.2.0-r6 | 更新日期：2026-06-16
+> 文档版本：v3.2.0-r8 | 更新日期：2026-06-16
 
 ## 1. 概述
 
@@ -112,10 +112,14 @@ docker-compose.yml 中 PostgreSQL 的 `command` 参数列表如下：
 │ compliance_baselines │
 ├──────────────────────┤
 │ id                PK │
-│ ip_address           │
-│ mac_address          │
-│ hostname             │
-│ source_tag           │
+│ name                 │
+│ type                 │
+│ tag                  │
+│ config (JSON)        │
+│ enabled              │
+│ last_sync_at         │
+│ last_sync_status     │
+│ last_sync_error      │
 │ created_at           │
 │ updated_at           │
 └──────────────────────┘
@@ -477,23 +481,29 @@ docker-compose.yml 中 PostgreSQL 的 `command` 参数列表如下：
 
 ### 3.9 compliance_baselines — 合规基准表
 
-存储合规基准数据，独立于数据源，用于合规检查时比对终端是否注册。
+存储合规基准数据源配置，支持 IP Guard 等多种合规数据采集方式。
 
 | 字段 | 类型 | 约束 | 默认值 | 说明 |
 |---|---|---|---|---|
 | id | INTEGER | PK, INDEX | 自增 | 主键 |
-| ip_address | VARCHAR(45) | NOT NULL, INDEX | — | IPv4/IPv6 地址 |
-| mac_address | VARCHAR(17) | NOT NULL, INDEX | — | MAC 地址（格式 XX-XX-XX-XX-XX-XX） |
-| hostname | VARCHAR(100) | | NULL | 主机名 |
-| source_tag | VARCHAR(50) | INDEX | NULL | 数据源标签 |
+| name | VARCHAR(100) | UNIQUE, NOT NULL | — | 基准名称 |
+| type | VARCHAR(20) | NOT NULL | — | 基准类型（sqlserver/mysql/postgresql） |
+| tag | VARCHAR(50) | UNIQUE, NOT NULL, INDEX | — | 基准唯一标签 |
+| config | JSON | NOT NULL | `{}` | 连接配置（JSON 格式，包含 host、port、db_name、username、password、query 等） |
+| enabled | BOOLEAN | | TRUE | 是否启用 |
+| last_sync_at | TIMESTAMP WITH TZ | | NULL | 最近同步时间 |
+| last_sync_status | VARCHAR(20) | | NULL | 最近同步状态（success/failed） |
+| last_sync_error | TEXT | | NULL | 最近同步错误信息 |
 | created_at | TIMESTAMP WITH TZ | server_default=now() | — | 创建时间 |
 | updated_at | TIMESTAMP WITH TZ | server_default=now(), onupdate=now() | — | 更新时间 |
 
-**索引：**
+**数据字典 — type：**
 
-| 索引名 | 类型 | 字段 |
-|---|---|---|
-| idx_compliance_baseline_ip_mac | COMPOSITE | (ip_address, mac_address) |
+| 值 | 说明 |
+|---|---|
+| sqlserver | SQL Server 数据库 |
+| mysql | MySQL 数据库 |
+| postgresql | PostgreSQL 数据库 |
 
 ---
 

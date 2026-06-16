@@ -434,7 +434,7 @@ class TerminalService:
 
     async def block_ip(self, ip_address: str, mac_address: str, username: str,
                         block_time: str = "30d", firewall_tag: Optional[str] = None,
-                        comments: Optional[str] = None) -> dict:
+                        comments: Optional[str] = None, client_ip: str = None) -> dict:
         """Block an IP address via Sangfor API and update database.
 
         Args:
@@ -503,7 +503,8 @@ class TerminalService:
                 # Log the action
                 await self.log_action(username, "block_terminal", "mac", ip_address,
                                      {"message": f"Blocked IP {ip_address} (MAC: {mac_address}) for {block_time}",
-                                      "ip": ip_address, "mac": mac_address, "duration": block_time})
+                                      "ip": ip_address, "mac": mac_address, "duration": block_time},
+                                     ip_address=client_ip)
 
                 await self.db.commit()
 
@@ -520,11 +521,14 @@ class TerminalService:
             raise
 
     async def unblock_ip(self, ip_address: str, username: str,
+                          mac_address: Optional[str] = None,
                           firewall_tag: Optional[str] = None,
-                          comments: Optional[str] = None) -> dict:
+                          comments: Optional[str] = None,
+                          client_ip: str = None) -> dict:
         """Unblock an IP address via Sangfor API and update database.
 
         Args:
+            mac_address: If provided, only unblock the specific MAC. If None, unblock all MACs for this IP.
             firewall_tag: If provided, use the specified firewall DataSource.
                          If None, fall back to global Sangfor config.
             comments: Optional comment to set on the terminal record.
@@ -553,11 +557,10 @@ class TerminalService:
                 sangfor_success = True
 
             if sangfor_success:
-                # Update terminal status
-                stmt = (
-                    select(Terminal)
-                    .where(Terminal.ip_address == ip_address)
-                )
+                # Update terminal status - filter by MAC if provided
+                stmt = select(Terminal).where(Terminal.ip_address == ip_address)
+                if mac_address:
+                    stmt = stmt.where(Terminal.mac_address == mac_address)
                 result = await self.db.execute(stmt)
                 mac_records = result.scalars().all()
 
@@ -568,10 +571,12 @@ class TerminalService:
                     if comments is not None:
                         record.comments = comments
 
-                # Remove from blacklist (filter by firewall_tag if specified)
+                # Remove from blacklist (filter by firewall_tag and MAC if specified)
                 stmt = select(Blacklist).where(Blacklist.ip_address == ip_address)
                 if firewall_tag:
                     stmt = stmt.where(Blacklist.firewall_tag == firewall_tag)
+                if mac_address:
+                    stmt = stmt.where(Blacklist.mac_address == mac_address)
                 result = await self.db.execute(stmt)
                 blacklist_entries = result.scalars().all()
                 for entry in blacklist_entries:
@@ -580,7 +585,8 @@ class TerminalService:
                 # Log the action
                 await self.log_action(username, "unblock_terminal", "mac", ip_address,
                                      {"message": f"Unblocked IP {ip_address}",
-                                      "ip": ip_address})
+                                      "ip": ip_address},
+                                     ip_address=client_ip)
 
                 await self.db.commit()
 
@@ -1091,23 +1097,27 @@ class TerminalService:
             expired_entries = result.scalars().all()
 
             count = 0
+            failed_unblock_ips = set()  # Track IPs where Sangfor unblock failed
             for entry in expired_entries:
                 # Restore terminal status and reset compliance for re-evaluation
                 if entry.ip_address:
-                    mac_stmt = select(Terminal).where(Terminal.ip_address == entry.ip_address)
+                    mac_stmt = select(Terminal).where(
+                        Terminal.ip_address == entry.ip_address,
+                        Terminal.mac_address == entry.mac_address
+                    )
                     mac_result = await self.db.execute(mac_stmt)
                     mac_records = mac_result.scalars().all()
                     for record in mac_records:
                         record.status = TerminalStatus.UNBLOCKED.value
                         # Reset compliance_status to "unknown" so the next
                         # scheduled compliance check will re-evaluate it.
-                        # This prevents the terminal from staying in an
-                        # inconsistent state (unblocked but non_compliant).
                         record.compliance_status = "unknown"
 
                 # Try to unblock on Sangfor
                 fw_tag = entry.firewall_tag
                 sangfor_svc = None
+                sangfor_unblock_success = True  # Default to True; only False on explicit failure
+
                 if fw_tag:
                     sangfor_svc = await self._get_sangfor_service_by_tag(fw_tag)
 
@@ -1115,20 +1125,51 @@ class TerminalService:
 
                 if entry.ip_address and svc and svc.base_url:
                     try:
-                        await svc.unblock_ip([{"srcIP": entry.ip_address}])
-                    except Exception:
-                        pass
+                        response = await svc.unblock_ip([{"srcIP": entry.ip_address}])
+                        if response.get('code') != 0:
+                            sangfor_unblock_success = False
+                            logger.warning(
+                                f"Sangfor unblock failed for {entry.ip_address} on firewall '{fw_tag}': "
+                                f"{response.get('message')}. Keeping blacklist entry for consistency."
+                            )
+                            failed_unblock_ips.add(entry.ip_address)
+                    except Exception as e:
+                        sangfor_unblock_success = False
+                        logger.warning(
+                            f"Sangfor API error when unblocking {entry.ip_address} on firewall '{fw_tag}': {e}. "
+                            f"Keeping blacklist entry for consistency."
+                        )
+                        failed_unblock_ips.add(entry.ip_address)
                     finally:
                         await svc.close()
 
-                await self.db.delete(entry)
-                count += 1
+                if sangfor_unblock_success:
+                    await self.db.delete(entry)
+                    count += 1
+                else:
+                    # Sangfor unblock failed — do NOT delete the blacklist entry
+                    # to maintain consistency between local DB and firewall.
+                    # The entry will be retried on the next cleanup cycle.
+                    # Extend expires_at slightly to avoid immediate retry loop.
+                    entry.expires_at = now + timedelta(minutes=30)
+                    count += 1  # Still count as processed
 
             if count > 0:
                 await self.log_action("system", "cleanup_expired", "blacklist", None,
                                       {"message": f"Cleaned up {count} expired blacklist entries",
+                                       "failed_unblock_ips": list(failed_unblock_ips) if failed_unblock_ips else None,
                                        "count": count})
                 await self.db.commit()
+
+                # Trigger compliance re-evaluation for affected terminals
+                # so that non-compliant ones get re-blocked promptly
+                try:
+                    from app.services.compliance_service import ComplianceService
+                    compliance_svc = ComplianceService(self.db)
+                    await compliance_svc.recalculate_all_compliance()
+                    logger.info("Post-cleanup compliance recalculation completed")
+                except Exception as e:
+                    logger.warning(f"Post-cleanup compliance recalculation failed: {e}")
 
             return count
         except Exception as e:
