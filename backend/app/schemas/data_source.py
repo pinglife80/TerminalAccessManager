@@ -128,3 +128,24 @@ class AutoUnblockResult(BaseModel):
     skipped: int = 0
     errors: List[str] = []
     details: Optional[List[Dict[str, Any]]] = None
+
+
+# ------------------------------------------------------------------
+# Delete Preview schemas
+# ------------------------------------------------------------------
+class DeletePreviewAffected(BaseModel):
+    """Affected resources count for delete preview"""
+    terminals: int = 0
+    blocked_terminals: int = 0
+    blacklist_entries: int = 0
+    bindings: int = 0
+    compliant_terminals: int = 0
+
+
+class DeletePreviewResponse(BaseModel):
+    """Response for delete preview - shows impact before actual deletion"""
+    can_delete: bool
+    warnings: List[str] = []
+    actions: List[str] = []
+    affected: DeletePreviewAffected = DeletePreviewAffected()
+    reason: Optional[str] = None

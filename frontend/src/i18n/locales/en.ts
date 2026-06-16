@@ -1,4 +1,17 @@
 const en = {
+  deletePreview: {
+    analyzingImpact: 'Analyzing deletion impact...',
+    cannotDelete: 'Cannot perform deletion',
+    impactScope: 'Impact Scope',
+    actionsToPerform: 'Actions to be performed',
+    terminals: 'Terminals',
+    blockedTerminals: 'Blocked Terminals',
+    blacklistEntries: 'Blacklist Entries',
+    bindings: 'Bindings',
+    compliantTerminals: 'Compliant Terminals',
+    cannotBeUndone: 'This action cannot be undone. Please review the impact scope above before confirming deletion.',
+    failedToAnalyze: 'Failed to analyze deletion impact',
+  },
   common: {
     loading: 'Loading...',
     save: 'Save',

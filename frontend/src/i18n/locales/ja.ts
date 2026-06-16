@@ -1,4 +1,17 @@
 const ja = {
+  deletePreview: {
+    analyzingImpact: '削除の影響を分析中...',
+    cannotDelete: '削除を実行できません',
+    impactScope: '影響範囲',
+    actionsToPerform: '実行される操作',
+    terminals: '端末レコード',
+    blockedTerminals: 'ブロック済み端末',
+    blacklistEntries: 'ブラックリストエントリ',
+    bindings: 'バインディング',
+    compliantTerminals: 'コンプライアンス端末',
+    cannotBeUndone: 'この操作は元に戻せません。削除を実行する前に、上記の影響範囲を確認してください。',
+    failedToAnalyze: '削除影響の分析に失敗しました',
+  },
   common: {
     loading: '読み込み中...',
     save: '保存',

@@ -76,10 +76,11 @@ class DataSourceService:
             source.name = data.name
 
         if data.tag is not None and data.tag != source.tag:
-            existing = await self._get_by_field(DataSource.tag, data.tag)
-            if existing:
-                raise ValueError(f"Data source with tag '{data.tag}' already exists")
-            source.tag = data.tag
+            raise ValueError(
+                f"Data source tag cannot be changed. Tag '{source.tag}' is referenced by terminals, "
+                f"blacklist entries, and bindings. Please create a new data source with the desired tag "
+                f"and delete the old one."
+            )
 
         if data.type is not None:
             source.type = data.type
@@ -98,6 +99,492 @@ class DataSourceService:
             source.config = decrypt_config(source.config)
 
         return source
+
+    async def preview_delete_data_source(self, source_id: int) -> dict:
+        """Preview the impact of deleting a data source without making any changes"""
+        from app.models.terminal import Terminal
+        from app.models.blacklist import Blacklist
+
+        stmt = select(DataSource).where(DataSource.id == source_id)
+        result = await self.db.execute(stmt)
+        source = result.scalar_one_or_none()
+        if not source:
+            return {
+                "can_delete": False,
+                "warnings": [],
+                "actions": [],
+                "affected": {"terminals": 0, "blocked_terminals": 0, "blacklist_entries": 0, "bindings": 0, "compliant_terminals": 0},
+                "reason": "Data source not found",
+            }
+
+        tag = source.tag
+        source_type = source.type
+        source_name = source.name
+
+        # Count affected terminals
+        terminal_stmt = select(Terminal).where(Terminal.source_tag == tag)
+        terminal_result = await self.db.execute(terminal_stmt)
+        terminals = terminal_result.scalars().all()
+        terminal_count = len(terminals)
+        blocked_count = sum(1 for t in terminals if t.status == "blocked")
+
+        # Count affected blacklist entries
+        bl_stmt = select(Blacklist).where(
+            (Blacklist.source_tag == tag) | (Blacklist.firewall_tag == tag)
+        )
+        bl_result = await self.db.execute(bl_stmt)
+        blacklist_entries = bl_result.scalars().all()
+        bl_count = len(blacklist_entries)
+
+        # Count affected bindings
+        bind_stmt = select(DataSourceBinding).where(
+            (DataSourceBinding.arp_source_tag == tag) | (DataSourceBinding.firewall_tag == tag)
+        )
+        bind_result = await self.db.execute(bind_stmt)
+        bindings = bind_result.scalars().all()
+        bind_count = len(bindings)
+
+        # Build warnings and actions
+        warnings = []
+        actions = []
+
+        if source_type in ("arp_ssh", "arp_api"):
+            # ARP source deletion
+            if terminal_count > 0:
+                warnings.append(f"该数据源关联 {terminal_count} 个终端记录")
+            if blocked_count > 0:
+                warnings.append(f"其中 {blocked_count} 个终端当前处于已封堵状态")
+            if bl_count > 0:
+                warnings.append(f"该数据源关联 {bl_count} 条黑名单记录")
+            if bind_count > 0:
+                warnings.append(f"该数据源关联 {bind_count} 条绑定关系")
+
+            if blocked_count > 0:
+                # Find firewall tags for unblocking
+                fw_tags = set()
+                for bl in blacklist_entries:
+                    if bl.firewall_tag:
+                        fw_tags.add(bl.firewall_tag)
+                for fw_tag in fw_tags:
+                    actions.append(f"从防火墙 [{fw_tag}] 解封 {blocked_count} 个已封堵终端")
+            if bl_count > 0:
+                actions.append(f"删除 {bl_count} 条黑名单记录")
+            if bind_count > 0:
+                actions.append(f"删除 {bind_count} 条数据源绑定关系")
+            actions.append(f"清理 Redis 缓存 (ipguard:{tag})")
+            if terminal_count > 0:
+                actions.append(f"删除 {terminal_count} 个终端记录")
+            actions.append(f"删除数据源 [{source_name}]")
+
+        elif source_type == "sangfor":
+            # Sangfor firewall deletion
+            if blocked_count > 0:
+                warnings.append(f"该防火墙关联 {blocked_count} 个已封堵终端")
+            if bl_count > 0:
+                warnings.append(f"该防火墙关联 {bl_count} 条黑名单记录")
+            if bind_count > 0:
+                warnings.append(f"该防火墙关联 {bind_count} 条绑定关系")
+
+            # Check firewall reachability for unblocking
+            can_delete = True
+            if blocked_count > 0:
+                try:
+                    from app.services.sangfor_service import SangforService
+                    config = source.config
+                    if config:
+                        config = decrypt_config(config)
+                    svc = SangforService(
+                        base_url=config.get("base_url", ""),
+                        username=config.get("username", ""),
+                        password=config.get("password", ""),
+                        verify_ssl=config.get("verify_ssl", True),
+                        ca_bundle=config.get("ca_bundle", ""),
+                    )
+                    test_result = await svc.test_connection()
+                    await svc.close()
+                    if not test_result.get("success", False):
+                        can_delete = False
+                        warnings.append("防火墙当前不可达，无法执行解封操作")
+                except Exception:
+                    can_delete = False
+                    warnings.append("防火墙连接失败，无法执行解封操作")
+
+            if can_delete:
+                if blocked_count > 0:
+                    actions.append(f"从防火墙 [{tag}] 解封 {blocked_count} 个终端")
+                if bl_count > 0:
+                    actions.append(f"删除 {bl_count} 条黑名单记录")
+                if bind_count > 0:
+                    actions.append(f"删除 {bind_count} 条数据源绑定关系")
+                actions.append(f"清理已封堵终端的 firewall_tag 引用")
+                actions.append(f"删除数据源 [{source_name}]")
+            else:
+                actions.append("请确保防火墙连接正常后重试")
+
+            return {
+                "can_delete": can_delete,
+                "warnings": warnings,
+                "actions": actions,
+                "affected": {
+                    "terminals": terminal_count,
+                    "blocked_terminals": blocked_count,
+                    "blacklist_entries": bl_count,
+                    "bindings": bind_count,
+                    "compliant_terminals": 0,
+                },
+                "reason": None if can_delete else "防火墙不可达，无法安全解封已封堵终端",
+            }
+
+        return {
+            "can_delete": True,
+            "warnings": warnings,
+            "actions": actions,
+            "affected": {
+                "terminals": terminal_count,
+                "blocked_terminals": blocked_count,
+                "blacklist_entries": bl_count,
+                "bindings": bind_count,
+                "compliant_terminals": 0,
+            },
+        }
+
+    async def safe_delete_data_source(self, source_id: int, username: str = None, client_ip: str = None) -> bool:
+        """Safely delete a data source with automatic cleanup of dependent data"""
+        from app.models.terminal import Terminal
+        from app.models.blacklist import Blacklist
+        from app.services.terminal_service import TerminalService
+
+        stmt = select(DataSource).where(DataSource.id == source_id)
+        result = await self.db.execute(stmt)
+        source = result.scalar_one_or_none()
+        if not source:
+            return False
+
+        tag = source.tag
+        source_type = source.type
+        source_name = source.name
+
+        # Step 1: For ARP sources, handle terminals and blacklist
+        if source_type in ("arp_ssh", "arp_api"):
+            # Unblock terminals on firewalls
+            terminal_stmt = select(Terminal).where(
+                (Terminal.source_tag == tag) & (Terminal.status == "blocked")
+            )
+            terminal_result = await self.db.execute(terminal_stmt)
+            blocked_terminals = terminal_result.scalars().all()
+
+            for terminal in blocked_terminals:
+                # Find blacklist entries for this terminal
+                bl_stmt = select(Blacklist).where(
+                    (Blacklist.ip_address == terminal.ip_address) &
+                    (Blacklist.mac_address == terminal.mac_address)
+                )
+                bl_result = await self.db.execute(bl_stmt)
+                bl_entries = bl_result.scalars().all()
+
+                # Group blacklist entries by firewall_tag for batch unblock
+                fw_ip_map: Dict[str, List[Dict[str, str]]] = {}
+                for bl_entry in bl_entries:
+                    if bl_entry.firewall_tag:
+                        fw_ip_map.setdefault(bl_entry.firewall_tag, []).append(
+                            {"srcIP": bl_entry.ip_address}
+                        )
+
+                # Unblock on each firewall
+                for fw_tag, ip_list in fw_ip_map.items():
+                    try:
+                        fw_source = await self.get_data_source_by_tag(fw_tag)
+                        if fw_source and fw_source.type == "sangfor":
+                            from app.services.sangfor_service import SangforService
+                            fw_config = fw_source.config
+                            if fw_config:
+                                fw_config = decrypt_config(fw_config)
+                            svc = SangforService(
+                                base_url=fw_config.get("base_url", ""),
+                                username=fw_config.get("username", ""),
+                                password=fw_config.get("password", ""),
+                                verify_ssl=fw_config.get("verify_ssl", True),
+                                ca_bundle=fw_config.get("ca_bundle", ""),
+                            )
+                            await svc.unblock_ip(ip_list)
+                            await svc.close()
+                    except Exception as e:
+                        logger.warning(f"Failed to unblock {terminal.ip_address} on {fw_tag}: {e}")
+
+                # Update terminal status
+                terminal.status = "unblocked"
+                terminal.firewall_tag = None
+                terminal.compliance_status = "unknown"
+                terminal.comments = None
+
+            # Delete all blacklist entries for this source
+            await self.db.execute(
+                delete(Blacklist).where(
+                    (Blacklist.source_tag == tag) | (Blacklist.firewall_tag == tag)
+                )
+            )
+
+            # Delete all terminals from this source
+            await self.db.execute(
+                delete(Terminal).where(Terminal.source_tag == tag)
+            )
+
+        # Step 2: For Sangfor firewalls, handle blocked terminals and blacklist
+        elif source_type == "sangfor":
+            # Find terminals blocked on this firewall
+            terminal_stmt = select(Terminal).where(
+                Terminal.firewall_tag.contains(tag)
+            )
+            terminal_result = await self.db.execute(terminal_stmt)
+            affected_terminals = terminal_result.scalars().all()
+
+            # Unblock on this firewall
+            try:
+                config = source.config
+                if config:
+                    config = decrypt_config(config)
+                from app.services.sangfor_service import SangforService
+                svc = SangforService(
+                    base_url=config.get("base_url", ""),
+                    username=config.get("username", ""),
+                    password=config.get("password", ""),
+                    verify_ssl=config.get("verify_ssl", True),
+                    ca_bundle=config.get("ca_bundle", ""),
+                )
+
+                # Get blocked IPs from blacklist
+                bl_stmt = select(Blacklist).where(Blacklist.firewall_tag == tag)
+                bl_result = await self.db.execute(bl_stmt)
+                bl_entries = bl_result.scalars().all()
+
+                # Batch unblock
+                ip_list = [{"srcIP": bl.ip_address} for bl in bl_entries if bl.ip_address]
+                if ip_list:
+                    try:
+                        await svc.unblock_ip(ip_list)
+                    except Exception as e:
+                        logger.warning(f"Failed to unblock IPs on {tag}: {e}")
+
+                await svc.close()
+            except Exception as e:
+                logger.warning(f"Failed to connect to Sangfor firewall {tag}: {e}")
+
+            # Update terminal firewall_tag - remove this tag
+            for terminal in affected_terminals:
+                if terminal.firewall_tag:
+                    tags = [t.strip() for t in terminal.firewall_tag.split(",") if t.strip() != tag]
+                    if not tags:
+                        terminal.firewall_tag = None
+                        terminal.status = "unblocked"
+                        terminal.compliance_status = "unknown"
+                        terminal.comments = None
+                    else:
+                        terminal.firewall_tag = ",".join(tags)
+
+            # Delete blacklist entries for this firewall
+            await self.db.execute(
+                delete(Blacklist).where(Blacklist.firewall_tag == tag)
+            )
+
+        # Step 3: Delete bindings (common for all types)
+        await self.db.execute(
+            delete(DataSourceBinding).where(
+                (DataSourceBinding.arp_source_tag == tag) |
+                (DataSourceBinding.firewall_tag == tag)
+            )
+        )
+
+        # Step 4: Clean up Redis cache
+        try:
+            from app.core.security import get_redis_client
+            redis_client = await get_redis_client()
+            if redis_client:
+                keys_to_delete = []
+                for pattern in [f"ipguard:{tag}", f"arp:{tag}"]:
+                    found = await redis_client.keys(pattern)
+                    keys_to_delete.extend(found)
+                if keys_to_delete:
+                    await redis_client.delete(*keys_to_delete)
+        except Exception as e:
+            logger.warning(f"Failed to clean Redis cache for {tag}: {e}")
+
+        # Step 5: Delete the data source
+        await self.db.delete(source)
+        await self.db.commit()
+
+        # Step 6: Audit log
+        if username:
+            ts = TerminalService(self.db)
+            await ts.log_action(
+                username, "delete_datasource", "datasource", str(source_id),
+                {"message": f"Safely deleted datasource with cleanup", "name": source_name, "tag": tag},
+                ip_address=client_ip,
+            )
+
+        logger.info(f"Safely deleted data source: {source_name} (tag={tag}, type={source_type})")
+        return True
+
+    async def preview_delete_binding(self, binding_id: int) -> dict:
+        """Preview the impact of deleting a data source binding"""
+        from app.models.terminal import Terminal
+        from app.models.blacklist import Blacklist
+
+        stmt = select(DataSourceBinding).where(DataSourceBinding.id == binding_id)
+        result = await self.db.execute(stmt)
+        binding = result.scalar_one_or_none()
+        if not binding:
+            return {
+                "can_delete": False,
+                "warnings": [],
+                "actions": [],
+                "affected": {"terminals": 0, "blocked_terminals": 0, "blacklist_entries": 0, "bindings": 0, "compliant_terminals": 0},
+                "reason": "Binding not found",
+            }
+
+        arp_tag = binding.arp_source_tag
+        fw_tag = binding.firewall_tag
+
+        # Find blocked terminals from this ARP source that are blocked on this firewall
+        bl_stmt = select(Blacklist).where(
+            (Blacklist.source_tag == arp_tag) & (Blacklist.firewall_tag == fw_tag)
+        )
+        bl_result = await self.db.execute(bl_stmt)
+        bl_entries = bl_result.scalars().all()
+        bl_count = len(bl_entries)
+
+        # Count distinct blocked IPs
+        blocked_ips = set(bl.ip_address for bl in bl_entries)
+        blocked_count = len(blocked_ips)
+
+        warnings = []
+        actions = []
+
+        if blocked_count > 0:
+            warnings.append(f"该绑定关联的 ARP 源下有 {blocked_count} 个终端在防火墙 [{fw_tag}] 上被封堵")
+            warnings.append(f"删除后这些终端将从防火墙 [{fw_tag}] 解封")
+            actions.append(f"从防火墙 [{fw_tag}] 解封 {blocked_count} 个终端")
+            actions.append(f"删除 {bl_count} 条黑名单记录")
+
+        actions.append("触发合规状态重算")
+        actions.append(f"删除绑定关系 [{arp_tag} → {fw_tag}]")
+
+        return {
+            "can_delete": True,
+            "warnings": warnings,
+            "actions": actions,
+            "affected": {
+                "terminals": 0,
+                "blocked_terminals": blocked_count,
+                "blacklist_entries": bl_count,
+                "bindings": 1,
+                "compliant_terminals": 0,
+            },
+        }
+
+    async def safe_delete_binding(self, binding_id: int, username: str = None, client_ip: str = None) -> bool:
+        """Safely delete a binding with automatic cleanup"""
+        from app.models.terminal import Terminal
+        from app.models.blacklist import Blacklist
+        from app.services.terminal_service import TerminalService
+
+        stmt = select(DataSourceBinding).where(DataSourceBinding.id == binding_id)
+        result = await self.db.execute(stmt)
+        binding = result.scalar_one_or_none()
+        if not binding:
+            return False
+
+        arp_tag = binding.arp_source_tag
+        fw_tag = binding.firewall_tag
+
+        # Step 1: Find and unblock terminals on this firewall
+        bl_stmt = select(Blacklist).where(
+            (Blacklist.source_tag == arp_tag) & (Blacklist.firewall_tag == fw_tag)
+        )
+        bl_result = await self.db.execute(bl_stmt)
+        bl_entries = bl_result.scalars().all()
+
+        # Unblock on firewall
+        try:
+            fw_source = await self.get_data_source_by_tag(fw_tag)
+            if fw_source and fw_source.type == "sangfor":
+                from app.services.sangfor_service import SangforService
+                fw_config = fw_source.config
+                if fw_config:
+                    fw_config = decrypt_config(fw_config)
+                svc = SangforService(
+                    base_url=fw_config.get("base_url", ""),
+                    username=fw_config.get("username", ""),
+                    password=fw_config.get("password", ""),
+                    verify_ssl=fw_config.get("verify_ssl", True),
+                    ca_bundle=fw_config.get("ca_bundle", ""),
+                )
+                ip_list = [{"srcIP": bl.ip_address} for bl in bl_entries if bl.ip_address]
+                if ip_list:
+                    try:
+                        await svc.unblock_ip(ip_list)
+                    except Exception as e:
+                        logger.warning(f"Failed to unblock IPs on {fw_tag}: {e}")
+                await svc.close()
+        except Exception as e:
+            logger.warning(f"Failed to connect to firewall {fw_tag}: {e}")
+
+        # Step 2: Update terminal status
+        for bl_entry in bl_entries:
+            terminal_stmt = select(Terminal).where(
+                (Terminal.ip_address == bl_entry.ip_address) &
+                (Terminal.mac_address == bl_entry.mac_address)
+            )
+            t_result = await self.db.execute(terminal_stmt)
+            terminal = t_result.scalar_one_or_none()
+            if terminal:
+                # Check if terminal is blocked on other firewalls too
+                other_bl_stmt = select(Blacklist).where(
+                    (Blacklist.ip_address == terminal.ip_address) &
+                    (Blacklist.mac_address == terminal.mac_address) &
+                    (Blacklist.firewall_tag != fw_tag)
+                )
+                other_bl_result = await self.db.execute(other_bl_stmt)
+                other_bl = other_bl_result.scalars().all()
+
+                if not other_bl:
+                    terminal.status = "unblocked"
+                    terminal.firewall_tag = None
+                    terminal.compliance_status = "unknown"
+                    terminal.comments = None
+                else:
+                    # Still blocked on other firewalls - just remove this fw_tag
+                    remaining_tags = [bl.firewall_tag for bl in other_bl if bl.firewall_tag]
+                    if terminal.firewall_tag:
+                        current_tags = [t.strip() for t in terminal.firewall_tag.split(",") if t.strip() != fw_tag]
+                        terminal.firewall_tag = ",".join(current_tags) if current_tags else None
+
+        # Step 3: Delete blacklist entries for this binding
+        for bl_entry in bl_entries:
+            await self.db.delete(bl_entry)
+
+        # Step 4: Delete the binding
+        await self.db.delete(binding)
+        await self.db.commit()
+
+        # Step 5: Trigger compliance recalculation
+        try:
+            from app.services.compliance_service import ComplianceService
+            cs = ComplianceService(self.db)
+            await cs.recalculate_all_compliance()
+        except Exception as e:
+            logger.warning(f"Failed to trigger compliance recalculation after binding deletion: {e}")
+
+        # Step 6: Audit log
+        if username:
+            ts = TerminalService(self.db)
+            await ts.log_action(
+                username, "unbind_datasource", "datasource", str(binding_id),
+                {"message": "Safely deleted datasource binding with cleanup", "arp_source_tag": arp_tag, "firewall_tag": fw_tag},
+                ip_address=client_ip,
+            )
+
+        logger.info(f"Safely deleted binding: {arp_tag} -> {fw_tag}")
+        return True
 
     async def delete_data_source(self, source_id: int) -> bool:
         """Delete a data source by ID"""

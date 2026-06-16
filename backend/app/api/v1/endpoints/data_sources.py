@@ -19,6 +19,8 @@ from app.schemas.data_source import (
     AutoBlockRequest,
     AutoBlockResult,
     AutoUnblockResult,
+    DeletePreviewResponse,
+    DeletePreviewAffected,
 )
 from app.services.data_source_service import DataSourceService
 from app.services.arp_collector_service import ArpCollectorService
@@ -122,6 +124,18 @@ async def update_data_source(
         )
 
 
+@router.post("/{source_id}/delete-preview", response_model=DeletePreviewResponse)
+async def preview_delete_data_source(
+    source_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permission("datasource:write")),
+):
+    """Preview the impact of deleting a data source without making any changes"""
+    service = DataSourceService(db)
+    preview = await service.preview_delete_data_source(source_id)
+    return preview
+
+
 @router.delete("/{source_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_data_source(
     source_id: int,
@@ -129,7 +143,7 @@ async def delete_data_source(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_permission("datasource:write")),
 ):
-    """Delete a data source (requires datasource:write permission)"""
+    """Safely delete a data source with automatic cleanup (requires datasource:write permission)"""
     service = DataSourceService(db)
     source = await service.get_data_source_by_id(source_id)
     if not source:
@@ -138,21 +152,16 @@ async def delete_data_source(
             detail="Data source not found",
         )
 
-    deleted_name = source.name
-    deleted_tag = source.tag
-    deleted = await service.delete_data_source(source_id)
+    deleted = await service.safe_delete_data_source(
+        source_id,
+        username=current_user.username,
+        client_ip=request.client.host if request.client else None,
+    )
     if not deleted:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Data source not found",
         )
-
-    # Audit log
-    from app.services.terminal_service import TerminalService
-    ts = TerminalService(db)
-    await ts.log_action(current_user.username, "delete_datasource", "datasource", str(source_id),
-                        {"message": "Deleted datasource", "name": deleted_name, "tag": deleted_tag},
-                        ip_address=request.client.host if request.client else None)
 
 
 @router.post("/{source_id}/test", response_model=ConnectionTestResult)
@@ -278,6 +287,18 @@ async def create_binding(
         )
 
 
+@router.post("/bindings/{binding_id}/delete-preview", response_model=DeletePreviewResponse)
+async def preview_delete_binding(
+    binding_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permission("datasource:write")),
+):
+    """Preview the impact of deleting a data source binding without making any changes"""
+    service = DataSourceService(db)
+    preview = await service.preview_delete_binding(binding_id)
+    return preview
+
+
 @router.delete("/bindings/{binding_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_binding(
     binding_id: int,
@@ -285,21 +306,18 @@ async def delete_binding(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_permission("datasource:write")),
 ):
-    """Delete a data source binding (requires datasource:write permission)"""
+    """Safely delete a data source binding with automatic cleanup (requires datasource:write permission)"""
     service = DataSourceService(db)
-    deleted = await service.delete_binding(binding_id)
+    deleted = await service.safe_delete_binding(
+        binding_id,
+        username=current_user.username,
+        client_ip=request.client.host if request.client else None,
+    )
     if not deleted:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Binding not found",
         )
-
-    # Audit log
-    from app.services.terminal_service import TerminalService
-    ts = TerminalService(db)
-    await ts.log_action(current_user.username, "unbind_datasource", "datasource", str(binding_id),
-                        {"message": "Deleted datasource binding"},
-                        ip_address=request.client.host if request.client else None)
 
 
 # ------------------------------------------------------------------

@@ -18,6 +18,7 @@ import { toast } from 'sonner';
 import { API_ENDPOINTS } from '@/lib/constants';
 import { getErrorMessage, formatDate } from '@/lib/utils';
 import { PrimaryButton, IconButton, ButtonGroup } from '@/components/Button';
+import { DeletePreviewModal, DeletePreviewData } from '@/components/DeletePreviewModal';
 import { Pagination } from '@/components/Pagination';
 import { EmptyState, LoadingState } from '@/components/StateDisplay';
 import { Modal } from '@/components/Modal';
@@ -65,6 +66,8 @@ const ComplianceBaselinesTab = forwardRef<{ openAddModal: () => void }, Complian
   const [showDeleteBlModal, setShowDeleteBlModal] = useState(false);
   const [deleteBlItem, setDeleteBlItem] = useState<ComplianceBaselineItem | null>(null);
   const [isDeletingBl, setIsDeletingBl] = useState(false);
+  const [blPreviewData, setBlPreviewData] = useState<DeletePreviewData | null>(null);
+  const [isLoadingBlPreview, setIsLoadingBlPreview] = useState(false);
 
   // Test Baseline connection
   const [blTestingId, setBlTestingId] = useState<number | null>(null);
@@ -138,6 +141,22 @@ const ComplianceBaselinesTab = forwardRef<{ openAddModal: () => void }, Complian
     setBlConfig({});
   };
 
+  const openDeleteBlModal = async (bl: ComplianceBaselineItem) => {
+    setDeleteBlItem(bl);
+    setShowDeleteBlModal(true);
+    setIsLoadingBlPreview(true);
+    setBlPreviewData(null);
+    try {
+      const response = await apiClient.post(`${API_ENDPOINTS.COMPLIANCE_BASELINE_DELETE_PREVIEW}${bl.id}/delete-preview`);
+      setBlPreviewData(response.data);
+    } catch (error: unknown) {
+      setBlPreviewData(null);
+      toast.error(getErrorMessage(error, t('deletePreview.failedToAnalyze')));
+    } finally {
+      setIsLoadingBlPreview(false);
+    }
+  };
+
   const handleDeleteBl = async () => {
     if (!deleteBlItem) return;
     setIsDeletingBl(true);
@@ -151,6 +170,7 @@ const ComplianceBaselinesTab = forwardRef<{ openAddModal: () => void }, Complian
       setIsDeletingBl(false);
       setShowDeleteBlModal(false);
       setDeleteBlItem(null);
+      setBlPreviewData(null);
     }
   };
 
@@ -363,7 +383,7 @@ const ComplianceBaselinesTab = forwardRef<{ openAddModal: () => void }, Complian
                           variant="danger"
                           size="md"
                           title={t('baselines.deleteBaseline')}
-                          onClick={() => { setDeleteBlItem(bl); setShowDeleteBlModal(true); }}
+                          onClick={() => openDeleteBlModal(bl)}
                         />
                       </ButtonGroup>
                       {/* Test result inline */}
@@ -575,35 +595,17 @@ const ComplianceBaselinesTab = forwardRef<{ openAddModal: () => void }, Complian
       </Modal>
 
       {/* Delete Compliance Baseline Modal */}
-      <Modal isOpen={showDeleteBlModal} onClose={() => { setShowDeleteBlModal(false); setDeleteBlItem(null); }} title={t('baselines.deleteBaselineTitle')} size="sm">
-        <div className="flex items-center gap-4 mb-4">
-          <div className="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center">
-            <Trash2 className="h-6 w-6 text-red-600" />
-          </div>
-          <div>
-            <p className="text-sm text-muted-foreground">{t('common.cannotBeUndone')}</p>
-          </div>
-        </div>
-        <p className="text-muted-foreground mb-6">
-          {t('baselines.areYouSureDeleteBaseline')} <span className="font-medium">{deleteBlItem?.name}</span> (tag: <span className="font-mono">{deleteBlItem?.tag}</span>)?
-        </p>
-        <div className="flex gap-3">
-          <PrimaryButton
-            label={t('common.cancel')}
-            variant="secondary"
-            onClick={() => { setShowDeleteBlModal(false); setDeleteBlItem(null); }}
-            className="flex-1"
-          />
-          <PrimaryButton
-            icon={Trash2}
-            label={t('common.delete')}
-            variant="danger"
-            onClick={handleDeleteBl}
-            loading={isDeletingBl}
-            className="flex-1"
-          />
-        </div>
-      </Modal>
+      <DeletePreviewModal
+        isOpen={showDeleteBlModal}
+        onClose={() => { setShowDeleteBlModal(false); setDeleteBlItem(null); setBlPreviewData(null); }}
+        onConfirm={handleDeleteBl}
+        title={t('baselines.deleteBaselineTitle')}
+        itemName={deleteBlItem?.name || ''}
+        itemTag={deleteBlItem?.tag}
+        previewData={blPreviewData}
+        isLoadingPreview={isLoadingBlPreview}
+        isDeleting={isDeletingBl}
+      />
     </>
   );
 });

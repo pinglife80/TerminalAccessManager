@@ -22,7 +22,7 @@ from app.models.whitelist import Whitelist
 from app.models.blacklist import Blacklist
 from app.models.data_source import DataSource, DataSourceBinding
 from app.models.compliance_baseline import ComplianceBaseline
-from app.models.audit_log import AuditLog
+from app.models.log import AuditLog
 from app.schemas.data_source import (
     ComplianceCheckResult, AutoBlockResult, AutoUnblockResult,
 )

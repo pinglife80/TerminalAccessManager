@@ -1,4 +1,17 @@
 const zh = {
+  deletePreview: {
+    analyzingImpact: '正在分析删除影响...',
+    cannotDelete: '无法执行删除操作',
+    impactScope: '影响范围',
+    actionsToPerform: '后台将执行的操作',
+    terminals: '终端记录',
+    blockedTerminals: '已封堵终端',
+    blacklistEntries: '黑名单记录',
+    bindings: '绑定关系',
+    compliantTerminals: '合规终端',
+    cannotBeUndone: '此操作不可撤销，请确认以上影响范围后再执行删除。',
+    failedToAnalyze: '分析删除影响失败',
+  },
   common: {
     loading: '加载中...',
     save: '保存',

@@ -18,6 +18,7 @@ import { toast } from 'sonner';
 import { API_ENDPOINTS } from '@/lib/constants';
 import { getErrorMessage, formatDate } from '@/lib/utils';
 import { PrimaryButton, IconButton, ButtonGroup } from '@/components/Button';
+import { DeletePreviewModal, DeletePreviewData } from '@/components/DeletePreviewModal';
 import { Pagination } from '@/components/Pagination';
 import { EmptyState, LoadingState } from '@/components/StateDisplay';
 import { Modal } from '@/components/Modal';
@@ -65,6 +66,8 @@ const DataSourcesTab = forwardRef<{ openAddModal: () => void }, DataSourcesTabPr
   const [showDeleteDsModal, setShowDeleteDsModal] = useState(false);
   const [deleteDsItem, setDeleteDsItem] = useState<DataSourceItem | null>(null);
   const [isDeletingDs, setIsDeletingDs] = useState(false);
+  const [deletePreviewData, setDeletePreviewData] = useState<DeletePreviewData | null>(null);
+  const [isLoadingPreview, setIsLoadingPreview] = useState(false);
 
   // Test connection
   const [testingId, setTestingId] = useState<number | null>(null);
@@ -138,6 +141,22 @@ const DataSourcesTab = forwardRef<{ openAddModal: () => void }, DataSourcesTabPr
     setDsConfig({});
   };
 
+  const openDeleteDsModal = async (ds: DataSourceItem) => {
+    setDeleteDsItem(ds);
+    setShowDeleteDsModal(true);
+    setIsLoadingPreview(true);
+    setDeletePreviewData(null);
+    try {
+      const response = await apiClient.post(`${API_ENDPOINTS.DATA_SOURCE_DELETE_PREVIEW}${ds.id}/delete-preview`);
+      setDeletePreviewData(response.data);
+    } catch (error: unknown) {
+      setDeletePreviewData(null);
+      toast.error(getErrorMessage(error, t('deletePreview.failedToAnalyze')));
+    } finally {
+      setIsLoadingPreview(false);
+    }
+  };
+
   const handleDeleteDs = async () => {
     if (!deleteDsItem) return;
     setIsDeletingDs(true);
@@ -151,6 +170,7 @@ const DataSourcesTab = forwardRef<{ openAddModal: () => void }, DataSourcesTabPr
       setIsDeletingDs(false);
       setShowDeleteDsModal(false);
       setDeleteDsItem(null);
+      setDeletePreviewData(null);
     }
   };
 
@@ -409,7 +429,7 @@ const DataSourcesTab = forwardRef<{ openAddModal: () => void }, DataSourcesTabPr
                           variant="danger"
                           size="md"
                           title={t('dataSources.deleteDataSource')}
-                          onClick={() => { setDeleteDsItem(ds); setShowDeleteDsModal(true); }}
+                          onClick={() => openDeleteDsModal(ds)}
                         />
                       </ButtonGroup>
                       {/* Test result inline */}
@@ -505,35 +525,17 @@ const DataSourcesTab = forwardRef<{ openAddModal: () => void }, DataSourcesTabPr
       </Modal>
 
       {/* Delete Data Source Modal */}
-      <Modal isOpen={showDeleteDsModal} onClose={() => { setShowDeleteDsModal(false); setDeleteDsItem(null); }} title={t('dataSources.deleteDataSourceTitle')} size="sm">
-        <div className="flex items-center gap-4 mb-4">
-          <div className="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center">
-            <Trash2 className="h-6 w-6 text-red-600" />
-          </div>
-          <div>
-            <p className="text-sm text-muted-foreground">{t('common.cannotBeUndone')}</p>
-          </div>
-        </div>
-        <p className="text-muted-foreground mb-6">
-          {t('dataSources.areYouSureDeleteDs')} <span className="font-medium">{deleteDsItem?.name}</span> (tag: <span className="font-mono">{deleteDsItem?.tag}</span>)?
-        </p>
-        <div className="flex gap-3">
-          <PrimaryButton
-            label="Cancel"
-            variant="secondary"
-            onClick={() => { setShowDeleteDsModal(false); setDeleteDsItem(null); }}
-            className="flex-1"
-          />
-          <PrimaryButton
-            icon={Trash2}
-            label={t('common.delete')}
-            variant="danger"
-            onClick={handleDeleteDs}
-            loading={isDeletingDs}
-            className="flex-1"
-          />
-        </div>
-      </Modal>
+      <DeletePreviewModal
+        isOpen={showDeleteDsModal}
+        onClose={() => { setShowDeleteDsModal(false); setDeleteDsItem(null); setDeletePreviewData(null); }}
+        onConfirm={handleDeleteDs}
+        title={t('dataSources.deleteDataSourceTitle')}
+        itemName={deleteDsItem?.name || ''}
+        itemTag={deleteDsItem?.tag}
+        previewData={deletePreviewData}
+        isLoadingPreview={isLoadingPreview}
+        isDeleting={isDeletingDs}
+      />
 
       {/* Edit Data Source Modal */}
       <Modal isOpen={showEditDsModal} onClose={() => setShowEditDsModal(false)} title={t('dataSources.editDataSourceTitle')} size="lg">

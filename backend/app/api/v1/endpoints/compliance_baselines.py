@@ -11,8 +11,9 @@ from app.schemas.compliance_baseline import (
     ComplianceBaselineUpdate,
     ComplianceBaselineResponse,
 )
-from app.schemas.data_source import ConnectionTestResult, SyncResult
+from app.schemas.data_source import ConnectionTestResult, SyncResult, DeletePreviewResponse, DeletePreviewAffected
 from app.services.compliance_service import ComplianceService
+from sqlalchemy import func
 
 
 router = APIRouter(prefix="/compliance-baselines", tags=["Compliance Baselines"])
@@ -102,6 +103,15 @@ async def update_baseline(
         raise HTTPException(status_code=404, detail="Compliance baseline not found")
 
     update_data = data.model_dump(exclude_unset=True)
+
+    # Prevent tag modification - tag is a system-wide identifier
+    if "tag" in update_data and update_data["tag"] != baseline.tag:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Baseline tag cannot be changed. Tag '{baseline.tag}' is referenced by IPGuard cache and compliance checks. "
+                   f"Please create a new baseline with the desired tag and delete the old one."
+        )
+
     for key, value in update_data.items():
         setattr(baseline, key, value)
     await db.commit()
@@ -117,6 +127,63 @@ async def update_baseline(
     return baseline
 
 
+@router.post("/{baseline_id}/delete-preview", response_model=DeletePreviewResponse)
+async def preview_delete_baseline(
+    baseline_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permission("baseline:write")),
+):
+    """Preview the impact of deleting a compliance baseline without making any changes"""
+    from sqlalchemy import select
+    stmt = select(ComplianceBaseline).where(ComplianceBaseline.id == baseline_id)
+    result = await db.execute(stmt)
+    baseline = result.scalar_one_or_none()
+    if not baseline:
+        return DeletePreviewResponse(
+            can_delete=False,
+            warnings=[],
+            actions=[],
+            affected=DeletePreviewAffected(),
+            reason="Compliance baseline not found",
+        )
+
+    tag = baseline.tag
+    name = baseline.name
+
+    # Count terminals with compliance_status determined by this baseline
+    from app.models.terminal import Terminal
+    from app.models.data_source import DataSourceBinding
+
+    # Count terminals with non-unknown compliance status
+    terminal_stmt = select(Terminal).where(Terminal.compliance_status.in_(["compliant", "non_compliant"]))
+    terminal_result = await db.execute(terminal_stmt)
+    all_compliant_terminals = terminal_result.scalars().all()
+
+    compliant_count = sum(1 for t in all_compliant_terminals if t.compliance_status == "compliant")
+    non_compliant_count = sum(1 for t in all_compliant_terminals if t.compliance_status == "non_compliant")
+
+    warnings = []
+    actions = []
+
+    if compliant_count > 0:
+        warnings.append(f"该基准当前覆盖 {compliant_count} 个合规终端")
+    if non_compliant_count > 0:
+        warnings.append(f"该基准关联 {non_compliant_count} 个不合规终端")
+
+    actions.append(f"清理 Redis 缓存 (ipguard:{tag})")
+    actions.append(f"删除合规基准 [{name}]")
+    actions.append("触发全量合规重算（不合规终端将被自动封堵）")
+
+    return DeletePreviewResponse(
+        can_delete=True,
+        warnings=warnings,
+        actions=actions,
+        affected=DeletePreviewAffected(
+            compliant_terminals=compliant_count + non_compliant_count,
+        ),
+    )
+
+
 @router.delete("/{baseline_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_baseline(
     baseline_id: int,
@@ -124,7 +191,7 @@ async def delete_baseline(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_permission("baseline:write")),
 ):
-    """Delete a compliance baseline (requires baseline:write permission)"""
+    """Safely delete a compliance baseline with automatic cleanup (requires baseline:write permission)"""
     from sqlalchemy import select
     stmt = select(ComplianceBaseline).where(ComplianceBaseline.id == baseline_id)
     result = await db.execute(stmt)
@@ -134,14 +201,36 @@ async def delete_baseline(
 
     deleted_name = baseline.name
     deleted_tag = baseline.tag
+
+    # Step 1: Delete the baseline
     await db.delete(baseline)
     await db.commit()
 
-    # Audit log
+    # Step 2: Clean up Redis cache
+    try:
+        from app.core.security import get_redis_client
+        redis_client = await get_redis_client()
+        if redis_client:
+            cache_key = f"ipguard:{deleted_tag}"
+            await redis_client.delete(cache_key)
+    except Exception as e:
+        from loguru import logger
+        logger.warning(f"Failed to clean Redis cache for baseline {deleted_tag}: {e}")
+
+    # Step 3: Trigger compliance recalculation
+    try:
+        from app.services.compliance_service import ComplianceService
+        cs = ComplianceService(db)
+        await cs.recalculate_all_compliance()
+    except Exception as e:
+        from loguru import logger
+        logger.warning(f"Failed to trigger compliance recalculation after baseline deletion: {e}")
+
+    # Step 4: Audit log
     from app.services.terminal_service import TerminalService
     ts = TerminalService(db)
     await ts.log_action(current_user.username, "delete_baseline", "compliance", str(baseline_id),
-                        {"message": "Deleted compliance baseline", "name": deleted_name, "tag": deleted_tag},
+                        {"message": "Safely deleted compliance baseline with cleanup", "name": deleted_name, "tag": deleted_tag},
                         ip_address=request.client.host if request.client else None)
 
 
