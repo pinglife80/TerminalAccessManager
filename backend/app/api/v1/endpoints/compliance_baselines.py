@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.security import get_current_user, require_permission
+from app.core.security import get_current_user, require_permission, get_client_ip
 from app.models.user import User
 from app.models.compliance_baseline import ComplianceBaseline
 from app.schemas.compliance_baseline import (
@@ -64,8 +64,9 @@ async def create_baseline(
     from app.services.terminal_service import TerminalService
     ts = TerminalService(db)
     await ts.log_action(current_user.username, "create_baseline", "compliance", str(baseline.id),
-                        {"message": "Created compliance baseline", "name": baseline.name, "tag": baseline.tag},
-                        ip_address=request.client.host if request.client else None)
+                        {"message": "Created compliance baseline", "name": baseline.name,
+                         "type": baseline.type, "tag": baseline.tag},
+                        ip_address=get_client_ip(request))
 
     return baseline
 
@@ -121,8 +122,9 @@ async def update_baseline(
     from app.services.terminal_service import TerminalService
     ts = TerminalService(db)
     await ts.log_action(current_user.username, "update_baseline", "compliance", str(baseline.id),
-                        {"message": "Updated compliance baseline", "name": baseline.name, "tag": baseline.tag},
-                        ip_address=request.client.host if request.client else None)
+                        {"message": "Updated compliance baseline", "name": baseline.name, "tag": baseline.tag,
+                         "changes": list(update_data.keys())},
+                        ip_address=get_client_ip(request))
 
     return baseline
 
@@ -231,7 +233,7 @@ async def delete_baseline(
     ts = TerminalService(db)
     await ts.log_action(current_user.username, "delete_baseline", "compliance", str(baseline_id),
                         {"message": "Safely deleted compliance baseline with cleanup", "name": deleted_name, "tag": deleted_tag},
-                        ip_address=request.client.host if request.client else None)
+                        ip_address=get_client_ip(request))
 
 
 @router.post("/{baseline_id}/test", response_model=ConnectionTestResult)

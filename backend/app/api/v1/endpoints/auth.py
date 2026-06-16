@@ -25,6 +25,7 @@ from app.core.security import (
     require_permission,
     invalidate_user_permissions,
     get_user_permissions,
+    get_client_ip,
 )
 from app.core.config import settings
 from app.models.user import User
@@ -134,7 +135,7 @@ async def login(
         ts = TerminalService(db)
         await ts.log_action(username, "login_failed", "auth", None,
                             {"message": "Login failed: user not found"},
-                            ip_address=request.client.host if request.client else None)
+                            ip_address=get_client_ip(request))
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={
@@ -155,7 +156,7 @@ async def login(
         ts = TerminalService(db)
         await ts.log_action(username, "login_failed", "auth", str(user.id),
                             {"message": "Login failed: incorrect password"},
-                            ip_address=request.client.host if request.client else None)
+                            ip_address=get_client_ip(request))
 
         error_detail = {
             "message": "Invalid credentials",
@@ -188,8 +189,8 @@ async def login(
     from app.services.terminal_service import TerminalService
     ts = TerminalService(db)
     await ts.log_action(user.username, "login", "auth", str(user.id),
-                        {"message": "User logged in successfully"},
-                        ip_address=request.client.host if request.client else None)
+                        {"message": "User logged in successfully", "ip": get_client_ip(request)},
+                        ip_address=get_client_ip(request))
 
     # Create tokens (uses hot-reloadable config for expiration)
     access_token = await create_access_token_async(data={"sub": user.username}, user_id=user.id)
@@ -386,7 +387,7 @@ async def refresh_token(
         ts = TerminalService(db)
         await ts.log_action(username, "token_refresh", "auth", str(user.id),
                             {"message": "Token refreshed"},
-                            ip_address=request.client.host if request.client else None)
+                            ip_address=get_client_ip(request))
 
         return {
             "access_token": access_token,
@@ -425,7 +426,7 @@ async def logout(
     ts = TerminalService(db)
     await ts.log_action(current_user.username, "logout", "auth", str(current_user.id),
                         {"message": "User logged out"},
-                        ip_address=request.client.host if request.client else None)
+                        ip_address=get_client_ip(request))
 
     return {"message": "Successfully logged out", "success": True}
 
@@ -492,7 +493,7 @@ async def change_password(
     ts = TerminalService(db)
     await ts.log_action(current_user.username, "change_password", "auth", str(current_user.id),
                         {"message": "User changed their own password"},
-                        ip_address=request.client.host if request.client else None)
+                        ip_address=get_client_ip(request))
 
     return {"message": "Password changed successfully", "success": True}
 
@@ -594,8 +595,9 @@ async def admin_create_user(
     ts = TerminalService(db)
     await ts.log_action(current_user.username, "create_user", "user", str(new_user.id),
                         {"message": "Created user", "username": new_user.username,
+                         "email": new_user.email, "is_active": new_user.is_active,
                          "role": "superuser" if new_user.is_superuser else "user"},
-                        ip_address=request.client.host if request.client else None)
+                        ip_address=get_client_ip(request))
 
     return await _build_user_detail_response(db, new_user)
 
@@ -690,7 +692,7 @@ async def admin_update_user(
         await ts.log_action(current_user.username, "role_change", "user", str(user.id),
                             {"message": f"User role changed from {old_role} to {new_role}",
                              "target_user": user.username, "old_role": old_role, "new_role": new_role},
-                            ip_address=request.client.host if request.client else None)
+                            ip_address=get_client_ip(request))
 
     await db.commit()
     await db.refresh(user)
@@ -718,9 +720,11 @@ async def admin_update_user(
     # Audit log
     from app.services.terminal_service import TerminalService
     ts = TerminalService(db)
+    changes = list(user_data.model_dump(exclude_unset=True).keys())
     await ts.log_action(current_user.username, "update_user", "user", str(user.id),
-                        {"message": "Updated user", "username": user.username},
-                        ip_address=request.client.host if request.client else None)
+                        {"message": "Updated user", "username": user.username,
+                         "changes": changes},
+                        ip_address=get_client_ip(request))
 
     return await _build_user_detail_response(db, user)
 
@@ -759,7 +763,7 @@ async def admin_delete_user(
     ts = TerminalService(db)
     await ts.log_action(current_user.username, "delete_user", "user", str(user_id),
                         {"message": "Deleted user", "username": deleted_username},
-                        ip_address=request.client.host if request.client else None)
+                        ip_address=get_client_ip(request))
 
     return {"message": f"User '{deleted_username}' deleted successfully", "success": True}
 
@@ -790,7 +794,7 @@ async def admin_reset_password(
     ts = TerminalService(db)
     await ts.log_action(current_user.username, "reset_password", "user", str(user.id),
                         {"message": "Reset password for user", "username": user.username},
-                        ip_address=request.client.host if request.client else None)
+                        ip_address=get_client_ip(request))
 
     return {"message": f"Password for '{user.username}' reset successfully", "success": True}
 
@@ -816,6 +820,6 @@ async def admin_unlock_user(
     ts = TerminalService(db)
     await ts.log_action(current_user.username, "unlock_user", "user", str(user.id),
                         {"message": "Unlocked user account", "username": user.username},
-                        ip_address=request.client.host if request.client else None)
+                        ip_address=get_client_ip(request))
 
     return {"message": f"Account '{user.username}' unlocked successfully", "success": True}

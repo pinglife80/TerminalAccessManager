@@ -274,10 +274,11 @@ class DataSourceService:
             blocked_terminals = terminal_result.scalars().all()
 
             for terminal in blocked_terminals:
-                # Find blacklist entries for this terminal
+                # Find blacklist entries for this terminal (use normalized MAC for reliable matching)
+                mac_norm = terminal.mac_address.replace('-', '').replace(':', '').replace('.', '').upper() if terminal.mac_address else None
                 bl_stmt = select(Blacklist).where(
                     (Blacklist.ip_address == terminal.ip_address) &
-                    (Blacklist.mac_address == terminal.mac_address)
+                    (Blacklist.mac_address_normalized == mac_norm)
                 )
                 bl_result = await self.db.execute(bl_stmt)
                 bl_entries = bl_result.scalars().all()
@@ -537,10 +538,11 @@ class DataSourceService:
             t_result = await self.db.execute(terminal_stmt)
             terminal = t_result.scalar_one_or_none()
             if terminal:
-                # Check if terminal is blocked on other firewalls too
+                # Check if terminal is blocked on other firewalls too (use normalized MAC)
+                mac_norm = terminal.mac_address.replace('-', '').replace(':', '').replace('.', '').upper() if terminal.mac_address else None
                 other_bl_stmt = select(Blacklist).where(
                     (Blacklist.ip_address == terminal.ip_address) &
-                    (Blacklist.mac_address == terminal.mac_address) &
+                    (Blacklist.mac_address_normalized == mac_norm) &
                     (Blacklist.firewall_tag != fw_tag)
                 )
                 other_bl_result = await self.db.execute(other_bl_stmt)

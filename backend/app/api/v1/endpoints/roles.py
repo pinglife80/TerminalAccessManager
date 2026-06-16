@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 
 from app.core.database import get_db
-from app.core.security import get_current_user, require_permission, invalidate_user_permissions
+from app.core.security import get_current_user, require_permission, invalidate_user_permissions, get_client_ip
 from app.models.user import User
 from app.models.role import Role, Permission, UserRole, RolePermission
 from app.schemas.role import (
@@ -140,8 +140,8 @@ async def create_role(
     from app.services.terminal_service import TerminalService
     ts = TerminalService(db)
     await ts.log_action(current_user.username, "create_role", "role", str(role.id),
-                        {"message": "Created role", "name": role.name},
-                        ip_address=request.client.host if request.client else None)
+                        {"message": "Created role", "name": role.name, "description": role.description},
+                        ip_address=get_client_ip(request))
 
     # Re-fetch to get full data
     return await get_role(role.id, current_user, db)
@@ -191,9 +191,10 @@ async def update_role(
     # Audit log
     from app.services.terminal_service import TerminalService
     ts = TerminalService(db)
+    changes = list(data.model_dump(exclude_unset=True).keys())
     await ts.log_action(current_user.username, "update_role", "role", str(role_id),
-                        {"message": "Updated role", "name": role.name},
-                        ip_address=request.client.host if request.client else None)
+                        {"message": "Updated role", "name": role.name, "changes": changes},
+                        ip_address=get_client_ip(request))
 
     return await get_role(role_id, current_user, db)
 
@@ -231,7 +232,7 @@ async def delete_role(
     ts = TerminalService(db)
     await ts.log_action(current_user.username, "delete_role", "role", str(role_id),
                         {"message": "Deleted role", "name": deleted_name},
-                        ip_address=request.client.host if request.client else None)
+                        ip_address=get_client_ip(request))
 
     return {"message": f"Role '{deleted_name}' deleted successfully", "success": True}
 
@@ -286,8 +287,9 @@ async def assign_user_roles(
     role_name_result = await db.execute(select(Role.name).where(Role.id == data.role_id))
     role_name = role_name_result.scalar_one()
     await ts.log_action(current_user.username, "assign_role", "user", str(user_id),
-                        {"message": "Assigned role to user", "username": user.username, "role": role_name},
-                        ip_address=request.client.host if request.client else None)
+                        {"message": "Assigned role to user", "username": user.username,
+                         "role": role_name, "role_name": role_name},
+                        ip_address=get_client_ip(request))
 
     return {"message": f"Roles updated for user '{user.username}'", "success": True}
 

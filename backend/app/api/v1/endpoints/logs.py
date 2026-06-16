@@ -6,7 +6,7 @@ import csv
 from io import StringIO
 
 from app.core.database import get_db
-from app.core.security import get_current_user, require_permission
+from app.core.security import get_current_user, require_permission, get_client_ip
 from app.models.user import User
 from app.models.log import AuditLog
 from app.schemas.terminal import AuditLogResponse, AuditLogQuery, PaginatedResponse
@@ -83,8 +83,10 @@ async def export_audit_logs(
     from app.services.terminal_service import TerminalService
     ts = TerminalService(db)
     await ts.log_action(current_user.username, "export_audit_logs", "system", None,
-                        {"message": "Exported audit logs", "record_count": len(logs)},
-                        ip_address=request.client.host if request.client else None)
+                        {"message": "Exported audit logs", "record_count": len(logs),
+                         "filters": {"username": username, "action": action, "search": search,
+                                     "start_date": start_date, "end_date": end_date, "limit": limit}},
+                        ip_address=get_client_ip(request))
 
     headers = {
         "Content-Disposition": "attachment; filename=audit_logs.csv",

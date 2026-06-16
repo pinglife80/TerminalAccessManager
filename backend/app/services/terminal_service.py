@@ -576,7 +576,8 @@ class TerminalService:
                 if firewall_tag:
                     stmt = stmt.where(Blacklist.firewall_tag == firewall_tag)
                 if mac_address:
-                    stmt = stmt.where(Blacklist.mac_address == mac_address)
+                    mac_norm = _normalize_mac(mac_address)
+                    stmt = stmt.where(Blacklist.mac_address_normalized == mac_norm.replace('-', '').upper())
                 result = await self.db.execute(stmt)
                 blacklist_entries = result.scalars().all()
                 for entry in blacklist_entries:
@@ -585,7 +586,8 @@ class TerminalService:
                 # Log the action
                 await self.log_action(username, "unblock_terminal", "mac", ip_address,
                                      {"message": f"Unblocked IP {ip_address}",
-                                      "ip": ip_address},
+                                      "ip": ip_address, "mac_address": mac_address,
+                                      "firewall_tag": firewall_tag},
                                      ip_address=client_ip)
 
                 await self.db.commit()
@@ -1018,8 +1020,9 @@ class TerminalService:
             cleaned_identifier = identifier.replace('-', '').replace(':', '').replace('.', '').upper()
 
             if len(cleaned_identifier) == 12 and cleaned_identifier.isalnum():
-                normalized_mac = self._normalize_mac(identifier)
-                stmt = select(Blacklist).where(Blacklist.mac_address == normalized_mac)
+                # Use mac_address_normalized column for reliable matching
+                # (mac_address column may use inconsistent separators: ':', '-', or '.')
+                stmt = select(Blacklist).where(Blacklist.mac_address_normalized == cleaned_identifier)
                 result = await self.db.execute(stmt)
                 blacklist_entry = result.scalar_one_or_none()
             else:
@@ -1169,7 +1172,7 @@ class TerminalService:
                 await self.log_action("system", "cleanup_expired", "blacklist", None,
                                       {"message": f"Cleaned up {count} expired blacklist entries",
                                        "failed_unblock_ips": list(failed_unblock_ips) if failed_unblock_ips else None,
-                                       "count": count})
+                                       "count": count, "expired_count": len(expired_entries)})
                 await self.db.commit()
 
                 # Trigger compliance re-evaluation for affected terminals

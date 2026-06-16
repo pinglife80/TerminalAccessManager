@@ -250,7 +250,7 @@ const DataSourcesTab = forwardRef<{ openAddModal: () => void }, DataSourcesTabPr
       const fields = CONFIG_FIELDS[editDsForm.type] || [];
       const config = buildConfigPayload(fields, editDsConfig);
 
-      await apiClient.put(`${API_ENDPOINTS.DATA_SOURCES}${editDsForm.id}`, {
+      const response = await apiClient.put(`${API_ENDPOINTS.DATA_SOURCES}${editDsForm.id}`, {
         name: editDsForm.name,
         type: editDsForm.type,
         tag: editDsForm.tag,
@@ -258,6 +258,10 @@ const DataSourcesTab = forwardRef<{ openAddModal: () => void }, DataSourcesTabPr
         enabled: editDsForm.enabled,
       });
       toast.success(t('dataSources.dataSourceUpdated'));
+      // Show business risk warnings from backend
+      if (response.data?.warnings?.length > 0) {
+        response.data.warnings.forEach((w: string) => toast.warning(w, { duration: 8000 }));
+      }
       setShowEditDsModal(false);
       dsRefetch();
     } catch (error: unknown) {
@@ -286,7 +290,7 @@ const DataSourcesTab = forwardRef<{ openAddModal: () => void }, DataSourcesTabPr
     try {
       const fields = CONFIG_FIELDS[editDsForm.type] || [];
       const config = buildConfigPayload(fields, editDsConfig);
-      await apiClient.put(`${API_ENDPOINTS.DATA_SOURCES}${editDsForm.id}`, {
+      const response = await apiClient.put(`${API_ENDPOINTS.DATA_SOURCES}${editDsForm.id}`, {
         name: editDsForm.name,
         type: editDsForm.type,
         tag: editDsForm.tag,
@@ -294,6 +298,9 @@ const DataSourcesTab = forwardRef<{ openAddModal: () => void }, DataSourcesTabPr
         enabled: editDsForm.enabled,
       });
       toast.success(t('dataSources.dataSourceUpdated'));
+      if (response.data?.warnings?.length > 0) {
+        response.data.warnings.forEach((w: string) => toast.warning(w, { duration: 8000 }));
+      }
       setShowEditDsModal(false);
       dsRefetch();
     } catch (error: unknown) {

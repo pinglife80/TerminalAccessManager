@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.security import require_permission
+from app.core.security import require_permission, get_client_ip
 from app.models.user import User
 from app.models.terminal import Terminal
 from app.schemas.terminal import (
@@ -77,7 +77,7 @@ async def block_ip_address(
     request: Request = None
 ):
     """Block an IP address via Sangfor API"""
-    client_ip = request.client.host if request else None
+    client_ip = get_client_ip(request)
     service = TerminalService(db)
     result = await service.block_ip(ip_address, mac_address, current_user.username,
                                      block_time=block_time, firewall_tag=firewall_tag,
@@ -103,7 +103,7 @@ async def unblock_ip_address(
     request: Request = None
 ):
     """Unblock an IP address via Sangfor API"""
-    client_ip = request.client.host if request else None
+    client_ip = get_client_ip(request)
     service = TerminalService(db)
     result = await service.unblock_ip(ip_address, current_user.username,
                                        mac_address=mac_address,

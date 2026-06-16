@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.core.database import get_db
-from app.core.security import get_current_user, require_permission
+from app.core.security import get_current_user, require_permission, get_client_ip
 from app.models.user import User
 from app.models.data_source import DataSource, DataSourceBinding
 from app.models.blacklist import Blacklist
@@ -70,7 +70,7 @@ async def create_data_source(
         await ts.log_action(current_user.username, "create_datasource", "datasource", str(source.id),
                             {"message": "Created datasource", "name": source.name,
                              "type": source.type, "tag": source.tag},
-                            ip_address=request.client.host if request.client else None)
+                            ip_address=get_client_ip(request))
 
         return source
     except ValueError as e:
@@ -107,37 +107,70 @@ async def update_data_source(
 ):
     """Update a data source (requires datasource:write permission)"""
     service = DataSourceService(db)
+    warnings = []
 
-    # Check disable impact for Sangfor firewalls with blocked terminals
+    # Check disable impact and collect warnings
     if data.enabled is False:
         current_source = await service.get_data_source_by_id(source_id)
-        if current_source and current_source.enabled is True and current_source.type == "sangfor":
-            blocked_stmt = select(Blacklist).where(Blacklist.firewall_tag == current_source.tag)
-            bl_result = await db.execute(blocked_stmt)
-            blocked_count = len(bl_result.scalars().all())
-            if blocked_count > 0:
-                logger.warning(
-                    f"Disabling Sangfor firewall '{current_source.tag}' with {blocked_count} blocked entries. "
-                    f"Auto-unblock will fail until firewall is re-enabled."
-                )
+        if current_source and current_source.enabled is True:
+            if current_source.type == "sangfor":
+                blocked_stmt = select(Blacklist).where(Blacklist.firewall_tag == current_source.tag)
+                bl_result = await db.execute(blocked_stmt)
+                blocked_count = len(bl_result.scalars().all())
+                if blocked_count > 0:
+                    warn_msg = (
+                        f"该防火墙下有 {blocked_count} 条封堵记录，禁用后自动解封将失败，"
+                        f"直到防火墙重新启用。已封堵终端将保持封堵状态但无法通过系统解封。"
+                    )
+                    warnings.append(warn_msg)
+                    logger.warning(
+                        f"Disabling Sangfor firewall '{current_source.tag}' with {blocked_count} blocked entries. "
+                        f"Auto-unblock will fail until firewall is re-enabled."
+                    )
 
-        # Reset compliance status to unknown when disabling ARP source
-        if current_source and current_source.enabled is True and current_source.type in ("arp_ssh", "arp_api"):
-            from app.models.terminal import Terminal, TerminalStatus
-            terminal_stmt = select(Terminal).where(
-                Terminal.source_tag == current_source.tag,
-                Terminal.compliance_status != "unknown"
-            )
-            t_result = await db.execute(terminal_stmt)
-            affected_terminals = t_result.scalars().all()
-            if affected_terminals:
-                for terminal in affected_terminals:
-                    terminal.compliance_status = "unknown"
-                await db.flush()
-                logger.info(
-                    f"Reset compliance status to 'unknown' for {len(affected_terminals)} terminals "
-                    f"under disabled ARP source '{current_source.tag}'"
+            elif current_source.type in ("arp_ssh", "arp_api"):
+                from app.models.terminal import Terminal, TerminalStatus
+                # Count affected terminals before reset
+                terminal_stmt = select(Terminal).where(
+                    Terminal.source_tag == current_source.tag,
+                    Terminal.compliance_status != "unknown"
                 )
+                t_result = await db.execute(terminal_stmt)
+                affected_terminals = t_result.scalars().all()
+                if affected_terminals:
+                    compliant_count = sum(1 for t in affected_terminals if t.compliance_status == "compliant")
+                    bypass_count = sum(1 for t in affected_terminals if t.compliance_status == "bypass")
+                    non_compliant_count = sum(1 for t in affected_terminals if t.compliance_status == "non_compliant")
+                    warn_msg = (
+                        f"禁用后该数据源下 {len(affected_terminals)} 个终端的合规状态将重置为「待判定」："
+                        f"合规 {compliant_count} 个、白名单旁路 {bypass_count} 个、不合规 {non_compliant_count} 个。"
+                        f"重新启用后需手动触发合规检查恢复状态。"
+                    )
+                    warnings.append(warn_msg)
+
+                    for terminal in affected_terminals:
+                        terminal.compliance_status = "unknown"
+                    await db.flush()
+                    logger.info(
+                        f"Reset compliance status to 'unknown' for {len(affected_terminals)} terminals "
+                        f"under disabled ARP source '{current_source.tag}'"
+                    )
+
+                # Check for bound firewalls with blocked terminals
+                binding_stmt = select(DataSourceBinding).where(DataSourceBinding.arp_source_tag == current_source.tag)
+                b_result = await db.execute(binding_stmt)
+                bindings = b_result.scalars().all()
+                if bindings:
+                    for binding in bindings:
+                        bl_stmt = select(Blacklist).where(Blacklist.firewall_tag == binding.firewall_tag,
+                                                          Blacklist.source_tag == current_source.tag)
+                        bl_result = await db.execute(bl_stmt)
+                        bl_count = len(bl_result.scalars().all())
+                        if bl_count > 0:
+                            warnings.append(
+                                f"该数据源下有 {bl_count} 个终端在防火墙 [{binding.firewall_tag}] 上被封堵，"
+                                f"禁用后过期自动解封仍可执行，但合规状态变更不会触发自动封堵/解封。"
+                            )
 
     try:
         source = await service.update_data_source(source_id, data)
@@ -150,11 +183,19 @@ async def update_data_source(
         # Audit log
         from app.services.terminal_service import TerminalService
         ts = TerminalService(db)
+        audit_details = {"message": "Updated datasource", "name": source.name, "tag": source.tag}
+        if data.enabled is not None:
+            audit_details["enabled"] = data.enabled
+        if warnings:
+            audit_details["warnings"] = warnings
         await ts.log_action(current_user.username, "update_datasource", "datasource", str(source.id),
-                            {"message": "Updated datasource", "name": source.name, "tag": source.tag},
-                            ip_address=request.client.host if request.client else None)
+                            audit_details, ip_address=get_client_ip(request))
 
-        return source
+        # Attach warnings to response
+        source_dict = DataSourceResponse.model_validate(source)
+        if warnings:
+            source_dict.warnings = warnings
+        return source_dict
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -193,7 +234,7 @@ async def delete_data_source(
     deleted = await service.safe_delete_data_source(
         source_id,
         username=current_user.username,
-        client_ip=request.client.host if request.client else None,
+        client_ip=get_client_ip(request),
     )
     if not deleted:
         raise HTTPException(
@@ -225,8 +266,8 @@ async def test_data_source_connection(
     ts = TerminalService(db)
     await ts.log_action(current_user.username, "test_datasource", "datasource", str(source_id),
                         {"message": "Tested datasource connection", "name": source.name,
-                         "success": result.success},
-                        ip_address=request.client.host if request.client else None)
+                         "tag": source.tag, "success": result.success},
+                        ip_address=get_client_ip(request))
 
     return result
 
@@ -257,8 +298,8 @@ async def sync_data_source(
     from app.services.terminal_service import TerminalService
     ts = TerminalService(db)
     await ts.log_action(current_user.username, "sync_datasource", "datasource", str(source_id),
-                        {"message": "Synced datasource", "name": source.name},
-                        ip_address=request.client.host if request.client else None)
+                        {"message": "Synced datasource", "name": source.name, "type": source.type},
+                        ip_address=get_client_ip(request))
 
     if source.type == "arp_ssh":
         arp_service = ArpCollectorService(db)
@@ -315,7 +356,7 @@ async def create_binding(
         await ts.log_action(current_user.username, "bind_datasource", "datasource", str(binding.id),
                             {"message": "Created datasource binding", "arp_source_tag": data.arp_source_tag,
                              "firewall_tag": data.firewall_tag},
-                            ip_address=request.client.host if request.client else None)
+                            ip_address=get_client_ip(request))
 
         return binding
     except ValueError as e:
@@ -349,7 +390,7 @@ async def delete_binding(
     deleted = await service.safe_delete_binding(
         binding_id,
         username=current_user.username,
-        client_ip=request.client.host if request.client else None,
+        client_ip=get_client_ip(request),
     )
     if not deleted:
         raise HTTPException(

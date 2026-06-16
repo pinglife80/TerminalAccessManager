@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional, Tuple
 from jose import JWTError, jwt
 import bcrypt
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, status, Request
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -22,6 +22,26 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.API_V1_STR}/auth/login
 
 # Redis client for token blacklist
 _redis_client: Optional[aioredis.Redis] = None
+
+
+def get_client_ip(request: Request) -> Optional[str]:
+    """Extract real client IP from request, respecting proxy headers.
+
+    Checks X-Real-IP and X-Forwarded-For headers first (set by Nginx),
+    falls back to request.client.host.
+    """
+    if request is None:
+        return None
+    # X-Real-IP is set by Nginx with proxy_set_header X-Real-IP $remote_addr
+    real_ip = request.headers.get("x-real-ip")
+    if real_ip:
+        return real_ip.strip()
+    # X-Forwarded-For: client, proxy1, proxy2 - take the first one
+    forwarded_for = request.headers.get("x-forwarded-for")
+    if forwarded_for:
+        return forwarded_for.split(",")[0].strip()
+    # Fallback to direct connection IP
+    return request.client.host if request.client else None
 
 
 async def get_redis_client() -> aioredis.Redis:

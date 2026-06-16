@@ -37,6 +37,7 @@ class DataSourceResponse(DataSourceBase):
     last_sync_error: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+    warnings: Optional[List[str]] = None
 
     class Config:
         from_attributes = True

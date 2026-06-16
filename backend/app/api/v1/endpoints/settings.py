@@ -6,7 +6,7 @@ import uuid
 import shutil
 
 from app.core.database import get_db
-from app.core.security import require_permission
+from app.core.security import require_permission, get_client_ip
 from app.models.user import User
 from app.schemas.system_config import (
     SystemConfigResponse, SystemConfigUpdate, ConfigUpdateResult,
@@ -70,6 +70,12 @@ async def update_configs(
     Read-only configs cannot be changed through this endpoint.
     Changes take effect immediately via cache invalidation."""
     service = ConfigService(db)
+
+    # Get old values before update for audit
+    old_values = {}
+    for update in updates:
+        old_values[update.key] = await service.get(update.key)
+
     results = await service.batch_update(updates, updated_by=current_user.username)
 
     # Audit log for each updated config
@@ -77,8 +83,9 @@ async def update_configs(
     ts = TerminalService(db)
     for update in updates:
         await ts.log_action(current_user.username, "update_config", "system", update.key,
-                            {"message": "Updated system configuration", "key": update.key},
-                            ip_address=request.client.host if request.client else None)
+                            {"message": "Updated system configuration", "key": update.key,
+                             "old_value": old_values.get(update.key), "new_value": update.value},
+                            ip_address=get_client_ip(request))
 
     return results
 
@@ -93,6 +100,7 @@ async def update_single_config(
 ):
     """Update a single config value by key (requires settings:write permission)"""
     service = ConfigService(db)
+    old_value = await service.get(key)
     result = await service.set(key, update.value, updated_by=current_user.username)
     if not result.success:
         raise HTTPException(
@@ -104,8 +112,9 @@ async def update_single_config(
     from app.services.terminal_service import TerminalService
     ts = TerminalService(db)
     await ts.log_action(current_user.username, "update_config", "system", key,
-                        {"message": "Updated system configuration", "key": key},
-                        ip_address=request.client.host if request.client else None)
+                        {"message": "Updated system configuration", "key": key,
+                         "old_value": old_value, "new_value": update.value},
+                        ip_address=get_client_ip(request))
 
     return result
 
@@ -184,8 +193,9 @@ async def upload_branding_asset(
     from app.services.terminal_service import TerminalService
     ts = TerminalService(db)
     await ts.log_action(current_user.username, "upload_branding", "system", config_key,
-                        {"message": "Uploaded branding asset", "purpose": purpose, "url": url_path},
-                        ip_address=request.client.host if request.client else None)
+                        {"message": "Uploaded branding asset", "purpose": purpose, "url": url_path,
+                         "file_size": len(content)},
+                        ip_address=get_client_ip(request))
 
     return {
         "url": url_path,
