@@ -183,7 +183,7 @@ export const useBlacklist = (params?: BlacklistSearchParams) => {
 };
 
 // -------------------------------------------------------------------
-// Audit Logs hooks - server-side filtering
+// Audit Logs hooks - server-side filtering with cursor pagination
 // -------------------------------------------------------------------
 export interface AuditLogSearchParams {
   username?: string;
@@ -191,8 +191,16 @@ export interface AuditLogSearchParams {
   search?: string;
   start_date?: string;
   end_date?: string;
+  cursor?: string;
   skip?: number;
   limit?: number;
+}
+
+export interface CursorPaginatedResponse<T> {
+  items: T[];
+  total: number;
+  limit: number;
+  next_cursor: string | null;
 }
 
 export interface AuditLog {
@@ -212,7 +220,7 @@ export const useAuditLogs = (params?: AuditLogSearchParams) => {
     queryKey: ['audit-logs', params],
     queryFn: async () => {
       const response = await apiClient.get('/logs/search', { params });
-      return response.data as PaginatedResponse<AuditLog>;
+      return response.data as CursorPaginatedResponse<AuditLog>;
     },
     placeholderData: keepPreviousData,
   });

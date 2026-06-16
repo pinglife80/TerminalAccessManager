@@ -363,6 +363,38 @@ class ComplianceService:
                 errors=[f"No firewall bindings found for ARP source '{arp_source_tag}'"],
             )
 
+        # Pre-resolve SangforService instances for all firewall tags
+        # (1 DataSource query per tag instead of 1 per entry per tag)
+        sangfor_services = {}  # fw_tag -> SangforService or None
+        if not dry_run:
+            for fw_tag in firewall_tags:
+                try:
+                    fw_stmt = select(DataSource).where(
+                        (DataSource.tag == fw_tag) & (DataSource.type == "sangfor")
+                    )
+                    fw_result = await self.db.execute(fw_stmt)
+                    fw_source = fw_result.scalar_one_or_none()
+
+                    if fw_source and fw_source.enabled:
+                        from app.services.sangfor_service import SangforService
+                        from app.core.crypto import decrypt_config
+                        config = fw_source.config
+                        if config:
+                            config = decrypt_config(config)
+                        sangfor_services[fw_tag] = SangforService(
+                            base_url=config.get("base_url", ""),
+                            username=config.get("username", ""),
+                            password=config.get("password", ""),
+                            verify_ssl=config.get("verify_ssl", True),
+                            ca_bundle=config.get("ca_bundle", ""),
+                        )
+                    else:
+                        logger.warning(f"Firewall '{fw_tag}' not found or disabled")
+                        sangfor_services[fw_tag] = None
+                except Exception as e:
+                    logger.error(f"Failed to resolve firewall '{fw_tag}': {str(e)}")
+                    sangfor_services[fw_tag] = None
+
         blocked = 0
         skipped = 0
         errors = []
@@ -379,14 +411,22 @@ class ComplianceService:
                 blocked += 1
                 continue
 
-            # Block on each associated firewall
+            # Block on each associated firewall (using pre-resolved services)
             all_success = True
             for fw_tag in firewall_tags:
-                try:
-                    success = await self._block_on_firewall(
-                        entry.ip_address, fw_tag, block_time
+                svc = sangfor_services.get(fw_tag)
+                if not svc:
+                    all_success = False
+                    errors.append(
+                        f"Failed to block {entry.ip_address} on firewall '{fw_tag}'"
                     )
-                    if not success:
+                    continue
+                try:
+                    response = await svc.block_ip(
+                        [entry.ip_address], source_tag=fw_tag,
+                        reason=f"Auto-blocked: non-compliant (source={arp_source_tag})"
+                    )
+                    if response.get('code') != 0:
                         all_success = False
                         errors.append(
                             f"Failed to block {entry.ip_address} on firewall '{fw_tag}'"
@@ -451,6 +491,14 @@ class ComplianceService:
                 })
             else:
                 skipped += 1
+
+        # Close all pre-resolved SangforService instances
+        for svc in sangfor_services.values():
+            if svc:
+                try:
+                    await svc.close()
+                except Exception:
+                    pass
 
         if not dry_run and blocked > 0:
             # Audit log for auto-block (before commit so it's persisted in the same transaction)

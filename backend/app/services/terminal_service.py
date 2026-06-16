@@ -1,9 +1,10 @@
 import re
 import json
 import ipaddress
+import base64
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc, and_, or_, func
-from typing import List, Optional, Dict, Any
+from sqlalchemy import select, desc, and_, or_, func, tuple_
+from typing import List, Optional, Dict, Any, Tuple
 from datetime import datetime, timedelta, timezone
 from loguru import logger
 
@@ -1110,94 +1111,116 @@ class TerminalService:
             result = await self.db.execute(stmt)
             expired_entries = result.scalars().all()
 
+            if not expired_entries:
+                return 0
+
+            # --- Batch-load all data upfront to avoid N+1 queries ---
+
+            # 1. Batch-load all affected Terminals (1 query instead of N)
+            all_ips = list(set(e.ip_address for e in expired_entries if e.ip_address))
+            terminal_map = {}  # (ip_address, mac_address) -> list of Terminal
+            if all_ips:
+                t_stmt = select(Terminal).where(Terminal.ip_address.in_(all_ips))
+                t_result = await self.db.execute(t_stmt)
+                for t in t_result.scalars().all():
+                    key = (t.ip_address, t.mac_address)
+                    if key not in terminal_map:
+                        terminal_map[key] = []
+                    terminal_map[key].append(t)
+
+            # 2. Batch-check for active blocks per unique IP (1 query instead of N)
+            active_block_ips = set()
+            if all_ips:
+                active_stmt = select(Blacklist.ip_address).where(
+                    (Blacklist.ip_address.in_(all_ips)) &
+                    (Blacklist.expires_at >= now) &
+                    (Blacklist.auto_unblocked == False)
+                )
+                active_result = await self.db.execute(active_stmt)
+                active_block_ips = set(row[0] for row in active_result.all())
+
+            # 3. Pre-resolve SangforService instances by firewall_tag
+            #    (1 query per unique tag instead of 1 query per entry)
+            sangfor_cache = {}
+            unique_fw_tags = set(e.firewall_tag for e in expired_entries if e.firewall_tag)
+            for fw_tag in unique_fw_tags:
+                sangfor_cache[fw_tag] = await self._get_sangfor_service_by_tag(fw_tag)
+
+            # --- Process entries using pre-loaded data ---
             count = 0
             failed_unblock_ips = set()  # Track IPs where Sangfor unblock failed
-            for entry in expired_entries:
-                # Check if there are still active (non-expired, non-auto-unblocked)
-                # Blacklist entries for the same IP. If so, the IP is still
-                # supposed to be blocked on the firewall — skip the firewall
-                # unblock and just delete the expired entry from DB.
-                if entry.ip_address:
-                    active_stmt = select(Blacklist).where(
-                        (Blacklist.ip_address == entry.ip_address) &
-                        (Blacklist.expires_at >= now) &
-                        (Blacklist.auto_unblocked == False)
-                    )
-                    active_result = await self.db.execute(active_stmt)
-                    active_entries = active_result.scalars().all()
-                    if active_entries:
+
+            try:
+                for entry in expired_entries:
+                    # Check if IP has active blocks (using pre-loaded set)
+                    if entry.ip_address and entry.ip_address in active_block_ips:
                         # IP still has active blocks — don't unblock on firewall,
                         # just delete the expired entry from DB
                         await self.db.delete(entry)
                         count += 1
                         continue
 
-                # Restore terminal status and reset compliance for re-evaluation
-                if entry.ip_address:
-                    mac_stmt = select(Terminal).where(
-                        Terminal.ip_address == entry.ip_address,
-                        Terminal.mac_address == entry.mac_address
-                    )
-                    mac_result = await self.db.execute(mac_stmt)
-                    mac_records = mac_result.scalars().all()
-                    for record in mac_records:
-                        if record.status == "blocked":  # Only reset if still blocked
-                            record.status = TerminalStatus.UNBLOCKED.value
-                            # Reset compliance_status to "unknown" so the next
-                            # scheduled compliance check will re-evaluate it.
-                            record.compliance_status = "unknown"
+                    # Restore terminal status and reset compliance for re-evaluation
+                    # (using pre-loaded map instead of per-entry query)
+                    if entry.ip_address:
+                        key = (entry.ip_address, entry.mac_address)
+                        mac_records = terminal_map.get(key, [])
+                        for record in mac_records:
+                            if record.status == "blocked":  # Only reset if still blocked
+                                record.status = TerminalStatus.UNBLOCKED.value
+                                # Reset compliance_status to "unknown" so the next
+                                # scheduled compliance check will re-evaluate it.
+                                record.compliance_status = "unknown"
 
-                # Try to unblock on Sangfor
-                fw_tag = entry.firewall_tag
-                sangfor_svc = None
-                sangfor_unblock_success = True  # Default to True; only False on explicit failure
+                    # Try to unblock on Sangfor (using cached service)
+                    fw_tag = entry.firewall_tag
+                    svc = sangfor_cache.get(fw_tag) if fw_tag else None
+                    sangfor_unblock_success = True  # Default to True; only False on explicit failure
 
-                if fw_tag:
-                    sangfor_svc = await self._get_sangfor_service_by_tag(fw_tag)
-
-                # Only attempt unblock if we have a valid service instance.
-                # Do NOT fall back to global self.sangfor when firewall is disabled/missing,
-                # as this could cause local DB / firewall state inconsistency.
-                svc = sangfor_svc
-
-                if entry.ip_address and svc and svc.base_url:
-                    try:
-                        response = await svc.unblock_ip([{"srcIP": entry.ip_address}])
-                        if response.get('code') != 0:
+                    if entry.ip_address and svc and svc.base_url:
+                        try:
+                            response = await svc.unblock_ip([{"srcIP": entry.ip_address}])
+                            if response.get('code') != 0:
+                                sangfor_unblock_success = False
+                                logger.warning(
+                                    f"Sangfor unblock failed for {entry.ip_address} on firewall '{fw_tag}': "
+                                    f"{response.get('message')}. Keeping blacklist entry for consistency."
+                                )
+                                failed_unblock_ips.add(entry.ip_address)
+                        except Exception as e:
                             sangfor_unblock_success = False
                             logger.warning(
-                                f"Sangfor unblock failed for {entry.ip_address} on firewall '{fw_tag}': "
-                                f"{response.get('message')}. Keeping blacklist entry for consistency."
+                                f"Sangfor API error when unblocking {entry.ip_address} on firewall '{fw_tag}': {e}. "
+                                f"Keeping blacklist entry for consistency."
                             )
                             failed_unblock_ips.add(entry.ip_address)
-                    except Exception as e:
+                    elif fw_tag and not svc:
+                        # Firewall exists in tag but is disabled or missing — cannot safely unblock
                         sangfor_unblock_success = False
                         logger.warning(
-                            f"Sangfor API error when unblocking {entry.ip_address} on firewall '{fw_tag}': {e}. "
+                            f"Cannot unblock {entry.ip_address}: firewall '{fw_tag}' is disabled or missing. "
                             f"Keeping blacklist entry for consistency."
                         )
                         failed_unblock_ips.add(entry.ip_address)
-                    finally:
-                        await svc.close()
-                elif fw_tag and not svc:
-                    # Firewall exists in tag but is disabled or missing — cannot safely unblock
-                    sangfor_unblock_success = False
-                    logger.warning(
-                        f"Cannot unblock {entry.ip_address}: firewall '{fw_tag}' is disabled or missing. "
-                        f"Keeping blacklist entry for consistency."
-                    )
-                    failed_unblock_ips.add(entry.ip_address)
 
-                if sangfor_unblock_success:
-                    await self.db.delete(entry)
-                    count += 1
-                else:
-                    # Sangfor unblock failed — do NOT delete the blacklist entry
-                    # to maintain consistency between local DB and firewall.
-                    # The entry will be retried on the next cleanup cycle.
-                    # Extend expires_at slightly to avoid immediate retry loop.
-                    entry.expires_at = now + timedelta(minutes=30)
-                    count += 1  # Still count as processed
+                    if sangfor_unblock_success:
+                        await self.db.delete(entry)
+                        count += 1
+                    else:
+                        # Sangfor unblock failed — do NOT delete the blacklist entry
+                        # to maintain consistency between local DB and firewall.
+                        # The entry will be retried on the next cleanup cycle.
+                        # Extend expires_at slightly to avoid immediate retry loop.
+                        entry.expires_at = now + timedelta(minutes=30)
+                        count += 1  # Still count as processed
+            finally:
+                # Close all cached SangforService instances
+                for svc in sangfor_cache.values():
+                    if svc:
+                        try:
+                            await svc.close()
+                        except Exception:
+                            pass
 
             if count > 0:
                 await self.log_action("system", "cleanup_expired_blacklist", "blacklist", None,
@@ -1225,8 +1248,21 @@ class TerminalService:
     # ------------------------------------------------------------------
     # Audit Logs
     # ------------------------------------------------------------------
-    async def search_audit_logs(self, query: AuditLogQuery) -> List[AuditLog]:
-        """Search audit logs by various criteria including date range and keyword"""
+    @staticmethod
+    def _encode_cursor(timestamp: datetime, record_id: int) -> str:
+        """Encode a cursor from timestamp and id for keyset pagination"""
+        payload = json.dumps({"ts": timestamp.isoformat(), "id": record_id})
+        return base64.urlsafe_b64encode(payload.encode()).decode()
+
+    @staticmethod
+    def _decode_cursor(cursor: str) -> Tuple[datetime, int]:
+        """Decode a cursor back to timestamp and id"""
+        payload = json.loads(base64.urlsafe_b64decode(cursor.encode()).decode())
+        return datetime.fromisoformat(payload["ts"]), payload["id"]
+
+    async def search_audit_logs(self, query: AuditLogQuery) -> Tuple[List[AuditLog], Optional[str]]:
+        """Search audit logs by various criteria including date range and keyword.
+        Returns (logs, next_cursor) where next_cursor is set if more results exist."""
         conditions = []
 
         if query.username:
@@ -1251,16 +1287,45 @@ class TerminalService:
         for dc in date_conditions:
             conditions.append(dc(AuditLog.timestamp))
 
+        # Keyset pagination: use cursor instead of offset when provided
+        if query.cursor:
+            try:
+                cursor_ts, cursor_id = self._decode_cursor(query.cursor)
+                # (timestamp, id) < (cursor_ts, cursor_id) for DESC order
+                conditions.append(
+                    or_(
+                        AuditLog.timestamp < cursor_ts,
+                        and_(AuditLog.timestamp == cursor_ts, AuditLog.id < cursor_id)
+                    )
+                )
+            except Exception:
+                logger.warning(f"Invalid cursor format: {query.cursor}, falling back to offset")
+
+        where_clause = and_(*conditions) if conditions else True
+
+        # Fetch limit+1 to determine if there's a next page
         stmt = (
             select(AuditLog)
-            .where(and_(*conditions) if conditions else True)
-            .order_by(desc(AuditLog.timestamp))
-            .offset(query.skip)
-            .limit(query.limit)
+            .where(where_clause)
+            .order_by(desc(AuditLog.timestamp), desc(AuditLog.id))
+            .limit(query.limit + 1)
         )
 
+        # Fall back to offset if no cursor
+        if not query.cursor:
+            stmt = stmt.offset(query.skip)
+
         result = await self.db.execute(stmt)
-        return result.scalars().all()
+        logs = result.scalars().all()
+
+        # Determine next_cursor
+        next_cursor = None
+        if len(logs) > query.limit:
+            logs = logs[:query.limit]  # Trim the extra record
+            last = logs[-1]
+            next_cursor = self._encode_cursor(last.timestamp, last.id)
+
+        return logs, next_cursor
 
     async def search_audit_logs_count(self, query: AuditLogQuery) -> int:
         """Get total count of audit logs matching search criteria"""

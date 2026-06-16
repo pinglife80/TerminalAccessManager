@@ -154,6 +154,7 @@ class AuditLogQuery(BaseModel):
     end_date: Optional[str] = Field(None, description="Filter by end date (YYYY-MM-DD)")
     skip: int = Field(0, ge=0)
     limit: int = Field(50, ge=1, le=200)
+    cursor: Optional[str] = Field(None, description="Keyset pagination cursor (base64-encoded timestamp/id)")
 
 
 # Stats schemas
@@ -202,3 +203,11 @@ class PaginatedResponse(BaseModel, Generic[T]):
     total: int
     skip: int
     limit: int
+
+
+class CursorPaginatedResponse(BaseModel, Generic[T]):
+    """Cursor-based paginated response wrapper for efficient deep pagination"""
+    items: List[T]
+    total: int
+    limit: int
+    next_cursor: Optional[str] = None

@@ -174,6 +174,47 @@ class SangforService:
 
         return response
 
+    async def _request_with_backoff(self, method: str, url: str, max_retries: int = 3, **kwargs) -> httpx.Response:
+        """Make API request with exponential backoff for transient errors.
+
+        Wraps _request_with_retry so that 401 re-authentication is handled first,
+        then backoff applies if the request still fails with a transient error
+        (connection errors, timeouts, or 5xx server errors).
+        """
+        import asyncio
+        last_error = None
+
+        for attempt in range(max_retries + 1):
+            try:
+                return await self._request_with_retry(method, url, **kwargs)
+            except (ConnectionError, TimeoutError, httpx.ConnectError, httpx.TimeoutException) as e:
+                last_error = e
+                if attempt < max_retries:
+                    wait = min(2 ** attempt, 10)  # 1s, 2s, 4s (capped at 10s)
+                    logger.warning(
+                        f"Sangfor API request failed (attempt {attempt + 1}/{max_retries + 1}), "
+                        f"retrying in {wait}s: {str(e)}"
+                    )
+                    await asyncio.sleep(wait)
+                else:
+                    logger.error(
+                        f"Sangfor API request failed after {max_retries + 1} attempts: {str(e)}"
+                    )
+                    raise
+            except httpx.HTTPStatusError as e:
+                # 5xx server errors are retryable, 4xx client errors are not
+                if e.response.status_code >= 500 and attempt < max_retries:
+                    wait = min(2 ** attempt, 10)
+                    logger.warning(
+                        f"Sangfor API server error {e.response.status_code} "
+                        f"(attempt {attempt + 1}/{max_retries + 1}), retrying in {wait}s"
+                    )
+                    await asyncio.sleep(wait)
+                else:
+                    raise
+
+        raise last_error  # Should not reach here, but just in case
+
     # ------------------------------------------------------------------
     # Blacklist (permanent blocking via whiteblacklist API)
     # ------------------------------------------------------------------
@@ -254,7 +295,7 @@ class SangforService:
 
                 # Add to blacklist via whiteblacklist API
                 description = self._make_description(source_tag, reason)
-                response = await self._request_with_retry(
+                response = await self._request_with_backoff(
                     "POST",
                     f"{self.base_url}{API_PREFIX}/v1/namespaces/public/whiteblacklist",
                     json={
@@ -331,7 +372,7 @@ class SangforService:
                     continue
 
                 # Delete via whiteblacklist API
-                response = await self._request_with_retry(
+                response = await self._request_with_backoff(
                     "DELETE",
                     f"{self.base_url}{API_PREFIX}/v1/namespaces/public/whiteblacklist/{ip}"
                 )
@@ -366,7 +407,7 @@ class SangforService:
         Returns the entry dict if found, None otherwise.
         """
         try:
-            response = await self._request_with_retry(
+            response = await self._request_with_backoff(
                 "GET",
                 f"{self.base_url}{API_PREFIX}/v1/namespaces/public/whiteblacklist",
                 params={
@@ -400,7 +441,7 @@ class SangforService:
             if search:
                 params["_search"] = search
 
-            response = await self._request_with_retry(
+            response = await self._request_with_backoff(
                 "GET",
                 f"{self.base_url}{API_PREFIX}/v1/namespaces/public/whiteblacklist",
                 params=params
@@ -421,7 +462,7 @@ class SangforService:
         the session alive during long-running operations.
         """
         try:
-            response = await self._request_with_retry(
+            response = await self._request_with_backoff(
                 "GET",
                 f"{self.base_url}{API_PREFIX}/v1/namespaces/public/keepalive"
             )

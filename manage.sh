@@ -264,7 +264,13 @@ release_lock() {
 
 # Run docker compose with .env loaded
 dc() {
-    docker compose --env-file "${ENV_FILE}" -f "${SCRIPT_DIR}/docker-compose.yml" "$@"
+    local compose_files="-f ${SCRIPT_DIR}/docker-compose.yml"
+    if [ "${ENVIRONMENT}" = "production" ] || [ "${ENVIRONMENT}" = "prod" ]; then
+        if [ -f "${SCRIPT_DIR}/docker-compose.prod.yml" ]; then
+            compose_files="${compose_files} -f ${SCRIPT_DIR}/docker-compose.prod.yml"
+        fi
+    fi
+    docker compose --env-file "${ENV_FILE}" ${compose_files} "$@"
 }
 
 # Ensure .env file exists (idempotent — never overwrites existing)
@@ -3549,7 +3555,7 @@ cmd_validate() {
         fi
 
         # Check docker-compose.yml syntax
-        if docker compose -f "${SCRIPT_DIR}/docker-compose.yml" config --quiet 2>/dev/null; then
+        if dc config --quiet 2>/dev/null; then
             log_success "docker-compose.yml syntax valid"
         else
             log_error "docker-compose.yml has syntax errors"

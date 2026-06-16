@@ -28,6 +28,7 @@ class AuditLog(Base):
     __table_args__ = (
         Index('idx_audit_user_timestamp', 'username', 'timestamp'),
         Index('idx_audit_action', 'action'),
+        Index('idx_audit_logs_keyset', 'timestamp', 'id'),
     )
     
     def __repr__(self):

@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional
 from fastapi import APIRouter, Depends, Query, Response, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc, and_, or_
@@ -9,7 +9,7 @@ from app.core.database import get_db
 from app.core.security import get_current_user, require_permission, get_client_ip
 from app.models.user import User
 from app.models.log import AuditLog
-from app.schemas.terminal import AuditLogResponse, AuditLogQuery, PaginatedResponse
+from app.schemas.terminal import AuditLogResponse, AuditLogQuery, PaginatedResponse, CursorPaginatedResponse
 from app.services.terminal_service import TerminalService, _parse_date_range
 
 router = APIRouter(prefix="/logs", tags=["Audit Logs"])
@@ -119,19 +119,21 @@ async def get_audit_logs(
     return logs
 
 
-@router.get("/search", response_model=PaginatedResponse[AuditLogResponse])
+@router.get("/search", response_model=CursorPaginatedResponse[AuditLogResponse])
 async def search_audit_logs(
     username: str = Query(None, description="Filter by username"),
     action: str = Query(None, description="Filter by action type"),
     search: str = Query(None, description="Search by IP, username, or details"),
     start_date: str = Query(None, description="Filter by start date (YYYY-MM-DD)"),
     end_date: str = Query(None, description="Filter by end date (YYYY-MM-DD)"),
-    skip: int = Query(0, ge=0),
+    cursor: Optional[str] = Query(None, description="Keyset pagination cursor"),
+    skip: int = Query(0, ge=0, description="Offset (used when cursor is not provided)"),
     limit: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_permission("audit:read"))
 ):
-    """Search audit logs by various criteria with date range and keyword filtering"""
+    """Search audit logs by various criteria with date range and keyword filtering.
+    Supports keyset pagination via cursor for efficient deep pagination."""
     query = AuditLogQuery(
         username=username,
         action=action,
@@ -139,10 +141,11 @@ async def search_audit_logs(
         start_date=start_date,
         end_date=end_date,
         skip=skip,
-        limit=limit
+        limit=limit,
+        cursor=cursor
     )
 
     service = TerminalService(db)
-    logs = await service.search_audit_logs(query)
+    logs, next_cursor = await service.search_audit_logs(query)
     total = await service.search_audit_logs_count(query)
-    return {"items": logs, "total": total, "skip": skip, "limit": limit}
+    return {"items": logs, "total": total, "limit": limit, "next_cursor": next_cursor}
