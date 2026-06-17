@@ -402,7 +402,7 @@ app.include_router(api_router, prefix=settings.API_V1_STR)
 
 # Serve uploaded branding assets
 
-UPLOAD_DIR = "/app/uploads"
+UPLOAD_DIR = settings.UPLOAD_DIR
 
 
 def _ensure_upload_dir():
@@ -410,8 +410,8 @@ def _ensure_upload_dir():
     try:
         os.makedirs(UPLOAD_DIR, exist_ok=True)
         return True
-    except PermissionError:
-        logger.warning(f"Cannot create upload directory {UPLOAD_DIR}: permission denied")
+    except (PermissionError, OSError) as e:
+        logger.warning(f"Cannot create upload directory {UPLOAD_DIR}: {e}")
         return False
 
 

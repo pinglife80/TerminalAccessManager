@@ -69,6 +69,9 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
     TZ: str = "Asia/Shanghai"
 
+    # Upload
+    UPLOAD_DIR: str = "./uploads"
+
     class Config:
         env_file = ".env"
         case_sensitive = True

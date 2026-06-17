@@ -4,6 +4,7 @@ import uuid
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.database import get_db
 from app.core.security import get_client_ip, require_permission
 from app.models.user import User
@@ -18,8 +19,7 @@ from app.services.config_service import ConfigService
 router = APIRouter(prefix="/settings", tags=["settings"])
 
 # Upload directory for branding assets
-UPLOAD_DIR = "/app/uploads"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
+UPLOAD_DIR = settings.UPLOAD_DIR
 
 ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/gif", "image/x-icon", "image/vnd.microsoft.icon"}
 ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".ico"}
