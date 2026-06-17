@@ -751,7 +751,7 @@ const DataSourcesTab = forwardRef<{ openAddModal: () => void }, DataSourcesTabPr
             <p className="text-xs text-muted-foreground font-mono">{editDsForm.tag}</p>
           </div>
         </div>
-        {disablePreviewData?.warnings?.length > 0 && (
+        {disablePreviewData?.warnings?.length ? (
           <div className="mb-4 space-y-2">
             {disablePreviewData.warnings.map((w: string, i: number) => (
               <div key={i} className="p-3 bg-red-50 border border-red-200 rounded-lg">
@@ -759,8 +759,8 @@ const DataSourcesTab = forwardRef<{ openAddModal: () => void }, DataSourcesTabPr
               </div>
             ))}
           </div>
-        )}
-        {disablePreviewData?.actions?.length > 0 && (
+        ) : null}
+        {disablePreviewData?.actions?.length ? (
           <div className="mb-4">
             <p className="text-xs font-medium text-muted-foreground mb-2">{t('dataSources.disableActions')}</p>
             <ul className="space-y-1">
@@ -772,7 +772,7 @@ const DataSourcesTab = forwardRef<{ openAddModal: () => void }, DataSourcesTabPr
               ))}
             </ul>
           </div>
-        )}
+        ) : null}
         <div className="flex gap-3">
           <PrimaryButton
             label={t('common.cancel')}
