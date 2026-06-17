@@ -82,8 +82,6 @@ export function buildConfigPayload(
         else if (f.key === 'verify_ssl') config[f.key] = val === 'true';
         else config[f.key] = val;
       }
-    } else if (f.key === 'port') {
-      config[f.key] = Number(val);
     } else {
       config[f.key] = val;
     }
