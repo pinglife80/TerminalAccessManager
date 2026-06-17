@@ -326,6 +326,10 @@ const zh = {
     invalidIpFormat: 'IP 地址格式无效。支持：192.168.1.100、192.168.1.0/24、192.168.1.1-100',
     pleaseEnterMacOrIp: '请至少输入 MAC 地址或 IP 地址',
     searchByMacOrIp: '搜索 MAC 或 IP 地址...',
+    activeTab: '活跃封堵',
+    unblockedTab: '已解封',
+    allTab: '全部',
+    unblockedLabel: '已解封',
   },
   auditLogs: {
     title: '审计日志',

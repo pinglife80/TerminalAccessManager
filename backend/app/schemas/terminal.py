@@ -121,6 +121,7 @@ class BlacklistQuery(BaseModel):
     search: str | None = Field(None, description="Search by MAC or IP")
     start_date: str | None = Field(None, description="Filter by start date (YYYY-MM-DD)")
     end_date: str | None = Field(None, description="Filter by end date (YYYY-MM-DD)")
+    status: str | None = Field(None, description="Filter by status: active/unblocked/all")
     skip: int = Field(0, ge=0)
     limit: int = Field(50, ge=1, le=200)
 

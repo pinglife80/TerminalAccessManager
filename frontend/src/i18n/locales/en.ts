@@ -326,6 +326,10 @@ const en = {
     invalidIpFormat: 'Invalid IP address format. Supported: 192.168.1.100, 192.168.1.0/24, 192.168.1.1-100',
     pleaseEnterMacOrIp: 'Please enter at least a MAC address or IP address',
     searchByMacOrIp: 'Search by MAC or IP address...',
+    activeTab: 'Active',
+    unblockedTab: 'Unblocked',
+    allTab: 'All',
+    unblockedLabel: 'Unblocked',
   },
   auditLogs: {
     title: 'Audit Logs',
