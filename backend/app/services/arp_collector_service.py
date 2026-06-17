@@ -7,7 +7,7 @@ processes entries, and triggers compliance checks.
 
 import re
 import asyncio
-from typing import Optional, List, Dict, Any
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -263,7 +263,7 @@ class ArpCollectorService:
     # Process ARP Entries
     # ------------------------------------------------------------------
     async def process_arp_entries(
-        self, entries: List[dict], source_tag: str
+        self, entries: list[dict], source_tag: str
     ) -> SyncResult:
         """
         Process ARP entries:
@@ -451,7 +451,7 @@ class ArpCollectorService:
     # ------------------------------------------------------------------
     # ARP Output Parsing
     # ------------------------------------------------------------------
-    def _parse_arp_output(self, output: str, source_type: str) -> List[dict]:
+    def _parse_arp_output(self, output: str, source_type: str) -> list[dict]:
         """
         Parse ARP table output from a switch.
 
@@ -519,7 +519,7 @@ class ArpCollectorService:
 
         return entries
 
-    def _parse_api_response(self, data: Any) -> List[dict]:
+    def _parse_api_response(self, data: Any) -> list[dict]:
         """
         Parse API response into a list of {ip_address, mac_address} dicts.
 
@@ -572,7 +572,7 @@ class ArpCollectorService:
     # Helpers
     # ------------------------------------------------------------------
     @staticmethod
-    def _normalize_mac(mac: str) -> Optional[str]:
+    def _normalize_mac(mac: str) -> str | None:
         """Normalize MAC address format to XX-XX-XX-XX-XX-XX"""
         mac_clean = mac.replace("-", "").replace(":", "").replace(".", "").upper()
         if len(mac_clean) != 12 or not mac_clean.isalnum():

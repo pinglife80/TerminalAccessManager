@@ -5,7 +5,6 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 from loguru import logger
 import redis.asyncio as aioredis
-from typing import Optional
 
 from app.core.config import settings
 
@@ -16,7 +15,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     def __init__(self, app, redis_url: str = None):
         super().__init__(app)
         self.redis_url = redis_url or settings.REDIS_URL
-        self._redis: Optional[aioredis.Redis] = None
+        self._redis: aioredis.Redis | None = None
 
     async def get_redis(self) -> aioredis.Redis:
         """Get or create Redis client"""

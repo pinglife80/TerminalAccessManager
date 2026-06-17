@@ -1,5 +1,4 @@
 from pydantic import BaseModel, Field, field_validator
-from typing import Optional
 from datetime import datetime
 import re
 
@@ -11,13 +10,13 @@ class Token(BaseModel):
 
 
 class TokenData(BaseModel):
-    username: Optional[str] = None
+    username: str | None = None
 
 
 class UserCreate(BaseModel):
     """Schema for user registration with password validation matching frontend rules"""
     username: str = Field(..., min_length=3, max_length=50, description="Username")
-    email: Optional[str] = Field(None, description="Email address")
+    email: str | None = Field(None, description="Email address")
     password: str = Field(..., min_length=8, max_length=128, description="Password")
 
     @field_validator('password')
@@ -50,7 +49,7 @@ class UserCreate(BaseModel):
 class UserResponse(BaseModel):
     id: int
     username: str
-    email: Optional[str] = None
+    email: str | None = None
     is_active: bool = True
     is_superuser: bool = False
     roles: list[str] = []  # role names
@@ -62,8 +61,8 @@ class UserResponse(BaseModel):
 
 class UserDetailResponse(UserResponse):
     """Extended user response with timestamps"""
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
     class Config:
         from_attributes = True
@@ -71,20 +70,20 @@ class UserDetailResponse(UserResponse):
 
 class UserUpdate(BaseModel):
     """Schema for updating user info (by admin)"""
-    email: Optional[str] = Field(None, description="Email address")
-    is_active: Optional[bool] = Field(None, description="Active status")
-    is_superuser: Optional[bool] = Field(None, description="Superuser status")
-    role_id: Optional[int] = Field(None, description="Role ID to assign")
+    email: str | None = Field(None, description="Email address")
+    is_active: bool | None = Field(None, description="Active status")
+    is_superuser: bool | None = Field(None, description="Superuser status")
+    role_id: int | None = Field(None, description="Role ID to assign")
 
 
 class AdminUserCreate(BaseModel):
     """Schema for admin creating a new user"""
     username: str = Field(..., min_length=3, max_length=50, description="Username")
-    email: Optional[str] = Field(None, description="Email address")
+    email: str | None = Field(None, description="Email address")
     password: str = Field(..., min_length=8, max_length=128, description="Password")
     is_active: bool = Field(True, description="Active status")
     is_superuser: bool = Field(False, description="Superuser status")
-    role_id: Optional[int] = Field(None, description="Role ID to assign")
+    role_id: int | None = Field(None, description="Role ID to assign")
 
     @field_validator('password')
     @classmethod
@@ -146,7 +145,7 @@ class AdminPasswordReset(BaseModel):
 
 class ProfileUpdate(BaseModel):
     """Schema for updating own profile"""
-    email: Optional[str] = Field(None, description="Email address")
+    email: str | None = Field(None, description="Email address")
 
 
 class LoginResponse(BaseModel):

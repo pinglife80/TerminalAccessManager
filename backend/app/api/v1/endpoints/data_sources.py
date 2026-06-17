@@ -1,4 +1,3 @@
-from typing import List, Optional
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
@@ -39,10 +38,10 @@ router = APIRouter(prefix="/data-sources", tags=["Data Sources"])
 # ------------------------------------------------------------------
 # DataSource CRUD
 # ------------------------------------------------------------------
-@router.get("/", response_model=List[DataSourceResponse])
+@router.get("/", response_model=list[DataSourceResponse])
 async def list_data_sources(
-    type: Optional[str] = Query(None, description="Filter by type (arp_ssh, arp_api, sangfor)"),
-    enabled: Optional[bool] = Query(None, description="Filter by enabled status"),
+    type: str | None = Query(None, description="Filter by type (arp_ssh, arp_api, sangfor)"),
+    enabled: bool | None = Query(None, description="Filter by enabled status"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_permission("datasource:read")),
 ):
@@ -437,9 +436,9 @@ async def sync_data_source(
 # ------------------------------------------------------------------
 # DataSourceBinding CRUD
 # ------------------------------------------------------------------
-@router.get("/bindings/", response_model=List[DataSourceBindingResponse])
+@router.get("/bindings/", response_model=list[DataSourceBindingResponse])
 async def list_bindings(
-    arp_source_tag: Optional[str] = Query(None, description="Filter by ARP source tag"),
+    arp_source_tag: str | None = Query(None, description="Filter by ARP source tag"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_permission("datasource:read")),
 ):

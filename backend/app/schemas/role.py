@@ -1,5 +1,4 @@
 from pydantic import BaseModel, Field
-from typing import Optional
 from datetime import datetime
 
 
@@ -8,7 +7,7 @@ class PermissionResponse(BaseModel):
     code: str
     name: str
     module: str
-    description: Optional[str] = None
+    description: str | None = None
 
     class Config:
         from_attributes = True
@@ -17,10 +16,10 @@ class PermissionResponse(BaseModel):
 class RoleResponse(BaseModel):
     id: int
     name: str
-    description: Optional[str] = None
+    description: str | None = None
     is_default: bool = False
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
     permissions: list[str] = []  # permission codes
 
     class Config:
@@ -33,13 +32,13 @@ class RoleDetailResponse(RoleResponse):
 
 class RoleCreate(BaseModel):
     name: str = Field(..., min_length=2, max_length=50, description="Role name")
-    description: Optional[str] = Field(None, max_length=200, description="Role description")
+    description: str | None = Field(None, max_length=200, description="Role description")
     permission_ids: list[int] = Field(default_factory=list, description="Permission IDs to assign")
 
 
 class RoleUpdate(BaseModel):
-    description: Optional[str] = Field(None, max_length=200, description="Role description")
-    permission_ids: Optional[list[int]] = Field(None, description="Permission IDs to assign (replaces all)")
+    description: str | None = Field(None, max_length=200, description="Role description")
+    permission_ids: list[int] | None = Field(None, description="Permission IDs to assign (replaces all)")
 
 
 class UserRoleUpdate(BaseModel):
@@ -50,7 +49,7 @@ class RoleUserResponse(BaseModel):
     """Schema for user info returned by role users endpoint"""
     id: int
     username: str
-    email: Optional[str] = None
+    email: str | None = None
     is_active: bool = True
     is_superuser: bool = False
 

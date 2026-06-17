@@ -1,4 +1,3 @@
-from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 import os
@@ -48,9 +47,9 @@ async def get_all_configs(
     return await service.get_all_grouped()
 
 
-@router.get("/list", response_model=List[SystemConfigResponse])
+@router.get("/list", response_model=list[SystemConfigResponse])
 async def list_configs(
-    category: Optional[str] = Query(None, description="Filter by category"),
+    category: str | None = Query(None, description="Filter by category"),
     current_user: User = Depends(require_permission("settings:read")),
     db: AsyncSession = Depends(get_db),
 ):
@@ -59,9 +58,9 @@ async def list_configs(
     return await service.list_all(category)
 
 
-@router.put("/update", response_model=List[ConfigUpdateResult])
+@router.put("/update", response_model=list[ConfigUpdateResult])
 async def update_configs(
-    updates: List[SystemConfigUpdate],
+    updates: list[SystemConfigUpdate],
     request: Request,
     current_user: User = Depends(require_permission("settings:write")),
     db: AsyncSession = Depends(get_db),

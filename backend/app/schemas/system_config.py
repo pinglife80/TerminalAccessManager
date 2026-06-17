@@ -1,5 +1,4 @@
 from pydantic import BaseModel, Field, field_validator
-from typing import Optional, List
 from datetime import datetime
 from enum import Enum
 
@@ -25,7 +24,7 @@ class ConfigCategory(str, Enum):
 class SystemConfigBase(BaseModel):
     key: str = Field(..., min_length=1, max_length=100, description="Configuration key")
     value: str = Field(..., description="Configuration value")
-    description: Optional[str] = Field(None, description="Human-readable description")
+    description: str | None = Field(None, description="Human-readable description")
     category: ConfigCategory = Field(ConfigCategory.GENERAL, description="Config category")
     value_type: ConfigValueType = Field(ConfigValueType.STRING, description="Value type for parsing")
 
@@ -37,7 +36,7 @@ class SystemConfigCreate(SystemConfigBase):
 class SystemConfigUpdate(BaseModel):
     key: str = Field(..., min_length=1, max_length=100, description="Configuration key")
     value: str = Field(..., description="New configuration value")
-    description: Optional[str] = None
+    description: str | None = None
 
     @field_validator('value')
     @classmethod
@@ -49,7 +48,7 @@ class SystemConfigUpdate(BaseModel):
 class SystemConfigResponse(SystemConfigBase):
     id: int
     is_readonly: bool
-    updated_by: Optional[str]
+    updated_by: str | None
     created_at: datetime
     updated_at: datetime
 
@@ -57,7 +56,7 @@ class SystemConfigResponse(SystemConfigBase):
 
 
 class SystemConfigListResponse(BaseModel):
-    configs: List[SystemConfigResponse]
+    configs: list[SystemConfigResponse]
     total: int
 
 
@@ -81,11 +80,11 @@ class RateLimitConfigResponse(BaseModel):
 class NetworkConfigResponse(BaseModel):
     """Network integration config values"""
     sangfor_enabled: bool
-    sangfor_base_url: Optional[str] = None
+    sangfor_base_url: str | None = None
     switch_enabled: bool
-    switch_host: Optional[str] = None
+    switch_host: str | None = None
     ipguard_enabled: bool
-    ipguard_host: Optional[str] = None
+    ipguard_host: str | None = None
 
 
 class GeneralConfigResponse(BaseModel):
@@ -131,11 +130,11 @@ class AllConfigsResponse(BaseModel):
 
 class ConfigUpdateRequest(BaseModel):
     """Request body for updating multiple configs at once"""
-    configs: List[SystemConfigUpdate] = Field(..., min_length=1)
+    configs: list[SystemConfigUpdate] = Field(..., min_length=1)
 
 
 class ConfigUpdateResult(BaseModel):
     """Result of a config update operation"""
     key: str
     success: bool
-    message: Optional[str] = None
+    message: str | None = None

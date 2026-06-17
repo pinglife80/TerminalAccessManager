@@ -6,7 +6,6 @@ plus connection testing functionality.
 """
 
 import json
-from typing import Optional, List, Dict, Any
 
 from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -56,7 +55,7 @@ class DataSourceService:
         logger.info(f"Created data source: {source.name} (tag={source.tag}, type={source.type})")
         return source
 
-    async def update_data_source(self, source_id: int, data: DataSourceUpdate) -> Optional[DataSource]:
+    async def update_data_source(self, source_id: int, data: DataSourceUpdate) -> DataSource | None:
         """Update an existing data source"""
         # Query directly without expunge — source must stay in session for updates
         stmt = select(DataSource).where(DataSource.id == source_id)
@@ -284,7 +283,7 @@ class DataSourceService:
                 bl_entries = bl_result.scalars().all()
 
                 # Group blacklist entries by firewall_tag for batch unblock
-                fw_ip_map: Dict[str, List[Dict[str, str]]] = {}
+                fw_ip_map: dict[str, list[dict[str, str]]] = {}
                 for bl_entry in bl_entries:
                     if bl_entry.firewall_tag:
                         fw_ip_map.setdefault(bl_entry.firewall_tag, []).append(
@@ -612,7 +611,7 @@ class DataSourceService:
         logger.info(f"Deleted data source: {source.name} (id={source.id})")
         return True
 
-    async def get_data_source_by_id(self, source_id: int) -> Optional[DataSource]:
+    async def get_data_source_by_id(self, source_id: int) -> DataSource | None:
         """Get a data source by ID"""
         stmt = select(DataSource).where(DataSource.id == source_id)
         result = await self.db.execute(stmt)
@@ -624,7 +623,7 @@ class DataSourceService:
             source.config = decrypt_config(source.config)
         return source
 
-    async def get_data_source_by_tag(self, tag: str) -> Optional[DataSource]:
+    async def get_data_source_by_tag(self, tag: str) -> DataSource | None:
         """Get a data source by tag"""
         stmt = select(DataSource).where(DataSource.tag == tag)
         result = await self.db.execute(stmt)
@@ -636,9 +635,9 @@ class DataSourceService:
 
     async def list_data_sources(
         self,
-        type: Optional[str] = None,
-        enabled: Optional[bool] = None,
-    ) -> List[DataSource]:
+        type: str | None = None,
+        enabled: bool | None = None,
+    ) -> list[DataSource]:
         """List all data sources with optional filtering"""
         stmt = select(DataSource).order_by(DataSource.id)
         if type:
@@ -655,7 +654,7 @@ class DataSourceService:
         return sources
 
     async def update_sync_status(
-        self, source_id: int, status: str, error: Optional[str] = None
+        self, source_id: int, status: str, error: str | None = None
     ) -> None:
         """Update the last sync status of a data source"""
         # Read directly from DB without expunge, so changes are tracked by session
@@ -828,8 +827,8 @@ class DataSourceService:
         return True
 
     async def list_bindings(
-        self, arp_source_tag: Optional[str] = None
-    ) -> List[DataSourceBinding]:
+        self, arp_source_tag: str | None = None
+    ) -> list[DataSourceBinding]:
         """List all bindings, optionally filtered by ARP source tag"""
         stmt = select(DataSourceBinding).order_by(DataSourceBinding.id)
         if arp_source_tag:
@@ -838,7 +837,7 @@ class DataSourceService:
         result = await self.db.execute(stmt)
         return result.scalars().all()
 
-    async def get_firewall_tags_for_arp(self, arp_source_tag: str) -> List[str]:
+    async def get_firewall_tags_for_arp(self, arp_source_tag: str) -> list[str]:
         """Get all firewall tags associated with an ARP source"""
         stmt = (
             select(DataSourceBinding.firewall_tag)
@@ -850,7 +849,7 @@ class DataSourceService:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
-    async def _get_by_name_or_tag(self, name: str, tag: str) -> Optional[DataSource]:
+    async def _get_by_name_or_tag(self, name: str, tag: str) -> DataSource | None:
         """Get a data source by name or tag"""
         stmt = select(DataSource).where(
             (DataSource.name == name) | (DataSource.tag == tag)
@@ -858,7 +857,7 @@ class DataSourceService:
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
 
-    async def _get_by_field(self, field, value) -> Optional[DataSource]:
+    async def _get_by_field(self, field, value) -> DataSource | None:
         """Get a data source by a specific field"""
         stmt = select(DataSource).where(field == value)
         result = await self.db.execute(stmt)

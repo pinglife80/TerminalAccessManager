@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Generic, TypeVar, Optional, List
+from typing import Generic, TypeVar
 from datetime import datetime
 
 
@@ -8,18 +8,18 @@ class TerminalBase(BaseModel):
     """Base terminal schema"""
     ip_address: str = Field(..., description="IP address")
     mac_address: str = Field(..., description="MAC address")
-    comments: Optional[str] = None
+    comments: str | None = None
 
 
 class TerminalCreate(TerminalBase):
     """Schema for creating terminal record"""
-    source: Optional[str] = "arp"
+    source: str | None = "arp"
 
 
 class TerminalUpdate(BaseModel):
     """Schema for updating terminal"""
-    status: Optional[str] = None
-    comments: Optional[str] = None
+    status: str | None = None
+    comments: str | None = None
 
 
 class TerminalResponse(TerminalBase):
@@ -28,10 +28,10 @@ class TerminalResponse(TerminalBase):
     status: str
     timestamp: datetime
     source: str
-    source_tag: Optional[str] = None
+    source_tag: str | None = None
     compliance_status: str = Field("unknown", description="Compliance status: compliant/bypass/non_compliant/unknown")
-    wl_match_type: Optional[str] = Field(None, description="Whitelist match type: mac/ip/both/null")
-    firewall_tag: Optional[str] = Field(None, description="Firewall tag from block operation")
+    wl_match_type: str | None = Field(None, description="Whitelist match type: mac/ip/both/null")
+    firewall_tag: str | None = Field(None, description="Firewall tag from block operation")
 
     class Config:
         from_attributes = True
@@ -39,14 +39,14 @@ class TerminalResponse(TerminalBase):
 
 class TerminalQuery(BaseModel):
     """Query parameters for terminal search"""
-    ip: Optional[str] = None
-    mac: Optional[str] = None
-    status: Optional[str] = None
-    compliance_status: Optional[str] = Field(None, description="Filter by compliance status")
-    source_tag: Optional[str] = Field(None, description="Filter by source tag")
-    firewall_tag: Optional[str] = Field(None, description="Filter by firewall tag (via blacklist)")
-    start_date: Optional[str] = Field(None, description="Filter by start date (YYYY-MM-DD)")
-    end_date: Optional[str] = Field(None, description="Filter by end date (YYYY-MM-DD)")
+    ip: str | None = None
+    mac: str | None = None
+    status: str | None = None
+    compliance_status: str | None = Field(None, description="Filter by compliance status")
+    source_tag: str | None = Field(None, description="Filter by source tag")
+    firewall_tag: str | None = Field(None, description="Filter by firewall tag (via blacklist)")
+    start_date: str | None = Field(None, description="Filter by start date (YYYY-MM-DD)")
+    end_date: str | None = Field(None, description="Filter by end date (YYYY-MM-DD)")
     skip: int = Field(0, ge=0)
     limit: int = Field(50, ge=1, le=200)
 
@@ -54,21 +54,21 @@ class TerminalQuery(BaseModel):
 # Whitelist schemas
 class WhitelistBase(BaseModel):
     """Base whitelist schema"""
-    mac_address: Optional[str] = Field(None, description="MAC address")
-    comments: Optional[str] = None
+    mac_address: str | None = Field(None, description="MAC address")
+    comments: str | None = None
 
 
 class WhitelistCreate(BaseModel):
     """Schema for adding to whitelist"""
-    mac_address: Optional[str] = None
-    ip_address: Optional[str] = None  # Accepts single IP, CIDR, or IP range (stored as ip_pattern)
-    comments: Optional[str] = None
+    mac_address: str | None = None
+    ip_address: str | None = None  # Accepts single IP, CIDR, or IP range (stored as ip_pattern)
+    comments: str | None = None
 
 
 class WhitelistResponse(WhitelistBase):
     """Whitelist response schema"""
     id: int
-    ip_pattern: Optional[str] = None
+    ip_pattern: str | None = None
     pattern_type: str = "single_ip"
     added_by: str
     created_at: datetime
@@ -79,9 +79,9 @@ class WhitelistResponse(WhitelistBase):
 
 class WhitelistQuery(BaseModel):
     """Query parameters for whitelist search"""
-    search: Optional[str] = Field(None, description="Search by MAC, IP, or comments")
-    start_date: Optional[str] = Field(None, description="Filter by start date (YYYY-MM-DD)")
-    end_date: Optional[str] = Field(None, description="Filter by end date (YYYY-MM-DD)")
+    search: str | None = Field(None, description="Search by MAC, IP, or comments")
+    start_date: str | None = Field(None, description="Filter by start date (YYYY-MM-DD)")
+    end_date: str | None = Field(None, description="Filter by end date (YYYY-MM-DD)")
     skip: int = Field(0, ge=0)
     limit: int = Field(50, ge=1, le=200)
 
@@ -89,25 +89,25 @@ class WhitelistQuery(BaseModel):
 # Blacklist schemas
 class BlacklistBase(BaseModel):
     """Base blacklist schema"""
-    ip_address: Optional[str] = Field(None, description="IP address")
-    mac_address: Optional[str] = Field(None, description="MAC address")
-    reason: Optional[str] = None
+    ip_address: str | None = Field(None, description="IP address")
+    mac_address: str | None = Field(None, description="MAC address")
+    reason: str | None = None
 
 
 class BlacklistCreate(BlacklistBase):
     """Schema for adding to blacklist"""
-    block_time: Optional[str] = Field("30d", description="Block duration (e.g. 15d, 7d, 1h)")
-    firewall_tag: Optional[str] = Field(None, description="Firewall tag to route block operation")
+    block_time: str | None = Field("30d", description="Block duration (e.g. 15d, 7d, 1h)")
+    firewall_tag: str | None = Field(None, description="Firewall tag to route block operation")
 
 
 class BlacklistResponse(BlacklistBase):
     """Blacklist response schema"""
     id: int
     blocked_at: datetime
-    expires_at: Optional[datetime] = None
+    expires_at: datetime | None = None
     blocked_by: str
-    source_tag: Optional[str] = None
-    firewall_tag: Optional[str] = None
+    source_tag: str | None = None
+    firewall_tag: str | None = None
     is_auto_blocked: bool = False
     auto_unblocked: bool = False
 
@@ -117,9 +117,9 @@ class BlacklistResponse(BlacklistBase):
 
 class BlacklistQuery(BaseModel):
     """Query parameters for blacklist search"""
-    search: Optional[str] = Field(None, description="Search by MAC or IP")
-    start_date: Optional[str] = Field(None, description="Filter by start date (YYYY-MM-DD)")
-    end_date: Optional[str] = Field(None, description="Filter by end date (YYYY-MM-DD)")
+    search: str | None = Field(None, description="Search by MAC or IP")
+    start_date: str | None = Field(None, description="Filter by start date (YYYY-MM-DD)")
+    end_date: str | None = Field(None, description="Filter by end date (YYYY-MM-DD)")
     skip: int = Field(0, ge=0)
     limit: int = Field(50, ge=1, le=200)
 
@@ -128,17 +128,17 @@ class BlacklistQuery(BaseModel):
 class AuditLogBase(BaseModel):
     """Base audit log schema"""
     action: str
-    resource_type: Optional[str] = None
-    resource_id: Optional[str] = None
-    resource_name: Optional[str] = None
-    details: Optional[str] = None
+    resource_type: str | None = None
+    resource_id: str | None = None
+    resource_name: str | None = None
+    details: str | None = None
 
 
 class AuditLogResponse(AuditLogBase):
     """Audit log response schema"""
     id: int
     username: str
-    ip_address: Optional[str] = None
+    ip_address: str | None = None
     timestamp: datetime
 
     class Config:
@@ -147,14 +147,14 @@ class AuditLogResponse(AuditLogBase):
 
 class AuditLogQuery(BaseModel):
     """Query parameters for audit log search"""
-    username: Optional[str] = None
-    action: Optional[str] = None
-    search: Optional[str] = Field(None, description="Search by IP, username, or details")
-    start_date: Optional[str] = Field(None, description="Filter by start date (YYYY-MM-DD)")
-    end_date: Optional[str] = Field(None, description="Filter by end date (YYYY-MM-DD)")
+    username: str | None = None
+    action: str | None = None
+    search: str | None = Field(None, description="Search by IP, username, or details")
+    start_date: str | None = Field(None, description="Filter by start date (YYYY-MM-DD)")
+    end_date: str | None = Field(None, description="Filter by end date (YYYY-MM-DD)")
     skip: int = Field(0, ge=0)
     limit: int = Field(50, ge=1, le=200)
-    cursor: Optional[str] = Field(None, description="Keyset pagination cursor (base64-encoded timestamp/id)")
+    cursor: str | None = Field(None, description="Keyset pagination cursor (base64-encoded timestamp/id)")
 
 
 # Stats schemas
@@ -175,14 +175,14 @@ class DashboardStats(BaseModel):
 class SangforStatus(BaseModel):
     """Sangfor AF system status"""
     connected: bool = False
-    error: Optional[str] = None
+    error: str | None = None
 
 
 class SystemStatus(BaseModel):
     """System status response"""
     backend_api: str = "connected"
     database: str = "connected"
-    sangfor: Optional[SangforStatus] = None
+    sangfor: SangforStatus | None = None
     network_scanner: str = "pending"
 
 
@@ -199,7 +199,7 @@ T = TypeVar('T')
 
 class PaginatedResponse(BaseModel, Generic[T]):
     """Paginated response wrapper"""
-    items: List[T]
+    items: list[T]
     total: int
     skip: int
     limit: int
@@ -207,7 +207,7 @@ class PaginatedResponse(BaseModel, Generic[T]):
 
 class CursorPaginatedResponse(BaseModel, Generic[T]):
     """Cursor-based paginated response wrapper for efficient deep pagination"""
-    items: List[T]
+    items: list[T]
     total: int
     limit: int
-    next_cursor: Optional[str] = None
+    next_cursor: str | None = None

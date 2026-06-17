@@ -1,4 +1,3 @@
-from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,10 +18,10 @@ from sqlalchemy import func
 router = APIRouter(prefix="/compliance-baselines", tags=["Compliance Baselines"])
 
 
-@router.get("/", response_model=List[ComplianceBaselineResponse])
+@router.get("/", response_model=list[ComplianceBaselineResponse])
 async def list_baselines(
-    type: Optional[str] = Query(None, description="Filter by type (ipguard)"),
-    enabled: Optional[bool] = Query(None, description="Filter by enabled status"),
+    type: str | None = Query(None, description="Filter by type (ipguard)"),
+    enabled: bool | None = Query(None, description="Filter by enabled status"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_permission("baseline:read")),
 ):

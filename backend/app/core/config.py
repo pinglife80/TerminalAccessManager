@@ -1,5 +1,4 @@
 from pydantic_settings import BaseSettings
-from typing import List, Optional
 import os
 import sys
 
@@ -24,35 +23,35 @@ class Settings(BaseSettings):
 
     # JWT
     SECRET_KEY: str
-    ENCRYPTION_KEY: Optional[str] = None
+    ENCRYPTION_KEY: str | None = None
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
 
     # Sangfor API (optional)
-    SANGFOR_BASE_URL: Optional[str] = None
-    SANGFOR_USERNAME: Optional[str] = None
-    SANGFOR_PASSWORD: Optional[str] = None
-    SANGFOR_CA_BUNDLE: Optional[str] = None
+    SANGFOR_BASE_URL: str | None = None
+    SANGFOR_USERNAME: str | None = None
+    SANGFOR_PASSWORD: str | None = None
+    SANGFOR_CA_BUNDLE: str | None = None
 
     # Switch Configuration (optional)
-    SWITCH_HOST: Optional[str] = None
-    SWITCH_USERNAME: Optional[str] = None
-    SWITCH_PASSWORD: Optional[str] = None
+    SWITCH_HOST: str | None = None
+    SWITCH_USERNAME: str | None = None
+    SWITCH_PASSWORD: str | None = None
     SWITCH_PORT: int = 23
 
     # IpGuard Database (optional)
-    IPGUARD_HOST: Optional[str] = None
-    IPGUARD_USER: Optional[str] = None
-    IPGUARD_PASSWORD: Optional[str] = None
+    IPGUARD_HOST: str | None = None
+    IPGUARD_USER: str | None = None
+    IPGUARD_PASSWORD: str | None = None
     IPGUARD_DATABASE: str = "OCULAR3"
 
     # Redis
     REDIS_URL: str = "redis://localhost:6379/0"
-    REDIS_PASSWORD: Optional[str] = None
+    REDIS_PASSWORD: str | None = None
 
     # CORS
-    BACKEND_CORS_ORIGINS: List[str] = ["http://localhost", "http://localhost:80"]
+    BACKEND_CORS_ORIGINS: list[str] = ["http://localhost", "http://localhost:80"]
 
     # Rate Limiting
     RATE_LIMIT_PER_MINUTE: int = 120

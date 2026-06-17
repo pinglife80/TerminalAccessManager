@@ -1,5 +1,5 @@
 import httpx
-from typing import List, Dict, Any, Optional
+from typing import Any
 from loguru import logger
 
 from app.core.config import settings
@@ -37,9 +37,9 @@ class SangforService:
 
     def __init__(
         self,
-        base_url: Optional[str] = None,
-        username: Optional[str] = None,
-        password: Optional[str] = None,
+        base_url: str | None = None,
+        username: str | None = None,
+        password: str | None = None,
         verify_ssl: bool = True,
         ca_bundle: str = "",
     ):
@@ -262,11 +262,11 @@ class SangforService:
 
     async def block_ip(
         self,
-        ip_list: List[str],
+        ip_list: list[str],
         block_time: str = "",
         source_tag: str = "",
         reason: str = "Auto-blocked",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Block IP addresses via Sangfor AF blacklist API (permanent).
 
         Uses the whiteblacklist API (section 8.1.3) instead of blockip API.
@@ -335,7 +335,7 @@ class SangforService:
             "data": results,
         }
 
-    async def unblock_ip(self, ip_list: List[Dict[str, str]]) -> Dict[str, Any]:
+    async def unblock_ip(self, ip_list: list[dict[str, str]]) -> dict[str, Any]:
         """Unblock IP addresses via Sangfor AF blacklist API.
 
         Uses the whiteblacklist DELETE API (section 8.1.5) to remove by IP.
@@ -398,7 +398,7 @@ class SangforService:
             "data": results,
         }
 
-    async def _find_blacklist_entry(self, ip: str) -> Optional[Dict[str, Any]]:
+    async def _find_blacklist_entry(self, ip: str) -> dict[str, Any] | None:
         """Find a blacklist entry by IP address.
 
         Uses the whiteblacklist search API (section 8.1.1) with the IP
@@ -430,7 +430,7 @@ class SangforService:
             logger.warning(f"Error searching AF blacklist for {ip}: {str(e)}")
             return None
 
-    async def get_blocked_ips(self, search: str = "") -> Dict[str, Any]:
+    async def get_blocked_ips(self, search: str = "") -> dict[str, Any]:
         """Get list of blocked IPs from Sangfor AF blacklist.
 
         Uses the whiteblacklist API (section 8.1.1) with type=BLACK.
@@ -473,7 +473,7 @@ class SangforService:
             logger.warning(f"Sangfor AF keepalive failed: {str(e)}")
             return False
 
-    async def test_connection(self) -> Dict[str, Any]:
+    async def test_connection(self) -> dict[str, Any]:
         """Test connection to Sangfor AF by authenticating.
 
         Returns dict with 'success', 'message', and optional 'details'.

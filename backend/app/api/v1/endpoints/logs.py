@@ -1,4 +1,3 @@
-from typing import List, Optional
 from fastapi import APIRouter, Depends, Query, Response, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc, and_, or_
@@ -98,7 +97,7 @@ async def export_audit_logs(
     return Response(content=output.getvalue(), headers=headers)
 
 
-@router.get("/", response_model=List[AuditLogResponse])
+@router.get("/", response_model=list[AuditLogResponse])
 async def get_audit_logs(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
@@ -126,7 +125,7 @@ async def search_audit_logs(
     search: str = Query(None, description="Search by IP, username, or details"),
     start_date: str = Query(None, description="Filter by start date (YYYY-MM-DD)"),
     end_date: str = Query(None, description="Filter by end date (YYYY-MM-DD)"),
-    cursor: Optional[str] = Query(None, description="Keyset pagination cursor"),
+    cursor: str | None = Query(None, description="Keyset pagination cursor"),
     skip: int = Query(0, ge=0, description="Offset (used when cursor is not provided)"),
     limit: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),

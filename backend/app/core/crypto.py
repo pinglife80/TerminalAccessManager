@@ -13,7 +13,7 @@ import base64
 import os
 import hashlib
 from loguru import logger
-from typing import Optional, Any, Dict
+from typing import Any
 
 from app.core.config import settings
 
@@ -52,7 +52,7 @@ def decrypt_value(ciphertext: str) -> str:
 SENSITIVE_FIELDS = {"password", "secret", "api_key", "token", "passphrase"}
 
 
-def encrypt_config(config: Dict[str, Any]) -> Dict[str, Any]:
+def encrypt_config(config: dict[str, Any]) -> dict[str, Any]:
     """Encrypt sensitive fields in a config dict"""
     encrypted = {}
     for key, value in config.items():
@@ -65,7 +65,7 @@ def encrypt_config(config: Dict[str, Any]) -> Dict[str, Any]:
     return encrypted
 
 
-def decrypt_config(config: Dict[str, Any]) -> Dict[str, Any]:
+def decrypt_config(config: dict[str, Any]) -> dict[str, Any]:
     """Decrypt sensitive fields in a config dict"""
     decrypted = {}
     for key, value in config.items():

@@ -10,7 +10,6 @@ Core compliance checking logic:
 
 import json
 import ipaddress
-from typing import Optional, List, Dict, Any
 
 from sqlalchemy import select, and_, or_
 from sqlalchemy.sql import func
@@ -90,7 +89,7 @@ class ComplianceService:
             "wl_match_type": wl_match_type,
         }
 
-    async def batch_check_compliance(self, entries: List[dict]) -> ComplianceCheckResult:
+    async def batch_check_compliance(self, entries: list[dict]) -> ComplianceCheckResult:
         """
         Batch compliance check.
 
@@ -684,14 +683,14 @@ class ComplianceService:
     # ------------------------------------------------------------------
     # Whitelist Matching
     # ------------------------------------------------------------------
-    async def _check_whitelist(self, ip_address: str, mac_address: str) -> Optional[dict]:
+    async def _check_whitelist(self, ip_address: str, mac_address: str) -> dict | None:
         """Check if IP+MAC matches any whitelist entry. Returns match result dict or None."""
         whitelist_data = await self._load_whitelist_cache()
         return self._match_whitelist_in_memory(whitelist_data, ip_address, mac_address)
 
     def _match_whitelist_in_memory(
-        self, whitelist_data: List[dict], ip_address: str, mac_address: str
-    ) -> Optional[dict]:
+        self, whitelist_data: list[dict], ip_address: str, mac_address: str
+    ) -> dict | None:
         """Match IP+MAC against in-memory whitelist data.
         Returns dict with "match_type" ("mac"/"ip"/"both") and "comments" (str or None),
         or None if no match."""
@@ -775,7 +774,7 @@ class ComplianceService:
         return self._match_ipguard_in_memory(ipguard_data, ip_address, mac_address)
 
     def _match_ipguard_in_memory(
-        self, ipguard_data: Dict[str, List[dict]], ip_address: str, mac_address: str
+        self, ipguard_data: dict[str, list[dict]], ip_address: str, mac_address: str
     ) -> bool:
         """Match IP+MAC against in-memory IPGuard data from all sources"""
         normalized_mac = mac_address.upper().replace(":", "-")
@@ -790,7 +789,7 @@ class ComplianceService:
     # ------------------------------------------------------------------
     # Cache Loading
     # ------------------------------------------------------------------
-    async def _load_whitelist_cache(self) -> List[dict]:
+    async def _load_whitelist_cache(self) -> list[dict]:
         """Load all whitelist data, from Redis cache or database"""
         try:
             redis = await _get_redis()
@@ -824,7 +823,7 @@ class ComplianceService:
 
         return data
 
-    async def _load_all_ipguard_cache(self) -> Dict[str, List[dict]]:
+    async def _load_all_ipguard_cache(self) -> dict[str, list[dict]]:
         """Load all IPGuard data from Redis cache or database"""
         result_data = {}
 
@@ -1176,7 +1175,7 @@ class ComplianceService:
             "unblocked": unblocked_count,
         }
 
-    async def _get_bound_firewall_tag(self, source_tag: str) -> Optional[str]:
+    async def _get_bound_firewall_tag(self, source_tag: str) -> str | None:
         """Find the firewall data source tag bound to the given ARP source tag.
 
         Uses DataSourceBinding table to find the correct firewall for
@@ -1197,7 +1196,7 @@ class ComplianceService:
         except Exception:
             return None
 
-    async def _get_bound_firewall_tags(self, source_tag: str) -> List[str]:
+    async def _get_bound_firewall_tags(self, source_tag: str) -> list[str]:
         """Find all firewall data source tags bound to the given ARP source tag.
 
         Uses DataSourceBinding table to find all firewalls for
@@ -1224,7 +1223,7 @@ class ComplianceService:
             return "30d"
 
     async def log_action(self, username: str, action: str, resource_type: str,
-                         resource_id: Optional[str], details: dict,
+                         resource_id: str | None, details: dict,
                          ip_address: str = None, resource_name: str = None):
         """Log an audit action with JSON details"""
         audit_log = AuditLog(

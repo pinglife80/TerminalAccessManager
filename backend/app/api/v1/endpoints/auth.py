@@ -4,7 +4,6 @@ from fastapi.security import OAuth2PasswordRequestForm, OAuth2PasswordBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from jose import JWTError, jwt
-from typing import Optional
 
 from app.core.database import get_db
 from app.core.security import (
@@ -73,8 +72,8 @@ async def _build_user_detail_response(db: AsyncSession, user: User) -> UserDetai
 async def login(
     request: Request,
     form_data: OAuth2PasswordRequestForm = Depends(),
-    captcha_id: Optional[str] = None,
-    captcha: Optional[str] = None,
+    captcha_id: str | None = None,
+    captcha: str | None = None,
     db: AsyncSession = Depends(get_db)
 ):
     """Login and get access token"""
@@ -509,8 +508,8 @@ async def change_password(
 
 @router.get("/users", response_model=list[UserDetailResponse])
 async def list_users(
-    search: Optional[str] = None,
-    is_active: Optional[bool] = None,
+    search: str | None = None,
+    is_active: bool | None = None,
     current_user: User = Depends(require_permission("user:read")),
     db: AsyncSession = Depends(get_db),
 ):

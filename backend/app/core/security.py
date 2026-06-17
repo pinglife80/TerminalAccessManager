@@ -1,5 +1,4 @@
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Tuple
 from jose import JWTError, jwt
 import bcrypt
 from fastapi import Depends, HTTPException, status, Request
@@ -21,10 +20,10 @@ from app.schemas.auth import TokenData
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.API_V1_STR}/auth/login")
 
 # Redis client for token blacklist
-_redis_client: Optional[aioredis.Redis] = None
+_redis_client: aioredis.Redis | None = None
 
 
-def get_client_ip(request: Request) -> Optional[str]:
+def get_client_ip(request: Request) -> str | None:
     """Extract real client IP from request, respecting proxy headers.
 
     Checks X-Real-IP and X-Forwarded-For headers first (set by Nginx),
@@ -208,7 +207,7 @@ async def reset_login_attempts(username: str) -> None:
 CAPTCHA_TTL_SECONDS = 300  # 5 minutes
 
 
-async def generate_captcha() -> Tuple[str, str]:
+async def generate_captcha() -> tuple[str, str]:
     """Generate a server-side arithmetic captcha.
 
     Returns:
@@ -281,7 +280,7 @@ def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
 
-async def create_access_token_async(data: dict, expires_delta: Optional[timedelta] = None, user_id: Optional[int] = None) -> str:
+async def create_access_token_async(data: dict, expires_delta: timedelta | None = None, user_id: int | None = None) -> str:
     """Create a JWT access token with hot-reloadable expiration.
     Reads access_token_expire_minutes from ConfigService.
     Includes token version (ver) for invalidation on password change."""
@@ -306,7 +305,7 @@ async def create_access_token_async(data: dict, expires_delta: Optional[timedelt
     return encoded_jwt
 
 
-async def create_refresh_token_async(data: dict, user_id: Optional[int] = None) -> str:
+async def create_refresh_token_async(data: dict, user_id: int | None = None) -> str:
     """Create a JWT refresh token with hot-reloadable expiration.
     Reads refresh_token_expire_days from ConfigService.
     Includes token version (ver) for invalidation on password change."""
@@ -326,7 +325,7 @@ async def create_refresh_token_async(data: dict, user_id: Optional[int] = None) 
     return encoded_jwt
 
 
-async def authenticate_user(db: AsyncSession, username: str, password: str) -> Optional[User]:
+async def authenticate_user(db: AsyncSession, username: str, password: str) -> User | None:
     """Authenticate a user by username and password"""
     from sqlalchemy import select
 

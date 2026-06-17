@@ -4,7 +4,7 @@ import ipaddress
 import base64
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc, and_, or_, func, tuple_
-from typing import List, Optional, Dict, Any, Tuple
+from typing import Any
 from datetime import datetime, timedelta, timezone
 from loguru import logger
 
@@ -27,7 +27,7 @@ def _normalize_mac(mac: str) -> str:
     return mac.replace(':', '').replace('-', '').replace('.', '').upper()
 
 
-def _parse_date_range(start_date: Optional[str], end_date: Optional[str]):
+def _parse_date_range(start_date: str | None, end_date: str | None):
     """Parse date range strings into datetime objects for filtering"""
     conditions = []
     if start_date:
@@ -67,7 +67,7 @@ class IPAddressParser:
     """Utility class to parse and expand IP addresses, CIDR subnets, and IP ranges"""
 
     @staticmethod
-    def parse_ip_input(ip_input: str) -> List[str]:
+    def parse_ip_input(ip_input: str) -> list[str]:
         """Parse IP input and return list of IP addresses"""
         ip_input = ip_input.strip()
 
@@ -82,7 +82,7 @@ class IPAddressParser:
             return [ip_input]
 
     @staticmethod
-    def _parse_cidr(cidr: str) -> List[str]:
+    def _parse_cidr(cidr: str) -> list[str]:
         """Parse CIDR notation and return list of IP addresses"""
         try:
             network = ipaddress.IPv4Network(cidr, strict=False)
@@ -91,7 +91,7 @@ class IPAddressParser:
             raise ValueError(f"Invalid CIDR notation: {cidr}")
 
     @staticmethod
-    def _parse_ip_range(ip_range: str) -> List[str]:
+    def _parse_ip_range(ip_range: str) -> list[str]:
         """Parse IP range like 192.168.1.1-100"""
         match = re.match(r'^(\d+\.\d+\.\d+)\.(\d+)-(\d+)$', ip_range)
         if not match:
@@ -109,7 +109,7 @@ class IPAddressParser:
         return [f"{prefix}.{i}" for i in range(start, end + 1)]
 
     @staticmethod
-    def _parse_ip_range_with_subnet(ip_range: str) -> List[str]:
+    def _parse_ip_range_with_subnet(ip_range: str) -> list[str]:
         """Parse IP range with subnet like 192.168.1.1-100/24"""
         subnet_match = re.match(r'^(.+)/(\d+)$', ip_range)
         if not subnet_match:
@@ -170,7 +170,7 @@ class TerminalService:
     # ------------------------------------------------------------------
     # Firewall helpers (multi-firewall support)
     # ------------------------------------------------------------------
-    async def _get_sangfor_service_by_tag(self, firewall_tag: str) -> Optional[SangforService]:
+    async def _get_sangfor_service_by_tag(self, firewall_tag: str) -> SangforService | None:
         """Get a SangforService instance configured from a DataSource entry"""
         stmt = select(DataSource).where(
             (DataSource.tag == firewall_tag) & (DataSource.type == "sangfor")
@@ -308,7 +308,7 @@ class TerminalService:
     # ------------------------------------------------------------------
     # Terminals
     # ------------------------------------------------------------------
-    async def get_invalid_macs(self, skip: int = 0, limit: int = 50) -> List[Terminal]:
+    async def get_invalid_macs(self, skip: int = 0, limit: int = 50) -> list[Terminal]:
         """Get unblocked MAC addresses with pagination"""
         try:
             stmt = (
@@ -326,7 +326,7 @@ class TerminalService:
             logger.error(f"Error getting invalid MACs: {str(e)}")
             raise
 
-    async def search_macs(self, query: TerminalQuery) -> List[Terminal]:
+    async def search_macs(self, query: TerminalQuery) -> list[Terminal]:
         """Search MAC addresses by various criteria including date range"""
         try:
             conditions = []
@@ -434,8 +434,8 @@ class TerminalService:
             raise
 
     async def block_ip(self, ip_address: str, mac_address: str, username: str,
-                        block_time: str = "30d", firewall_tag: Optional[str] = None,
-                        comments: Optional[str] = None, client_ip: str = None) -> dict:
+                        block_time: str = "30d", firewall_tag: str | None = None,
+                        comments: str | None = None, client_ip: str = None) -> dict:
         """Block an IP address via Sangfor API and update database.
 
         Args:
@@ -521,9 +521,9 @@ class TerminalService:
             raise
 
     async def unblock_ip(self, ip_address: str, username: str,
-                          mac_address: Optional[str] = None,
-                          firewall_tag: Optional[str] = None,
-                          comments: Optional[str] = None,
+                          mac_address: str | None = None,
+                          firewall_tag: str | None = None,
+                          comments: str | None = None,
                           client_ip: str = None) -> dict:
         """Unblock an IP address via Sangfor API and update database.
 
@@ -616,8 +616,8 @@ class TerminalService:
     # ------------------------------------------------------------------
     # Whitelist
     # ------------------------------------------------------------------
-    async def get_whitelist(self, query: Optional[WhitelistQuery] = None,
-                            skip: int = 0, limit: int = 50) -> List[Whitelist]:
+    async def get_whitelist(self, query: WhitelistQuery | None = None,
+                            skip: int = 0, limit: int = 50) -> list[Whitelist]:
         """Get whitelist entries with optional search and date filtering"""
         conditions = []
 
@@ -653,7 +653,7 @@ class TerminalService:
         result = await self.db.execute(stmt)
         return result.scalars().all()
 
-    async def get_whitelist_count(self, query: Optional[WhitelistQuery] = None) -> int:
+    async def get_whitelist_count(self, query: WhitelistQuery | None = None) -> int:
         """Get total count of whitelist entries matching search criteria"""
         conditions = []
 
@@ -851,8 +851,8 @@ class TerminalService:
     # ------------------------------------------------------------------
     # Blacklist
     # ------------------------------------------------------------------
-    async def get_blacklist(self, query: Optional[BlacklistQuery] = None,
-                            skip: int = 0, limit: int = 50) -> List[Blacklist]:
+    async def get_blacklist(self, query: BlacklistQuery | None = None,
+                            skip: int = 0, limit: int = 50) -> list[Blacklist]:
         """Get blacklist entries with optional search and date filtering"""
         conditions = []
 
@@ -887,7 +887,7 @@ class TerminalService:
         result = await self.db.execute(stmt)
         return result.scalars().all()
 
-    async def get_blacklist_count(self, query: Optional[BlacklistQuery] = None) -> int:
+    async def get_blacklist_count(self, query: BlacklistQuery | None = None) -> int:
         """Get total count of blacklist entries matching search criteria"""
         conditions = []
 
@@ -918,7 +918,7 @@ class TerminalService:
     async def add_to_blacklist(self, ip_address: str = "", mac_address: str = None,
                                 reason: str = "", username: str = "",
                                 block_time: str = "30d",
-                                firewall_tag: Optional[str] = None) -> dict:
+                                firewall_tag: str | None = None) -> dict:
         """Add to blacklist by IP address, MAC address, or both.
         Also calls Sangfor API to actually block the IP on the firewall.
 
@@ -1255,12 +1255,12 @@ class TerminalService:
         return base64.urlsafe_b64encode(payload.encode()).decode()
 
     @staticmethod
-    def _decode_cursor(cursor: str) -> Tuple[datetime, int]:
+    def _decode_cursor(cursor: str) -> tuple[datetime, int]:
         """Decode a cursor back to timestamp and id"""
         payload = json.loads(base64.urlsafe_b64decode(cursor.encode()).decode())
         return datetime.fromisoformat(payload["ts"]), payload["id"]
 
-    async def search_audit_logs(self, query: AuditLogQuery) -> Tuple[List[AuditLog], Optional[str]]:
+    async def search_audit_logs(self, query: AuditLogQuery) -> tuple[list[AuditLog], str | None]:
         """Search audit logs by various criteria including date range and keyword.
         Returns (logs, next_cursor) where next_cursor is set if more results exist."""
         conditions = []
@@ -1365,7 +1365,7 @@ class TerminalService:
     # Helpers
     # ------------------------------------------------------------------
     async def log_action(self, username: str, action: str, resource_type: str,
-                         resource_id: str, details: Dict[str, Any],
+                         resource_id: str, details: dict[str, Any],
                          ip_address: str = None, resource_name: str = None):
         """Log an audit action with JSON details"""
         audit_log = AuditLog(

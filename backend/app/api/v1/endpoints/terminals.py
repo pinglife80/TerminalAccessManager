@@ -1,4 +1,3 @@
-from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,7 +16,7 @@ from app.services.terminal_service import TerminalService
 router = APIRouter(prefix="/terminals", tags=["Terminals"])
 
 
-@router.get("/", response_model=List[TerminalResponse])
+@router.get("/", response_model=list[TerminalResponse])
 async def get_invalid_mac_addresses(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
@@ -70,8 +69,8 @@ async def block_ip_address(
     ip_address: str,
     mac_address: str = Query(..., description="MAC address associated with IP"),
     block_time: str = Query("30d", description="Block duration (e.g. 30d, 15d, 7d, 1h)"),
-    firewall_tag: Optional[str] = Query(None, description="Firewall tag to route block operation"),
-    comments: Optional[str] = Query(None, description="Comment for the block action"),
+    firewall_tag: str | None = Query(None, description="Firewall tag to route block operation"),
+    comments: str | None = Query(None, description="Comment for the block action"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_permission("terminal:write")),
     request: Request = None
@@ -95,9 +94,9 @@ async def block_ip_address(
 @router.post("/unblock/{ip_address}", response_model=ResponseMessage)
 async def unblock_ip_address(
     ip_address: str,
-    mac_address: Optional[str] = Query(None, description="MAC address to unblock (if omitted, unblocks all MACs for this IP)"),
-    firewall_tag: Optional[str] = Query(None, description="Firewall tag to route unblock operation"),
-    comments: Optional[str] = Query(None, description="Comment for the unblock action"),
+    mac_address: str | None = Query(None, description="MAC address to unblock (if omitted, unblocks all MACs for this IP)"),
+    firewall_tag: str | None = Query(None, description="Firewall tag to route unblock operation"),
+    comments: str | None = Query(None, description="Comment for the unblock action"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_permission("terminal:write")),
     request: Request = None
