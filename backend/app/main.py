@@ -403,8 +403,20 @@ app.include_router(api_router, prefix=settings.API_V1_STR)
 # Serve uploaded branding assets
 
 UPLOAD_DIR = "/app/uploads"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
-app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
+
+
+def _ensure_upload_dir():
+    """Ensure upload directory exists (safe to call multiple times)"""
+    try:
+        os.makedirs(UPLOAD_DIR, exist_ok=True)
+        return True
+    except PermissionError:
+        logger.warning(f"Cannot create upload directory {UPLOAD_DIR}: permission denied")
+        return False
+
+
+if _ensure_upload_dir():
+    app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
 
 @app.get("/health")
