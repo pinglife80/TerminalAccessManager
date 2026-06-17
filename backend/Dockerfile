@@ -4,7 +4,8 @@ FROM python:3.11-alpine AS builder
 WORKDIR /app
 
 # Install system dependencies for building
-RUN apk add --no-cache gcc g++ musl-dev libpq-dev freetds-dev unixodbc-dev
+RUN apk add --no-cache gcc g++ musl-dev libpq-dev freetds-dev unixodbc-dev \
+    libffi-dev openssl-dev
 
 # Create app user early and install packages to accessible location
 RUN adduser -D app
@@ -17,7 +18,7 @@ FROM python:3.11-alpine
 WORKDIR /app
 
 # Install only runtime dependencies
-RUN apk add --no-cache libpq curl freetds unixodbc libstdc++
+RUN apk add --no-cache libpq curl freetds unixodbc libstdc++ libffi openssl
 
 # Configure FreeTDS ODBC driver
 RUN echo "[FreeTDS]" >> /etc/odbcinst.ini && \

@@ -13,7 +13,7 @@ import { Modal } from '@/components/Modal';
 import { DateRangeFilter } from '@/components/DateRangeFilter';
 import { downloadCSV, formatDate, useDebounce, getErrorMessage } from '@/lib/utils';
 
-const REFRESH_OPTIONS = [
+const REFRESH_OPTIONS: { labelKey?: string; label: string; value: number }[] = [
   { labelKey: 'common.off', label: 'Off', value: 0 },
   { label: '30s', value: 30000 },
   { label: '1m', value: 60000 },

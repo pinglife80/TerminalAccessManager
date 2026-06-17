@@ -12,7 +12,7 @@ const COMPLIANCE_CONFIG: Record<string, { labelKey: string; className: string }>
   unknown: { labelKey: 'terminal.complianceStatusValues.unknown', className: 'bg-yellow-100 text-yellow-800' },
 };
 
-const REFRESH_OPTIONS = [
+const REFRESH_OPTIONS: { labelKey: string; label?: string; value: number }[] = [
   { labelKey: 'common.off', value: 0 },
   { labelKey: '', label: '30s', value: 30000 },
   { labelKey: '', label: '1m', value: 60000 },

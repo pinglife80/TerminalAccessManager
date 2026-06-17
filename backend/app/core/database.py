@@ -61,6 +61,8 @@ async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         # Make blacklist.ip_address nullable to allow blocking by MAC only
-        await conn.execute(text(
-            "ALTER TABLE blacklist ALTER COLUMN ip_address DROP NOT NULL"
-        ))
+        # SQLite does not support ALTER COLUMN, so skip for SQLite
+        if not settings.DATABASE_URL.startswith("sqlite"):
+            await conn.execute(text(
+                "ALTER TABLE blacklist ALTER COLUMN ip_address DROP NOT NULL"
+            ))

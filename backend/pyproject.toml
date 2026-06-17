@@ -18,6 +18,9 @@ ignore = [
     "B008",   # function call in default argument (FastAPI Depends pattern)
     "B905",   # zip without strict
     "SIM108", # ternary operator (readability preference)
+    "UP006",  # use `list` instead of `List` (project convention: typing imports)
+    "UP035",  # import from `collections.abc` instead (project convention)
+    "UP007",  # use `X | None` instead of `Optional[X]` (project convention)
 ]
 
 [tool.ruff.lint.isort]
