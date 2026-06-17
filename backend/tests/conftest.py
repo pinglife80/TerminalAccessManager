@@ -86,7 +86,7 @@ def mock_redis():
     return redis_mock
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def mock_redis_patch(mock_redis):
     """Patch the get_redis_client function to return mock_redis."""
     with patch("app.core.security.get_redis_client", return_value=mock_redis):
