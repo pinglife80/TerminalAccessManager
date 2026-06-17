@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
+import { renderHook } from '@testing-library/react'
 import { usePermission } from '../usePermission'
 import { useAuthStore } from '@/store/auth'
 
@@ -26,9 +27,9 @@ describe('usePermission', () => {
         isAuthenticated: true,
       })
 
-      const { hasPermission } = usePermission()
-      expect(hasPermission('any:permission')).toBe(true)
-      expect(hasPermission('role:write')).toBe(true)
+      const { result } = renderHook(() => usePermission())
+      expect(result.current.hasPermission('any:permission')).toBe(true)
+      expect(result.current.hasPermission('role:write')).toBe(true)
     })
 
     it('should return true when user has the specific permission', () => {
@@ -45,9 +46,9 @@ describe('usePermission', () => {
         isAuthenticated: true,
       })
 
-      const { hasPermission } = usePermission()
-      expect(hasPermission('terminal:read')).toBe(true)
-      expect(hasPermission('terminal:write')).toBe(true)
+      const { result } = renderHook(() => usePermission())
+      expect(result.current.hasPermission('terminal:read')).toBe(true)
+      expect(result.current.hasPermission('terminal:write')).toBe(true)
     })
 
     it('should return false when user lacks the permission', () => {
@@ -64,16 +65,16 @@ describe('usePermission', () => {
         isAuthenticated: true,
       })
 
-      const { hasPermission } = usePermission()
-      expect(hasPermission('terminal:write')).toBe(false)
-      expect(hasPermission('role:write')).toBe(false)
+      const { result } = renderHook(() => usePermission())
+      expect(result.current.hasPermission('terminal:write')).toBe(false)
+      expect(result.current.hasPermission('role:write')).toBe(false)
     })
 
     it('should return false when user is null', () => {
       useAuthStore.setState({ user: null, isAuthenticated: false })
 
-      const { hasPermission } = usePermission()
-      expect(hasPermission('terminal:read')).toBe(false)
+      const { result } = renderHook(() => usePermission())
+      expect(result.current.hasPermission('terminal:read')).toBe(false)
     })
   })
 
@@ -92,8 +93,8 @@ describe('usePermission', () => {
         isAuthenticated: true,
       })
 
-      const { hasAnyPermission } = usePermission()
-      expect(hasAnyPermission(['role:write', 'user:delete'])).toBe(true)
+      const { result } = renderHook(() => usePermission())
+      expect(result.current.hasAnyPermission(['role:write', 'user:delete'])).toBe(true)
     })
 
     it('should return true when user has at least one of the permissions', () => {
@@ -110,8 +111,8 @@ describe('usePermission', () => {
         isAuthenticated: true,
       })
 
-      const { hasAnyPermission } = usePermission()
-      expect(hasAnyPermission(['terminal:write', 'terminal:read'])).toBe(true)
+      const { result } = renderHook(() => usePermission())
+      expect(result.current.hasAnyPermission(['terminal:write', 'terminal:read'])).toBe(true)
     })
 
     it('should return false when user has none of the permissions', () => {
@@ -128,8 +129,8 @@ describe('usePermission', () => {
         isAuthenticated: true,
       })
 
-      const { hasAnyPermission } = usePermission()
-      expect(hasAnyPermission(['role:write', 'user:delete'])).toBe(false)
+      const { result } = renderHook(() => usePermission())
+      expect(result.current.hasAnyPermission(['role:write', 'user:delete'])).toBe(false)
     })
   })
 
@@ -148,8 +149,8 @@ describe('usePermission', () => {
         isAuthenticated: true,
       })
 
-      const { hasAllPermissions } = usePermission()
-      expect(hasAllPermissions(['terminal:read', 'terminal:write'])).toBe(true)
+      const { result } = renderHook(() => usePermission())
+      expect(result.current.hasAllPermissions(['terminal:read', 'terminal:write'])).toBe(true)
     })
 
     it('should return true when user has all permissions', () => {
@@ -166,8 +167,8 @@ describe('usePermission', () => {
         isAuthenticated: true,
       })
 
-      const { hasAllPermissions } = usePermission()
-      expect(hasAllPermissions(['terminal:read', 'terminal:write'])).toBe(true)
+      const { result } = renderHook(() => usePermission())
+      expect(result.current.hasAllPermissions(['terminal:read', 'terminal:write'])).toBe(true)
     })
 
     it('should return false when user is missing some permissions', () => {
@@ -184,8 +185,8 @@ describe('usePermission', () => {
         isAuthenticated: true,
       })
 
-      const { hasAllPermissions } = usePermission()
-      expect(hasAllPermissions(['terminal:read', 'terminal:write'])).toBe(false)
+      const { result } = renderHook(() => usePermission())
+      expect(result.current.hasAllPermissions(['terminal:read', 'terminal:write'])).toBe(false)
     })
   })
 
@@ -204,8 +205,8 @@ describe('usePermission', () => {
         isAuthenticated: true,
       })
 
-      const { hasRole } = usePermission()
-      expect(hasRole('any_role')).toBe(true)
+      const { result } = renderHook(() => usePermission())
+      expect(result.current.hasRole('any_role')).toBe(true)
     })
 
     it('should return true when user has the role', () => {
@@ -222,8 +223,8 @@ describe('usePermission', () => {
         isAuthenticated: true,
       })
 
-      const { hasRole } = usePermission()
-      expect(hasRole('operator')).toBe(true)
+      const { result } = renderHook(() => usePermission())
+      expect(result.current.hasRole('operator')).toBe(true)
     })
 
     it('should return false when user does not have the role', () => {
@@ -240,15 +241,15 @@ describe('usePermission', () => {
         isAuthenticated: true,
       })
 
-      const { hasRole } = usePermission()
-      expect(hasRole('admin')).toBe(false)
+      const { result } = renderHook(() => usePermission())
+      expect(result.current.hasRole('admin')).toBe(false)
     })
 
     it('should return false when user is null', () => {
       useAuthStore.setState({ user: null, isAuthenticated: false })
 
-      const { hasRole } = usePermission()
-      expect(hasRole('operator')).toBe(false)
+      const { result } = renderHook(() => usePermission())
+      expect(result.current.hasRole('operator')).toBe(false)
     })
   })
 })
