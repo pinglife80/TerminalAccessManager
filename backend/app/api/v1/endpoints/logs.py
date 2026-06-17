@@ -1,15 +1,15 @@
-from typing import List
-from fastapi import APIRouter, Depends, Query, Response, Request
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc, and_, or_
 import csv
 from io import StringIO
 
+from fastapi import APIRouter, Depends, Query, Request, Response
+from sqlalchemy import and_, desc, or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.core.database import get_db
-from app.core.security import get_current_user, get_current_active_superuser
-from app.models.user import User
+from app.core.security import get_client_ip, require_permission
 from app.models.log import AuditLog
-from app.schemas.terminal import AuditLogResponse, AuditLogQuery, PaginatedResponse
+from app.models.user import User
+from app.schemas.terminal import AuditLogQuery, AuditLogResponse, CursorPaginatedResponse
 from app.services.terminal_service import TerminalService, _parse_date_range
 
 router = APIRouter(prefix="/logs", tags=["Audit Logs"])
@@ -25,9 +25,9 @@ async def export_audit_logs(
     end_date: str = Query(None, description="Filter by end date (YYYY-MM-DD)"),
     limit: int = Query(10000, ge=1, le=50000, description="Maximum number of records to export"),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_superuser)
+    current_user: User = Depends(require_permission("audit:export"))
 ):
-    """Export audit logs as CSV with filtering support (superuser only)"""
+    """Export audit logs as CSV with filtering support (requires audit:export permission)"""
     conditions = []
 
     if username:
@@ -35,7 +35,8 @@ async def export_audit_logs(
     if action:
         conditions.append(AuditLog.action == action)
     if search:
-        search_term = f"%{search}%"
+        escaped_search = search.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
+        search_term = f"%{escaped_search}%"
         conditions.append(
             or_(
                 AuditLog.ip_address.ilike(search_term),
@@ -61,7 +62,7 @@ async def export_audit_logs(
 
     writer.writerow([
         "ID", "Timestamp", "Username", "Action",
-        "Resource Type", "Resource ID", "IP Address", "Details"
+        "Resource Type", "Resource ID", "Resource Name", "IP Address", "Details"
     ])
 
     for log in logs:
@@ -72,6 +73,7 @@ async def export_audit_logs(
             log.action,
             log.resource_type or "",
             log.resource_id or "",
+            log.resource_name or "",
             log.ip_address or "",
             log.details or ""
         ])
@@ -82,8 +84,11 @@ async def export_audit_logs(
     from app.services.terminal_service import TerminalService
     ts = TerminalService(db)
     await ts.log_action(current_user.username, "export_audit_logs", "system", None,
-                        {"message": "Exported audit logs", "record_count": len(logs)},
-                        ip_address=request.client.host if request.client else None)
+                        {"message": "Exported audit logs", "record_count": len(logs),
+                         "filters": {"username": username, "action": action, "search": search,
+                                     "start_date": start_date, "end_date": end_date, "limit": limit}},
+                        ip_address=get_client_ip(request),
+                        resource_name="audit_logs")
 
     headers = {
         "Content-Disposition": "attachment; filename=audit_logs.csv",
@@ -93,12 +98,12 @@ async def export_audit_logs(
     return Response(content=output.getvalue(), headers=headers)
 
 
-@router.get("/", response_model=List[AuditLogResponse])
+@router.get("/", response_model=list[AuditLogResponse])
 async def get_audit_logs(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_permission("audit:read"))
 ):
     """Get audit logs with pagination"""
     stmt = (
@@ -114,19 +119,21 @@ async def get_audit_logs(
     return logs
 
 
-@router.get("/search", response_model=PaginatedResponse[AuditLogResponse])
+@router.get("/search", response_model=CursorPaginatedResponse[AuditLogResponse])
 async def search_audit_logs(
     username: str = Query(None, description="Filter by username"),
     action: str = Query(None, description="Filter by action type"),
     search: str = Query(None, description="Search by IP, username, or details"),
     start_date: str = Query(None, description="Filter by start date (YYYY-MM-DD)"),
     end_date: str = Query(None, description="Filter by end date (YYYY-MM-DD)"),
-    skip: int = Query(0, ge=0),
+    cursor: str | None = Query(None, description="Keyset pagination cursor"),
+    skip: int = Query(0, ge=0, description="Offset (used when cursor is not provided)"),
     limit: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_permission("audit:read"))
 ):
-    """Search audit logs by various criteria with date range and keyword filtering"""
+    """Search audit logs by various criteria with date range and keyword filtering.
+    Supports keyset pagination via cursor for efficient deep pagination."""
     query = AuditLogQuery(
         username=username,
         action=action,
@@ -134,10 +141,11 @@ async def search_audit_logs(
         start_date=start_date,
         end_date=end_date,
         skip=skip,
-        limit=limit
+        limit=limit,
+        cursor=cursor
     )
 
     service = TerminalService(db)
-    logs = await service.search_audit_logs(query)
+    logs, next_cursor = await service.search_audit_logs(query)
     total = await service.search_audit_logs_count(query)
-    return {"items": logs, "total": total, "skip": skip, "limit": limit}
+    return {"items": logs, "total": total, "limit": limit, "next_cursor": next_cursor}

@@ -3,8 +3,7 @@ Core business logic tests for TerminalAccessManager.
 Tests authentication, encryption, and search functionality.
 """
 
-import pytest
-from app.core.crypto import encrypt_value, decrypt_value, encrypt_config, decrypt_config
+from app.core.crypto import decrypt_config, decrypt_value, encrypt_config, encrypt_value
 
 
 class TestFieldEncryption:

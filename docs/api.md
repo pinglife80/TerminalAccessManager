@@ -1,6 +1,6 @@
 # TerminalAccessManager API 文档
 
-> 文档版本：v3.1.0 | 更新日期：2026-06-09
+> 文档版本：v3.3.0 | 更新日期：2026-06-17
 
 > 基于 MAC 地址和 IP 地址的网络终端准入管理平台
 
@@ -10,6 +10,8 @@
 - 基础路径：`/api/v1`
 - 认证方式：Bearer Token（JWT）
 - 内容类型：`application/json`（文件上传除外）
+
+> 每个请求响应头包含 `X-Request-ID`，用于链路追踪
 
 ---
 
@@ -28,7 +30,9 @@
 - [10. 审计日志 /logs](#10-审计日志-logs)
 - [11. 统计 /stats](#11-统计-stats)
 - [12. 系统设置 /settings](#12-系统设置-settings)
-- [13. 健康检查 /health](#13-健康检查-health)
+- [13. 角色管理 /roles](#13-角色管理-roles)
+- [14. 权限码参考](#14-权限码参考)
+- [15. 健康检查 /health](#15-健康检查-health)
 
 ---
 
@@ -67,6 +71,8 @@ Authorization: Bearer <access_token>
   "detail": "错误描述信息"
 }
 ```
+
+> **注意**：未捕获异常的 `detail` 可能为对象格式 `{"message": "错误描述", "error_id": "xxx"}`，前端 `getErrorMessage` 已处理此情况。
 
 ### 分页参数
 
@@ -725,7 +731,7 @@ curl -X POST https://<HOST_IP>:8443/api/v1/auth/users/2/unlock \
     "id": 1,
     "ip_address": "192.168.1.100",
     "mac_address": "AA:BB:CC:DD:EE:FF",
-    "status": "unfrozen",
+    "status": "unblocked",
     "timestamp": "2025-06-01T10:00:00Z",
     "source": "arp",
     "source_tag": "switch-1f",
@@ -758,11 +764,13 @@ curl "https://<HOST_IP>:8443/api/v1/terminals/?skip=0&limit=20" \
 | ip | Query | string | 否 | 按 IP 地址模糊搜索（ILIKE） |
 | mac | Query | string | 否 | 按 MAC 地址模糊搜索（ILIKE） |
 | compliance_status | Query | string | 否 | 按合规状态过滤（compliant/bypass/non_compliant/unknown） |
-| status | Query | string | 否 | 按状态过滤（active/inactive/frozen/pending/unfrozen） |
+| status | Query | string | 否 | 按状态过滤（blocked/unblocked） |
 | start_date | Query | string | 否 | 起始日期（YYYY-MM-DD） |
 | end_date | Query | string | 否 | 截止日期（YYYY-MM-DD） |
 | skip | Query | int | 0 | 跳过记录数 |
 | limit | Query | int | 50 | 每页记录数（1-200） |
+| source_tag | Query | string | 否 | 按数据源标签过滤终端 |
+| firewall_tag | Query | string | 否 | 按防火墙标签过滤终端（通过 Blacklist 子查询） |
 
 > IP 和 MAC 参数使用 ILIKE 模糊搜索，同时提供时使用 OR 逻辑（任一匹配即返回）。
 
@@ -775,7 +783,7 @@ curl "https://<HOST_IP>:8443/api/v1/terminals/?skip=0&limit=20" \
       "id": 1,
       "ip_address": "192.168.1.100",
       "mac_address": "AA:BB:CC:DD:EE:FF",
-      "status": "unfrozen",
+      "status": "unblocked",
       "timestamp": "2025-06-01T10:00:00Z",
       "source": "arp",
       "source_tag": "switch-1f",
@@ -805,6 +813,8 @@ curl "https://<HOST_IP>:8443/api/v1/terminals/search?ip=192.168.1&compliance_sta
 
 - **认证要求**：需认证
 
+> **绑定验证**：封堵操作前会检查终端所属 ARP 数据源是否已绑定防火墙。若终端的 `source_tag` 未关联任何 `DataSourceBinding`，前端将显示防火墙选择器供用户手动指定目标防火墙，或显示"无绑定"错误提示。
+
 **请求参数**
 
 | 参数 | 位置 | 类型 | 必填 | 说明 |
@@ -813,6 +823,7 @@ curl "https://<HOST_IP>:8443/api/v1/terminals/search?ip=192.168.1&compliance_sta
 | mac_address | Query | string | 是 | 关联的 MAC 地址 |
 | block_time | Query | string | 否 | 封锁时长，默认 `30d`（如 30d/15d/7d/1h） |
 | firewall_tag | Query | string | 否 | 防火墙标签，指定路由到哪个防火墙 |
+| comments | Query | string | 否 | 封堵备注，写入 Terminal.comments 字段 |
 
 **成功响应** `200`
 
@@ -849,7 +860,9 @@ curl -X POST "https://<HOST_IP>:8443/api/v1/terminals/block/192.168.1.100?mac_ad
 | 参数 | 位置 | 类型 | 必填 | 说明 |
 |------|------|------|------|------|
 | ip_address | Path | string | 是 | 要解封的 IP 地址 |
+| mac_address | Query | string | 否 | 关联的 MAC 地址 |
 | firewall_tag | Query | string | 否 | 防火墙标签 |
+| comments | Query | string | 否 | 解封备注，写入 Terminal.comments 字段 |
 
 **成功响应** `200`
 
@@ -894,11 +907,11 @@ curl -X POST "https://<HOST_IP>:8443/api/v1/terminals/unblock/192.168.1.100?fire
   "id": 1,
   "ip_address": "192.168.1.100",
   "mac_address": "AA:BB:CC:DD:EE:FF",
-  "status": "unfrozen",
-  "timestamp": "2025-06-01T10:00:00Z",
-  "source": "arp",
-  "source_tag": "switch-1f",
-  "compliance_status": "compliant",
+  "status": "unblocked",
+    "timestamp": "2025-06-01T10:00:00Z",
+    "source": "arp",
+    "source_tag": "switch-1f",
+    "compliance_status": "compliant",
   "wl_match_type": "mac",
   "comments": null
 }
@@ -1119,6 +1132,8 @@ curl "https://<HOST_IP>:8443/api/v1/blacklist/?search=192.168&start_date=2025-06
 
 ### 5.2 POST /blacklist/
 
+> **⚠️ 已废弃**: 此端点已废弃，请使用 `POST /terminals/block/{ip_address}` 代替。此端点将在未来版本中移除。
+
 添加黑名单条目，同时在深信服 AF 防火墙上执行封锁。IP 和 MAC 至少提供一项。
 
 - **认证要求**：需认证
@@ -1262,8 +1277,20 @@ curl "https://<HOST_IP>:8443/api/v1/data-sources/?type=arp_ssh&enabled=true" \
 | name | string | 是 | 最长100字符 | 数据源名称（唯一） |
 | type | string | 是 | - | 类型：arp_ssh / arp_api / sangfor |
 | tag | string | 是 | 最长50字符 | 唯一标签标识符 |
-| config | object | 否 | JSON 对象 | 连接配置 |
+| config | object | 否 | JSON 对象 | 连接配置（见下方 config 参数说明） |
 | enabled | bool | 否 | 默认 true | 是否启用 |
+
+**config 参数说明：**
+
+| 参数 | 类型 | 适用类型 | 说明 |
+|------|------|---------|------|
+| host | string | arp_ssh / arp_api | 主机地址 |
+| port | int | arp_ssh / arp_api | 端口号（SSH 默认 22，API 默认 443） |
+| username | string | arp_ssh / arp_api | 用户名 |
+| password | string | arp_ssh / arp_api | 密码（Fernet 加密存储） |
+| base_url | string | sangfor | 防火墙 API 地址 |
+| auth_type | string | arp_api | 认证方式：`basic`（默认）/ `header`（Custom Header 认证） |
+| header_name | string | arp_api | 自定义认证 Header 名称（`auth_type=header` 时必填，如 `X-API-Key`） |
 
 **成功响应** `201`
 
@@ -1346,6 +1373,10 @@ curl https://<HOST_IP>:8443/api/v1/data-sources/1 \
 
 更新数据源。
 
+> **tag 不可修改**: tag 是系统全局标识符，被终端、黑名单、绑定关系等表引用。修改 tag 会导致关联数据断裂。如需更改 tag，请创建新记录并删除旧记录。
+
+> **合规状态重置**: 当 ARP 数据源（`arp_ssh` / `arp_api`）被禁用（`enabled` 设为 `false`）时，系统自动将该数据源关联的所有终端 `compliance_status` 重置为 `unknown`，确保禁用后终端合规状态不会残留过期判定结果。重新启用后需等待下次合规检查或手动触发合规重算。
+
 - **认证要求**：超管专用
 
 **请求参数**
@@ -1386,9 +1417,90 @@ curl -X PUT https://<HOST_IP>:8443/api/v1/data-sources/1 \
 
 ---
 
+### 删除预览数据源
+
+```
+POST /api/v1/data-sources/{id}/delete-preview
+```
+
+预览删除数据源的影响，不执行任何实际操作。
+
+**权限**: `datasource:write`
+
+**路径参数**:
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| id | integer | 数据源 ID |
+
+**响应**:
+```json
+{
+  "can_delete": true,
+  "warnings": ["该数据源关联 20 个终端记录", "其中 10 个终端当前处于已封堵状态"],
+  "actions": ["从防火墙 [chn] 解封 10 个已封堵终端", "删除 13 条黑名单记录", "删除数据源 [LAB-ASW01]"],
+  "affected": {
+    "terminals": 20,
+    "blocked_terminals": 10,
+    "blacklist_entries": 13,
+    "bindings": 1,
+    "compliant_terminals": 0
+  },
+  "reason": null
+}
+```
+
+**说明**:
+- `can_delete=false` 时表示无法安全删除（如防火墙不可达），`reason` 字段说明原因
+- `warnings` 列出受影响的业务数据
+- `actions` 列出确认删除后后台将执行的操作
+- ARP 数据源删除：解封终端 → 删除黑名单 → 删除绑定 → 清理缓存 → 删除终端 → 删除数据源
+- Sangfor 防火墙删除：检查可达性 → 解封终端 → 删除黑名单 → 删除绑定 → 清理 firewall_tag → 删除数据源
+
+---
+
+### 禁用预览数据源
+
+```
+POST /api/v1/data-sources/{id}/disable-preview
+```
+
+预览禁用数据源的影响，不执行任何实际操作。
+
+**权限**: `datasource:write`
+
+**路径参数**:
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| id | integer | 数据源 ID |
+
+**响应**:
+```json
+{
+  "can_disable": true,
+  "warnings": ["该数据源关联 20 个终端记录", "禁用后终端合规状态将重置为 unknown"],
+  "actions": ["重置 20 个终端的合规状态为 unknown", "禁用数据源 [LAB-ASW01]"],
+  "affected": {
+    "terminals": 20,
+    "compliant_terminals": 15,
+    "non_compliant_terminals": 5
+  },
+  "reason": null
+}
+```
+
+**说明**:
+- `can_disable=false` 时表示无法安全禁用，`reason` 字段说明原因
+- `warnings` 列出受影响的业务数据
+- `actions` 列出确认禁用后后台将执行的操作
+- ARP 数据源禁用后，关联终端的 `compliance_status` 将自动重置为 `unknown`
+
+---
+
 ### 6.5 DELETE /data-sources/{source_id}
 
 删除数据源。
+
+> **安全删除**: 此端点执行安全删除，自动处理善后工作（解封终端、清理黑名单、清理缓存）。建议先调用 `delete-preview` 接口查看影响范围。
 
 - **认证要求**：超管专用
 
@@ -1462,9 +1574,9 @@ curl -X POST https://<HOST_IP>:8443/api/v1/data-sources/1/test \
 
 - 数据源必须处于启用状态
 - 不同类型数据源的同步行为不同：
-  - `arp_ssh`：通过 SSH 收集 ARP 表
+  - `arp_ssh`：通过 SSH（netmiko）收集 ARP 表，支持 Huawei/H3C/Cisco 自动设备类型检测
   - `arp_api`：通过 API 收集 ARP 表
-  - `sangfor`：测试连接
+  - `sangfor`：不适用。Sangfor 为推送型防火墙，无数据同步语义；前端已隐藏同步按钮，接口返回"Sync is not applicable"提示
 
 **成功响应** `200`
 
@@ -1572,9 +1684,29 @@ curl -X POST https://<HOST_IP>:8443/api/v1/data-sources/bindings/ \
 
 ---
 
+### 删除预览绑定关系
+
+```
+POST /api/v1/data-sources/bindings/{id}/delete-preview
+```
+
+预览删除绑定关系的影响。
+
+**权限**: `datasource:write`
+
+**响应**: 同 DeletePreviewResponse 结构
+
+**说明**:
+- 检查该绑定关联的已封堵终端数量
+- 删除后自动解封终端并触发合规重算
+
+---
+
 ### 7.3 DELETE /data-sources/bindings/{binding_id}
 
 删除数据源绑定。
+
+> **安全删除**: 自动解封受影响终端、清理黑名单记录、触发合规重算。
 
 - **认证要求**：超管专用
 
@@ -1731,18 +1863,20 @@ curl -X POST https://<HOST_IP>:8443/api/v1/data-sources/compliance/auto-unblock 
 
 ## 9. 合规基准管理 /compliance-baselines
 
+> **审计日志**：合规基准管理操作均记录审计日志，action 值包括 `create_baseline`、`update_baseline`、`delete_baseline`，details 包含基准名称、标签及变更内容。
+
 ### 9.1 GET /compliance-baselines/
 
-获取合规基准列表（分页）。
+获取合规基准列表，支持按类型和启用状态过滤。
 
-- **认证要求**：需认证
+- **认证要求**：`baseline:read`
 
 **请求参数**
 
-| 参数 | 位置 | 类型 | 默认值 | 说明 |
-|------|------|------|--------|------|
-| skip | Query | int | 0 | 跳过记录数 |
-| limit | Query | int | 50 | 每页记录数（1-200） |
+| 参数 | 位置 | 类型 | 必填 | 说明 |
+|------|------|------|------|------|
+| type | Query | string | 否 | 按类型过滤（ipguard） |
+| enabled | Query | bool | 否 | 按启用状态过滤 |
 
 **成功响应** `200`
 
@@ -1750,10 +1884,14 @@ curl -X POST https://<HOST_IP>:8443/api/v1/data-sources/compliance/auto-unblock 
 [
   {
     "id": 1,
-    "ip_address": "192.168.1.100",
-    "mac_address": "AA:BB:CC:DD:EE:FF",
-    "hostname": "PC-100",
-    "source_tag": "ipguard-01",
+    "name": "IPGuard基准",
+    "type": "ipguard",
+    "tag": "ipguard-01",
+    "config": {"db_type": "postgresql", "host": "10.0.0.2", "port": 5432, "username": "readonly", "password": "***", "database": "ipguard"},
+    "enabled": true,
+    "last_sync_at": "2025-06-08T10:00:00Z",
+    "last_sync_status": "success",
+    "last_sync_error": null,
     "created_at": "2025-06-01T10:00:00Z",
     "updated_at": "2025-06-01T10:00:00Z"
   }
@@ -1763,7 +1901,12 @@ curl -X POST https://<HOST_IP>:8443/api/v1/data-sources/compliance/auto-unblock 
 **用例**
 
 ```bash
-curl "https://<HOST_IP>:8443/api/v1/compliance-baselines/?skip=0&limit=20" \
+# 列出所有合规基准
+curl "https://<HOST_IP>:8443/api/v1/compliance-baselines/" \
+  -H "Authorization: Bearer <access_token>"
+
+# 按类型和启用状态过滤
+curl "https://<HOST_IP>:8443/api/v1/compliance-baselines/?type=ipguard&enabled=true" \
   -H "Authorization: Bearer <access_token>"
 ```
 
@@ -1771,30 +1914,46 @@ curl "https://<HOST_IP>:8443/api/v1/compliance-baselines/?skip=0&limit=20" \
 
 ### 9.2 POST /compliance-baselines/
 
-创建合规基准条目。
+创建合规基准。
 
-- **认证要求**：超管专用
+- **认证要求**：`baseline:write`
 
 **请求体**
 
-| 字段 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| ip_address | string | 是 | IP 地址 |
-| mac_address | string | 是 | MAC 地址 |
-| hostname | string | 否 | 主机名 |
-| source_tag | string | 否 | 数据源标签 |
+| 字段 | 类型 | 必填 | 约束 | 说明 |
+|------|------|------|------|------|
+| name | string | 是 | 最长100字符 | 基准名称（唯一） |
+| type | string | 是 | - | 基准类型：ipguard |
+| tag | string | 是 | 最长50字符 | 唯一标签标识符 |
+| config | object | 否 | JSON 对象 | 连接配置（见下方 config 参数说明） |
+| enabled | bool | 否 | 默认 true | 是否启用 |
+
+**config 参数说明（type=ipguard）：**
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| db_type | string | 数据库类型：postgresql / mysql / mssql |
+| host | string | 数据库主机地址 |
+| port | int | 数据库端口 |
+| username | string | 数据库用户名 |
+| password | string | 数据库密码（Fernet 加密存储） |
+| database | string | 数据库名（默认 ipguard） |
 
 **成功响应** `201`
 
 ```json
 {
-  "id": 1,
-  "ip_address": "192.168.1.100",
-  "mac_address": "AA:BB:CC:DD:EE:FF",
-  "hostname": "PC-100",
-  "source_tag": "ipguard-01",
-  "created_at": "2025-06-01T10:00:00Z",
-  "updated_at": "2025-06-01T10:00:00Z"
+  "id": 2,
+  "name": "IPGuard基准-2F",
+  "type": "ipguard",
+  "tag": "ipguard-2f",
+  "config": {"db_type": "postgresql", "host": "10.0.0.3", "port": 5432, "username": "readonly", "password": "***", "database": "ipguard"},
+  "enabled": true,
+  "last_sync_at": null,
+  "last_sync_status": null,
+  "last_sync_error": null,
+  "created_at": "2025-06-08T12:00:00Z",
+  "updated_at": "2025-06-08T12:00:00Z"
 }
 ```
 
@@ -1802,7 +1961,7 @@ curl "https://<HOST_IP>:8443/api/v1/compliance-baselines/?skip=0&limit=20" \
 
 | 状态码 | 说明 |
 |--------|------|
-| 400 | 参数无效或条目已存在 |
+| 400 | 名称或标签重复；参数无效 |
 
 **用例**
 
@@ -1811,10 +1970,18 @@ curl -X POST https://<HOST_IP>:8443/api/v1/compliance-baselines/ \
   -H "Authorization: Bearer <access_token>" \
   -H "Content-Type: application/json" \
   -d '{
-    "ip_address": "192.168.1.100",
-    "mac_address": "AA:BB:CC:DD:EE:FF",
-    "hostname": "PC-100",
-    "source_tag": "ipguard-01"
+    "name": "IPGuard基准",
+    "type": "ipguard",
+    "tag": "ipguard-01",
+    "config": {
+      "db_type": "postgresql",
+      "host": "10.0.0.2",
+      "port": 5432,
+      "username": "readonly",
+      "password": "secret",
+      "database": "ipguard"
+    },
+    "enabled": true
   }'
 ```
 
@@ -1824,7 +1991,7 @@ curl -X POST https://<HOST_IP>:8443/api/v1/compliance-baselines/ \
 
 获取合规基准详情。
 
-- **认证要求**：需认证
+- **认证要求**：`baseline:read`
 
 **请求参数**
 
@@ -1834,7 +2001,7 @@ curl -X POST https://<HOST_IP>:8443/api/v1/compliance-baselines/ \
 
 **成功响应** `200`
 
-返回格式同创建响应。
+返回格式同 [9.2 POST /compliance-baselines/](#92-post-compliance-baselines) 中的单条记录。
 
 **错误响应**
 
@@ -1853,9 +2020,11 @@ curl https://<HOST_IP>:8443/api/v1/compliance-baselines/1 \
 
 ### 9.4 PUT /compliance-baselines/{baseline_id}
 
-更新合规基准条目。
+更新合规基准。
 
-- **认证要求**：超管专用
+> **tag 不可修改**: tag 是系统全局标识符，被终端、黑名单、绑定关系等表引用。修改 tag 会导致关联数据断裂。如需更改 tag，请创建新记录并删除旧记录。
+
+- **认证要求**：`baseline:write`
 
 **请求参数**
 
@@ -1867,10 +2036,11 @@ curl https://<HOST_IP>:8443/api/v1/compliance-baselines/1 \
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| ip_address | string | 否 | IP 地址 |
-| mac_address | string | 否 | MAC 地址 |
-| hostname | string | 否 | 主机名 |
-| source_tag | string | 否 | 数据源标签 |
+| name | string | 否 | 基准名称 |
+| type | string | 否 | 基准类型 |
+| tag | string | 否 | 标签标识符 |
+| config | object | 否 | 连接配置 |
+| enabled | bool | 否 | 启用状态 |
 
 **成功响应** `200`
 
@@ -1880,7 +2050,7 @@ curl https://<HOST_IP>:8443/api/v1/compliance-baselines/1 \
 
 | 状态码 | 说明 |
 |--------|------|
-| 400 | 参数无效 |
+| 400 | 名称或标签重复；参数无效 |
 | 404 | 记录不存在 |
 
 **用例**
@@ -1889,16 +2059,36 @@ curl https://<HOST_IP>:8443/api/v1/compliance-baselines/1 \
 curl -X PUT https://<HOST_IP>:8443/api/v1/compliance-baselines/1 \
   -H "Authorization: Bearer <access_token>" \
   -H "Content-Type: application/json" \
-  -d '{"hostname": "PC-100-Updated"}'
+  -d '{"enabled": false}'
 ```
+
+---
+
+### 删除预览合规基准
+
+```
+POST /api/v1/compliance-baselines/{id}/delete-preview
+```
+
+预览删除合规基准的影响。
+
+**权限**: `baseline:write`
+
+**响应**: 同 DeletePreviewResponse 结构
+
+**说明**:
+- 检查受影响的合规/不合规终端数量
+- 删除后自动清理 Redis 缓存并触发全量合规重算
 
 ---
 
 ### 9.5 DELETE /compliance-baselines/{baseline_id}
 
-删除合规基准条目。
+删除合规基准。
 
-- **认证要求**：超管专用
+> **安全删除**: 自动清理 Redis 缓存（ipguard:{tag}）、触发全量合规重算。
+
+- **认证要求**：`baseline:write`
 
 **请求参数**
 
@@ -1927,7 +2117,7 @@ curl -X DELETE https://<HOST_IP>:8443/api/v1/compliance-baselines/1 \
 
 测试合规基准连接。
 
-- **认证要求**：超管专用
+- **认证要求**：`baseline:test`
 
 **请求参数**
 
@@ -1935,15 +2125,26 @@ curl -X DELETE https://<HOST_IP>:8443/api/v1/compliance-baselines/1 \
 |------|------|------|------|------|
 | baseline_id | Path | int | 是 | 合规基准 ID |
 
+**业务规则**
+
+- 仅 `ipguard` 类型支持连接测试
+- 根据 config 中的 `db_type` 选择对应驱动连接（postgresql / mysql / mssql）
+
 **成功响应** `200`
 
 ```json
 {
   "success": true,
-  "message": "Connection successful",
+  "message": "Connection successful (postgresql)",
   "details": null
 }
 ```
+
+**错误响应**
+
+| 状态码 | 说明 |
+|--------|------|
+| 404 | 记录不存在 |
 
 **用例**
 
@@ -1958,13 +2159,18 @@ curl -X POST https://<HOST_IP>:8443/api/v1/compliance-baselines/1/test \
 
 手动触发合规基准同步。
 
-- **认证要求**：超管专用
+- **认证要求**：`baseline:sync`
 
 **请求参数**
 
 | 参数 | 位置 | 类型 | 必填 | 说明 |
 |------|------|------|------|------|
 | baseline_id | Path | int | 是 | 合规基准 ID |
+
+**业务规则**
+
+- 合规基准必须处于启用状态
+- 仅 `ipguard` 类型支持同步
 
 **成功响应** `200`
 
@@ -1973,8 +2179,8 @@ curl -X POST https://<HOST_IP>:8443/api/v1/compliance-baselines/1/test \
   "success": true,
   "message": "Sync completed",
   "entries_processed": 120,
-  "entries_added": 5,
-  "entries_updated": 3,
+  "entries_added": 0,
+  "entries_updated": 0,
   "errors": []
 }
 ```
@@ -1983,7 +2189,7 @@ curl -X POST https://<HOST_IP>:8443/api/v1/compliance-baselines/1/test \
 
 | 状态码 | 说明 |
 |--------|------|
-| 400 | 同步失败 |
+| 400 | 合规基准已禁用；不支持同步的类型 |
 | 404 | 记录不存在 |
 
 **用例**
@@ -2020,6 +2226,7 @@ curl -X POST https://<HOST_IP>:8443/api/v1/compliance-baselines/1/sync \
     "action": "block_terminal",
     "resource_type": "terminal",
     "resource_id": "192.168.1.100",
+    "resource_name": "192.168.1.100",
     "details": "{\"ip\": \"192.168.1.100\", \"mac\": \"AA:BB:CC:DD:EE:FF\", \"block_time\": \"30d\", \"firewall_tag\": \"sangfor-af1\"}",
     "ip_address": "10.0.0.50",
     "timestamp": "2025-06-08T10:00:00Z"
@@ -2051,7 +2258,8 @@ curl "https://<HOST_IP>:8443/api/v1/logs/?skip=0&limit=20" \
 | search | Query | string | 否 | 关键词搜索（匹配 IP、用户名、详情） |
 | start_date | Query | string | 否 | 起始日期（YYYY-MM-DD） |
 | end_date | Query | string | 否 | 截止日期（YYYY-MM-DD） |
-| skip | Query | int | 0 | 跳过记录数 |
+| cursor | Query | string | 否 | 游标分页标记（上一页最后一条记录的排序键，Base64 编码）。使用 cursor 时忽略 skip 参数 |
+| skip | Query | int | 0 | 跳过记录数（offset 分页，与 cursor 互斥） |
 | limit | Query | int | 50 | 每页记录数（1-200） |
 
 **action 值列表**
@@ -2061,26 +2269,38 @@ curl "https://<HOST_IP>:8443/api/v1/logs/?skip=0&limit=20" \
 | 认证 | `login` | 登录成功 |
 | 认证 | `login_failed` | 登录失败 |
 | 认证 | `logout` | 登出 |
+| 认证 | `token_refresh` | 刷新令牌 |
+| 认证 | `change_password` | 修改密码 |
 | 终端操作 | `block_terminal` | 封锁终端 |
 | 终端操作 | `unblock_terminal` | 解封终端 |
 | 白名单 | `add_whitelist` | 添加白名单 |
 | 白名单 | `remove_whitelist` | 移除白名单 |
-| 黑名单 | `add_blacklist` | 添加黑名单 |
-| 黑名单 | `remove_blacklist` | 移除黑名单 |
-| 用户管理 | `create_user` | 创建用户 |
-| 用户管理 | `update_user` | 更新用户 |
-| 用户管理 | `delete_user` | 删除用户 |
-| 用户管理 | `reset_password` | 重置密码 |
-| 用户管理 | `unlock_user` | 解锁用户 |
+| 黑名单 | `block_blacklist` | 添加黑名单 |
+| 黑名单 | `unblock_blacklist` | 移除黑名单 |
+| 黑名单 | `cleanup_expired` | 清理过期条目 |
 | 数据源 | `create_datasource` | 创建数据源 |
 | 数据源 | `update_datasource` | 更新数据源 |
 | 数据源 | `delete_datasource` | 删除数据源 |
 | 数据源 | `test_datasource` | 测试数据源连接 |
 | 数据源 | `sync_datasource` | 同步数据源 |
-| 合规 | `compliance_check` | 合规检查 |
-| 合规 | `auto_block` | 自动封禁 |
-| 合规 | `auto_unblock` | 自动解封 |
-| 配置变更 | `update_config` | 更新系统配置 |
+| 数据源 | `bind_datasource` | 绑定数据源 |
+| 数据源 | `unbind_datasource` | 解绑数据源 |
+| 用户管理 | `create_user` | 创建用户 |
+| 用户管理 | `update_user` | 更新用户 |
+| 用户管理 | `delete_user` | 删除用户 |
+| 用户管理 | `reset_password` | 重置密码 |
+| 用户管理 | `unlock_user` | 解锁用户 |
+| 用户管理 | `role_change` | 角色变更 |
+| 用户管理 | `assign_role` | 分配角色 |
+| 角色 | `create_role` | 创建角色 |
+| 角色 | `update_role` | 更新角色 |
+| 角色 | `delete_role` | 删除角色 |
+| 合规 | `create_baseline` | 创建合规基准 |
+| 合规 | `update_baseline` | 更新合规基准 |
+| 合规 | `delete_baseline` | 删除合规基准 |
+| 系统 | `update_config` | 更新系统配置 |
+| 系统 | `upload_branding` | 上传品牌资源 |
+| 系统 | `export_audit_logs` | 导出审计日志 |
 
 > 后端启动时自动迁移旧版 action 值（如 `block_ip` → `block_terminal`、`add_to_whitelist` → `add_whitelist` 等），确保历史数据与新命名一致。
 
@@ -2095,6 +2315,7 @@ curl "https://<HOST_IP>:8443/api/v1/logs/?skip=0&limit=20" \
       "action": "block_terminal",
       "resource_type": "terminal",
       "resource_id": "192.168.1.100",
+      "resource_name": "192.168.1.100",
       "details": "{\"ip\": \"192.168.1.100\", \"mac\": \"AA:BB:CC:DD:EE:FF\", \"block_time\": \"30d\", \"firewall_tag\": \"sangfor-af1\"}",
       "ip_address": "10.0.0.50",
       "timestamp": "2025-06-08T10:00:00Z"
@@ -2102,16 +2323,26 @@ curl "https://<HOST_IP>:8443/api/v1/logs/?skip=0&limit=20" \
   ],
   "total": 200,
   "skip": 0,
-  "limit": 50
+  "limit": 50,
+  "next_cursor": "eyJpZCI6NTB9"
 }
 ```
 
 > **details 字段**：存储为 JSON 格式字符串，包含操作相关的结构化信息（如 IP 地址、MAC 地址、封锁时长、变更内容等），前端可解析后以格式化方式展示。
+>
+> **resource_name 字段**：存储人类可读的资源名称（如用户名、数据源名称、IP 地址等），优先于 resource_id 展示。当 resource_name 为 null 时，回退显示 resource_id。
+>
+> **cursor 分页**：使用 cursor 参数实现 keyset 分页，适用于大数据量深分页场景。首次请求不传 cursor，后续请求使用响应中的 `next_cursor` 值。当 `next_cursor` 为 null 时表示已到最后一页。
 
 **用例**
 
 ```bash
+# offset 分页
 curl "https://<HOST_IP>:8443/api/v1/logs/search?username=admin&action=block_terminal&start_date=2025-06-01&end_date=2025-06-08" \
+  -H "Authorization: Bearer <access_token>"
+
+# cursor 分页（深分页推荐）
+curl "https://<HOST_IP>:8443/api/v1/logs/search?cursor=eyJpZCI6NTB9&limit=50" \
   -H "Authorization: Bearer <access_token>"
 ```
 
@@ -2139,7 +2370,7 @@ curl "https://<HOST_IP>:8443/api/v1/logs/search?username=admin&action=block_term
 - Content-Type: `text/csv`
 - Content-Disposition: `attachment; filename=audit_logs.csv`
 
-CSV 列：`ID, Timestamp, Username, Action, Resource Type, Resource ID, IP Address, Details`
+CSV 列：`ID, Timestamp, Username, Action, Resource Type, Resource ID, Resource Name, IP Address, Details`
 
 **用例**
 
@@ -2166,9 +2397,7 @@ curl "https://<HOST_IP>:8443/api/v1/logs/export?start_date=2025-06-01&end_date=2
   "total": 500,
   "whitelisted": 120,
   "blocked": 35,
-  "active": 300,
-  "inactive": 80,
-  "pending": 85,
+  "unblocked": 465,
   "compliant": 280,
   "bypass": 100,
   "non_compliant": 45,
@@ -2271,8 +2500,8 @@ curl https://<HOST_IP>:8443/api/v1/settings/branding
     "refresh_token_expire_days": 7
   },
   "rate_limit": {
-    "rate_limit_per_minute": 60,
-    "auth_rate_limit_per_minute": 5
+    "rate_limit_per_minute": 120,
+    "auth_rate_limit_per_minute": 10
   },
   "network": {
     "sangfor_enabled": true,
@@ -2561,9 +2790,9 @@ curl -X POST "https://<HOST_IP>:8443/api/v1/settings/upload?purpose=favicon" \
 
 ---
 
-## 13. 健康检查 /health
+## 15. 健康检查 /health
 
-### 13.1 GET /health
+### 15.1 GET /health
 
 健康检查，验证数据库和 Redis 连接状态。
 
@@ -2599,3 +2828,248 @@ curl -X POST "https://<HOST_IP>:8443/api/v1/settings/upload?purpose=favicon" \
 ```bash
 curl https://<HOST_IP>:8443/health
 ```
+
+---
+
+## 13. 角色管理 /roles
+
+### 获取角色列表
+
+```
+GET /api/v1/roles/
+```
+
+**所需权限**: `role:read`
+
+**查询参数**:
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| 无 | | | |
+
+**响应**: 角色列表数组
+
+```json
+[
+  {
+    "id": 1,
+    "name": "superadmin",
+    "description": "超级管理员",
+    "is_default": false,
+    "permissions": [],
+    "created_at": "2026-06-10T00:00:00",
+    "updated_at": "2026-06-10T00:00:00"
+  }
+]
+```
+
+#### 获取权限码列表
+
+```
+GET /api/v1/roles/permissions
+```
+
+**所需权限**: `role:read`
+
+**响应**: 权限码列表数组
+
+```json
+[
+  {
+    "id": 1,
+    "code": "terminal:read",
+    "name": "查看终端",
+    "module": "terminal",
+    "description": "查看终端列表和详情"
+  }
+]
+```
+
+#### 获取角色详情
+
+```
+GET /api/v1/roles/{role_id}
+```
+
+**所需权限**: `role:read`
+
+**路径参数**:
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| role_id | int | 角色ID |
+
+**业务规则**: 非超管用户查看 superadmin 角色详情返回 403
+
+**响应**:
+
+```json
+{
+  "id": 2,
+  "name": "admin",
+  "description": "管理员",
+  "is_default": false,
+  "permissions": ["datasource:read", "datasource:write", "..."],
+  "user_count": 3,
+  "created_at": "2026-06-10T00:00:00",
+  "updated_at": "2026-06-10T00:00:00"
+}
+```
+
+#### 创建角色
+
+```
+POST /api/v1/roles/
+```
+
+**所需权限**: `role:write`
+
+**请求体**:
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| name | string | 是 | 角色标识名（2-50字符，小写字母开头，仅含小写字母/数字/下划线） |
+| description | string | 否 | 角色描述（最长200字符） |
+| permission_ids | int[] | 是 | 权限ID列表 |
+
+**请求示例**:
+
+```json
+{
+  "name": "custom_operator",
+  "description": "自定义操作员角色",
+  "permission_ids": [1, 2, 3, 5]
+}
+```
+
+#### 更新角色
+
+```
+PUT /api/v1/roles/{role_id}
+```
+
+**所需权限**: `role:write`
+
+**业务规则**: superadmin 角色不可修改
+
+**请求体**:
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| description | string | 否 | 角色描述 |
+| permission_ids | int[] | 否 | 权限ID列表（替换全部） |
+
+**请求示例**:
+
+```json
+{
+  "description": "更新后的描述",
+  "permission_ids": [1, 2, 3, 5, 7]
+}
+```
+
+#### 删除角色
+
+```
+DELETE /api/v1/roles/{role_id}
+```
+
+**所需权限**: `role:delete`
+
+**业务规则**: 内置角色（superadmin/admin/operator/auditor/viewer）不可删除；仍有用户关联的角色不可删除
+
+**响应**: `204 No Content`
+
+#### 分配用户角色
+
+```
+PUT /api/v1/roles/users/{user_id}/roles
+```
+
+**所需权限**: `user:write`
+
+**业务规则**: superadmin 角色不可分配；分配后自动同步 `is_superuser` 字段；自动失效用户权限缓存
+
+**请求体**:
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| role_id | int | 是 | 角色ID（单角色分配） |
+
+**请求示例**:
+
+```json
+{
+  "role_id": 3
+}
+```
+
+#### 获取角色用户列表
+
+```
+GET /api/v1/roles/{role_id}/users
+```
+
+**所需权限**: `role:read`
+
+**业务规则**: 非超管用户查看 superadmin 角色用户返回 403
+
+**响应**:
+
+```json
+[
+  {
+    "id": 1,
+    "username": "admin",
+    "email": "admin@example.com",
+    "is_active": true,
+    "is_superuser": true
+  }
+]
+```
+
+> **CLI 替代方案**：以上角色管理操作也可通过命令行完成：
+> - 查看角色列表：`./manage.sh role list` 或 `python cli.py role list`
+> - 查看权限码：`./manage.sh role permissions` 或 `python cli.py role permissions`
+> - 重置用户密码：`./manage.sh password reset <username>`
+> - 解锁用户：`./manage.sh user unlock <username>`
+>
+> CLI 操作适用于无法访问 Web UI 的紧急运维场景。
+
+---
+
+## 14. 权限码参考
+
+系统共定义29个权限码，按10个功能模块分组：
+
+| 模块 | 权限码 | 名称 |
+|------|--------|------|
+| terminal | `terminal:read` | 查看终端 |
+| terminal | `terminal:write` | 操作终端 |
+| whitelist | `whitelist:read` | 查看白名单 |
+| whitelist | `whitelist:write` | 管理白名单 |
+| blacklist | `blacklist:read` | 查看封禁列表 |
+| blacklist | `blacklist:write` | 管理封禁列表 |
+| datasource | `datasource:read` | 查看数据源 |
+| datasource | `datasource:write` | 管理数据源 |
+| datasource | `datasource:test` | 测试数据源 |
+| datasource | `datasource:sync` | 同步数据源 |
+| datasource | `datasource:compliance` | 合规检查 |
+| baseline | `baseline:read` | 查看合规基线 |
+| baseline | `baseline:write` | 管理合规基线 |
+| baseline | `baseline:test` | 测试合规基线 |
+| baseline | `baseline:sync` | 同步合规基线 |
+| user | `user:read` | 查看用户 |
+| user | `user:write` | 管理用户 |
+| user | `user:delete` | 删除用户 |
+| user | `user:password` | 重置密码 |
+| user | `user:unlock` | 解锁用户 |
+| audit | `audit:read` | 查看审计日志 |
+| audit | `audit:export` | 导出审计日志 |
+| settings | `settings:read` | 查看系统配置 |
+| settings | `settings:write` | 修改系统配置 |
+| settings | `settings:upload` | 上传品牌资源 |
+| stats | `stats:read` | 查看统计 |
+| role | `role:read` | 查看角色 |
+| role | `role:write` | 管理角色 |
+| role | `role:delete` | 删除角色 |

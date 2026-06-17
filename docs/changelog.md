@@ -1,9 +1,101 @@
 # 更新日志
 
+> 文档版本：v3.3.0  更新日期：2026-06-17
+
 本文件记录 TerminalAccessManager 的所有重要变更。
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
+
+---
+
+## [Unreleased]
+
+---
+
+## [3.3.0] - 2026-06-17
+
+### 新增
+
+- 审计日志 `resource_name` 字段：存储人类可读资源名称（用户名、数据源名称、IP 地址等），替代无意义的 #id 显示
+- 审计日志 keyset 分页：`/api/v1/logs/search` 新增 cursor 参数，支持深分页高性能查询
+- Docker 安全加固：docker-compose.prod.yml 实现容器安全最佳实践（no-new-privileges、cap_drop:ALL、read_only）
+- Docker 健康检查：所有服务添加 healthcheck 配置，支持容器编排健康探测
+- Sangfor API 指数退避重试：`_request_with_backoff` 方法，最多 3 次重试，等待时间指数增长（1s→2s→4s，上限 10s）
+- 核心服务单元测试：compliance_service 22 个测试用例（状态转换、自动封堵/解封、过期清理、白名单匹配、合规重算）
+- 灾难恢复计划：docs/disaster-recovery.md（故障分级 P0-P3、各组件恢复步骤、RPO/RTO 目标）
+- 运维操作手册：docs/operations-runbook.md（日常巡检、故障排查、定时任务管理、升级回滚）
+- 部署模式统一：`deploy --dev` 替代 `deploy --demo`，自动设置 ENVIRONMENT 变量
+- 开发环境 Nginx 配置：tam.dev.conf（HTTP 直连 + 放宽限流 120r/m+30r/m）
+- docker-compose.dev.yml：开发环境 override 文件，自动加载 tam.dev.conf
+- Mock 数据业务对齐：28 种 verb_resource action、JSON details、resource_name、firewall_tag 绑定关系一致
+
+### 改进
+
+- 审计日志 action 命名统一为 verb_resource 格式：block_ip→block_terminal, unblock_ip→unblock_terminal, auto_block→auto_block_terminal, auto_unblock→auto_unblock_terminal, cleanup_expired→cleanup_expired_blacklist, role_change→change_role
+- N+1 查询优化：cleanup_expired_blacklist 批量预加载 Terminal + 批量检查活跃 Blacklist + 缓存 SangforService；batch_check_compliance 一次性加载白名单和 IPGuard 数据
+- Nginx 生产限速调整：api_limit 30r/m→60r/m，auth_limit 5r/m→10r/m，避免前端正常操作触发限速
+- 生产环境禁止 mock generate：`cmd_mock()` 检测 ENVIRONMENT=production 时拒绝执行
+- Mock 数据 blocked_by 修正：自动封堵 blocked_by="system"，手动封堵使用操作者用户名
+- 从 git 移除 sangfor_api 文件夹和 todos.md：仅保留本地，不再追踪到仓库
+- 终端封堵绑定验证：封堵终端前强制检查绑定关系，无绑定时显示防火墙选择器和无绑定错误提示（Terminals.tsx）
+- 数据源标签页绑定状态列：数据源列表新增绑定状态列，已禁用 ARP 数据源显示"合规状态已冻结"（DataSourcesTab.tsx）
+- 启用无绑定数据源确认对话框：启用未绑定防火墙的 ARP 数据源时弹出确认提示（DataSourcesTab.tsx）
+- 绑定关系下拉框包含已禁用数据源：ARP 和防火墙数据源下拉框现在包含已禁用的数据源，以 `[已禁用]` 后缀标识（BindingsTab.tsx）
+- ARP 数据源禁用触发合规重置：禁用 ARP 数据源时自动重置关联终端 `compliance_status` 为 `unknown`（data_sources.py、terminal_service.py）
+- i18n 三语言补全：新增绑定状态、合规冻结、无绑定封堵提示等翻译键（zh.ts、en.ts、ja.ts）
+- 两阶段删除机制：数据源、绑定关系、合规基准删除前提供影响预览 API（`POST /{id}/delete-preview`）
+- 安全删除：自动解封终端、清理黑名单记录、清理 Redis 缓存、触发合规重算
+- 前端 DeletePreviewModal 组件：展示影响范围、操作清单、受影响资源统计
+- 数据源 tag 和合规基准 tag 修改禁止（tag 为系统全局标识符，修改会导致关联数据断裂）
+- RBAC 角色权限控制：4张核心表（roles/permissions/user_roles/role_permissions），5个预设角色（superadmin/admin/operator/auditor/viewer），29个权限码覆盖10个功能模块
+- `require_permission` 权限检查工厂函数：FastAPI 依赖注入 + Redis 缓存（TTL 300s）+ superuser 短路
+- 角色 CRUD API：7个端点（列表/详情/创建/编辑/删除/权限列表/角色用户列表）
+- 用户角色分配 API：`PUT /roles/users/{id}/roles`（单角色分配）
+- 前端 `usePermission` Hook：4个权限判断方法（hasPermission/hasAnyPermission/hasAllPermissions/hasRole）
+- 前端 `ProtectedRoute` 路由守卫：支持 `requiredPermission` / `requiredAnyPermissions`
+- 前端侧边栏导航过滤：根据 `requiredPermission` 过滤导航项
+- 角色管理页面：角色列表、创建/编辑弹窗、权限按模块分组、删除确认
+- 超管隔离机制：非超管不可见/不可管理超管用户，超管只能自己管理自己
+- 初始管理员4层保护：不可删除/降级/停用/角色变更
+- RBAC 后端测试：11个测试用例（权限缓存、权限检查、缓存失效）
+- RBAC 前端测试：20个 usePermission Hook 测试用例
+- RBAC 文档：`docs/RBAC.md`（从"角色管理与用户访问控制说明文档"重命名）
+- 数据源删除操作从直接删除改为安全删除（先自动善后再删除）
+- 绑定关系删除操作从直接删除改为安全删除（先解封终端再删除绑定）
+- 合规基准删除操作增加 Redis 缓存清理和合规重算步骤
+- Sangfor 数据源移除"同步"按钮：Sangfor 为推送型防火墙，无数据同步语义，前端按类型条件隐藏同步按钮，后端同步接口对 sangfor 类型返回"不适用"提示
+- 合规重算（`recalculate_all_compliance`）自动封堵/解封改为多防火墙路由，与 `auto_block_non_compliant` 行为一致
+- 合规重算创建的 Blacklist 记录补全 `expires_at` 和 `blocked_by` 字段
+- 过期黑名单清理 Sangfor 解封失败时保留 Blacklist 记录并延长重试，避免本地与防火墙状态不一致
+- 过期清理完成后触发合规重算，确保不合规终端及时重新封堵
+- `unblock_ip` 增加 `mac_address` 参数，支持按 MAC 精确解封
+- `auto_unblock_compliant` / `cleanup_expired_blacklist` Terminal 查询增加 MAC 维度匹配
+- 自动封堵/解封/合规重算操作补全审计日志
+- `block_ip` / `unblock_ip` 审计日志补充客户端 IP 地址
+- 单角色模型：`role_ids: list[int]` → `role_id: int`，前端 checkbox 多选 → select 单选下拉
+- 搜索防抖统一为 500ms（Terminals/Whitelist/Blacklist/AuditLogs），`keepPreviousData` 防搜索闪屏
+- Redis 客户端添加超时配置（`socket_timeout`/`socket_connect_timeout`），防止无限阻塞
+- API 速率限制从 60→120 次/分钟，认证限制从 5→10 次/分钟
+- i18n 三语言补全：`superadminRoleFixed`/`selectRole` 等 RBAC 相关 key
+- 9个后端端点文件从 `get_current_user` 替换为 `require_permission`，实现真正的 RBAC 权限校验
+
+### 修复
+
+- 修复 compliance_service.py 导入错误（`app.models.audit_log` → `app.models.log`）导致后端启动失败
+- 搜索返回空结果（Whitelist/Blacklist/AuditLogs）：`_escape_like` 对已包裹 `%` 的字符串转义导致 LIKE 模式错误
+- AuditLog 搜索缺少 action 字段：搜索只覆盖 ip_address/username/details
+- MAC 搜索从前缀匹配改为包含匹配：`ilike(f"{value}%")` → `ilike(f"%{value}%")`
+- API 全局阻塞（30s+）：paramiko SSH 同步操作阻塞 asyncio 事件循环，改用 `asyncio.to_thread()`
+- 307 重定向 + CSP 错误：前端 API 路径带尾部斜杠，后端路由不带
+- 超管角色可被分配给其他用户：创建/编辑用户时过滤 superadmin 角色
+- 超管编辑自己时仍显示角色修改选项：超管或自己编辑时隐藏角色下拉框，显示只读文本
+- Users 搜索框闪屏/失焦：添加 `keepPreviousData` + `useDebounce(500ms)`
+
+### 修正
+
+- 用户使用手册（user-guide.md）修正与实际系统功能不一致的描述：仪表板快捷操作（4 个非 5 个）、终端封堵不支持批量选择、终端详情字段修正、黑名单详情移除不存在的审计日志关联、合规基准页面为标签页非独立页面、系统设置无前端管理界面（仅 API）、Logo 不支持动态上传、密码策略为硬编码不可配置、移除不存在的 SSO 和并发会话控制
+- 快速上手指南（quick-start-guide.md）修正终端封堵操作描述（不支持批量勾选）
 
 ---
 

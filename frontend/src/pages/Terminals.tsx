@@ -12,7 +12,7 @@ const COMPLIANCE_CONFIG: Record<string, { labelKey: string; className: string }>
   unknown: { labelKey: 'terminal.complianceStatusValues.unknown', className: 'bg-yellow-100 text-yellow-800' },
 };
 
-const REFRESH_OPTIONS = [
+const REFRESH_OPTIONS: { labelKey: string; label?: string; value: number }[] = [
   { labelKey: 'common.off', value: 0 },
   { labelKey: '', label: '30s', value: 30000 },
   { labelKey: '', label: '1m', value: 60000 },
@@ -29,11 +29,70 @@ import { PageSkeleton } from '@/components/Skeleton';
 import { Modal } from '@/components/Modal';
 import { DateRangeFilter } from '@/components/DateRangeFilter';
 
+/**
+ * Determine action buttons for a terminal based on status matrix:
+ * - compliant + unblocked: view only (no actions)
+ * - compliant + blocked: view + unblock
+ * - bypass: view + remove from whitelist
+ * - non_compliant + blocked: view only (no actions)
+ * - non_compliant + unblocked + in blacklist: view + remove from blacklist
+ * - non_compliant + unblocked + not in blacklist: view + block
+ * - unknown + unblocked: view + add to whitelist (block disabled - no compliance basis)
+ * - unknown + blocked: view + unblock
+ */
+function getTerminalActions(terminal: Terminal): {
+  canBlock: boolean;
+  canUnblock: boolean;
+  canAddWhitelist: boolean;
+  canRemoveWhitelist: boolean;
+  canRemoveBlacklist: boolean;
+} {
+  const cs = terminal.compliance_status || 'unknown';
+  const st = terminal.status;
+
+  // compliant + unblocked: view only
+  if (cs === 'compliant' && st !== 'blocked') {
+    return { canBlock: false, canUnblock: false, canAddWhitelist: false, canRemoveWhitelist: false, canRemoveBlacklist: false };
+  }
+  // compliant + blocked: can unblock
+  if (cs === 'compliant' && st === 'blocked') {
+    return { canBlock: false, canUnblock: true, canAddWhitelist: false, canRemoveWhitelist: false, canRemoveBlacklist: false };
+  }
+  // bypass: can remove from whitelist
+  if (cs === 'bypass') {
+    return { canBlock: false, canUnblock: false, canAddWhitelist: false, canRemoveWhitelist: true, canRemoveBlacklist: false };
+  }
+  // non_compliant + blocked: view only
+  if (cs === 'non_compliant' && st === 'blocked') {
+    return { canBlock: false, canUnblock: false, canAddWhitelist: false, canRemoveWhitelist: false, canRemoveBlacklist: false };
+  }
+  // non_compliant + unblocked + in blacklist: can remove from blacklist
+  if (cs === 'non_compliant' && st !== 'blocked' && terminal.black_match_type) {
+    return { canBlock: false, canUnblock: false, canAddWhitelist: false, canRemoveWhitelist: false, canRemoveBlacklist: true };
+  }
+  // non_compliant + unblocked + not in blacklist: can block
+  if (cs === 'non_compliant' && st !== 'blocked') {
+    return { canBlock: true, canUnblock: false, canAddWhitelist: false, canRemoveWhitelist: false, canRemoveBlacklist: false };
+  }
+  // unknown + unblocked: can add to whitelist (block disabled - no compliance basis)
+  if (cs === 'unknown' && st !== 'blocked') {
+    return { canBlock: false, canUnblock: false, canAddWhitelist: true, canRemoveWhitelist: false, canRemoveBlacklist: false };
+  }
+  // unknown + blocked: can unblock
+  if (cs === 'unknown' && st === 'blocked') {
+    return { canBlock: false, canUnblock: true, canAddWhitelist: false, canRemoveWhitelist: false, canRemoveBlacklist: false };
+  }
+  // fallback: view only
+  return { canBlock: false, canUnblock: false, canAddWhitelist: false, canRemoveWhitelist: false, canRemoveBlacklist: false };
+}
+
 const Terminals: React.FC = () => {
   const { t } = useTranslation();
   const [searchTerm, setSearchTerm] = useState('');
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [filterCompliance, setFilterCompliance] = useState<string>('all');
+  const [filterSource, setFilterSource] = useState<string>('all');
+  const [filterFirewallTag, setFilterFirewallTag] = useState<string>('all');
   const [selectedTerminal, setSelectedTerminal] = useState<Terminal | null>(null);
   const [showModal, setShowModal] = useState(false);
   const [filterCollapsed, setFilterCollapsed] = useState(false);
@@ -44,7 +103,7 @@ const Terminals: React.FC = () => {
   const [autoRefresh, setAutoRefresh] = useState<number>(0);
 
   // Debounce search term
-  const debouncedSearch = useDebounce(searchTerm, 300);
+  const debouncedSearch = useDebounce(searchTerm, 500);
 
   // Loading states for operations
   const [blockingId, setBlockingId] = useState<number | null>(null);
@@ -52,11 +111,40 @@ const Terminals: React.FC = () => {
   const [removingWlId, setRemovingWlId] = useState<number | null>(null);
   const [removingBlId, setRemovingBlId] = useState<number | null>(null);
 
+  // Confirmation dialogs - Whitelist Add
+  const [showWlAddDialog, setShowWlAddDialog] = useState(false);
+  const [wlAddTarget, setWlAddTarget] = useState<Terminal | null>(null);
+  const [wlAddComment, setWlAddComment] = useState('');
+
+  // Confirmation dialogs - Whitelist Remove
+  const [showWlRemoveConfirm, setShowWlRemoveConfirm] = useState(false);
+  const [wlRemoveTarget, setWlRemoveTarget] = useState<Terminal | null>(null);
+
+  // Confirmation dialogs - Block
+  const [showBlockConfirm, setShowBlockConfirm] = useState(false);
+  const [blockTarget, setBlockTarget] = useState<Terminal | null>(null);
+  const [blockComment, setBlockComment] = useState('');
+  const [availableFirewallTags, setAvailableFirewallTags] = useState<string[]>([]);
+  const [selectedFirewallTag, setSelectedFirewallTag] = useState<string>('');
+  const [hasNoBinding, setHasNoBinding] = useState(false);
+
+  // Confirmation dialogs - Unblock
+  const [showUnblockConfirm, setShowUnblockConfirm] = useState(false);
+  const [unblockTarget, setUnblockTarget] = useState<Terminal | null>(null);
+  const [unblockComment, setUnblockComment] = useState('');
+
+  // Confirmation dialogs - Remove from Blacklist
+  const [showBlRemoveConfirm, setShowBlRemoveConfirm] = useState(false);
+  const [blRemoveTarget, setBlRemoveTarget] = useState<Terminal | null>(null);
+  const [blRemoveComment, setBlRemoveComment] = useState('');
+
   const { data: terminalsData, isLoading, refetch } = useTerminals({
     ip: debouncedSearch || undefined,
     mac: debouncedSearch || undefined,
     status: filterStatus !== 'all' ? filterStatus : undefined,
     compliance_status: filterCompliance !== 'all' ? filterCompliance : undefined,
+    source_tag: filterSource !== 'all' ? filterSource : undefined,
+    firewall_tag: filterFirewallTag !== 'all' ? filterFirewallTag : undefined,
     start_date: startDate || undefined,
     end_date: endDate || undefined,
     skip: (currentPage - 1) * pageSize,
@@ -128,10 +216,12 @@ const Terminals: React.FC = () => {
         firewallTag = info?.firewall_tag || null;
       }
 
-      // Use backend compliance_status, but override with blacklist if needed
+      // Use backend compliance_status as the source of truth.
+      // Only override with blacklist if backend hasn't already determined
+      // the terminal is bypass (whitelist match) - the backend compliance
+      // recalculation already handles auto-unblock for bypass terminals.
       let complianceStatus = mac.compliance_status || 'unknown';
-      // If in blacklist and not already marked non_compliant by backend, mark as non_compliant
-      if (blackMatchType && complianceStatus !== 'non_compliant') {
+      if (blackMatchType && complianceStatus !== 'bypass' && complianceStatus !== 'non_compliant') {
         complianceStatus = 'non_compliant';
       }
 
@@ -145,6 +235,19 @@ const Terminals: React.FC = () => {
     });
   }, [macAddresses, blackMacSet, blackIpSet, blackEntryMap]);
 
+  // Extract unique source_tags and firewall_tags for filter dropdowns
+  const sourceTagOptions = useMemo(() => {
+    const tags = new Set<string>();
+    macAddresses.forEach((m) => { if (m.source_tag) tags.add(m.source_tag); });
+    return Array.from(tags).sort();
+  }, [macAddresses]);
+
+  const firewallTagOptions = useMemo(() => {
+    const tags = new Set<string>();
+    allTerminals.forEach((m) => { if (m.firewall_tag) tags.add(m.firewall_tag); });
+    return Array.from(tags).sort();
+  }, [allTerminals]);
+
   const totalPages = Math.ceil(totalFromServer / pageSize);
 
   const handlePageChange = (page: number) => {
@@ -156,67 +259,146 @@ const Terminals: React.FC = () => {
     setCurrentPage(1);
   };
 
+  // --- Action handlers with confirmation dialogs ---
+
   const handleBlock = async (mac: Terminal) => {
-    setBlockingId(mac.id);
+    setBlockTarget(mac);
+    setBlockComment('');
+    setSelectedFirewallTag(mac.firewall_tag || '');
+    setHasNoBinding(false);
+    setAvailableFirewallTags([]);
+
+    // Query available firewall tags for this terminal's source_tag
+    if (!mac.source_tag) {
+      setHasNoBinding(true);
+    } else {
+      try {
+        const bindingsResponse = await apiClient.get(`${API_ENDPOINTS.DATA_SOURCE_BINDINGS}?arp_source_tag=${mac.source_tag}`);
+        const bindings = bindingsResponse.data || [];
+        const fwTags = bindings.map((b: { firewall_tag: string }) => b.firewall_tag).filter(Boolean);
+        setAvailableFirewallTags(fwTags);
+        if (fwTags.length === 0) {
+          setHasNoBinding(true);
+        }
+      } catch {
+        // Silently fail - user can still manually specify
+      }
+    }
+    setShowBlockConfirm(true);
+  };
+
+  const confirmBlock = async () => {
+    if (!blockTarget) return;
+    setBlockingId(blockTarget.id);
     try {
-      await apiClient.post(`${API_ENDPOINTS.TERMINALS_BLOCK}${mac.ip_address}`, null, {
-        params: { mac_address: mac.mac_address, block_time: '30d' }
+      const params: Record<string, string> = {
+        mac_address: blockTarget.mac_address,
+        block_time: '30d',
+      };
+      if (blockComment.trim()) params['comments'] = blockComment.trim();
+      if (selectedFirewallTag.trim()) params['firewall_tag'] = selectedFirewallTag.trim();
+      await apiClient.post(`${API_ENDPOINTS.TERMINALS_BLOCK}${blockTarget.ip_address}`, null, {
+        params
       });
       toast.success(t('terminal.blocked'));
       refetch();
+      refetchBlacklist();
     } catch (error: unknown) {
       toast.error(getErrorMessage(error, t('terminal.failedToBlock')));
     } finally {
       setBlockingId(null);
+      setShowBlockConfirm(false);
+      setBlockTarget(null);
     }
   };
 
-  const handleUnblock = async (mac: Terminal) => {
-    setBlockingId(mac.id);
+  const handleUnblock = (mac: Terminal) => {
+    setUnblockTarget(mac);
+    setUnblockComment('');
+    setShowUnblockConfirm(true);
+  };
+
+  const confirmUnblock = async () => {
+    if (!unblockTarget) return;
+    setBlockingId(unblockTarget.id);
     try {
-      await apiClient.post(`${API_ENDPOINTS.TERMINALS_UNBLOCK}${mac.ip_address}`);
+      const params: Record<string, string> = {};
+      if (unblockComment.trim()) params['comments'] = unblockComment.trim();
+      await apiClient.post(`${API_ENDPOINTS.TERMINALS_UNBLOCK}${unblockTarget.ip_address}`, null, {
+        params
+      });
       toast.success(t('terminal.unblocked'));
       refetch();
+      refetchBlacklist();
     } catch (error: unknown) {
       toast.error(getErrorMessage(error, t('terminal.failedToUnblock')));
     } finally {
       setBlockingId(null);
+      setShowUnblockConfirm(false);
+      setUnblockTarget(null);
     }
   };
 
-  const handleAddToWhitelist = async (mac: Terminal) => {
-    setWhitelistId(mac.id);
+  const handleAddToWhitelist = (mac: Terminal) => {
+    setWlAddTarget(mac);
+    setWlAddComment('');
+    setShowWlAddDialog(true);
+  };
+
+  const confirmAddToWhitelist = async () => {
+    if (!wlAddTarget) return;
+    setWhitelistId(wlAddTarget.id);
     try {
       const payload: Record<string, string> = {};
-      if (mac.mac_address) payload['mac_address'] = mac.mac_address;
-      if (mac.ip_address) payload['ip_address'] = mac.ip_address;
+      if (wlAddTarget.mac_address) payload['mac_address'] = wlAddTarget.mac_address;
+      if (wlAddTarget.ip_address) payload['ip_address'] = wlAddTarget.ip_address;
+      if (wlAddComment.trim()) payload['comments'] = wlAddComment.trim();
       await apiClient.post(API_ENDPOINTS.WHITELIST, payload);
       toast.success(t('terminal.addedToWhitelist'));
       refetch();
+      refetchBlacklist();
     } catch (error: unknown) {
       toast.error(getErrorMessage(error, t('terminal.failedToAddToWhitelist')));
     } finally {
       setWhitelistId(null);
+      setShowWlAddDialog(false);
+      setWlAddTarget(null);
     }
   };
 
-  const handleRemoveFromWhitelist = async (mac: Terminal) => {
-    const identifier = mac.wl_match_type === 'ip' ? mac.ip_address : mac.mac_address;
-    setRemovingWlId(mac.id);
+  const handleRemoveFromWhitelist = (mac: Terminal) => {
+    setWlRemoveTarget(mac);
+    setShowWlRemoveConfirm(true);
+  };
+
+  const confirmRemoveFromWhitelist = async () => {
+    if (!wlRemoveTarget) return;
+    const identifier = wlRemoveTarget.wl_match_type === 'ip' ? wlRemoveTarget.ip_address : wlRemoveTarget.mac_address;
+    setRemovingWlId(wlRemoveTarget.id);
     try {
       await apiClient.delete(`${API_ENDPOINTS.WHITELIST}${identifier}`);
       toast.success(t('terminal.removedFromWhitelist'));
       refetch();
+      refetchBlacklist();
     } catch (error: unknown) {
       toast.error(getErrorMessage(error, t('terminal.failedToRemoveFromWhitelist')));
     } finally {
       setRemovingWlId(null);
+      setShowWlRemoveConfirm(false);
+      setWlRemoveTarget(null);
     }
   };
 
-  const handleRemoveFromBlacklist = async (mac: Terminal) => {
-    const identifier = mac.black_match_type === 'ip' ? mac.ip_address : mac.mac_address;
-    setRemovingBlId(mac.id);
+  const handleRemoveFromBlacklist = (mac: Terminal) => {
+    setBlRemoveTarget(mac);
+    setBlRemoveComment('');
+    setShowBlRemoveConfirm(true);
+  };
+
+  const confirmRemoveFromBlacklist = async () => {
+    if (!blRemoveTarget) return;
+    const identifier = blRemoveTarget.black_match_type === 'ip' ? blRemoveTarget.ip_address : blRemoveTarget.mac_address;
+    setRemovingBlId(blRemoveTarget.id);
     try {
       await apiClient.delete(`${API_ENDPOINTS.BLACKLIST}${identifier}`);
       toast.success(t('terminal.removedFromBlacklist'));
@@ -226,6 +408,8 @@ const Terminals: React.FC = () => {
       toast.error(getErrorMessage(error, t('terminal.failedToRemoveFromBlacklist')));
     } finally {
       setRemovingBlId(null);
+      setShowBlRemoveConfirm(false);
+      setBlRemoveTarget(null);
     }
   };
 
@@ -257,14 +441,17 @@ const Terminals: React.FC = () => {
     setSearchTerm('');
     setFilterStatus('all');
     setFilterCompliance('all');
+    setFilterSource('all');
+    setFilterFirewallTag('all');
     setStartDate('');
     setEndDate('');
     setCurrentPage(1);
   };
 
-  const handleManualRefresh = () => {
-    refetch();
+  const handleManualRefresh = async () => {
+    await refetch();
     refetchBlacklist();
+    toast.success(t('terminal.dataRefreshed'));
   };
 
   // Stats - use server total and current page data for compliance counts
@@ -277,15 +464,55 @@ const Terminals: React.FC = () => {
   // Helper to get status label via i18n
   const getStatusLabel = (status: string): string => {
     const keyMap: Record<string, string> = {
-      active: 'terminal.status.active',
-      inactive: 'terminal.status.inactive',
-      frozen: 'terminal.status.frozen',
-      pending: 'terminal.status.pending',
-      unfrozen: 'terminal.status.unfrozen',
-      bypass: 'terminal.status.bypass',
+      blocked: 'terminal.status.blocked',
+      unblocked: 'terminal.status.unblocked',
+      // Legacy values mapping
+      frozen: 'terminal.status.blocked',
+      unfrozen: 'terminal.status.unblocked',
+      active: 'terminal.status.unblocked',
+      inactive: 'terminal.status.unblocked',
+      pending: 'terminal.status.unblocked',
+      bypass: 'terminal.status.unblocked',
     };
     return keyMap[status] ? t(keyMap[status]) : (STATUS_CONFIG[status]?.label || status);
   };
+
+  // Helper to render terminal info in confirmation dialogs
+  const renderTerminalInfo = (terminal: Terminal | null) => {
+    if (!terminal) return null;
+    return (
+      <div className="bg-background rounded-lg p-4 mb-4">
+        <div className="space-y-2 text-sm">
+          {terminal.mac_address && (
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">{t('terminal.mac')}:</span>
+              <span className="font-mono text-foreground">{terminal.mac_address}</span>
+            </div>
+          )}
+          {terminal.ip_address && (
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">{t('terminal.ip')}:</span>
+              <span className="font-mono text-foreground">{terminal.ip_address}</span>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  // Helper to render comment input in confirmation dialogs
+  const renderCommentInput = (value: string, onChange: (val: string) => void) => (
+    <div>
+      <label className="text-sm text-muted-foreground block mb-1">{t('terminal.actionCommentPlaceholder')}</label>
+      <input
+        type="text"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={t('terminal.actionCommentPlaceholder')}
+        className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+      />
+    </div>
+  );
 
   return (
     <div className="min-h-full bg-background p-4 sm:p-6 lg:p-8">
@@ -354,12 +581,8 @@ const Terminals: React.FC = () => {
                   className="bg-transparent py-1.5 text-sm text-muted-foreground focus:outline-none focus:ring-0 cursor-pointer font-medium min-w-[6rem]"
                 >
                   <option value="all">{t('terminal.allStatus')}</option>
-                  <option value="active">{t('terminal.status.active')}</option>
-                  <option value="inactive">{t('terminal.status.inactive')}</option>
-                  <option value="frozen">{t('terminal.status.frozen')}</option>
-                  <option value="pending">{t('terminal.status.pending')}</option>
-                  <option value="unfrozen">{t('terminal.status.unfrozen')}</option>
-                  <option value="bypass">{t('terminal.status.bypass')}</option>
+                  <option value="blocked">{t('terminal.status.blocked')}</option>
+                  <option value="unblocked">{t('terminal.status.unblocked')}</option>
                 </select>
               </div>
 
@@ -381,6 +604,46 @@ const Terminals: React.FC = () => {
                   <option value="unknown">{t('terminal.complianceStatusValues.unknown')}</option>
                 </select>
               </div>
+
+              {/* Source Tag Filter */}
+              {sourceTagOptions.length > 0 && (
+              <div className="flex items-center gap-2 bg-background rounded-xl px-3 py-1.5">
+                <Server className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                <select
+                  value={filterSource}
+                  onChange={(e) => {
+                    setFilterSource(e.target.value);
+                    setCurrentPage(1);
+                  }}
+                  className="bg-transparent py-1.5 text-sm text-muted-foreground focus:outline-none focus:ring-0 cursor-pointer font-medium min-w-[6rem]"
+                >
+                  <option value="all">{t('terminal.allSource')}</option>
+                  {sourceTagOptions.map((tag) => (
+                    <option key={tag} value={tag}>{tag}</option>
+                  ))}
+                </select>
+              </div>
+              )}
+
+              {/* Firewall Tag Filter */}
+              {firewallTagOptions.length > 0 && (
+              <div className="flex items-center gap-2 bg-background rounded-xl px-3 py-1.5">
+                <ShieldOff className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                <select
+                  value={filterFirewallTag}
+                  onChange={(e) => {
+                    setFilterFirewallTag(e.target.value);
+                    setCurrentPage(1);
+                  }}
+                  className="bg-transparent py-1.5 text-sm text-muted-foreground focus:outline-none focus:ring-0 cursor-pointer font-medium min-w-[6rem]"
+                >
+                  <option value="all">{t('terminal.allFirewallTag')}</option>
+                  {firewallTagOptions.map((tag) => (
+                    <option key={tag} value={tag}>{tag}</option>
+                  ))}
+                </select>
+              </div>
+              )}
 
               {/* Date Range Filter */}
               <DateRangeFilter
@@ -407,7 +670,15 @@ const Terminals: React.FC = () => {
                 <Clock className="h-4 w-4 text-muted-foreground flex-shrink-0" />
                 <select
                   value={autoRefresh}
-                  onChange={(e) => setAutoRefresh(Number(e.target.value))}
+                  onChange={(e) => {
+                    const val = Number(e.target.value);
+                    setAutoRefresh(val);
+                    if (val > 0) {
+                      toast.success(t('terminal.autoRefreshEnabled', { seconds: val / 1000 }));
+                    } else {
+                      toast.info(t('terminal.autoRefreshDisabled'));
+                    }
+                  }}
                   className="bg-transparent py-1.5 text-sm text-muted-foreground focus:outline-none focus:ring-0 cursor-pointer font-medium min-w-[4rem]"
                 >
                   {REFRESH_OPTIONS.map((opt) => (
@@ -548,85 +819,68 @@ const Terminals: React.FC = () => {
                   </td>
                 </tr>
               ) : (
-                (allTerminals || []).map((mac) => (
-                  <tr key={mac.id} className="hover:bg-blue-50/30 transition-colors">
-                    <td className="px-4 sm:px-6 py-4 whitespace-nowrap">
-                      <div className="flex items-center">
-                        <Server className="h-4 w-4 text-muted-foreground mr-2 flex-shrink-0" />
-                        <span className="font-medium text-foreground font-mono text-sm">
-                          {mac.mac_address}
+                (allTerminals || []).map((mac) => {
+                  const actions = getTerminalActions(mac);
+                  return (
+                    <tr key={mac.id} className="hover:bg-blue-50/30 transition-colors">
+                      <td className="px-4 sm:px-6 py-4 whitespace-nowrap">
+                        <div className="flex items-center">
+                          <Server className="h-4 w-4 text-muted-foreground mr-2 flex-shrink-0" />
+                          <span className="font-medium text-foreground font-mono text-sm">
+                            {mac.mac_address}
+                          </span>
+                        </div>
+                      </td>
+                      <td className="px-4 sm:px-6 py-4 whitespace-nowrap font-mono text-sm text-muted-foreground">
+                        {mac.ip_address}
+                      </td>
+                      <td className="px-4 sm:px-6 py-4 whitespace-nowrap">
+                        <span
+                          className={`px-2.5 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${STATUS_CONFIG[mac.status]?.className || 'bg-muted text-foreground'}`}
+                        >
+                          {getStatusLabel(mac.status)}
                         </span>
-                      </div>
-                    </td>
-                    <td className="px-4 sm:px-6 py-4 whitespace-nowrap font-mono text-sm text-muted-foreground">
-                      {mac.ip_address}
-                    </td>
-                    <td className="px-4 sm:px-6 py-4 whitespace-nowrap">
-                      <span
-                        className={`px-2.5 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${STATUS_CONFIG[mac.status]?.className || 'bg-muted text-foreground'}`}
-                      >
-                        {getStatusLabel(mac.status)}
-                      </span>
-                    </td>
-                    <td className="px-4 sm:px-6 py-4 whitespace-nowrap">
-                      <span className="text-sm text-muted-foreground capitalize">
-                        {mac.source}{mac.source_tag ? <span className="text-muted-foreground"> ({mac.source_tag})</span> : ''}
-                      </span>
-                    </td>
-                    <td className="px-4 sm:px-6 py-4 whitespace-nowrap">
-                      <span
-                        className={`px-2.5 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${COMPLIANCE_CONFIG[mac.compliance_status || 'unknown']?.className || 'bg-muted text-foreground'}`}
-                      >
-                        {COMPLIANCE_CONFIG[mac.compliance_status || 'unknown']?.labelKey ? t(COMPLIANCE_CONFIG[mac.compliance_status || 'unknown']?.labelKey) : 'Unknown'}
-                        {mac.compliance_status === 'bypass' && mac.wl_match_type && (
-                          <span className="ml-1 text-xs opacity-75">({mac.wl_match_type.toUpperCase()})</span>
-                        )}
-                        {mac.compliance_status === 'non_compliant' && mac.black_match_type && (
-                          <span className="ml-1 text-xs opacity-75">({mac.black_match_type.toUpperCase()})</span>
-                        )}
-                      </span>
-                    </td>
-                    <td className="px-4 sm:px-6 py-4 whitespace-nowrap text-sm text-muted-foreground">
-                      {mac.firewall_tag || '-'}
-                    </td>
-                    <td className="px-4 sm:px-6 py-4 whitespace-nowrap">
-                      <div className="flex items-center text-sm text-muted-foreground">
-                        <Clock className="h-4 w-4 mr-1.5 text-muted-foreground" />
-                        {formatDate(mac.timestamp)}
-                      </div>
-                    </td>
-                    <td className="px-4 sm:px-6 py-4">
-                      <p className="text-sm text-muted-foreground max-w-xs truncate">{mac.comments}</p>
-                    </td>
-                    <td className="px-4 sm:px-6 py-4 whitespace-nowrap">
-                      <ButtonGroup>
-                        <IconButton
-                          icon={Eye}
-                          variant="primary"
-                          size="md"
-                          title={t('terminal.viewDetails')}
-                          onClick={() => handleViewDetails(mac)}
-                        />
-                        {mac.compliance_status === 'bypass' ? (
+                      </td>
+                      <td className="px-4 sm:px-6 py-4 whitespace-nowrap">
+                        <span className="text-sm text-muted-foreground capitalize">
+                          {mac.source}{mac.source_tag ? <span className="text-muted-foreground"> ({mac.source_tag})</span> : ''}
+                        </span>
+                      </td>
+                      <td className="px-4 sm:px-6 py-4 whitespace-nowrap">
+                        <span
+                          className={`px-2.5 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${COMPLIANCE_CONFIG[mac.compliance_status || 'unknown']?.className || 'bg-muted text-foreground'}`}
+                        >
+                          {COMPLIANCE_CONFIG[mac.compliance_status || 'unknown']?.labelKey ? t(COMPLIANCE_CONFIG[mac.compliance_status || 'unknown']?.labelKey) : 'Unknown'}
+                          {mac.compliance_status === 'bypass' && mac.wl_match_type && (
+                            <span className="ml-1 text-xs opacity-75">({mac.wl_match_type.toUpperCase()})</span>
+                          )}
+                          {mac.compliance_status === 'non_compliant' && mac.black_match_type && (
+                            <span className="ml-1 text-xs opacity-75">({mac.black_match_type.toUpperCase()})</span>
+                          )}
+                        </span>
+                      </td>
+                      <td className="px-4 sm:px-6 py-4 whitespace-nowrap text-sm text-muted-foreground">
+                        {mac.firewall_tag || '-'}
+                      </td>
+                      <td className="px-4 sm:px-6 py-4 whitespace-nowrap">
+                        <div className="flex items-center text-sm text-muted-foreground">
+                          <Clock className="h-4 w-4 mr-1.5 text-muted-foreground" />
+                          {formatDate(mac.timestamp)}
+                        </div>
+                      </td>
+                      <td className="px-4 sm:px-6 py-4">
+                        <p className="text-sm text-muted-foreground max-w-xs truncate" title={mac.comments || undefined}>{mac.comments}</p>
+                      </td>
+                      <td className="px-4 sm:px-6 py-4 whitespace-nowrap">
+                        <ButtonGroup>
                           <IconButton
-                            icon={Trash2}
-                            variant="danger"
+                            icon={Eye}
+                            variant="primary"
                             size="md"
-                            title={t('terminal.removeFromWhitelist')}
-                            loading={removingWlId === mac.id}
-                            onClick={() => handleRemoveFromWhitelist(mac)}
+                            title={t('terminal.viewDetails')}
+                            onClick={() => handleViewDetails(mac)}
                           />
-                        ) : mac.compliance_status === 'non_compliant' && mac.black_match_type ? (
-                          <IconButton
-                            icon={Trash2}
-                            variant="danger"
-                            size="md"
-                            title={t('terminal.removeFromBlacklist')}
-                            loading={removingBlId === mac.id}
-                            onClick={() => handleRemoveFromBlacklist(mac)}
-                          />
-                        ) : mac.compliance_status !== 'bypass' && mac.compliance_status !== 'non_compliant' ? (
-                          <>
+                          {actions.canAddWhitelist && (
                             <IconButton
                               icon={Plus}
                               variant="success"
@@ -635,31 +889,52 @@ const Terminals: React.FC = () => {
                               loading={whitelistId === mac.id}
                               onClick={() => handleAddToWhitelist(mac)}
                             />
-                            {mac.status !== 'frozen' ? (
-                              <IconButton
-                                icon={Shield}
-                                variant="danger"
-                                size="md"
-                                title={t('terminal.blockTerminal')}
-                                loading={blockingId === mac.id}
-                                onClick={() => handleBlock(mac)}
-                              />
-                            ) : (
-                              <IconButton
-                                icon={ShieldOff}
-                                variant="secondary"
-                                size="md"
-                                title={t('terminal.unblockTerminal')}
-                                loading={blockingId === mac.id}
-                                onClick={() => handleUnblock(mac)}
-                              />
-                            )}
-                          </>
-                        ) : null}
-                      </ButtonGroup>
-                    </td>
-                  </tr>
-                ))
+                          )}
+                          {actions.canRemoveWhitelist && (
+                            <IconButton
+                              icon={Trash2}
+                              variant="danger"
+                              size="md"
+                              title={t('terminal.removeFromWhitelist')}
+                              loading={removingWlId === mac.id}
+                              onClick={() => handleRemoveFromWhitelist(mac)}
+                            />
+                          )}
+                          {actions.canBlock && (
+                            <IconButton
+                              icon={Shield}
+                              variant="danger"
+                              size="md"
+                              title={t('terminal.blockTerminal')}
+                              loading={blockingId === mac.id}
+                              onClick={() => handleBlock(mac)}
+                            />
+                          )}
+                          {actions.canUnblock && (
+                            <IconButton
+                              icon={ShieldOff}
+                              variant="secondary"
+                              size="md"
+                              title={t('terminal.unblockTerminal')}
+                              loading={blockingId === mac.id}
+                              onClick={() => handleUnblock(mac)}
+                            />
+                          )}
+                          {actions.canRemoveBlacklist && (
+                            <IconButton
+                              icon={Trash2}
+                              variant="danger"
+                              size="md"
+                              title={t('terminal.removeFromBlacklist')}
+                              loading={removingBlId === mac.id}
+                              onClick={() => handleRemoveFromBlacklist(mac)}
+                            />
+                          )}
+                        </ButtonGroup>
+                      </td>
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>
@@ -751,39 +1026,33 @@ const Terminals: React.FC = () => {
             </p>
           </div>
 
-          <div className="flex gap-3">
-            {selectedTerminal?.compliance_status === 'bypass' ? (
-              <PrimaryButton
-                icon={Trash2}
-                label={t('terminal.removeFromWhitelist')}
-                variant="danger"
-                onClick={() => {
-                  if (selectedTerminal) handleRemoveFromWhitelist(selectedTerminal);
-                  setShowModal(false);
-                }}
-                className="flex-1"
-              />
-            ) : selectedTerminal?.compliance_status === 'non_compliant' && selectedTerminal?.black_match_type ? (
-              <PrimaryButton
-                icon={Trash2}
-                label={t('terminal.removeFromBlacklist')}
-                variant="danger"
-                onClick={() => {
-                  if (selectedTerminal) handleRemoveFromBlacklist(selectedTerminal);
-                  setShowModal(false);
-                }}
-                className="flex-1"
-              />
-            ) : (
-              <>
-                <PrimaryButton
-                  icon={Plus}
-                  label={t('terminal.addToWhitelist')}
-                  variant="success"
-                  onClick={() => { if (selectedTerminal) handleAddToWhitelist(selectedTerminal); }}
-                  className="flex-1"
-                />
-                {selectedTerminal?.status !== 'frozen' ? (
+          {/* Action buttons in detail modal - same logic as table */}
+          {(() => {
+            if (!selectedTerminal) return null;
+            const actions = getTerminalActions(selectedTerminal);
+            const hasAnyAction = actions.canBlock || actions.canUnblock || actions.canAddWhitelist || actions.canRemoveWhitelist || actions.canRemoveBlacklist;
+            if (!hasAnyAction) return null;
+            return (
+              <div className="flex gap-3">
+                {actions.canAddWhitelist && (
+                  <PrimaryButton
+                    icon={Plus}
+                    label={t('terminal.addToWhitelist')}
+                    variant="success"
+                    onClick={() => { if (selectedTerminal) handleAddToWhitelist(selectedTerminal); }}
+                    className="flex-1"
+                  />
+                )}
+                {actions.canRemoveWhitelist && (
+                  <PrimaryButton
+                    icon={Trash2}
+                    label={t('terminal.removeFromWhitelist')}
+                    variant="danger"
+                    onClick={() => { if (selectedTerminal) handleRemoveFromWhitelist(selectedTerminal); }}
+                    className="flex-1"
+                  />
+                )}
+                {actions.canBlock && (
                   <PrimaryButton
                     icon={Shield}
                     label={t('terminal.blockTerminal')}
@@ -791,7 +1060,8 @@ const Terminals: React.FC = () => {
                     onClick={() => { if (selectedTerminal) handleBlock(selectedTerminal); }}
                     className="flex-1"
                   />
-                ) : (
+                )}
+                {actions.canUnblock && (
                   <PrimaryButton
                     icon={ShieldOff}
                     label={t('terminal.unblockTerminal')}
@@ -800,9 +1070,200 @@ const Terminals: React.FC = () => {
                     className="flex-1"
                   />
                 )}
-              </>
-            )}
+                {actions.canRemoveBlacklist && (
+                  <PrimaryButton
+                    icon={Trash2}
+                    label={t('terminal.removeFromBlacklist')}
+                    variant="danger"
+                    onClick={() => { if (selectedTerminal) handleRemoveFromBlacklist(selectedTerminal); setShowModal(false); }}
+                    className="flex-1"
+                  />
+                )}
+              </div>
+            );
+          })()}
+        </div>
+      </Modal>
+
+      {/* Add to Whitelist Dialog */}
+      <Modal isOpen={showWlAddDialog && !!wlAddTarget} onClose={() => { setShowWlAddDialog(false); setWlAddTarget(null); }} title={t('terminal.addToWhitelistWithComment')} size="sm">
+        <div className="space-y-4">
+          {renderTerminalInfo(wlAddTarget)}
+          <div>
+            <label className="text-sm text-muted-foreground block mb-1">{t('terminal.whitelistCommentPlaceholder')}</label>
+            <input
+              type="text"
+              value={wlAddComment}
+              onChange={(e) => setWlAddComment(e.target.value)}
+              placeholder={t('terminal.whitelistCommentPlaceholder')}
+              className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+            />
           </div>
+          <div className="flex gap-3">
+            <PrimaryButton
+              label={t('common.cancel')}
+              variant="secondary"
+              onClick={() => { setShowWlAddDialog(false); setWlAddTarget(null); }}
+              className="flex-1"
+            />
+            <PrimaryButton
+              icon={Plus}
+              label={t('common.add')}
+              variant="success"
+              onClick={confirmAddToWhitelist}
+              loading={whitelistId === wlAddTarget?.id}
+              className="flex-1"
+            />
+          </div>
+        </div>
+      </Modal>
+
+      {/* Remove from Whitelist Confirmation */}
+      <Modal isOpen={showWlRemoveConfirm && !!wlRemoveTarget} onClose={() => { setShowWlRemoveConfirm(false); setWlRemoveTarget(null); }} title={t('terminal.confirmRemoveFromWhitelist')} size="sm">
+        <div className="flex items-center gap-4 mb-4">
+          <div className="w-12 h-12 bg-yellow-100 rounded-full flex items-center justify-center">
+            <Trash2 className="h-6 w-6 text-yellow-600" />
+          </div>
+          <div>
+            <p className="text-sm text-muted-foreground">{t('terminal.confirmRemoveFromWhitelistMsg')}</p>
+          </div>
+        </div>
+        {renderTerminalInfo(wlRemoveTarget)}
+        <div className="flex gap-3">
+          <PrimaryButton
+            label={t('common.cancel')}
+            variant="secondary"
+            onClick={() => { setShowWlRemoveConfirm(false); setWlRemoveTarget(null); }}
+            className="flex-1"
+          />
+          <PrimaryButton
+            icon={Trash2}
+            label={t('common.delete')}
+            variant="danger"
+            onClick={confirmRemoveFromWhitelist}
+            loading={removingWlId === wlRemoveTarget?.id}
+            className="flex-1"
+          />
+        </div>
+      </Modal>
+
+      {/* Block Confirmation Dialog */}
+      <Modal isOpen={showBlockConfirm && !!blockTarget} onClose={() => { setShowBlockConfirm(false); setBlockTarget(null); }} title={t('terminal.confirmBlock')} size="sm">
+        <div className="flex items-center gap-4 mb-4">
+          <div className="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center">
+            <Shield className="h-6 w-6 text-red-600" />
+          </div>
+          <div>
+            <p className="text-sm text-muted-foreground">{t('terminal.confirmBlockMsg')}</p>
+          </div>
+        </div>
+        {renderTerminalInfo(blockTarget)}
+
+        {/* Firewall tag selector */}
+        {availableFirewallTags.length > 0 && (
+          <div className="mb-3">
+            <label className="block text-sm font-medium text-muted-foreground mb-1">{t('terminal.selectFirewall')}</label>
+            <select
+              value={selectedFirewallTag}
+              onChange={(e) => setSelectedFirewallTag(e.target.value)}
+              className="w-full px-3 py-2 border border-border rounded-lg text-sm bg-background"
+            >
+              <option value="">{t('auto')}</option>
+              {availableFirewallTags.map((tag) => (
+                <option key={tag} value={tag}>{tag}</option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        {/* No binding warning */}
+        {hasNoBinding && (
+          <div className="mb-3 p-2.5 bg-red-50 border border-red-200 rounded-lg flex items-start gap-2">
+            <ShieldOff className="h-4 w-4 text-red-600 mt-0.5 shrink-0" />
+            <div>
+              <p className="text-sm font-medium text-red-800">{t('terminal.noBindingBlock')}</p>
+              <p className="text-xs text-red-700 mt-0.5">{t('terminal.noBindingBlockDetail')}</p>
+            </div>
+          </div>
+        )}
+
+        {renderCommentInput(blockComment, setBlockComment)}
+        <div className="flex gap-3 mt-4">
+          <PrimaryButton
+            label={t('common.cancel')}
+            variant="secondary"
+            onClick={() => { setShowBlockConfirm(false); setBlockTarget(null); }}
+            className="flex-1"
+          />
+          <PrimaryButton
+            icon={Shield}
+            label={t('terminal.blockTerminal')}
+            variant="danger"
+            onClick={confirmBlock}
+            loading={blockingId === blockTarget?.id}
+            disabled={hasNoBinding}
+            className="flex-1"
+          />
+        </div>
+      </Modal>
+
+      {/* Unblock Confirmation Dialog */}
+      <Modal isOpen={showUnblockConfirm && !!unblockTarget} onClose={() => { setShowUnblockConfirm(false); setUnblockTarget(null); }} title={t('terminal.confirmUnblock')} size="sm">
+        <div className="flex items-center gap-4 mb-4">
+          <div className="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center">
+            <ShieldOff className="h-6 w-6 text-green-600" />
+          </div>
+          <div>
+            <p className="text-sm text-muted-foreground">{t('terminal.confirmUnblockMsg')}</p>
+          </div>
+        </div>
+        {renderTerminalInfo(unblockTarget)}
+        {renderCommentInput(unblockComment, setUnblockComment)}
+        <div className="flex gap-3 mt-4">
+          <PrimaryButton
+            label={t('common.cancel')}
+            variant="secondary"
+            onClick={() => { setShowUnblockConfirm(false); setUnblockTarget(null); }}
+            className="flex-1"
+          />
+          <PrimaryButton
+            icon={ShieldOff}
+            label={t('terminal.unblockTerminal')}
+            variant="secondary"
+            onClick={confirmUnblock}
+            loading={blockingId === unblockTarget?.id}
+            className="flex-1"
+          />
+        </div>
+      </Modal>
+
+      {/* Remove from Blacklist Confirmation Dialog */}
+      <Modal isOpen={showBlRemoveConfirm && !!blRemoveTarget} onClose={() => { setShowBlRemoveConfirm(false); setBlRemoveTarget(null); }} title={t('terminal.confirmRemoveFromBlacklist')} size="sm">
+        <div className="flex items-center gap-4 mb-4">
+          <div className="w-12 h-12 bg-yellow-100 rounded-full flex items-center justify-center">
+            <Trash2 className="h-6 w-6 text-yellow-600" />
+          </div>
+          <div>
+            <p className="text-sm text-muted-foreground">{t('terminal.confirmRemoveFromBlacklistMsg')}</p>
+          </div>
+        </div>
+        {renderTerminalInfo(blRemoveTarget)}
+        {renderCommentInput(blRemoveComment, setBlRemoveComment)}
+        <div className="flex gap-3 mt-4">
+          <PrimaryButton
+            label={t('common.cancel')}
+            variant="secondary"
+            onClick={() => { setShowBlRemoveConfirm(false); setBlRemoveTarget(null); }}
+            className="flex-1"
+          />
+          <PrimaryButton
+            icon={Trash2}
+            label={t('terminal.removeFromBlacklist')}
+            variant="danger"
+            onClick={confirmRemoveFromBlacklist}
+            loading={removingBlId === blRemoveTarget?.id}
+            className="flex-1"
+          />
         </div>
       </Modal>
       </>

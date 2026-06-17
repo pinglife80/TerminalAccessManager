@@ -8,24 +8,27 @@ Core compliance checking logic:
 - Redis caching for performance optimization
 """
 
-import json
+import contextlib
 import ipaddress
-from typing import Optional, List, Dict, Any
+import json
+from datetime import UTC
 
-from sqlalchemy import select, and_, or_
-from sqlalchemy.sql import func
-from sqlalchemy.ext.asyncio import AsyncSession
 from loguru import logger
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql import func
 
+from app.models.blacklist import Blacklist
+from app.models.compliance_baseline import ComplianceBaseline
+from app.models.data_source import DataSource
+from app.models.log import AuditLog
 from app.models.terminal import Terminal
 from app.models.whitelist import Whitelist
-from app.models.blacklist import Blacklist
-from app.models.data_source import DataSource, DataSourceBinding
-from app.models.compliance_baseline import ComplianceBaseline
 from app.schemas.data_source import (
-    ComplianceCheckResult, AutoBlockResult, AutoUnblockResult,
+    AutoBlockResult,
+    AutoUnblockResult,
+    ComplianceCheckResult,
 )
-
 
 # Redis cache key patterns and TTLs
 IPGUARD_CACHE_PREFIX = "ipguard:"
@@ -64,10 +67,10 @@ class ComplianceService:
         wl_match_type = None
 
         # 1. Check whitelist
-        whitelist_match = await self._check_whitelist(ip_address, mac_address)
-        if whitelist_match:
+        whitelist_result = await self._check_whitelist(ip_address, mac_address)
+        if whitelist_result:
             whitelisted = True
-            wl_match_type = whitelist_match
+            wl_match_type = whitelist_result.get("match_type")
             matched_sources.append("whitelist")
 
         # 2. Check IPGuard baseline
@@ -89,7 +92,7 @@ class ComplianceService:
             "wl_match_type": wl_match_type,
         }
 
-    async def batch_check_compliance(self, entries: List[dict]) -> ComplianceCheckResult:
+    async def batch_check_compliance(self, entries: list[dict]) -> ComplianceCheckResult:
         """
         Batch compliance check.
 
@@ -114,17 +117,17 @@ class ComplianceService:
         for entry in entries:
             ip_addr = entry.get("ip_address", "")
             mac_addr = entry.get("mac_address", "")
-            source_tag = entry.get("source_tag", "")
+            entry.get("source_tag", "")
 
             # Check whitelist
-            wl_match = self._match_whitelist_in_memory(whitelist_data, ip_addr, mac_addr)
+            wl_result = self._match_whitelist_in_memory(whitelist_data, ip_addr, mac_addr)
 
             # Check IPGuard
             ig_match = self._match_ipguard_in_memory(ipguard_data, ip_addr, mac_addr)
 
-            if wl_match:
+            if wl_result:
                 entry["compliance_status"] = "bypass"
-                entry["wl_match_type"] = wl_match  # "mac" or "ip" or "both"
+                entry["wl_match_type"] = wl_result.get("match_type")  # "mac" or "ip" or "both"
                 bypass_list.append(entry)
             elif ig_match:
                 entry["compliance_status"] = "compliant"
@@ -143,7 +146,7 @@ class ComplianceService:
                 "compliant": compliant_list,
                 "non_compliant": non_compliant_list,
                 "bypass": bypass_list,
-            } if len(entries) <= 1000 else None,
+            },
         )
 
     # ------------------------------------------------------------------
@@ -167,44 +170,103 @@ class ComplianceService:
             raise ValueError(f"Compliance baseline '{source_tag}' is disabled")
 
         config = baseline.config
+        # Decrypt config if values are encrypted
+        from app.core.crypto import decrypt_config
+        if config:
+            config = decrypt_config(config)
         entries = []
 
+        # Determine database type (default: postgresql for backward compatibility)
+        db_type = config.get("db_type", "postgresql")
+        host = config.get("host", "")
+        port = config.get("port", 3306)
+        username = config.get("username", "")
+        password = config.get("password", "")
+        database = config.get("database", "ipguard")
+
         try:
-            # Connect to IPGuard database and fetch data
-            # IPGuard typically uses MySQL/MariaDB or SQL Server
-            # We use asyncpg for PostgreSQL-compatible or raw connection
-            import asyncpg
+            if db_type == "mssql":
+                # SQL Server (IPGuard OCULAR3 typically uses this)
+                # IPGuard OCULAR3 stores IP+MAC in AGENT.AGT_IP_MAC_STR
+                # Format: "MAC(IP),MAC(),MAC()" — only pairs with IP are useful
+                import re
 
-            host = config.get("host", "")
-            port = config.get("port", 3306)
-            username = config.get("username", "")
-            password = config.get("password", "")
-            database = config.get("database", "ipguard")
+                import pyodbc
+                conn_str = (
+                    f"DRIVER={{FreeTDS}};"
+                    f"SERVER={host};"
+                    f"PORT={port};"
+                    f"DATABASE={database};"
+                    f"UID={username};"
+                    f"PWD={password};"
+                    f"TDS_Version=7.3;"
+                )
+                conn = pyodbc.connect(conn_str, timeout=30)
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT AGT_IP_MAC_STR FROM AGENT "
+                    "WHERE AGT_IP_MAC_STR IS NOT NULL AND AGT_IP_MAC_STR <> ''"
+                )
+                # Parse MAC(IP) pairs from AGT_IP_MAC_STR
+                mac_ip_pattern = re.compile(
+                    r'([0-9A-Fa-f]{2}[:-][0-9A-Fa-f]{2}[:-][0-9A-Fa-f]{2}[:-]'
+                    r'[0-9A-Fa-f]{2}[:-][0-9A-Fa-f]{2}[:-][0-9A-Fa-f]{2})\(([^)]*)\)'
+                )
+                for row in cursor:
+                    ip_mac_str = row[0] or ""
+                    for mac, ip in mac_ip_pattern.findall(ip_mac_str):
+                        if ip:  # Only entries with an IP address
+                            entries.append({
+                                "ip_address": ip.strip(),
+                                "mac_address": mac.strip(),
+                            })
+                conn.close()
 
-            conn = await asyncpg.connect(
-                host=host,
-                port=port,
-                user=username,
-                password=password,
-                database=database,
-                timeout=30,
-            )
+            elif db_type == "mysql":
+                # MySQL / MariaDB
+                import aiomysql
+                conn = await aiomysql.connect(
+                    host=host,
+                    port=int(port),
+                    user=username,
+                    password=password,
+                    db=database,
+                    connect_timeout=30,
+                )
+                async with conn.cursor() as cur:
+                    await cur.execute(
+                        "SELECT ip_address, mac_address FROM terminal_info "
+                        "WHERE ip_address IS NOT NULL AND mac_address IS NOT NULL"
+                    )
+                    rows = await cur.fetchall()
+                    for row in rows:
+                        entries.append({
+                            "ip_address": str(row[0]),
+                            "mac_address": str(row[1]),
+                        })
+                conn.close()
 
-            # Query IP+MAC mappings from IPGuard
-            # The actual table/column names may vary by IPGuard version
-            # This is a common schema for OCULAR3
-            rows = await conn.fetch(
-                "SELECT ip_address, mac_address FROM terminal_info "
-                "WHERE ip_address IS NOT NULL AND mac_address IS NOT NULL"
-            )
-
-            for row in rows:
-                entries.append({
-                    "ip_address": str(row["ip_address"]),
-                    "mac_address": str(row["mac_address"]),
-                })
-
-            await conn.close()
+            else:
+                # PostgreSQL (default)
+                import asyncpg
+                conn = await asyncpg.connect(
+                    host=host,
+                    port=int(port),
+                    user=username,
+                    password=password,
+                    database=database,
+                    timeout=30,
+                )
+                rows = await conn.fetch(
+                    "SELECT ip_address, mac_address FROM terminal_info "
+                    "WHERE ip_address IS NOT NULL AND mac_address IS NOT NULL"
+                )
+                for row in rows:
+                    entries.append({
+                        "ip_address": str(row["ip_address"]),
+                        "mac_address": str(row["mac_address"]),
+                    })
+                await conn.close()
 
             # Cache to Redis
             redis = await _get_redis()
@@ -271,7 +333,7 @@ class ComplianceService:
             .where(
                 (Terminal.source_tag == arp_source_tag) &
                 (Terminal.compliance_status == "non_compliant") &
-                (Terminal.status != "frozen")
+                (Terminal.status != "blocked")
             )
         )
         result = await self.db.execute(stmt)
@@ -304,6 +366,38 @@ class ComplianceService:
                 errors=[f"No firewall bindings found for ARP source '{arp_source_tag}'"],
             )
 
+        # Pre-resolve SangforService instances for all firewall tags
+        # (1 DataSource query per tag instead of 1 per entry per tag)
+        sangfor_services = {}  # fw_tag -> SangforService or None
+        if not dry_run:
+            for fw_tag in firewall_tags:
+                try:
+                    fw_stmt = select(DataSource).where(
+                        (DataSource.tag == fw_tag) & (DataSource.type == "sangfor")
+                    )
+                    fw_result = await self.db.execute(fw_stmt)
+                    fw_source = fw_result.scalar_one_or_none()
+
+                    if fw_source and fw_source.enabled:
+                        from app.core.crypto import decrypt_config
+                        from app.services.sangfor_service import SangforService
+                        config = fw_source.config
+                        if config:
+                            config = decrypt_config(config)
+                        sangfor_services[fw_tag] = SangforService(
+                            base_url=config.get("base_url", ""),
+                            username=config.get("username", ""),
+                            password=config.get("password", ""),
+                            verify_ssl=config.get("verify_ssl", True),
+                            ca_bundle=config.get("ca_bundle", ""),
+                        )
+                    else:
+                        logger.warning(f"Firewall '{fw_tag}' not found or disabled")
+                        sangfor_services[fw_tag] = None
+                except Exception as e:
+                    logger.error(f"Failed to resolve firewall '{fw_tag}': {str(e)}")
+                    sangfor_services[fw_tag] = None
+
         blocked = 0
         skipped = 0
         errors = []
@@ -320,14 +414,22 @@ class ComplianceService:
                 blocked += 1
                 continue
 
-            # Block on each associated firewall
+            # Block on each associated firewall (using pre-resolved services)
             all_success = True
             for fw_tag in firewall_tags:
-                try:
-                    success = await self._block_on_firewall(
-                        entry.ip_address, fw_tag, block_time
+                svc = sangfor_services.get(fw_tag)
+                if not svc:
+                    all_success = False
+                    errors.append(
+                        f"Failed to block {entry.ip_address} on firewall '{fw_tag}'"
                     )
-                    if not success:
+                    continue
+                try:
+                    response = await svc.block_ip(
+                        [entry.ip_address], source_tag=fw_tag,
+                        reason=f"Auto-blocked: non-compliant (source={arp_source_tag})"
+                    )
+                    if response.get('code') != 0:
                         all_success = False
                         errors.append(
                             f"Failed to block {entry.ip_address} on firewall '{fw_tag}'"
@@ -340,11 +442,19 @@ class ComplianceService:
 
             if all_success:
                 # Update MAC status
-                entry.status = "frozen"
+                entry.status = "blocked"
+                entry.firewall_tag = firewall_tags[0] if len(firewall_tags) == 1 else ",".join(firewall_tags)
+                # Update comments with block info
+                fw_info = ",".join(firewall_tags)
+                block_comment = f"Auto-blocked by TAM on firewall [{fw_info}]"
+                if entry.comments:
+                    entry.comments = f"{entry.comments}; {block_comment}"
+                else:
+                    entry.comments = block_comment
 
                 # Create a separate Blacklist record for each firewall
                 import re
-                from datetime import datetime, timedelta, timezone
+                from datetime import datetime, timedelta
 
                 match = re.match(r'^(\d+)([dhm])$', block_time.lower())
                 td = timedelta(days=30)
@@ -366,7 +476,7 @@ class ComplianceService:
                         mac_address_normalized=mac_norm,
                         reason=f"Auto-blocked: non-compliant (source={arp_source_tag})",
                         blocked_by="system",
-                        expires_at=datetime.now(timezone.utc) + td,
+                        expires_at=datetime.now(UTC) + td,
                         source_tag=arp_source_tag,
                         firewall_tag=fw_tag,
                         is_auto_blocked=True,
@@ -385,7 +495,21 @@ class ComplianceService:
             else:
                 skipped += 1
 
+        # Close all pre-resolved SangforService instances
+        for svc in sangfor_services.values():
+            if svc:
+                with contextlib.suppress(Exception):
+                    await svc.close()
+
         if not dry_run and blocked > 0:
+            # Audit log for auto-block (before commit so it's persisted in the same transaction)
+            await self.log_action("system", "auto_block_terminal", "terminal", None, {
+                "message": f"Auto-blocked {blocked} non-compliant terminals from source '{arp_source_tag}'",
+                "source_tag": arp_source_tag,
+                "blocked": blocked,
+                "skipped": skipped,
+                "firewall_tags": firewall_tags,
+            }, ip_address="System")
             await self.db.commit()
 
         return AutoBlockResult(
@@ -403,16 +527,17 @@ class ComplianceService:
         """
         Auto-unblock terminals that have become compliant.
 
-        1. Find Blacklist entries where is_auto_blocked=True and auto_unblocked=False
-        2. Check if the IP+MAC is now compliant
-        3. If compliant, call firewall API to unblock
-        4. Mark auto_unblocked=True
+        1. Find Blacklist entries where auto_unblocked=False (both auto and manual blocked)
+        2. Group entries by (ip_address, mac_address) to handle multi-firewall atomically
+        3. Check if the IP+MAC is now compliant
+        4. If compliant, call firewall API to unblock on ALL firewalls
+        5. Only update Terminal status if ALL firewalls were successfully unblocked
+        6. Mark only successfully unblocked Blacklist entries as auto_unblocked=True
         """
         stmt = (
             select(Blacklist)
             .where(
-                (Blacklist.is_auto_blocked == True) &
-                (Blacklist.auto_unblocked == False)
+                Blacklist.auto_unblocked == False
             )
         )
         result = await self.db.execute(stmt)
@@ -429,50 +554,101 @@ class ComplianceService:
         whitelist_data = await self._load_whitelist_cache()
         ipguard_data = await self._load_all_ipguard_cache()
 
+        # Group entries by (ip, mac) so we process all firewalls for a
+        # given terminal atomically — only mark unblocked if ALL firewalls
+        # succeed.
+        from collections import defaultdict
+        entry_groups = defaultdict(list)
+        for entry in auto_blocked_entries:
+            key = (entry.ip_address or "", entry.mac_address or "")
+            entry_groups[key].append(entry)
+
         unblocked = 0
         skipped = 0
         errors = []
         details = []
 
-        for bl_entry in auto_blocked_entries:
-            ip_addr = bl_entry.ip_address or ""
-            mac_addr = bl_entry.mac_address or ""
-
+        for (ip_addr, mac_addr), entries in entry_groups.items():
             # Check if now compliant
             wl_match = self._match_whitelist_in_memory(whitelist_data, ip_addr, mac_addr)
             ig_match = self._match_ipguard_in_memory(ipguard_data, ip_addr, mac_addr)
 
-            if wl_match or ig_match:
-                # Unblock on firewall
+            if not (wl_match or ig_match):
+                skipped += len(entries)
+                continue
+
+            # Try to unblock on ALL firewalls for this terminal
+            all_success = True
+            successfully_unblocked_entries = []
+
+            for bl_entry in entries:
                 fw_tag = bl_entry.firewall_tag
                 if fw_tag:
                     try:
                         success = await self._unblock_on_firewall(ip_addr, fw_tag)
-                        if not success:
+                        if success:
+                            successfully_unblocked_entries.append(bl_entry)
+                        else:
+                            all_success = False
                             errors.append(
                                 f"Failed to unblock {ip_addr} on firewall '{fw_tag}'"
                             )
-                            skipped += 1
-                            continue
                     except Exception as e:
+                        all_success = False
                         errors.append(
                             f"Error unblocking {ip_addr} on firewall '{fw_tag}': {str(e)}"
                         )
-                        skipped += 1
-                        continue
+                else:
+                    # No firewall_tag on blacklist entry — try to find binding
+                    # via the terminal's source_tag (use multi-firewall method)
+                    if bl_entry.source_tag:
+                        fw_tags = await self._get_bound_firewall_tags(bl_entry.source_tag)
+                        binding_success = True
+                        for ft in fw_tags:
+                            try:
+                                success = await self._unblock_on_firewall(ip_addr, ft)
+                                if not success:
+                                    binding_success = False
+                                    all_success = False
+                                    errors.append(
+                                        f"Failed to unblock {ip_addr} on firewall '{ft}' (resolved from binding)"
+                                    )
+                            except Exception as e:
+                                binding_success = False
+                                all_success = False
+                                errors.append(
+                                    f"Error unblocking {ip_addr} on firewall '{ft}': {str(e)}"
+                                )
+                        if binding_success:
+                            successfully_unblocked_entries.append(bl_entry)
+                    else:
+                        # No firewall at all, just mark as unblocked in DB
+                        successfully_unblocked_entries.append(bl_entry)
 
-                # Mark as auto-unblocked
-                bl_entry.auto_unblocked = True
+            if all_success:
+                # All firewalls unblocked — update Terminal and mark all entries
+                for bl_entry in successfully_unblocked_entries:
+                    bl_entry.auto_unblocked = True
 
-                # Update MAC status
                 if ip_addr:
-                    mac_stmt = select(Terminal).where(Terminal.ip_address == ip_addr)
+                    mac_stmt = select(Terminal).where(
+                        Terminal.ip_address == ip_addr,
+                        Terminal.mac_address == mac_addr
+                    )
                     mac_result = await self.db.execute(mac_stmt)
                     mac_records = mac_result.scalars().all()
                     for record in mac_records:
-                        record.status = "unfrozen"
+                        record.status = "unblocked"
+                        record.firewall_tag = None  # Clear firewall tag on unblock
                         record.compliance_status = "bypass" if wl_match else "compliant"
-                        record.wl_match_type = wl_match if wl_match else None
+                        record.wl_match_type = wl_match.get("match_type") if isinstance(wl_match, dict) else wl_match
+                        # Update comments with unblock info
+                        resolved_fw = entries[0].firewall_tag or "N/A"
+                        unblock_comment = f"Auto-unblocked by TAM from firewall [{resolved_fw}]"
+                        if record.comments:
+                            record.comments = f"{record.comments}; {unblock_comment}"
+                        else:
+                            record.comments = unblock_comment
 
                 unblocked += 1
                 details.append({
@@ -482,9 +658,20 @@ class ComplianceService:
                     "reason": "now_compliant",
                 })
             else:
-                skipped += 1
+                # Partial failure — only mark successfully unblocked entries
+                # but leave Terminal status as blocked since some firewalls
+                # still hold the block
+                for bl_entry in successfully_unblocked_entries:
+                    bl_entry.auto_unblocked = True
+                skipped += len(entries) - len(successfully_unblocked_entries)
 
         if unblocked > 0:
+            # Audit log for auto-unblock (before commit so it's persisted in the same transaction)
+            await self.log_action("system", "auto_unblock_terminal", "terminal", None, {
+                "message": f"Auto-unblocked {unblocked} compliant terminals",
+                "unblocked": unblocked,
+                "skipped": skipped,
+            }, ip_address="System")
             await self.db.commit()
 
         return AutoUnblockResult(
@@ -498,21 +685,22 @@ class ComplianceService:
     # ------------------------------------------------------------------
     # Whitelist Matching
     # ------------------------------------------------------------------
-    async def _check_whitelist(self, ip_address: str, mac_address: str) -> Optional[str]:
-        """Check if IP+MAC matches any whitelist entry. Returns match type or None."""
+    async def _check_whitelist(self, ip_address: str, mac_address: str) -> dict | None:
+        """Check if IP+MAC matches any whitelist entry. Returns match result dict or None."""
         whitelist_data = await self._load_whitelist_cache()
         return self._match_whitelist_in_memory(whitelist_data, ip_address, mac_address)
 
     def _match_whitelist_in_memory(
-        self, whitelist_data: List[dict], ip_address: str, mac_address: str
-    ) -> Optional[str]:
+        self, whitelist_data: list[dict], ip_address: str, mac_address: str
+    ) -> dict | None:
         """Match IP+MAC against in-memory whitelist data.
-        Returns match type string ("mac", "ip", "both") or None if no match."""
+        Returns dict with "match_type" ("mac"/"ip"/"both") and "comments" (str or None),
+        or None if no match."""
         for entry in whitelist_data:
             # MAC-only whitelist entry: match by MAC only
             if entry.get("pattern_type") == "mac_only":
                 if entry.get("mac_address") and entry["mac_address"].upper() == mac_address.upper().replace(":", "-"):
-                    return "mac"
+                    return {"match_type": "mac", "comments": entry.get("comments")}
                 continue
 
             # Check IP pattern match
@@ -530,13 +718,12 @@ class ComplianceService:
             # If only MAC is specified, MAC must match
             if entry.get("ip_pattern") and entry.get("mac_address"):
                 if ip_match and mac_match:
-                    return "both"
+                    return {"match_type": "both", "comments": entry.get("comments")}
             elif entry.get("ip_pattern"):
                 if ip_match:
-                    return "ip"
-            elif entry.get("mac_address"):
-                if mac_match:
-                    return "mac"
+                    return {"match_type": "ip", "comments": entry.get("comments")}
+            elif entry.get("mac_address") and mac_match:
+                return {"match_type": "mac", "comments": entry.get("comments")}
 
         return None
 
@@ -588,12 +775,12 @@ class ComplianceService:
         return self._match_ipguard_in_memory(ipguard_data, ip_address, mac_address)
 
     def _match_ipguard_in_memory(
-        self, ipguard_data: Dict[str, List[dict]], ip_address: str, mac_address: str
+        self, ipguard_data: dict[str, list[dict]], ip_address: str, mac_address: str
     ) -> bool:
         """Match IP+MAC against in-memory IPGuard data from all sources"""
         normalized_mac = mac_address.upper().replace(":", "-")
 
-        for source_tag, entries in ipguard_data.items():
+        for _source_tag, entries in ipguard_data.items():
             for entry in entries:
                 entry_mac = entry.get("mac_address", "").upper().replace(":", "-")
                 if entry.get("ip_address") == ip_address and entry_mac == normalized_mac:
@@ -603,7 +790,7 @@ class ComplianceService:
     # ------------------------------------------------------------------
     # Cache Loading
     # ------------------------------------------------------------------
-    async def _load_whitelist_cache(self) -> List[dict]:
+    async def _load_whitelist_cache(self) -> list[dict]:
         """Load all whitelist data, from Redis cache or database"""
         try:
             redis = await _get_redis()
@@ -625,6 +812,7 @@ class ComplianceService:
                 "mac_address": entry.mac_address,
                 "ip_pattern": entry.ip_pattern,
                 "pattern_type": entry.pattern_type,
+                "comments": entry.comments,
             })
 
         # Cache to Redis
@@ -636,7 +824,7 @@ class ComplianceService:
 
         return data
 
-    async def _load_all_ipguard_cache(self) -> Dict[str, List[dict]]:
+    async def _load_all_ipguard_cache(self) -> dict[str, list[dict]]:
         """Load all IPGuard data from Redis cache or database"""
         result_data = {}
 
@@ -683,9 +871,10 @@ class ComplianceService:
     # Firewall Operations
     # ------------------------------------------------------------------
     async def _block_on_firewall(
-        self, ip_address: str, firewall_tag: str, block_time: str = "30d"
+        self, ip_address: str, firewall_tag: str, block_time: str = "30d",
+        reason: str = "Auto-blocked: non-compliant"
     ) -> bool:
-        """Block an IP on the specified firewall"""
+        """Block an IP on the specified firewall via permanent blacklist"""
         try:
             stmt = select(DataSource).where(
                 (DataSource.tag == firewall_tag) & (DataSource.type == "sangfor")
@@ -697,8 +886,11 @@ class ComplianceService:
                 logger.warning(f"Firewall '{firewall_tag}' not found or disabled")
                 return False
 
+            from app.core.crypto import decrypt_config
             from app.services.sangfor_service import SangforService
             config = fw_source.config
+            if config:
+                config = decrypt_config(config)
             svc = SangforService(
                 base_url=config.get("base_url", ""),
                 username=config.get("username", ""),
@@ -707,7 +899,9 @@ class ComplianceService:
                 ca_bundle=config.get("ca_bundle", ""),
             )
 
-            response = await svc.block_ip([ip_address], block_time=block_time)
+            response = await svc.block_ip(
+                [ip_address], source_tag=firewall_tag, reason=reason
+            )
             await svc.close()
 
             return response.get("code") == 0
@@ -728,8 +922,11 @@ class ComplianceService:
                 logger.warning(f"Firewall '{firewall_tag}' not found or disabled")
                 return False
 
+            from app.core.crypto import decrypt_config
             from app.services.sangfor_service import SangforService
             config = fw_source.config
+            if config:
+                config = decrypt_config(config)
             svc = SangforService(
                 base_url=config.get("base_url", ""),
                 username=config.get("username", ""),
@@ -756,3 +953,287 @@ class ComplianceService:
             await redis.delete(WHITELIST_CACHE_KEY)
         except Exception:
             pass
+
+    async def recalculate_all_compliance(self) -> dict:
+        """Recalculate compliance status for all existing terminals.
+
+        Called after whitelist changes (add/delete) to update terminal
+        compliance_status in real-time instead of waiting for next sync.
+        Also handles auto-unblock for terminals that become compliant
+        while currently blocked on firewall.
+
+        Returns:
+            dict with counts: total, bypass, compliant, non_compliant,
+            unchanged, unblocked (auto-unblocked from blocked state)
+        """
+        # Load fresh whitelist and IPGuard data (cache already invalidated by caller)
+        whitelist_data = await self._load_whitelist_cache()
+        ipguard_data = await self._load_all_ipguard_cache()
+
+        # Query all terminals
+        stmt = select(Terminal)
+        result = await self.db.execute(stmt)
+        terminals = result.scalars().all()
+
+        if not terminals:
+            return {"total": 0, "bypass": 0, "compliant": 0, "non_compliant": 0, "unchanged": 0, "unblocked": 0}
+
+        bypass_count = 0
+        compliant_count = 0
+        non_compliant_count = 0
+        unchanged_count = 0
+        unblocked_count = 0
+
+        for terminal in terminals:
+            ip_addr = terminal.ip_address or ""
+            mac_addr = terminal.mac_address or ""
+
+            # Determine new compliance status
+            wl_result = self._match_whitelist_in_memory(whitelist_data, ip_addr, mac_addr)
+            ig_match = self._match_ipguard_in_memory(ipguard_data, ip_addr, mac_addr)
+
+            if wl_result:
+                new_compliance = "bypass"
+                new_wl_match_type = wl_result.get("match_type")
+                wl_comments = wl_result.get("comments")
+            elif ig_match:
+                new_compliance = "compliant"
+                new_wl_match_type = None
+                wl_comments = None
+            else:
+                new_compliance = "non_compliant"
+                new_wl_match_type = None
+                wl_comments = None
+
+            compliance_changed = (
+                terminal.compliance_status != new_compliance
+                or terminal.wl_match_type != new_wl_match_type
+            )
+
+            # Sync whitelist comments to terminal when bypass (even if unchanged)
+            if new_compliance == "bypass" and wl_comments:
+                wl_comment_str = f"Whitelist: {wl_comments}"
+                if not terminal.comments or "Whitelist: " not in terminal.comments:
+                    if terminal.comments:
+                        terminal.comments = f"{terminal.comments}; {wl_comment_str}"
+                    else:
+                        terminal.comments = wl_comment_str
+
+            if compliance_changed:
+                terminal.compliance_status = new_compliance
+                terminal.wl_match_type = new_wl_match_type
+
+                if new_compliance == "bypass":
+                    bypass_count += 1
+                elif new_compliance == "compliant":
+                    compliant_count += 1
+                else:
+                    non_compliant_count += 1
+
+                # Auto-unblock: if terminal was blocked and now becomes compliant/bypass
+                if terminal.status == "blocked" and new_compliance in ("bypass", "compliant"):
+                    # Find firewall tags via terminal's source_tag -> DataSourceBinding
+                    fw_tags = await self._get_bound_firewall_tags(terminal.source_tag)
+                    if fw_tags:
+                        all_unblock_success = True
+                        for fw_tag in fw_tags:
+                            try:
+                                success = await self._unblock_on_firewall(ip_addr, fw_tag)
+                                if not success:
+                                    all_unblock_success = False
+                                    logger.warning(f"Failed to auto-unblock {ip_addr} on firewall '{fw_tag}'")
+                            except Exception as e:
+                                all_unblock_success = False
+                                logger.warning(f"Error auto-unblocking {ip_addr} on firewall '{fw_tag}': {e}")
+                        if all_unblock_success:
+                            terminal.status = "unblocked"
+                            terminal.firewall_tag = None
+                            unblocked_count += 1
+                            fw_info = ",".join(fw_tags)
+                            unblock_comment = f"Auto-unblocked by TAM from firewall [{fw_info}]"
+                            if terminal.comments:
+                                terminal.comments = f"{terminal.comments}; {unblock_comment}"
+                            else:
+                                terminal.comments = unblock_comment
+                            # Mark matching Blacklist records as auto-unblocked
+                            mac_norm = mac_addr.replace('-', '').replace(':', '').replace('.', '').upper() if mac_addr else None
+                            for fw_tag in fw_tags:
+                                bl_stmt = select(Blacklist).where(
+                                    (Blacklist.ip_address == ip_addr) &
+                                    (Blacklist.mac_address_normalized == mac_norm) &
+                                    (Blacklist.firewall_tag == fw_tag)
+                                )
+                                bl_result = await self.db.execute(bl_stmt)
+                                bl_entries = bl_result.scalars().all()
+                                for bl_entry in bl_entries:
+                                    if bl_entry.auto_unblocked is False:
+                                        bl_entry.auto_unblocked = True
+                            logger.info(f"Auto-unblocked {ip_addr} (now {new_compliance}) from firewall(s) '{fw_info}'")
+                        else:
+                            logger.warning(f"Partial unblock failure for {ip_addr}, keeping blocked status")
+                    else:
+                        # No firewall binding, just update status
+                        terminal.status = "unblocked"
+                        terminal.firewall_tag = None
+                        unblocked_count += 1
+
+                # Auto-block: if terminal becomes non_compliant and has a bound firewall
+                if new_compliance == "non_compliant" and terminal.status != "blocked":
+                    # Find firewall tags via terminal's source_tag -> DataSourceBinding
+                    fw_tags = await self._get_bound_firewall_tags(terminal.source_tag)
+                    if fw_tags:
+                        all_block_success = True
+                        for fw_tag in fw_tags:
+                            try:
+                                success = await self._block_on_firewall(
+                                    ip_addr, fw_tag,
+                                    reason="Auto-blocked: compliance recalculation"
+                                )
+                                if not success:
+                                    all_block_success = False
+                                    logger.warning(f"Failed to auto-block {ip_addr} on firewall '{fw_tag}'")
+                            except Exception as e:
+                                all_block_success = False
+                                logger.warning(f"Error auto-blocking {ip_addr} on firewall '{fw_tag}': {e}")
+
+                        if all_block_success:
+                            terminal.status = "blocked"
+                            terminal.firewall_tag = fw_tags[0] if len(fw_tags) == 1 else ",".join(fw_tags)
+                            fw_info = ",".join(fw_tags)
+                            block_comment = f"Auto-blocked by TAM on firewall [{fw_info}]"
+                            if terminal.comments:
+                                terminal.comments = f"{terminal.comments}; {block_comment}"
+                            else:
+                                terminal.comments = block_comment
+                            # Create Blacklist record for each firewall with expires_at
+                            import re
+                            from datetime import datetime, timedelta
+                            block_time = await self._get_block_time()
+                            match = re.match(r'^(\d+)([dhm])$', block_time.lower())
+                            td = timedelta(days=30)
+                            if match:
+                                value = int(match.group(1))
+                                unit = match.group(2)
+                                if unit == 'd':
+                                    td = timedelta(days=value)
+                                elif unit == 'h':
+                                    td = timedelta(hours=value)
+                                elif unit == 'm':
+                                    td = timedelta(minutes=value)
+                            mac_norm = mac_addr.replace('-', '').replace(':', '').replace('.', '').upper() if mac_addr else None
+                            for fw_tag in fw_tags:
+                                bl_entry = Blacklist(
+                                    ip_address=ip_addr,
+                                    mac_address=mac_addr,
+                                    mac_address_normalized=mac_norm,
+                                    reason="Auto-blocked: non-compliant (compliance recalculation)",
+                                    blocked_by="system",
+                                    expires_at=datetime.now(UTC) + td,
+                                    source_tag=terminal.source_tag,
+                                    firewall_tag=fw_tag,
+                                    is_auto_blocked=True,
+                                    auto_unblocked=False,
+                                )
+                                self.db.add(bl_entry)
+                            logger.info(f"Auto-blocked {ip_addr} (now non_compliant) on firewall(s) '{fw_info}'")
+            else:
+                unchanged_count += 1
+                # Backfill firewall_tag for blocked terminals missing it (historical data)
+                if terminal.status == "blocked" and not terminal.firewall_tag:
+                    fw_tags = await self._get_bound_firewall_tags(terminal.source_tag)
+                    if fw_tags:
+                        terminal.firewall_tag = fw_tags[0] if len(fw_tags) == 1 else ",".join(fw_tags)
+
+        # Audit log for compliance recalculation
+        if non_compliant_count > 0 or unblocked_count > 0:
+            await self.log_action("system", "recalculate_compliance", "terminal", None, {
+                "message": f"Compliance recalculation: {len(terminals)} total, "
+                           f"{non_compliant_count} → non_compliant, {unblocked_count} auto-unblocked",
+                "total": len(terminals),
+                "bypass": bypass_count,
+                "compliant": compliant_count,
+                "non_compliant": non_compliant_count,
+                "unblocked": unblocked_count,
+            }, ip_address="System")
+
+        # Flush changes (caller is responsible for final commit to maintain
+        # transaction atomicity with the triggering operation, e.g. whitelist add)
+        await self.db.flush()
+
+        logger.info(
+            f"Compliance recalculation complete: {len(terminals)} total, "
+            f"{bypass_count} → bypass, {compliant_count} → compliant, "
+            f"{non_compliant_count} → non_compliant, {unchanged_count} unchanged, "
+            f"{unblocked_count} auto-unblocked"
+        )
+
+        return {
+            "total": len(terminals),
+            "bypass": bypass_count,
+            "compliant": compliant_count,
+            "non_compliant": non_compliant_count,
+            "unchanged": unchanged_count,
+            "unblocked": unblocked_count,
+        }
+
+    async def _get_bound_firewall_tag(self, source_tag: str) -> str | None:
+        """Find the firewall data source tag bound to the given ARP source tag.
+
+        Uses DataSourceBinding table to find the correct firewall for
+        a terminal's ARP source, ensuring the right firewall is used
+        for block/unblock operations.
+
+        Note: Returns only the first matching firewall tag. For multi-firewall
+        support, use _get_bound_firewall_tags() instead.
+        """
+        try:
+            from app.models.data_source import DataSourceBinding
+            stmt = select(DataSourceBinding.firewall_tag).where(
+                DataSourceBinding.arp_source_tag == source_tag
+            )
+            result = await self.db.execute(stmt)
+            row = result.first()
+            return row[0] if row else None
+        except Exception:
+            return None
+
+    async def _get_bound_firewall_tags(self, source_tag: str) -> list[str]:
+        """Find all firewall data source tags bound to the given ARP source tag.
+
+        Uses DataSourceBinding table to find all firewalls for
+        a terminal's ARP source, ensuring block/unblock operations
+        are executed on all bound firewalls.
+        """
+        try:
+            from app.services.data_source_service import DataSourceService
+            ds_service = DataSourceService(self.db)
+            return await ds_service.get_firewall_tags_for_arp(source_tag)
+        except Exception:
+            return []
+
+    async def _get_block_time(self) -> str:
+        """Get the configured block_time for auto-block operations.
+
+        Reads from ConfigService, defaults to '30d'.
+        """
+        try:
+            from app.services.config_service import ConfigService
+            config_service = ConfigService(self.db)
+            return await config_service.get("block_time", "30d")
+        except Exception:
+            return "30d"
+
+    async def log_action(self, username: str, action: str, resource_type: str,
+                         resource_id: str | None, details: dict,
+                         ip_address: str = None, resource_name: str = None):
+        """Log an audit action with JSON details"""
+        audit_log = AuditLog(
+            username=username,
+            action=action,
+            resource_type=resource_type,
+            resource_id=resource_id or "",
+            resource_name=resource_name,
+            details=json.dumps(details, ensure_ascii=False),
+            ip_address=ip_address,
+        )
+        self.db.add(audit_log)

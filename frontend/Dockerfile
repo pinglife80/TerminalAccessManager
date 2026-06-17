@@ -7,7 +7,7 @@ WORKDIR /app
 COPY package*.json ./
 
 # Install dependencies with retry logic
-RUN npm install --network-timeout=100000 || \
+RUN npm ci --network-timeout=100000 || \
     npm install --network-timeout=100000 || \
     npm install --registry https://registry.npmmirror.com
 

@@ -15,7 +15,9 @@ select = [
 ]
 ignore = [
     "E501",   # line too long (handled by formatter)
+    "E712",   # == True/False comparison (SQLAlchemy filter requires SQL expressions)
     "B008",   # function call in default argument (FastAPI Depends pattern)
+    "B904",   # raise from err (intentional exception chaining style in this project)
     "B905",   # zip without strict
     "SIM108", # ternary operator (readability preference)
 ]

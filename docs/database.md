@@ -1,6 +1,6 @@
 # TerminalAccessManager 数据库设计文档
 
-> 文档版本：v3.2.0 | 更新日期：2026-06-10
+> 文档版本：v3.3.0  更新日期：2026-06-17
 
 ## 1. 概述
 
@@ -112,13 +112,41 @@ docker-compose.yml 中 PostgreSQL 的 `command` 参数列表如下：
 │ compliance_baselines │
 ├──────────────────────┤
 │ id                PK │
-│ ip_address           │
-│ mac_address          │
-│ hostname             │
-│ source_tag           │
+│ name                 │
+│ type                 │
+│ tag                  │
+│ config (JSON)        │
+│ enabled              │
+│ last_sync_at         │
+│ last_sync_status     │
+│ last_sync_error      │
 │ created_at           │
 │ updated_at           │
 └──────────────────────┘
+
+┌──────────────────┐       ┌──────────────────┐
+│     roles        │       │   permissions    │
+├──────────────────┤       ├──────────────────┤
+│ id           PK  │       │ id           PK  │
+│ name             │       │ code             │
+│ description      │       │ name             │
+│ is_default       │       │ module           │
+│ created_at       │       │ description      │
+│ updated_at       │       └────────┬─────────┘
+└───────┬──────────┘                │
+        │                           │
+        ├───────────┐   ┌───────────┤
+        │           │   │           │
+        ▼           ▼   ▼           │
+┌──────────────────────┐ ┌──────────────────────┐
+│    user_roles        │ │  role_permissions    │
+├──────────────────────┤ ├──────────────────────┤
+│ user_id  FK→users.id │ │ role_id  FK→roles.id │
+│ role_id  FK→roles.id │ │ permission_id        │
+│                      │ │   FK→permissions.id  │
+│ PK: (user_id,        │ │ PK: (role_id,        │
+│      role_id)        │ │      permission_id)  │
+└──────────────────────┘ └──────────────────────┘
 ```
 
 ---
@@ -164,7 +192,7 @@ docker-compose.yml 中 PostgreSQL 的 `command` 参数列表如下：
 | id | INTEGER | PK, INDEX | 自增 | 主键 |
 | ip_address | VARCHAR(45) | NOT NULL, INDEX | — | IPv4/IPv6 地址 |
 | mac_address | VARCHAR(17) | NOT NULL, INDEX | — | MAC 地址（格式 XX-XX-XX-XX-XX-XX） |
-| status | VARCHAR(20) | INDEX | 'unfrozen' | 终端状态 |
+| status | VARCHAR(20) | INDEX | 'unblocked' | 终端状态（blocked/unblocked） |
 | comments | TEXT | | NULL | 备注 |
 | timestamp | TIMESTAMP WITH TZ | INDEX | utcnow | 记录时间 |
 | source | VARCHAR(50) | | 'arp' | 数据来源 |
@@ -172,6 +200,7 @@ docker-compose.yml 中 PostgreSQL 的 `command` 参数列表如下：
 | compliance_status | VARCHAR(20) | INDEX | 'unknown' | 合规状态 |
 | wl_match_type | VARCHAR(10) | | NULL | 白名单匹配类型 |
 | mac_address_normalized | VARCHAR(12) | INDEX | NULL | MAC 地址标准化（去除分隔符的大写 12 位字符串，如 AABBCCDDEEFF） |
+| firewall_tag | VARCHAR(50) | | NULL | 封堵操作时写入的防火墙标签，解封时清除 |
 
 **索引：**
 
@@ -191,11 +220,8 @@ docker-compose.yml 中 PostgreSQL 的 `command` 参数列表如下：
 
 | 值 | 说明 |
 |---|---|
-| active | 在线活跃 |
-| inactive | 离线失活 |
-| frozen | 已冻结（被防火墙阻断） |
-| pending | 待处理 |
-| unfrozen | 已解冻（默认初始状态） |
+| blocked | 已封堵（被防火墙阻断） |
+| unblocked | 未封堵（默认初始状态） |
 
 **数据字典 — source：**
 
@@ -303,6 +329,7 @@ docker-compose.yml 中 PostgreSQL 的 `command` 参数列表如下：
 | action | VARCHAR(100) | NOT NULL, INDEX | — | 操作类型 |
 | resource_type | VARCHAR(50) | | NULL | 资源类型 |
 | resource_id | VARCHAR(100) | | NULL | 资源标识 |
+| resource_name | VARCHAR(200) | | NULL | 资源的可读名称（如用户名、数据源名称、IP 地址） |
 | details | TEXT | | NULL | 操作详情（JSON 格式，json.dumps 序列化，每个 dict 包含 message 字段） |
 | ip_address | VARCHAR(45) | INDEX | NULL | 请求来源 IP |
 | timestamp | TIMESTAMP WITH TZ | INDEX | utcnow | 操作时间 |
@@ -314,6 +341,7 @@ docker-compose.yml 中 PostgreSQL 的 `command` 参数列表如下：
 | idx_audit_user_timestamp | COMPOSITE | (username, timestamp) |
 | idx_audit_action | COMPOSITE | (action) |
 | idx_audit_ip_address | SINGLE | ip_address |
+| idx_audit_logs_keyset | COMPOSITE | (timestamp DESC, id DESC) |
 
 **数据字典 — resource_type：**
 
@@ -409,7 +437,7 @@ docker-compose.yml 中 PostgreSQL 的 `command` 参数列表如下：
 | name | VARCHAR(100) | UNIQUE, NOT NULL | — | 数据源名称 |
 | type | VARCHAR(20) | NOT NULL | — | 数据源类型 |
 | tag | VARCHAR(50) | UNIQUE, NOT NULL, INDEX | — | 数据源唯一标签 |
-| config | JSON | NOT NULL | `{}` | 连接配置（JSON 格式） |
+| config | JSON | NOT NULL | `{}` | 连接配置（JSON 格式，敏感字段 Fernet 加密存储，读取时通过 `db.expunge` + `decrypt_config` 解密） |
 | enabled | BOOLEAN | | TRUE | 是否启用 |
 | last_sync_at | TIMESTAMP WITH TZ | | NULL | 最近同步时间 |
 | last_sync_status | VARCHAR(20) | | NULL | 最近同步状态 |
@@ -455,23 +483,88 @@ docker-compose.yml 中 PostgreSQL 的 `command` 参数列表如下：
 
 ### 3.9 compliance_baselines — 合规基准表
 
-存储合规基准数据，独立于数据源，用于合规检查时比对终端是否注册。
+存储合规基准数据源配置，支持 IP Guard 等多种合规数据采集方式。
 
 | 字段 | 类型 | 约束 | 默认值 | 说明 |
 |---|---|---|---|---|
 | id | INTEGER | PK, INDEX | 自增 | 主键 |
-| ip_address | VARCHAR(45) | NOT NULL, INDEX | — | IPv4/IPv6 地址 |
-| mac_address | VARCHAR(17) | NOT NULL, INDEX | — | MAC 地址（格式 XX-XX-XX-XX-XX-XX） |
-| hostname | VARCHAR(100) | | NULL | 主机名 |
-| source_tag | VARCHAR(50) | INDEX | NULL | 数据源标签 |
+| name | VARCHAR(100) | UNIQUE, NOT NULL | — | 基准名称 |
+| type | VARCHAR(20) | NOT NULL | — | 基准类型（sqlserver/mysql/postgresql） |
+| tag | VARCHAR(50) | UNIQUE, NOT NULL, INDEX | — | 基准唯一标签 |
+| config | JSON | NOT NULL | `{}` | 连接配置（JSON 格式，包含 host、port、db_name、username、password、query 等） |
+| enabled | BOOLEAN | | TRUE | 是否启用 |
+| last_sync_at | TIMESTAMP WITH TZ | | NULL | 最近同步时间 |
+| last_sync_status | VARCHAR(20) | | NULL | 最近同步状态（success/failed） |
+| last_sync_error | TEXT | | NULL | 最近同步错误信息 |
 | created_at | TIMESTAMP WITH TZ | server_default=now() | — | 创建时间 |
 | updated_at | TIMESTAMP WITH TZ | server_default=now(), onupdate=now() | — | 更新时间 |
 
-**索引：**
+**数据字典 — type：**
 
-| 索引名 | 类型 | 字段 |
-|---|---|---|
-| idx_compliance_baseline_ip_mac | COMPOSITE | (ip_address, mac_address) |
+| 值 | 说明 |
+|---|---|
+| sqlserver | SQL Server 数据库 |
+| mysql | MySQL 数据库 |
+| postgresql | PostgreSQL 数据库 |
+
+---
+
+### 3.10 RBAC 权限控制表
+
+系统通过4张核心表实现 RBAC 数据模型：
+
+#### roles 表
+
+| 字段 | 类型 | 约束 | 说明 |
+|------|------|------|------|
+| id | SERIAL | PRIMARY KEY | 角色ID |
+| name | VARCHAR(50) | UNIQUE, NOT NULL | 角色标识名 |
+| description | VARCHAR(200) | | 角色描述 |
+| is_default | BOOLEAN | DEFAULT FALSE | 是否为默认角色 |
+| created_at | TIMESTAMP | DEFAULT NOW() | 创建时间 |
+| updated_at | TIMESTAMP | DEFAULT NOW() | 更新时间 |
+
+#### permissions 表
+
+| 字段 | 类型 | 约束 | 说明 |
+|------|------|------|------|
+| id | SERIAL | PRIMARY KEY | 权限ID |
+| code | VARCHAR(100) | UNIQUE, NOT NULL | 权限码（如 terminal:read） |
+| name | VARCHAR(100) | NOT NULL | 权限名称 |
+| module | VARCHAR(50) | NOT NULL | 所属模块 |
+| description | VARCHAR(200) | | 权限描述 |
+
+#### user_roles 表
+
+| 字段 | 类型 | 约束 | 说明 |
+|------|------|------|------|
+| user_id | INTEGER | FK→users.id, ON DELETE CASCADE | 用户ID |
+| role_id | INTEGER | FK→roles.id, ON DELETE CASCADE | 角色ID |
+
+联合主键: (user_id, role_id)
+
+#### role_permissions 表
+
+| 字段 | 类型 | 约束 | 说明 |
+|------|------|------|------|
+| role_id | INTEGER | FK→roles.id, ON DELETE CASCADE | 角色ID |
+| permission_id | INTEGER | FK→permissions.id, ON DELETE CASCADE | 权限ID |
+
+联合主键: (role_id, permission_id)
+
+### RBAC 种子数据自动填充（v3.2.0-r2）
+
+`manage.sh init` 和 `python cli.py setup` 现在自动调用 `_ensure_rbac_seed(db)` 填充 RBAC 种子数据：
+
+| 数据 | 数量 | 说明 |
+|------|------|------|
+| 角色 | 5 | superadmin, admin, operator, auditor, viewer |
+| 权限码 | 29 | 覆盖 10 个功能模块 |
+| 角色-权限映射 | 51 | admin(23), operator(10), auditor(8), viewer(10) |
+
+幂等保护：`roles` 表已有 >= 5 条记录时跳过种子操作。
+
+> **注意**：通过 `alembic upgrade head` 升级的已有数据库，由 006_rbac_tables.py 迁移脚本负责种子数据填充。
 
 ---
 
@@ -481,11 +574,15 @@ docker-compose.yml 中 PostgreSQL 的 `command` 参数列表如下：
 
 | 枚举值 | 适用表 | 说明 |
 |---|---|---|
-| active | terminals.status | 在线活跃 |
-| inactive | terminals.status | 离线失活 |
-| frozen | terminals.status | 已冻结（被防火墙阻断） |
-| pending | terminals.status | 待处理 |
-| unfrozen | terminals.status | 已解冻（默认初始状态） |
+| blocked | terminals.status | 终端已被防火墙封堵 |
+| unblocked | terminals.status | 终端未被封堵（默认值） |
+
+> **说明**：`status` 字段现在只表示防火墙封堵状态，合规状态由 `compliance_status` 字段独立追踪。
+>
+> **v3.2.0-r4 数据迁移说明：** 终端状态从 6 值枚举精简为 2 值枚举，迁移规则如下：
+> - `frozen` → `blocked`
+> - `unfrozen` → `unblocked`
+> - 其他遗留值（`active`、`inactive`、`pending`）→ `unblocked`
 
 ### 4.2 ComplianceStatus（合规状态）
 
@@ -662,6 +759,10 @@ docker-compose.yml 中 PostgreSQL 的 `command` 参数列表如下：
 | 003_search_indexes.py | 搜索优化索引：whitelist.created_at、blacklist.blocked_at、blacklist.expires_at、audit_logs.ip_address |
 | 004_terminal_unique_constraint.py | terminals 表联合唯一约束 uq_terminal_ip_mac + 迁移前去重 |
 | 005_mac_normalized_column.py | terminals/whitelist/blacklist 三张表添加 mac_address_normalized 列，回填历史数据，创建索引 |
+| 006_rbac_tables.py | RBAC 权限控制表（roles、permissions、user_roles、role_permissions）及种子数据 |
+| 007_firewall_tag.py | terminals 表新增 firewall_tag 列（VARCHAR(50), nullable, default NULL） |
+| 008_audit_resource_name.py | audit_logs 表新增 resource_name 列 |
+| 009_audit_keyset_index.py | audit_logs 表新增 keyset 分页复合索引 |
 
 ### 003_search_indexes.py 详情
 
@@ -721,3 +822,22 @@ docker-compose.yml 中 PostgreSQL 的 `command` 参数列表如下：
 将 `system_config` 表中品牌配置项（`app_name`、`login_heading` 等）的旧值 `"Terminal Access Platform"` 替换为 `"Terminal Access Manager"`。
 
 > **注意：** 这些迁移为幂等操作，仅更新包含旧值的记录，已更新的记录不受影响。
+
+### 备份轮转策略（v3.2.0-r2）
+
+通过 `BACKUP_RETAIN_COUNT` 环境变量控制备份文件保留数量：
+
+| 配置 | 默认值 | 说明 |
+|------|--------|------|
+| `BACKUP_RETAIN_COUNT` | `0`（保留全部） | 保留最近 N 个备份文件，超出时自动清理最旧的 |
+
+轮转范围：
+- PostgreSQL 备份（`backups/db_*.sql`）
+- Redis 备份（`backups/redis_*.rdb`）
+- 配置快照（`backups/config_*.env`）
+
+设置示例：
+```bash
+# 在 .env 中设置保留最近 10 个备份
+BACKUP_RETAIN_COUNT=10
+```

@@ -9,22 +9,28 @@ Provides a cached, hot-reloadable configuration layer on top of the database.
 """
 
 import json
-from typing import Optional, List, Dict, Any
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+from typing import Any
 
-from sqlalchemy import select, update
-from sqlalchemy.ext.asyncio import AsyncSession
 from loguru import logger
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.models.system_config import SystemConfig
 from app.schemas.system_config import (
-    SystemConfigCreate, SystemConfigUpdate, SystemConfigResponse,
-    ConfigCategory, ConfigValueType, ConfigUpdateResult,
-    SecurityConfigResponse, RateLimitConfigResponse, NetworkConfigResponse,
-    SchedulerConfigResponse, GeneralConfigResponse, BrandingConfigResponse, AllConfigsResponse,
+    AllConfigsResponse,
+    BrandingConfigResponse,
+    ConfigUpdateResult,
+    ConfigValueType,
+    GeneralConfigResponse,
+    NetworkConfigResponse,
+    RateLimitConfigResponse,
+    SchedulerConfigResponse,
+    SecurityConfigResponse,
+    SystemConfigResponse,
+    SystemConfigUpdate,
 )
-from app.core.config import settings
-
 
 # Redis cache key prefix and TTL
 CONFIG_CACHE_PREFIX = "sys_config:"
@@ -55,7 +61,7 @@ class ConfigService:
     """Service for managing system configuration with Redis caching"""
 
     # Default configs that are seeded on first startup
-    DEFAULT_CONFIGS: List[Dict[str, Any]] = [
+    DEFAULT_CONFIGS: list[dict[str, Any]] = [
         # Security
         {"key": "max_login_attempts", "value": "5", "category": "security",
          "value_type": "int", "description": "Maximum failed login attempts before account lockout",
@@ -190,7 +196,7 @@ class ConfigService:
             logger.info(f"Seeded {count} default configs")
         return count
 
-    def _get_env_default(self, key: str) -> Optional[str]:
+    def _get_env_default(self, key: str) -> str | None:
         """Get the current .env value for a config key, if it exists"""
         env_mapping = {
             "max_login_attempts": settings.MAX_LOGIN_ATTEMPTS,
@@ -213,7 +219,7 @@ class ConfigService:
         }
         return env_mapping.get(key)
 
-    async def get(self, key: str) -> Optional[str]:
+    async def get(self, key: str) -> str | None:
         """Get a config value. Reads from Redis cache first, then DB, then .env fallback."""
         # Try Redis cache first
         try:
@@ -262,7 +268,7 @@ class ConfigService:
         except (ValueError, json.JSONDecodeError):
             return default
 
-    async def get_value(self, key: str) -> Optional[str]:
+    async def get_value(self, key: str) -> str | None:
         """Get a config value by key"""
         stmt = select(SystemConfig.value).where(SystemConfig.key == key)
         result = await self.db.execute(stmt)
@@ -289,7 +295,7 @@ class ConfigService:
         # Update database
         config.value = value
         config.updated_by = updated_by
-        config.updated_at = datetime.now(timezone.utc)
+        config.updated_at = datetime.now(UTC)
         await self.db.commit()
 
         # Invalidate Redis cache
@@ -298,7 +304,7 @@ class ConfigService:
         logger.info(f"Config updated: {key} = {value} (by {updated_by})")
         return ConfigUpdateResult(key=key, success=True)
 
-    async def batch_update(self, updates: List[SystemConfigUpdate], updated_by: str = "system") -> List[ConfigUpdateResult]:
+    async def batch_update(self, updates: list[SystemConfigUpdate], updated_by: str = "system") -> list[ConfigUpdateResult]:
         """Update multiple configs at once. All-or-nothing: if any validation fails, none are applied."""
         results = []
 
@@ -331,7 +337,7 @@ class ConfigService:
 
         return results
 
-    def _validate_value(self, value: str, value_type: str) -> Optional[str]:
+    def _validate_value(self, value: str, value_type: str) -> str | None:
         """Validate a value against its declared type. Returns error message or None."""
         try:
             if value_type == ConfigValueType.INT:
@@ -366,7 +372,7 @@ class ConfigService:
         except Exception:
             pass
 
-    async def list_all(self, category: Optional[str] = None) -> List[SystemConfigResponse]:
+    async def list_all(self, category: str | None = None) -> list[SystemConfigResponse]:
         """List all configs, optionally filtered by category"""
         stmt = select(SystemConfig).order_by(SystemConfig.category, SystemConfig.key)
         if category:

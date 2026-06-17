@@ -1,6 +1,7 @@
-from pydantic import BaseModel, Field
-from typing import Optional, Dict, Any
 from datetime import datetime
+from typing import Any
+
+from pydantic import BaseModel, Field
 
 
 class ComplianceBaselineBase(BaseModel):
@@ -8,7 +9,7 @@ class ComplianceBaselineBase(BaseModel):
     name: str = Field(..., max_length=100, description="Baseline name")
     type: str = Field(..., description="Baseline type: ipguard")
     tag: str = Field(..., max_length=50, description="Unique tag identifier")
-    config: Dict[str, Any] = Field(default={}, description="Connection configuration")
+    config: dict[str, Any] = Field(default={}, description="Connection configuration")
     enabled: bool = Field(default=True, description="Whether the baseline is enabled")
 
 
@@ -19,21 +20,21 @@ class ComplianceBaselineCreate(ComplianceBaselineBase):
 
 class ComplianceBaselineUpdate(BaseModel):
     """Schema for updating a compliance baseline"""
-    name: Optional[str] = Field(None, max_length=100)
-    type: Optional[str] = None
-    tag: Optional[str] = Field(None, max_length=50)
-    config: Optional[Dict[str, Any]] = None
-    enabled: Optional[bool] = None
+    name: str | None = Field(None, max_length=100)
+    type: str | None = None
+    tag: str | None = Field(None, max_length=50)
+    config: dict[str, Any] | None = None
+    enabled: bool | None = None
 
 
 class ComplianceBaselineResponse(ComplianceBaselineBase):
     """Compliance baseline response schema"""
     id: int
-    last_sync_at: Optional[datetime] = None
-    last_sync_status: Optional[str] = None
-    last_sync_error: Optional[str] = None
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
+    last_sync_at: datetime | None = None
+    last_sync_status: str | None = None
+    last_sync_error: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
     class Config:
         from_attributes = True

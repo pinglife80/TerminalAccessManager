@@ -17,6 +17,7 @@ export function useNetworkStatus(): NetworkStatus {
     window.addEventListener('offline', handleOffline);
 
     // Check effective connection type if available
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Navigator connection API has no standard type
     const connection = (navigator as any).connection;
     if (connection) {
       const updateConnection = () => {

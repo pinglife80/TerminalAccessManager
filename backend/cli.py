@@ -88,6 +88,14 @@ async def _run_setup():
     print(_green("✓ Database initialized"))
     print()
 
+    print("Seeding RBAC preset data...")
+    from app.core.database import async_session_maker
+    async with async_session_maker() as db:
+        await _ensure_rbac_seed(db)
+        await db.commit()
+    print(_green("✓ RBAC preset data seeded"))
+    print()
+
     print("Creating admin user...")
     await _create_admin_user()
     print()
@@ -109,6 +117,171 @@ def cmd_setup(_args):
 
 
 # ---------------------------------------------------------------------------
+# password reset command
+# ---------------------------------------------------------------------------
+async def _password_reset(username: str, new_password: str):
+    """Reset a user's password."""
+    from sqlalchemy import select
+    from app.core.database import async_session_maker
+    from app.core.security import hash_password
+    from app.models.user import User
+
+    async with async_session_maker() as db:
+        result = await db.execute(select(User).where(User.username == username))
+        user = result.scalar_one_or_none()
+
+        if not user:
+            print(_red(f"✗ User '{username}' not found"))
+            return False
+
+        user.hashed_password = hash_password(new_password)
+        user.failed_login_attempts = 0
+        user.locked_until = None
+        await db.commit()
+
+        print(_green(f"✓ Password reset for user '{username}'"))
+        print("  Remember to update ADMIN_PASSWORD in .env if this is the admin user")
+        return True
+
+
+def cmd_password_reset(args):
+    """Handle password reset command."""
+    username = args.username
+    new_password = args.password
+
+    if not new_password:
+        import getpass
+        new_password = getpass.getpass(f"Enter new password for '{username}': ")
+        confirm_pw = getpass.getpass("Confirm new password: ")
+        if new_password != confirm_pw:
+            print(_red("✗ Passwords do not match"))
+            sys.exit(1)
+
+    if len(new_password) < 8:
+        print(_red("✗ Password must be at least 8 characters"))
+        sys.exit(1)
+
+    asyncio.run(_password_reset(username, new_password))
+
+
+# ---------------------------------------------------------------------------
+# user management commands
+# ---------------------------------------------------------------------------
+async def _list_users():
+    """List all users."""
+    from sqlalchemy import select
+    from app.core.database import async_session_maker
+    from app.models.user import User
+
+    async with async_session_maker() as db:
+        result = await db.execute(
+            select(User).order_by(User.id)
+        )
+        users = result.scalars().all()
+
+        if not users:
+            print("No users found")
+            return
+
+        print(f"{'ID':<5} {'Username':<20} {'Email':<30} {'Active':<8} {'Superuser':<10} {'Locked':<8}")
+        print("-" * 85)
+        for u in users:
+            locked = "Yes" if u.locked_until and u.locked_until > datetime.now(timezone.utc) else "No"
+            print(f"{u.id:<5} {u.username:<20} {u.email or 'N/A':<30} {'Yes' if u.is_active else 'No':<8} {'Yes' if u.is_superuser else 'No':<10} {locked:<8}")
+
+
+def cmd_user_list(args):
+    """Handle user list command."""
+    asyncio.run(_list_users())
+
+
+async def _unlock_user(username: str):
+    """Unlock a locked user account."""
+    from sqlalchemy import select
+    from app.core.database import async_session_maker
+    from app.models.user import User
+
+    async with async_session_maker() as db:
+        result = await db.execute(select(User).where(User.username == username))
+        user = result.scalar_one_or_none()
+
+        if not user:
+            print(_red(f"✗ User '{username}' not found"))
+            return False
+
+        user.failed_login_attempts = 0
+        user.locked_until = None
+        user.is_active = True
+        await db.commit()
+
+        print(_green(f"✓ User '{username}' unlocked"))
+        return True
+
+
+def cmd_user_unlock(args):
+    """Handle user unlock command."""
+    asyncio.run(_unlock_user(args.username))
+
+
+# ---------------------------------------------------------------------------
+# role management commands
+# ---------------------------------------------------------------------------
+async def _list_roles():
+    """List all roles."""
+    from sqlalchemy import select
+    from app.core.database import async_session_maker
+    from app.models.role import Role
+
+    async with async_session_maker() as db:
+        result = await db.execute(select(Role).order_by(Role.id))
+        roles = result.scalars().all()
+
+        if not roles:
+            print("No roles found. Run 'python cli.py setup' to seed default roles.")
+            return
+
+        print(f"{'ID':<5} {'Name':<20} {'Display Name':<25} {'Description':<40} {'Built-in':<10}")
+        print("-" * 105)
+        for r in roles:
+            builtin = "Yes" if r.is_builtin else "No"
+            print(f"{r.id:<5} {r.name:<20} {r.display_name or 'N/A':<25} {(r.description or 'N/A')[:40]:<40} {builtin:<10}")
+
+
+def cmd_role_list(args):
+    """Handle role list command."""
+    asyncio.run(_list_roles())
+
+
+async def _list_permissions():
+    """List all permissions grouped by module."""
+    from sqlalchemy import select
+    from app.core.database import async_session_maker
+    from app.models.role import Permission
+
+    async with async_session_maker() as db:
+        result = await db.execute(
+            select(Permission).order_by(Permission.module, Permission.id)
+        )
+        perms = result.scalars().all()
+
+        if not perms:
+            print("No permissions found. Run 'python cli.py setup' to seed default permissions.")
+            return
+
+        current_module = ""
+        for p in perms:
+            if p.module != current_module:
+                current_module = p.module
+                print(f"\n  [{current_module.upper()}]")
+            print(f"    {p.code:<40} {p.name}")
+
+
+def cmd_role_permissions(args):
+    """Handle role permissions command."""
+    asyncio.run(_list_permissions())
+
+
+# ---------------------------------------------------------------------------
 # mock generate helpers
 # ---------------------------------------------------------------------------
 def _generate_random_mac():
@@ -116,6 +289,7 @@ def _generate_random_mac():
 
 
 def _normalize_mac(mac: str) -> str:
+    """Normalize MAC to XX-XX-XX-XX-XX-XX format (for mac_address column)"""
     mac_clean = mac.replace('-', '').replace(':', '').replace('.', '').upper()
     return '-'.join(mac_clean[i:i + 2] for i in range(0, len(mac_clean), 2))
 
@@ -133,12 +307,6 @@ def _generate_random_ip():
     ]
     r = random.choice(ranges)
     return f"{r[0]}.{r[1]}.{r[2]}.{random.randint(r[3], r[7])}"
-
-
-def _generate_random_hostname():
-    prefixes = ['desktop', 'laptop', 'server', 'printer', 'phone', 'tablet', 'camera', 'ap']
-    departments = ['hr', 'it', 'finance', 'marketing', 'sales', 'engineering', 'support']
-    return f"{random.choice(prefixes)}-{random.choice(departments)}-{random.randint(1, 99):02d}"
 
 
 async def _create_mock_data_sources(db):
@@ -223,12 +391,20 @@ async def _create_mock_data_sources(db):
         existing = result.scalar_one_or_none()
 
         if not existing:
+            last_sync = None
+            sync_status = None
+            if ds_data["enabled"] and ds_data["type"] != "sangfor":
+                last_sync = datetime.now(timezone.utc) - timedelta(hours=random.randint(1, 24))
+                sync_status = "success"
+
             ds = DataSource(
                 name=ds_data["name"],
                 type=ds_data["type"],
                 tag=ds_data["tag"],
                 config=ds_data["config"],
                 enabled=ds_data["enabled"],
+                last_sync_at=last_sync,
+                last_sync_status=sync_status,
             )
             db.add(ds)
             created_sources.append(ds)
@@ -313,20 +489,125 @@ async def _create_mock_data_source_bindings(db):
     await db.commit()
 
 
+async def _ensure_rbac_seed(db):
+    """Ensure RBAC preset roles and permissions exist in the database."""
+    from sqlalchemy import select, func
+    from app.models.role import Role, Permission, RolePermission
+
+    # Check if roles already exist
+    count_result = await db.execute(select(func.count()).select_from(Role))
+    role_count = count_result.scalar()
+
+    if role_count >= 5:
+        print("RBAC preset data already exists, skipping seed.")
+        return
+
+    print("Seeding RBAC preset data...")
+
+    # Seed roles
+    roles_data = [
+        {"id": 1, "name": "superadmin", "description": "超级管理员 - 拥有系统全部权限", "is_default": False},
+        {"id": 2, "name": "admin", "description": "管理员 - 管理用户、数据源、系统配置", "is_default": False},
+        {"id": 3, "name": "operator", "description": "操作员 - 操作终端、白名单、黑名单", "is_default": True},
+        {"id": 4, "name": "auditor", "description": "审计员 - 查看审计日志和导出", "is_default": False},
+        {"id": 5, "name": "viewer", "description": "只读用户 - 仅查看各模块数据", "is_default": False},
+    ]
+    for rd in roles_data:
+        existing = await db.execute(select(Role).where(Role.name == rd["name"]))
+        if not existing.scalar_one_or_none():
+            db.add(Role(id=rd["id"], name=rd["name"], description=rd["description"], is_default=rd["is_default"]))
+            print(f"  ✓ Created role: {rd['name']}")
+
+    await db.flush()
+
+    # Seed permissions
+    permissions_data = [
+        {"id": 1, "code": "terminal:read", "name": "查看终端", "module": "terminal", "description": "查看终端列表和详情"},
+        {"id": 2, "code": "terminal:write", "name": "操作终端", "module": "terminal", "description": "封禁/解封终端"},
+        {"id": 3, "code": "whitelist:read", "name": "查看白名单", "module": "whitelist", "description": "查看白名单列表"},
+        {"id": 4, "code": "whitelist:write", "name": "管理白名单", "module": "whitelist", "description": "添加/删除白名单条目"},
+        {"id": 5, "code": "blacklist:read", "name": "查看封禁列表", "module": "blacklist", "description": "查看封禁列表"},
+        {"id": 6, "code": "blacklist:write", "name": "管理封禁列表", "module": "blacklist", "description": "添加/解封黑名单条目"},
+        {"id": 7, "code": "datasource:read", "name": "查看数据源", "module": "datasource", "description": "查看数据源列表和详情"},
+        {"id": 8, "code": "datasource:write", "name": "管理数据源", "module": "datasource", "description": "创建/编辑/删除数据源和绑定"},
+        {"id": 9, "code": "datasource:test", "name": "测试数据源", "module": "datasource", "description": "测试数据源连接"},
+        {"id": 10, "code": "datasource:sync", "name": "同步数据源", "module": "datasource", "description": "手动同步数据源"},
+        {"id": 11, "code": "datasource:compliance", "name": "合规检查", "module": "datasource", "description": "执行合规检查和自动封禁"},
+        {"id": 12, "code": "baseline:read", "name": "查看合规基线", "module": "baseline", "description": "查看合规基线列表"},
+        {"id": 13, "code": "baseline:write", "name": "管理合规基线", "module": "baseline", "description": "创建/编辑/删除合规基线"},
+        {"id": 14, "code": "baseline:test", "name": "测试合规基线", "module": "baseline", "description": "测试合规基线连接"},
+        {"id": 15, "code": "baseline:sync", "name": "同步合规基线", "module": "baseline", "description": "手动同步合规基线"},
+        {"id": 16, "code": "user:read", "name": "查看用户", "module": "user", "description": "查看用户列表和详情"},
+        {"id": 17, "code": "user:write", "name": "管理用户", "module": "user", "description": "创建/编辑用户"},
+        {"id": 18, "code": "user:delete", "name": "删除用户", "module": "user", "description": "删除用户"},
+        {"id": 19, "code": "user:password", "name": "重置密码", "module": "user", "description": "重置用户密码"},
+        {"id": 20, "code": "user:unlock", "name": "解锁用户", "module": "user", "description": "解锁用户账户"},
+        {"id": 21, "code": "audit:read", "name": "查看审计日志", "module": "audit", "description": "查看审计日志"},
+        {"id": 22, "code": "audit:export", "name": "导出审计日志", "module": "audit", "description": "导出审计日志为CSV"},
+        {"id": 23, "code": "settings:read", "name": "查看系统配置", "module": "settings", "description": "查看系统配置"},
+        {"id": 24, "code": "settings:write", "name": "修改系统配置", "module": "settings", "description": "修改系统配置"},
+        {"id": 25, "code": "settings:upload", "name": "上传品牌资源", "module": "settings", "description": "上传登录背景和图标"},
+        {"id": 26, "code": "stats:read", "name": "查看统计", "module": "stats", "description": "查看仪表盘统计"},
+        {"id": 27, "code": "role:read", "name": "查看角色", "module": "role", "description": "查看角色列表和权限"},
+        {"id": 28, "code": "role:write", "name": "管理角色", "module": "role", "description": "创建/编辑角色和分配权限"},
+        {"id": 29, "code": "role:delete", "name": "删除角色", "module": "role", "description": "删除角色"},
+    ]
+    for pd in permissions_data:
+        existing = await db.execute(select(Permission).where(Permission.code == pd["code"]))
+        if not existing.scalar_one_or_none():
+            db.add(Permission(id=pd["id"], code=pd["code"], name=pd["name"], module=pd["module"], description=pd["description"]))
+
+    await db.flush()
+
+    # Seed role_permissions
+    admin_perms = [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29]
+    operator_perms = [1, 2, 3, 4, 5, 6, 7, 12, 21, 26]
+    auditor_perms = [1, 3, 5, 7, 12, 21, 22, 26]
+    viewer_perms = [1, 3, 5, 7, 12, 16, 21, 23, 26, 27]
+
+    role_perm_map = {2: admin_perms, 3: operator_perms, 4: auditor_perms, 5: viewer_perms}
+    for role_id, perm_ids in role_perm_map.items():
+        for pid in perm_ids:
+            existing = await db.execute(
+                select(RolePermission).where(RolePermission.role_id == role_id, RolePermission.permission_id == pid)
+            )
+            if not existing.scalar_one_or_none():
+                db.add(RolePermission(role_id=role_id, permission_id=pid))
+
+    await db.commit()
+
+    # Update sequences for PostgreSQL
+    try:
+        from sqlalchemy import text
+        await db.execute(text("SELECT setval('roles_id_seq', (SELECT COALESCE(MAX(id), 1) FROM roles))"))
+        await db.execute(text("SELECT setval('permissions_id_seq', (SELECT COALESCE(MAX(id), 1) FROM permissions))"))
+        await db.commit()
+    except Exception:
+        pass  # SQLite or sequence not needed
+
+    print(_green("✓ RBAC preset data seeded (5 roles, 29 permissions)"))
+
+
 async def _create_mock_users(db):
     from sqlalchemy import select
     from app.core.security import hash_password
     from app.models.user import User
+    from app.models.role import Role, UserRole
 
     print("\nCreating mock users...")
 
+    # Define users with their intended RBAC roles
     users_data = [
-        {"username": "admin", "email": "admin@company.com", "password": "Admin123", "is_superuser": True, "is_active": True},
-        {"username": "john.doe", "email": "john.doe@company.com", "password": "Password123", "is_superuser": False, "is_active": True},
-        {"username": "jane.smith", "email": "jane.smith@company.com", "password": "Password456", "is_superuser": False, "is_active": True},
-        {"username": "network.admin", "email": "netadmin@company.com", "password": "Netpass456", "is_superuser": True, "is_active": True},
-        {"username": "security.officer", "email": "security@company.com", "password": "Securepass789", "is_superuser": False, "is_active": True},
+        {"username": "admin", "email": "admin@company.com", "password": "Admin123", "is_superuser": True, "is_active": True, "role_name": "superadmin"},
+        {"username": "john.doe", "email": "john.doe@company.com", "password": "Password123", "is_superuser": False, "is_active": True, "role_name": "operator"},
+        {"username": "jane.smith", "email": "jane.smith@company.com", "password": "Password456", "is_superuser": False, "is_active": True, "role_name": "auditor"},
+        {"username": "network.admin", "email": "netadmin@company.com", "password": "Netpass456", "is_superuser": False, "is_active": True, "role_name": "admin"},
+        {"username": "security.officer", "email": "security@company.com", "password": "Securepass789", "is_superuser": False, "is_active": True, "role_name": "admin"},
     ]
+
+    # Load role ID mapping
+    role_result = await db.execute(select(Role))
+    roles_map = {r.name: r.id for r in role_result.scalars().all()}
 
     created_users = []
     for ud in users_data:
@@ -343,11 +624,31 @@ async def _create_mock_users(db):
                 is_active=ud["is_active"],
             )
             db.add(user)
+            await db.flush()  # Get user.id
             created_users.append(user)
             print(f"  ✓ Created user: {ud['username']}")
         else:
             created_users.append(existing)
             print(f"  - User already exists: {ud['username']}")
+
+    await db.commit()
+
+    # Assign RBAC roles
+    print("\nAssigning RBAC roles...")
+    for ud, user in zip(users_data, created_users):
+        role_id = roles_map.get(ud["role_name"])
+        if role_id:
+            # Check if role already assigned
+            existing_role = await db.execute(
+                select(UserRole).where(UserRole.user_id == user.id, UserRole.role_id == role_id)
+            )
+            if not existing_role.scalar_one_or_none():
+                db.add(UserRole(user_id=user.id, role_id=role_id))
+                print(f"  ✓ Assigned role '{ud['role_name']}' to {ud['username']}")
+            else:
+                print(f"  - Role '{ud['role_name']}' already assigned to {ud['username']}")
+        else:
+            print(f"  ⚠ Role '{ud['role_name']}' not found in database, skipping assignment for {ud['username']}")
 
     await db.commit()
     return created_users
@@ -361,6 +662,12 @@ async def _create_mock_terminals(db, users):
 
     # Realistic distribution: 60% compliant, 15% bypass, 10% non_compliant, 15% unknown
     source_tags = ['switch-bldg-a', 'switch-bldg-b']
+
+    # Binding relationships: source_tag -> firewall_tag
+    binding_map = {
+        'switch-bldg-a': 'sangfor-primary',
+        'switch-bldg-b': 'sangfor-dr',
+    }
 
     mac_records = []
     for i in range(50):
@@ -389,16 +696,21 @@ async def _create_mock_terminals(db, users):
 
             # Set status based on compliance
             if compliance == 'non_compliant':
-                status = random.choice(['frozen', 'active'])
+                status = 'blocked'
             elif compliance == 'bypass':
-                status = 'active'
+                status = 'unblocked'
             else:
-                status = random.choice(['active', 'inactive'])
+                status = 'unblocked'
 
             # Set wl_match_type for bypass entries
             wl_match_type = None
             if compliance == 'bypass':
                 wl_match_type = random.choice(['mac', 'ip', 'both'])
+
+            # Set firewall_tag for blocked terminals (matches binding relationship)
+            firewall_tag = None
+            if status == 'blocked':
+                firewall_tag = binding_map.get(source_tag)
 
             mac_record = Terminal(
                 mac_address=_normalize_mac(mac),
@@ -411,6 +723,7 @@ async def _create_mock_terminals(db, users):
                 source_tag=source_tag,
                 compliance_status=compliance,
                 wl_match_type=wl_match_type,
+                firewall_tag=firewall_tag,
             )
             db.add(mac_record)
             mac_records.append(mac_record)
@@ -577,7 +890,11 @@ async def _create_mock_blacklist(db, mac_records, users):
     available_macs = [m for m in mac_records if m.mac_address not in whitelisted_macs]
     selected_macs = random.sample(available_macs, min(10, len(available_macs)))
 
-    firewall_tags = ['sangfor-primary', 'sangfor-dr']
+    # Binding relationships: source_tag -> firewall_tag (must match DataSourceBinding)
+    binding_map = {
+        'switch-bldg-a': 'sangfor-primary',
+        'switch-bldg-b': 'sangfor-dr',
+    }
 
     for mac_record in selected_macs:
         stmt = select(Blacklist).where(Blacklist.mac_address == mac_record.mac_address)
@@ -588,7 +905,12 @@ async def _create_mock_blacklist(db, mac_records, users):
             days_ago = random.randint(0, 30)
             created_at = datetime.now(timezone.utc) - timedelta(days=days_ago)
             is_auto = random.choice([True, False, False])  # ~33% auto-blocked
-            firewall_tag = random.choice(firewall_tags)
+
+            # firewall_tag must match binding relationship for the terminal's source_tag
+            firewall_tag = binding_map.get(mac_record.source_tag, 'sangfor-primary')
+
+            # Auto-blocked entries are created by the system
+            blocked_by = "system" if is_auto else random.choice(users).username
 
             blacklist_entry = Blacklist(
                 mac_address=mac_record.mac_address,
@@ -597,17 +919,18 @@ async def _create_mock_blacklist(db, mac_records, users):
                 reason=random.choice(reasons),
                 blocked_at=created_at,
                 expires_at=datetime.now(timezone.utc) + timedelta(days=random.randint(7, 30)),
-                blocked_by=random.choice(users).username,
-                source_tag="manual" if not is_auto else mac_record.source_tag,
+                blocked_by=blocked_by,
+                source_tag=mac_record.source_tag if is_auto else "manual",
                 firewall_tag=firewall_tag,
                 is_auto_blocked=is_auto,
                 auto_unblocked=False,
             )
             db.add(blacklist_entry)
 
-            # Update corresponding terminal to non_compliant + frozen
+            # Update corresponding terminal to non_compliant + blocked
             mac_record.compliance_status = "non_compliant"
-            mac_record.status = "frozen"
+            mac_record.status = "blocked"
+            mac_record.firewall_tag = firewall_tag
 
             label = "auto" if is_auto else "manual"
             print(f"  ✓ Blacklisted ({label}): {mac_record.mac_address} → fw:{firewall_tag}")
@@ -616,24 +939,123 @@ async def _create_mock_blacklist(db, mac_records, users):
 
 
 async def _create_mock_audit_logs(db, users, mac_records):
+    import json as _json
     from app.models.log import AuditLog
 
     print("\nCreating mock audit logs...")
 
-    actions = [
-        ('login', 'User logged in successfully'),
-        ('logout', 'User logged out'),
-        ('block_ip', f'Blocked IP {_generate_random_ip()}'),
-        ('unblock_ip', f'Unblocked IP {_generate_random_ip()}'),
-        ('add_whitelist', 'Added device to whitelist'),
-        ('remove_whitelist', 'Removed device from whitelist'),
-        ('search_terminal', 'Searched for terminal'),
-        ('update_terminal', 'Updated terminal information'),
-        ('view_logs', 'Viewed audit logs'),
-        ('export_data', 'Exported terminal data'),
+    # Action definitions matching actual business code (verb_resource format)
+    # Each entry: (action, resource_type, resource_name_fn, details_fn)
+    action_templates = [
+        # Authentication actions (resource_type='auth')
+        ('login', 'auth', lambda u: u.username, lambda u: _json.dumps({"method": "password"})),
+        ('login_failed', 'auth', lambda u: u.username, lambda u: _json.dumps({"reason": "Invalid credentials"})),
+        ('logout', 'auth', lambda u: u.username, lambda u: _json.dumps({"method": "manual"})),
+        ('token_refresh', 'auth', lambda u: u.username, lambda u: _json.dumps({"grant_type": "refresh_token"})),
+        ('change_password', 'auth', lambda u: u.username, lambda u: _json.dumps({"changed_by": "self"})),
+
+        # Terminal actions (resource_type='terminal')
+        ('block_terminal', 'terminal',
+         lambda u: random.choice(mac_records).ip_address if mac_records else None,
+         lambda u: _json.dumps({"ip": random.choice(mac_records).ip_address if mac_records else "", "firewall": "sangfor-primary", "reason": random.choice(["Non-compliant", "Security violation"])})),
+        ('unblock_terminal', 'terminal',
+         lambda u: random.choice(mac_records).ip_address if mac_records else None,
+         lambda u: _json.dumps({"ip": random.choice(mac_records).ip_address if mac_records else "", "firewall": "sangfor-primary"})),
+        ('auto_block_terminal', 'terminal',
+         lambda u: random.choice(mac_records).ip_address if mac_records else None,
+         lambda u: _json.dumps({"ip": random.choice(mac_records).ip_address if mac_records else "", "firewall": "sangfor-primary", "trigger": "compliance_check"})),
+        ('auto_unblock_terminal', 'terminal',
+         lambda u: random.choice(mac_records).ip_address if mac_records else None,
+         lambda u: _json.dumps({"ip": random.choice(mac_records).ip_address if mac_records else "", "firewall": "sangfor-primary", "trigger": "compliance_restored"})),
+        ('cleanup_expired_blacklist', 'terminal',
+         lambda u: None,
+         lambda u: _json.dumps({"expired_count": random.randint(1, 5)})),
+
+        # Whitelist actions (resource_type='whitelist')
+        ('add_whitelist', 'whitelist',
+         lambda u: random.choice(mac_records).mac_address if mac_records else None,
+         lambda u: _json.dumps({"pattern": random.choice(mac_records).ip_address if mac_records else "", "type": "single_ip"})),
+        ('remove_whitelist', 'whitelist',
+         lambda u: random.choice(mac_records).mac_address if mac_records else None,
+         lambda u: _json.dumps({"pattern": random.choice(mac_records).ip_address if mac_records else ""})),
+
+        # Blacklist actions (resource_type='blacklist')
+        ('block_blacklist', 'blacklist',
+         lambda u: random.choice(mac_records).ip_address if mac_records else None,
+         lambda u: _json.dumps({"ip": random.choice(mac_records).ip_address if mac_records else "", "firewall": "sangfor-primary"})),
+        ('unblock_blacklist', 'blacklist',
+         lambda u: random.choice(mac_records).ip_address if mac_records else None,
+         lambda u: _json.dumps({"ip": random.choice(mac_records).ip_address if mac_records else "", "firewall": "sangfor-primary"})),
+
+        # User management actions (resource_type='user')
+        ('create_user', 'user',
+         lambda u: f"user_{random.randint(100,999)}",
+         lambda u: _json.dumps({"username": f"user_{random.randint(100,999)}", "role": "operator"})),
+        ('update_user', 'user',
+         lambda u: random.choice(users).username if len(users) > 1 else u.username,
+         lambda u: _json.dumps({"field": random.choice(["email", "is_active", "role"])})),
+        ('change_role', 'user',
+         lambda u: random.choice(users).username if len(users) > 1 else u.username,
+         lambda u: _json.dumps({"old_role": "viewer", "new_role": "operator"})),
+
+        # Data source actions (resource_type='datasource')
+        ('create_datasource', 'datasource',
+         lambda u: random.choice(["Core Switch (Building A)", "Network Monitor API"]),
+         lambda u: _json.dumps({"type": "arp_ssh", "tag": "switch-bldg-a"})),
+        ('test_datasource', 'datasource',
+         lambda u: random.choice(["Core Switch (Building A)", "Sangfor Firewall (Primary)"]),
+         lambda u: _json.dumps({"result": "success", "latency_ms": random.randint(10, 200)})),
+        ('sync_datasource', 'datasource',
+         lambda u: random.choice(["Core Switch (Building A)", "Core Switch (Building B)"]),
+         lambda u: _json.dumps({"new_entries": random.randint(0, 15), "updated_entries": random.randint(0, 5)})),
+        ('bind_datasource', 'datasource',
+         lambda u: "switch-bldg-a → sangfor-primary",
+         lambda u: _json.dumps({"arp_source": "switch-bldg-a", "firewall": "sangfor-primary"})),
+
+        # Compliance baseline actions (resource_type='compliance')
+        ('create_baseline', 'compliance',
+         lambda u: "IPGuard Database",
+         lambda u: _json.dumps({"type": "ipguard", "tag": "ipguard-main"})),
+        ('sync_baseline', 'compliance',
+         lambda u: "IPGuard Database",
+         lambda u: _json.dumps({"matched": random.randint(50, 200), "new": random.randint(0, 10)})),
+
+        # Role actions (resource_type='role')
+        ('create_role', 'role',
+         lambda u: f"custom_role_{random.randint(1,9)}",
+         lambda u: _json.dumps({"permissions_count": random.randint(3, 10)})),
+        ('update_role', 'role',
+         lambda u: random.choice(["operator", "auditor", "viewer"]),
+         lambda u: _json.dumps({"changes": "permissions_updated"})),
+        ('assign_role', 'role',
+         lambda u: random.choice(users).username if users else "admin",
+         lambda u: _json.dumps({"role": random.choice(["operator", "auditor", "viewer"])})),
+
+        # System actions (resource_type='system')
+        ('update_config', 'system',
+         lambda u: None,
+         lambda u: _json.dumps({"key": random.choice(["APP_NAME", "LOGIN_HEADING", "RATE_LIMIT"]), "via": "api"})),
+        ('export_audit_logs', 'system',
+         lambda u: None,
+         lambda u: _json.dumps({"format": "csv", "count": random.randint(50, 500)})),
+        ('recalculate_compliance', 'system',
+         lambda u: None,
+         lambda u: _json.dumps({"total": random.randint(40, 60), "compliant": random.randint(20, 35), "non_compliant": random.randint(3, 8)})),
     ]
 
-    resource_types = ['user', 'terminal', 'whitelist', 'blacklist', 'system']
+    # Weight distribution: auth actions most common, then terminal, then others
+    weights = []
+    for action, rtype, _, _ in action_templates:
+        if rtype == 'auth':
+            weights.append(30)
+        elif rtype == 'terminal':
+            weights.append(15)
+        elif rtype in ('whitelist', 'blacklist'):
+            weights.append(8)
+        elif rtype == 'user':
+            weights.append(5)
+        else:
+            weights.append(3)
 
     for i in range(100):
         days_ago = random.randint(0, 30)
@@ -644,28 +1066,33 @@ async def _create_mock_audit_logs(db, users, mac_records):
             days=days_ago, hours=hours_ago, minutes=minutes_ago,
         )
 
-        action, description = random.choice(actions)
+        # Weighted random selection
+        action_def = random.choices(action_templates, weights=weights, k=1)[0]
+        action, resource_type, resource_name_fn, details_fn = action_def
 
-        mac_for_action = None
-        if action in ['block_ip', 'unblock_ip', 'search_terminal', 'update_terminal']:
-            mac_for_action = random.choice(mac_records)
-            if mac_for_action:
-                description = description.replace('IP', f"{mac_for_action.ip_address}")
+        user = random.choice(users)
+        resource_name = resource_name_fn(user)
+        details = details_fn(user)
+
+        # Auto-block/unblock/cleanup are system operations
+        if action in ('auto_block_terminal', 'auto_unblock_terminal', 'cleanup_expired_blacklist', 'recalculate_compliance'):
+            username = "system"
+        else:
+            username = user.username
 
         log_entry = AuditLog(
-            user_id=random.choice(users).id,
-            username=random.choice(users).username,
+            username=username,
             action=action,
-            resource_type=random.choice(resource_types),
-            resource_id=str(mac_for_action.id) if mac_for_action else None,
-            details=description,
-            ip_address=_generate_random_ip(),
+            resource_type=resource_type,
+            resource_name=resource_name,
+            details=details,
+            ip_address=_generate_random_ip() if username != "system" else "127.0.0.1",
             timestamp=timestamp,
         )
         db.add(log_entry)
 
     await db.commit()
-    print("  ✓ Created 100 audit log entries")
+    print("  ✓ Created 100 audit log entries (matching current business actions)")
 
 
 async def _run_mock_generate():
@@ -691,6 +1118,9 @@ async def _run_mock_generate():
 
     async with async_session_maker() as db:
         try:
+            # Ensure RBAC preset data exists before creating users
+            await _ensure_rbac_seed(db)
+
             data_sources = await _create_mock_data_sources(db)
             await _create_mock_data_source_bindings(db)
             users = await _create_mock_users(db)
@@ -731,11 +1161,11 @@ async def _run_mock_generate():
             print(f"  • Audit Logs: {result.scalar()}")
             print()
             print("Demo accounts:")
-            print("  • admin / Admin123 (superuser)")
-            print("  • john.doe / Password123")
-            print("  • jane.smith / Password456")
-            print("  • network.admin / Netpass456 (superuser)")
-            print("  • security.officer / Securepass789")
+            print("  • admin / Admin123 (superadmin - 全部权限)")
+            print("  • network.admin / Netpass456 (superadmin - 全部权限)")
+            print("  • security.officer / Securepass789 (admin - 用户/数据源/配置管理)")
+            print("  • john.doe / Password123 (operator - 终端/白名单/黑名单操作)")
+            print("  • jane.smith / Password456 (auditor - 审计日志查看和导出)")
             print()
             print("To clear mock data:")
             print("  python cli.py mock clear")
@@ -756,7 +1186,7 @@ def cmd_mock_generate(_args):
 # mock clear
 # ---------------------------------------------------------------------------
 async def _run_mock_clear():
-    from sqlalchemy import delete, func, select
+    from sqlalchemy import delete, func, select, text
     from app.core.database import async_session_maker
     from app.models.user import User
     from app.models.terminal import Terminal
@@ -765,6 +1195,7 @@ async def _run_mock_clear():
     from app.models.log import AuditLog
     from app.models.data_source import DataSource, DataSourceBinding
     from app.models.compliance_baseline import ComplianceBaseline
+    from app.models.role import UserRole, Role, RolePermission
 
     print("=" * 70)
     print("TerminalAccessManager - Clear Mock Data")
@@ -793,6 +1224,17 @@ async def _run_mock_clear():
         stmt = select(func.count()).select_from(User).where(User.username != 'admin')
         result = await db.execute(stmt)
         counts['Non-Admin Users'] = result.scalar()
+
+        # RBAC data counts
+        stmt = select(func.count()).select_from(UserRole)
+        result = await db.execute(stmt)
+        counts['User-Role Assignments'] = result.scalar()
+
+        # Custom roles (non-built-in)
+        builtin_roles = ('superadmin', 'admin', 'operator', 'auditor', 'viewer')
+        stmt = select(func.count()).select_from(Role).where(Role.name.notin_(builtin_roles))
+        result = await db.execute(stmt)
+        counts['Custom Roles'] = result.scalar()
 
         print("Current data:")
         for category, count in counts.items():
@@ -837,9 +1279,43 @@ async def _run_mock_clear():
             await db.execute(DataSource.__table__.delete())
             print(_green("  ✓ Deleted data sources"))
 
+            # Delete non-admin users (must be before user_roles to avoid FK issues)
             stmt = delete(User).where(User.username != 'admin')
             await db.execute(stmt)
             print(_green("  ✓ Deleted non-admin users"))
+
+            # Clean up RBAC data: remove user_roles for deleted users, keep built-in roles
+            await db.execute(UserRole.__table__.delete())
+            print(_green("  ✓ Deleted user-role assignments"))
+
+            # Delete custom roles and their permissions (keep 5 built-in roles)
+            custom_roles_result = await db.execute(
+                select(Role.id).where(Role.name.notin_(builtin_roles))
+            )
+            custom_role_ids = [row[0] for row in custom_roles_result.all()]
+            if custom_role_ids:
+                await db.execute(
+                    RolePermission.__table__.delete().where(RolePermission.role_id.in_(custom_role_ids))
+                )
+                await db.execute(
+                    Role.__table__.delete().where(Role.id.in_(custom_role_ids))
+                )
+                print(_green(f"  ✓ Deleted {len(custom_role_ids)} custom roles"))
+            else:
+                print(_green("  ✓ No custom roles to delete"))
+
+            # Re-assign admin user to superadmin role
+            admin_result = await db.execute(select(User).where(User.username == 'admin'))
+            admin_user = admin_result.scalar_one_or_none()
+            if admin_user:
+                sa_result = await db.execute(select(Role).where(Role.name == 'superadmin'))
+                sa_role = sa_result.scalar_one_or_none()
+                if sa_role:
+                    existing = await db.execute(
+                        select(UserRole).where(UserRole.user_id == admin_user.id, UserRole.role_id == sa_role.id)
+                    )
+                    if not existing.scalar_one_or_none():
+                        db.add(UserRole(user_id=admin_user.id, role_id=sa_role.id))
 
             await db.commit()
 
@@ -851,7 +1327,9 @@ async def _run_mock_clear():
             print("Database is now clean and ready for production.")
             print()
             print("Remaining:")
-            print("  • Admin user account (username: admin)")
+            print("  • Admin user account (username: admin, role: superadmin)")
+            print("  • 5 built-in roles (superadmin, admin, operator, auditor, viewer)")
+            print("  • 29 preset permissions and role-permission mappings")
             print("  • Database schema and tables")
             print("  • System configuration (system_config table)")
             print()
@@ -1243,6 +1721,36 @@ def build_parser():
     # setup
     sp_setup = subparsers.add_parser("setup", help="Initialize database and create admin user")
     sp_setup.set_defaults(func=cmd_setup)
+
+    # password reset
+    sp_password = subparsers.add_parser("password", help="Password management")
+    pw_sub = sp_password.add_subparsers(dest="pw_command", help="Password operations")
+
+    sp_pw_reset = pw_sub.add_parser("reset", help="Reset a user's password")
+    sp_pw_reset.add_argument("username", help="Username to reset password for")
+    sp_pw_reset.add_argument("--password", "-p", help="New password (will prompt if not provided)")
+    sp_pw_reset.set_defaults(func=cmd_password_reset)
+
+    # user management
+    sp_user = subparsers.add_parser("user", help="User management")
+    user_sub = sp_user.add_subparsers(dest="user_command", help="User operations")
+
+    sp_user_list = user_sub.add_parser("list", help="List all users")
+    sp_user_list.set_defaults(func=cmd_user_list)
+
+    sp_user_unlock = user_sub.add_parser("unlock", help="Unlock a locked user account")
+    sp_user_unlock.add_argument("username", help="Username to unlock")
+    sp_user_unlock.set_defaults(func=cmd_user_unlock)
+
+    # role management
+    sp_role = subparsers.add_parser("role", help="Role and permission management")
+    role_sub = sp_role.add_subparsers(dest="role_command", help="Role operations")
+
+    sp_role_list = role_sub.add_parser("list", help="List all roles")
+    sp_role_list.set_defaults(func=cmd_role_list)
+
+    sp_role_perms = role_sub.add_parser("permissions", help="List all permissions")
+    sp_role_perms.set_defaults(func=cmd_role_permissions)
 
     # mock (with sub-subcommands)
     sp_mock = subparsers.add_parser("mock", help="Manage mock/demo data")

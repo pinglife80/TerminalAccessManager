@@ -1,6 +1,6 @@
 # 前端实现总结
 
-> 文档版本：v3.2.0 | 更新日期：2026-06-10
+> 文档版本：v3.3.0 | 更新日期：2026-06-17
 
 ## 概述
 
@@ -369,7 +369,6 @@ logger.clearLogs();    // 清除所有日志
 - MAC 地址格式无关搜索（后端去除分隔符后 ILIKE 匹配，前端 `keepPreviousData` 防搜索闪烁）
 - 日期范围过滤
 - 服务端分页（PaginatedResponse）
-- 添加黑名单条目（MAC 地址、IP 地址、原因、过期时间）
 - 删除黑名单条目（带确认对话框）
 - 查看详情弹窗
 - MAC 地址格式自动标准化
@@ -415,6 +414,17 @@ logger.clearLogs();    // 清除所有日志
 - 搜索过滤
 - 高级分页
 - 空状态和加载状态
+
+### RBAC 权限控制
+
+- **usePermission Hook** (`src/hooks/usePermission.ts`): 4个权限判断方法（hasPermission/hasAnyPermission/hasAllPermissions/hasRole），superuser 直接返回 true
+- **ProtectedRoute 路由守卫** (`src/components/ProtectedRoute.tsx`): 支持 `requiredPermission` / `requiredAnyPermissions`，无权限重定向 /403
+- **侧边栏导航过滤** (`src/components/Sidebar.tsx`): 根据 `requiredPermission` 过滤导航项
+- **角色管理页面** (`src/pages/Roles.tsx`): 角色列表、创建/编辑弹窗、权限按模块分组、删除确认、超管角色保护
+- **用户管理页面** (`src/pages/Users.tsx`): 单角色分配（select 下拉）、超管/自己编辑时角色只读、按钮级权限控制
+- **审计日志页面** (`src/pages/AuditLogs.tsx`): 导出按钮权限控制
+- **按钮级权限差距**: Terminals/Whitelist/Blacklist/DataSources/Settings 页面操作按钮尚未添加前端权限控制（后端 API 已有保护）
+- **详细文档**: 参见 [RBAC.md](../../docs/RBAC.md)
 
 ### 9. 个人资料 (`/profile`)
 **功能：**
@@ -582,7 +592,7 @@ logger.clearLogs();    // 清除所有日志
 - `POST /api/v1/whitelist/` - 添加到白名单
 - `DELETE /api/v1/whitelist/{mac}` - 从白名单移除
 - `GET /api/v1/blacklist/` - 列出黑名单
-- `POST /api/v1/blacklist/` - 添加到黑名单
+- `POST /api/v1/blacklist/` - 添加到黑名单（⚠️ 已废弃，不再使用）
 - `DELETE /api/v1/blacklist/{id}` - 从黑名单移除
 - `GET /api/v1/logs/` - 列出审计日志
 - `GET /api/v1/logs/search` - 搜索审计日志

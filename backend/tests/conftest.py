@@ -1,11 +1,9 @@
 """Pytest configuration and fixtures"""
-import pytest
-import sys
-import os
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+import os
+from unittest.mock import AsyncMock, patch
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+import pytest
 
 # Set test environment variables BEFORE importing app modules
 os.environ["ENVIRONMENT"] = "test"
@@ -88,7 +86,7 @@ def mock_redis():
     return redis_mock
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def mock_redis_patch(mock_redis):
     """Patch the get_redis_client function to return mock_redis."""
     with patch("app.core.security.get_redis_client", return_value=mock_redis):

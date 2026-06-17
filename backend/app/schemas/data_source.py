@@ -1,6 +1,7 @@
-from pydantic import BaseModel, Field
-from typing import Optional, Dict, Any, List
 from datetime import datetime
+from typing import Any
+
+from pydantic import BaseModel, Field
 
 
 # ------------------------------------------------------------------
@@ -11,7 +12,7 @@ class DataSourceBase(BaseModel):
     name: str = Field(..., max_length=100, description="Data source name")
     type: str = Field(..., description="Data source type: arp_ssh / arp_api / sangfor")
     tag: str = Field(..., max_length=50, description="Unique tag identifier")
-    config: Dict[str, Any] = Field(default={}, description="Connection configuration")
+    config: dict[str, Any] = Field(default={}, description="Connection configuration")
     enabled: bool = Field(default=True, description="Whether the data source is enabled")
 
 
@@ -22,21 +23,22 @@ class DataSourceCreate(DataSourceBase):
 
 class DataSourceUpdate(BaseModel):
     """Schema for updating a data source"""
-    name: Optional[str] = Field(None, max_length=100)
-    type: Optional[str] = None
-    tag: Optional[str] = Field(None, max_length=50)
-    config: Optional[Dict[str, Any]] = None
-    enabled: Optional[bool] = None
+    name: str | None = Field(None, max_length=100)
+    type: str | None = None
+    tag: str | None = Field(None, max_length=50)
+    config: dict[str, Any] | None = None
+    enabled: bool | None = None
 
 
 class DataSourceResponse(DataSourceBase):
     """Data source response schema"""
     id: int
-    last_sync_at: Optional[datetime] = None
-    last_sync_status: Optional[str] = None
-    last_sync_error: Optional[str] = None
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
+    last_sync_at: datetime | None = None
+    last_sync_status: str | None = None
+    last_sync_error: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    warnings: list[str] | None = None
 
     class Config:
         from_attributes = True
@@ -56,7 +58,7 @@ class DataSourceBindingResponse(BaseModel):
     id: int
     arp_source_tag: str
     firewall_tag: str
-    created_at: Optional[datetime] = None
+    created_at: datetime | None = None
 
     class Config:
         from_attributes = True
@@ -69,7 +71,7 @@ class ConnectionTestResult(BaseModel):
     """Result of testing a data source connection"""
     success: bool
     message: str
-    details: Optional[Dict[str, Any]] = None
+    details: dict[str, Any] | None = None
 
 
 # ------------------------------------------------------------------
@@ -82,7 +84,7 @@ class SyncResult(BaseModel):
     entries_processed: int = 0
     entries_added: int = 0
     entries_updated: int = 0
-    errors: List[str] = []
+    errors: list[str] = []
 
 
 # ------------------------------------------------------------------
@@ -90,7 +92,7 @@ class SyncResult(BaseModel):
 # ------------------------------------------------------------------
 class ComplianceCheckRequest(BaseModel):
     """Request for compliance check"""
-    arp_source_tag: Optional[str] = Field(None, description="Check only entries from this ARP source")
+    arp_source_tag: str | None = Field(None, description="Check only entries from this ARP source")
     force: bool = Field(default=False, description="Force re-check even if already checked")
 
 
@@ -101,8 +103,8 @@ class ComplianceCheckResult(BaseModel):
     bypass: int = 0
     non_compliant: int = 0
     unknown: int = 0
-    message: Optional[str] = None
-    details: Optional[Dict[str, List[Dict[str, Any]]]] = None
+    message: str | None = None
+    details: dict[str, list[dict[str, Any]]] | None = None
 
 
 class AutoBlockRequest(BaseModel):
@@ -117,8 +119,8 @@ class AutoBlockResult(BaseModel):
     total_non_compliant: int = 0
     blocked: int = 0
     skipped: int = 0
-    errors: List[str] = []
-    details: Optional[List[Dict[str, Any]]] = None
+    errors: list[str] = []
+    details: list[dict[str, Any]] | None = None
 
 
 class AutoUnblockResult(BaseModel):
@@ -126,5 +128,26 @@ class AutoUnblockResult(BaseModel):
     total_auto_blocked: int = 0
     unblocked: int = 0
     skipped: int = 0
-    errors: List[str] = []
-    details: Optional[List[Dict[str, Any]]] = None
+    errors: list[str] = []
+    details: list[dict[str, Any]] | None = None
+
+
+# ------------------------------------------------------------------
+# Delete Preview schemas
+# ------------------------------------------------------------------
+class DeletePreviewAffected(BaseModel):
+    """Affected resources count for delete preview"""
+    terminals: int = 0
+    blocked_terminals: int = 0
+    blacklist_entries: int = 0
+    bindings: int = 0
+    compliant_terminals: int = 0
+
+
+class DeletePreviewResponse(BaseModel):
+    """Response for delete preview - shows impact before actual deletion"""
+    can_delete: bool
+    warnings: list[str] = []
+    actions: list[str] = []
+    affected: DeletePreviewAffected = DeletePreviewAffected()
+    reason: str | None = None

@@ -1,26 +1,27 @@
-from fastapi import FastAPI
-from fastapi.staticfiles import StaticFiles
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.exceptions import RequestValidationError
-from starlette.exceptions import HTTPException as StarletteHTTPException
-from contextlib import asynccontextmanager
-from loguru import logger
 import asyncio
+import os
+from contextlib import asynccontextmanager
 
-from app.core.config import settings
-from app.core.logging_config import setup_logging
-from app.core.database import init_db, async_session_factory
+from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from loguru import logger
+from starlette.exceptions import HTTPException as StarletteHTTPException
+
 from app.api.v1.api import api_router
+from app.core.config import settings
+from app.core.database import async_session_factory, init_db
+from app.core.logging_config import setup_logging
 from app.core.security import close_redis_client
-from app.middleware.rate_limit import RateLimitMiddleware
-from app.middleware.request_id import RequestIDMiddleware
-from app.middleware.logging import RequestLoggingMiddleware
 from app.middleware.error_handler import (
     http_exception_handler,
-    validation_exception_handler,
     unhandled_exception_handler,
+    validation_exception_handler,
 )
-
+from app.middleware.logging import RequestLoggingMiddleware
+from app.middleware.rate_limit import RateLimitMiddleware
+from app.middleware.request_id import RequestIDMiddleware
 
 # Configure logging (centralized: loguru + intercept stdlib logging)
 setup_logging()
@@ -136,6 +137,7 @@ async def scheduled_ipguard_sync():
             try:
                 async with async_session_factory() as db:
                     from sqlalchemy import select
+
                     from app.models.compliance_baseline import ComplianceBaseline
                     from app.services.compliance_service import ComplianceService
                     service = ComplianceService(db)
@@ -146,6 +148,13 @@ async def scheduled_ipguard_sync():
                         try:
                             await service.sync_ipguard_data(baseline.tag)
                             logger.info(f"Synced IPGuard data for baseline: {baseline.tag} [source=scheduler]")
+                            # Trigger compliance re-evaluation after IPGuard data update
+                            try:
+                                result = await service.recalculate_all_compliance()
+                                if result.get("non_compliant", 0) > 0 or result.get("bypass", 0) > 0 or result.get("compliant", 0) > 0:
+                                    logger.info(f"Compliance re-evaluated after IPGuard sync: {result} [source=scheduler]")
+                            except Exception as re:
+                                logger.error(f"Error re-evaluating compliance after IPGuard sync: {type(re).__name__}: {re} [source=scheduler]")
                         except Exception as e:
                             logger.error(f"Error syncing IPGuard data for {baseline.tag}: {type(e).__name__}: {e} [source=scheduler]")
             finally:
@@ -176,6 +185,7 @@ async def scheduled_compliance_check():
                     for source in all_arp_sources:
                         try:
                             from sqlalchemy import select as sa_select
+
                             from app.models.terminal import Terminal
                             stmt = sa_select(Terminal).where(
                                 (Terminal.source_tag == source.tag) &
@@ -213,6 +223,14 @@ async def scheduled_compliance_check():
                                 await db.commit()
                                 if result.non_compliant > 0 or result.bypass > 0:
                                     logger.info(f"Compliance check for {source.tag}: {result.compliant} compliant, {result.bypass} bypass, {result.non_compliant} non-compliant")
+                                    # Trigger auto-block for non-compliant terminals
+                                    if result.non_compliant > 0:
+                                        try:
+                                            block_result = await service.auto_block_non_compliant(source.tag)
+                                            if block_result.blocked > 0:
+                                                logger.info(f"Auto-blocked {block_result.blocked} non-compliant terminals from {source.tag} [source=scheduler]")
+                                        except Exception as be:
+                                            logger.error(f"Error auto-blocking for {source.tag}: {type(be).__name__}: {be} [source=scheduler]")
                         except Exception as e:
                             logger.error(f"Error in compliance check for {source.tag}: {type(e).__name__}: {e} [source=scheduler]")
             finally:
@@ -383,18 +401,31 @@ if settings.BACKEND_CORS_ORIGINS:
 app.include_router(api_router, prefix=settings.API_V1_STR)
 
 # Serve uploaded branding assets
-import os
-UPLOAD_DIR = "/app/uploads"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
-app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
+
+UPLOAD_DIR = settings.UPLOAD_DIR
+
+
+def _ensure_upload_dir():
+    """Ensure upload directory exists (safe to call multiple times)"""
+    try:
+        os.makedirs(UPLOAD_DIR, exist_ok=True)
+        return True
+    except (PermissionError, OSError) as e:
+        logger.warning(f"Cannot create upload directory {UPLOAD_DIR}: {e}")
+        return False
+
+
+if _ensure_upload_dir():
+    app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
 
 @app.get("/health")
 async def health_check():
     """Health check endpoint with dependency verification"""
-    from sqlalchemy import text
-    from app.core.database import engine
     import redis.asyncio as aioredis
+    from sqlalchemy import text
+
+    from app.core.database import engine
 
     health_status = {
         "status": "healthy",

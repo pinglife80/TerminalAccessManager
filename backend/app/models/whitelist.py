@@ -1,5 +1,6 @@
-from sqlalchemy import Column, Integer, String, DateTime, Text
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+
+from sqlalchemy import Column, DateTime, Integer, String, Text
 
 from app.core.database import Base
 
@@ -16,7 +17,7 @@ class Whitelist(Base):
     pattern_type = Column(String(20), default="single_ip")  # single_ip / cidr / ip_range / mac_only
     comments = Column(Text, nullable=True)
     added_by = Column(String(50), nullable=False)
-    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True)
 
     def __repr__(self):
         return f"<Whitelist(mac='{self.mac_address}', ip_pattern='{self.ip_pattern}')>"

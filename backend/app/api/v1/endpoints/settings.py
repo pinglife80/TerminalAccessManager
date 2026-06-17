@@ -1,24 +1,25 @@
-from typing import Optional, List
-from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File, Request
-from sqlalchemy.ext.asyncio import AsyncSession
 import os
 import uuid
-import shutil
 
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.config import settings
 from app.core.database import get_db
-from app.core.security import get_current_active_superuser
+from app.core.security import get_client_ip, require_permission
 from app.models.user import User
 from app.schemas.system_config import (
-    SystemConfigResponse, SystemConfigUpdate, ConfigUpdateResult,
-    AllConfigsResponse, ConfigCategory,
+    AllConfigsResponse,
+    ConfigUpdateResult,
+    SystemConfigResponse,
+    SystemConfigUpdate,
 )
 from app.services.config_service import ConfigService
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 
 # Upload directory for branding assets
-UPLOAD_DIR = "/app/uploads"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
+UPLOAD_DIR = settings.UPLOAD_DIR
 
 ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/gif", "image/x-icon", "image/vnd.microsoft.icon"}
 ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".ico"}
@@ -40,36 +41,42 @@ async def get_public_branding(
 
 @router.get("/", response_model=AllConfigsResponse)
 async def get_all_configs(
-    current_user: User = Depends(get_current_active_superuser),
+    current_user: User = Depends(require_permission("settings:read")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get all system configurations grouped by category (superuser only)"""
+    """Get all system configurations grouped by category (requires settings:read permission)"""
     service = ConfigService(db)
     return await service.get_all_grouped()
 
 
-@router.get("/list", response_model=List[SystemConfigResponse])
+@router.get("/list", response_model=list[SystemConfigResponse])
 async def list_configs(
-    category: Optional[str] = Query(None, description="Filter by category"),
-    current_user: User = Depends(get_current_active_superuser),
+    category: str | None = Query(None, description="Filter by category"),
+    current_user: User = Depends(require_permission("settings:read")),
     db: AsyncSession = Depends(get_db),
 ):
-    """List all config entries with metadata (superuser only)"""
+    """List all config entries with metadata (requires settings:read permission)"""
     service = ConfigService(db)
     return await service.list_all(category)
 
 
-@router.put("/update", response_model=List[ConfigUpdateResult])
+@router.put("/update", response_model=list[ConfigUpdateResult])
 async def update_configs(
-    updates: List[SystemConfigUpdate],
+    updates: list[SystemConfigUpdate],
     request: Request,
-    current_user: User = Depends(get_current_active_superuser),
+    current_user: User = Depends(require_permission("settings:write")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Update one or more config values (superuser only).
+    """Update one or more config values (requires settings:write permission).
     Read-only configs cannot be changed through this endpoint.
     Changes take effect immediately via cache invalidation."""
     service = ConfigService(db)
+
+    # Get old values before update for audit
+    old_values = {}
+    for update in updates:
+        old_values[update.key] = await service.get(update.key)
+
     results = await service.batch_update(updates, updated_by=current_user.username)
 
     # Audit log for each updated config
@@ -77,8 +84,10 @@ async def update_configs(
     ts = TerminalService(db)
     for update in updates:
         await ts.log_action(current_user.username, "update_config", "system", update.key,
-                            {"message": "Updated system configuration", "key": update.key},
-                            ip_address=request.client.host if request.client else None)
+                            {"message": "Updated system configuration", "key": update.key,
+                             "old_value": old_values.get(update.key), "new_value": update.value},
+                            ip_address=get_client_ip(request),
+                            resource_name=update.key)
 
     return results
 
@@ -88,11 +97,12 @@ async def update_single_config(
     key: str,
     update: SystemConfigUpdate,
     request: Request,
-    current_user: User = Depends(get_current_active_superuser),
+    current_user: User = Depends(require_permission("settings:write")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Update a single config value by key (superuser only)"""
+    """Update a single config value by key (requires settings:write permission)"""
     service = ConfigService(db)
+    old_value = await service.get(key)
     result = await service.set(key, update.value, updated_by=current_user.username)
     if not result.success:
         raise HTTPException(
@@ -104,15 +114,17 @@ async def update_single_config(
     from app.services.terminal_service import TerminalService
     ts = TerminalService(db)
     await ts.log_action(current_user.username, "update_config", "system", key,
-                        {"message": "Updated system configuration", "key": key},
-                        ip_address=request.client.host if request.client else None)
+                        {"message": "Updated system configuration", "key": key,
+                         "old_value": old_value, "new_value": update.value},
+                        ip_address=get_client_ip(request),
+                        resource_name=key)
 
     return result
 
 
 @router.post("/seed", response_model=dict)
 async def seed_default_configs(
-    current_user: User = Depends(get_current_active_superuser),
+    current_user: User = Depends(require_permission("settings:write")),
     db: AsyncSession = Depends(get_db),
 ):
     """Seed default configs into the database. Idempotent - skips existing keys."""
@@ -123,7 +135,7 @@ async def seed_default_configs(
 
 @router.post("/invalidate-cache", response_model=dict)
 async def invalidate_config_cache(
-    current_user: User = Depends(get_current_active_superuser),
+    current_user: User = Depends(require_permission("settings:write")),
     db: AsyncSession = Depends(get_db),
 ):
     """Invalidate all config cache entries in Redis.
@@ -135,9 +147,10 @@ async def invalidate_config_cache(
 
 @router.post("/upload", response_model=dict)
 async def upload_branding_asset(
+    request: Request,
     file: UploadFile = File(...),
     purpose: str = Query(..., description="Purpose: 'login_bg' or 'favicon'"),
-    current_user: User = Depends(get_current_active_superuser),
+    current_user: User = Depends(require_permission("settings:upload")),
     db: AsyncSession = Depends(get_db),
 ):
     """Upload a branding asset (login background image or favicon).
@@ -183,8 +196,10 @@ async def upload_branding_asset(
     from app.services.terminal_service import TerminalService
     ts = TerminalService(db)
     await ts.log_action(current_user.username, "upload_branding", "system", config_key,
-                        {"message": "Uploaded branding asset", "purpose": purpose, "url": url_path},
-                        ip_address=None)
+                        {"message": "Uploaded branding asset", "purpose": purpose, "url": url_path,
+                         "file_size": len(content)},
+                        ip_address=get_client_ip(request),
+                        resource_name=config_key)
 
     return {
         "url": url_path,

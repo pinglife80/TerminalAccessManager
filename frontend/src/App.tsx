@@ -18,6 +18,8 @@ const DataSources = lazy(() => import('./pages/DataSources'));
 const AuditLogs = lazy(() => import('./pages/AuditLogs'));
 const Profile = lazy(() => import('./pages/Profile'));
 const Users = lazy(() => import('./pages/Users'));
+const Roles = lazy(() => import('./pages/Roles'));
+const Forbidden = lazy(() => import('./pages/Forbidden'));
 
 // Preload page components on hover to eliminate lazy-load flash
 export const pagePreloadMap: Record<string, () => Promise<unknown>> = {
@@ -29,6 +31,7 @@ export const pagePreloadMap: Record<string, () => Promise<unknown>> = {
   '/audit-logs': () => import('./pages/AuditLogs'),
   '/profile': () => import('./pages/Profile'),
   '/users': () => import('./pages/Users'),
+  '/roles': () => import('./pages/Roles'),
 };
 import { apiClient } from './lib/api';
 import { useAuthStore } from './store/auth';
@@ -133,6 +136,15 @@ const App: React.FC = () => {
                 <Login />
               </Suspense>
             } />
+            <Route path="/403" element={
+              <Suspense fallback={
+                <div className="h-screen w-screen flex items-center justify-center bg-background">
+                  <div className="h-8 w-8 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
+                </div>
+              }>
+                <Forbidden />
+              </Suspense>
+            } />
             <Route
               path="/"
               element={
@@ -143,13 +155,14 @@ const App: React.FC = () => {
             >
               <Route index element={<Navigate to="/dashboard" replace />} />
               <Route path="dashboard" element={<Dashboard />} />
-              <Route path="terminals" element={<Terminals />} />
-              <Route path="whitelist" element={<Whitelist />} />
-              <Route path="blacklist" element={<Blacklist />} />
-              <Route path="data-sources" element={<DataSources />} />
-              <Route path="audit-logs" element={<AuditLogs />} />
+              <Route path="terminals" element={<ProtectedRoute requiredPermission="terminal:read"><Terminals /></ProtectedRoute>} />
+              <Route path="whitelist" element={<ProtectedRoute requiredPermission="whitelist:read"><Whitelist /></ProtectedRoute>} />
+              <Route path="blacklist" element={<ProtectedRoute requiredPermission="blacklist:read"><Blacklist /></ProtectedRoute>} />
+              <Route path="data-sources" element={<ProtectedRoute requiredPermission="datasource:read"><DataSources /></ProtectedRoute>} />
+              <Route path="audit-logs" element={<ProtectedRoute requiredPermission="audit:read"><AuditLogs /></ProtectedRoute>} />
               <Route path="profile" element={<Profile />} />
-              <Route path="users" element={<Users />} />
+              <Route path="users" element={<ProtectedRoute requiredPermission="user:read"><Users /></ProtectedRoute>} />
+              <Route path="roles" element={<ProtectedRoute requiredPermission="role:read"><Roles /></ProtectedRoute>} />
             </Route>
           </Routes>
         </BrowserRouter>

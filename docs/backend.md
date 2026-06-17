@@ -1,6 +1,6 @@
 # TerminalAccessManager 后端实现文档
 
-> 文档版本：v3.2.0 | 更新日期：2026-06-10
+> 文档版本：v3.3.0 | 更新日期：2026-06-17
 
 ## 1. 概述
 
@@ -45,14 +45,16 @@ backend/
 │   │   ├── log.py                       # 审计日志模型
 │   │   ├── system_config.py             # 系统配置模型
 │   │   ├── data_source.py              # 数据源模型 + DataSourceBinding
-│   │   └── compliance_baseline.py       # 合规基准模型
+│   │   ├── compliance_baseline.py       # 合规基准模型
+│   │   ├── role.py                      # RBAC 模型（Role, Permission, UserRole, RolePermission）
 │   ├── schemas/
 │   │   ├── __init__.py
 │   │   ├── auth.py                      # 认证相关 Schema
 │   │   ├── terminal.py                  # 终端查询 Schema
 │   │   ├── compliance_baseline.py       # 合规基准 Schema
 │   │   ├── system_config.py             # 系统配置 Schema
-│   │   └── data_source.py              # 数据源 + 合规检查 Schema
+│   │   ├── data_source.py              # 数据源 + 合规检查 Schema
+│   │   ├── role.py                      # 角色 Schema
 │   ├── services/
 │   │   ├── __init__.py
 │   │   ├── terminal_service.py          # 终端管理服务
@@ -75,7 +77,8 @@ backend/
 │               ├── stats.py             # 统计端点
 │               ├── settings.py          # 系统配置端点
 │               ├── data_sources.py      # 数据源端点
-│               └── compliance_baselines.py  # 合规基准端点
+│               ├── compliance_baselines.py  # 合规基准端点
+│               ├── roles.py            # 角色管理端点
 ├── alembic/                             # 数据库迁移
 ├── tests/                               # 测试
 │   ├── conftest.py                      # 测试配置（mock_redis fixture）
@@ -250,8 +253,8 @@ async def _is_task_paused(task_name: str) -> bool:
 | Redis | `REDIS_URL` | str | `"redis://localhost:6379/0"` | Redis 连接串 |
 | | `REDIS_PASSWORD` | Optional[str] | `None` | Redis 密码 |
 | CORS | `BACKEND_CORS_ORIGINS` | List[str] | `["http://localhost", ...]` | 允许的跨域来源 |
-| 限流 | `RATE_LIMIT_PER_MINUTE` | int | `60` | 通用 API 限流（次/分钟） |
-| | `AUTH_RATE_LIMIT_PER_MINUTE` | int | `5` | 认证端点限流（次/分钟） |
+| 限流 | `RATE_LIMIT_PER_MINUTE` | int | `120` | 通用 API 限流（次/分钟） |
+| | `AUTH_RATE_LIMIT_PER_MINUTE` | int | `10` | 认证端点限流（次/分钟） |
 | 账户锁定 | `MAX_LOGIN_ATTEMPTS` | int | `5` | 最大登录尝试次数 |
 | | `LOCKOUT_DURATION_MINUTES` | int | `15` | 锁定时长（分钟） |
 | | `CAPTCHA_THRESHOLD` | int | `3` | 触发验证码的失败次数 |
@@ -365,22 +368,22 @@ async_session_factory = async_session_maker  # 别名，供后台任务使用
 | `get_token_version(user_id)` | 获取用户当前 Token 版本号（Redis key: `token_version:{user_id}`） |
 | `increment_token_version(user_id)` | 递增用户 Token 版本号（密码变更时调用） |
 
-#### Redis fail-open 降级策略
+#### Redis 故障降级策略
 
-所有 Redis 交互函数统一添加 try/except 异常处理，Redis 不可用时按策略降级，避免 Redis 故障导致服务完全不可用：
+所有 Redis 交互函数统一添加 try/except 异常处理，Redis 不可用时按混合策略（fail-closed / fail-open）降级，避免 Redis 故障导致服务完全不可用：
 
-| 函数 | 降级行为 | 说明 |
-|------|---------|------|
-| `is_token_blacklisted(jti)` | 返回 `False` | 黑名单不可用时放行（fail-open） |
-| `get_token_version(user_id)` | 返回 `0` | 版本号不可用时视为初始版本 |
-| `increment_token_version(user_id)` | 返回 `0` | 递增失败静默降级 |
-| `check_login_attempts(username)` | 返回 `False` | 锁定状态不可用时允许登录 |
-| `check_captcha_required(username)` | 返回 `False` | 验证码要求不可用时跳过 |
-| `record_failed_login(username)` | 静默忽略 | 记录失败不影响登录流程 |
-| `reset_login_attempts(username)` | 静默忽略 | 重置失败不影响登录流程 |
-| `verify_captcha(captcha_id, answer)` | 返回 `False` | 验证码不可用时校验失败 |
-| `generate_captcha()` | 抛出异常 | 验证码生成必须依赖 Redis |
-| `add_token_to_blacklist(jti, exp)` | 静默忽略 | 黑名单写入失败不影响登出 |
+| 函数 | 降级行为 | 策略 | 说明 |
+|------|---------|------|------|
+| `is_token_blacklisted(jti)` | 返回 `True` | fail-closed | 黑名单不可用时视为已黑名单，拒绝请求 |
+| `verify_captcha(captcha_id, answer)` | 返回 `False` | fail-closed | 验证码不可用时校验失败，防止绕过验证码保护 |
+| `get_token_version(user_id)` | 返回 `0` | fail-open | 版本号不可用时视为初始版本 |
+| `increment_token_version(user_id)` | 返回 `0` | fail-open | 递增失败静默降级 |
+| `check_login_attempts(username)` | 返回 `False` | fail-open | 锁定状态不可用时允许登录 |
+| `check_captcha_required(username)` | 返回 `False` | fail-open | 验证码要求不可用时跳过 |
+| `record_failed_login(username)` | 静默忽略 | fail-open | 记录失败不影响登录流程 |
+| `reset_login_attempts(username)` | 静默忽略 | fail-open | 重置失败不影响登录流程 |
+| `generate_captcha()` | 抛出异常 | — | 验证码生成必须依赖 Redis |
+| `add_token_to_blacklist(jti, exp)` | 静默忽略 | fail-open | 黑名单写入失败不影响登出 |
 
 #### 鉴权依赖
 
@@ -388,6 +391,14 @@ async_session_factory = async_session_maker  # 别名，供后台任务使用
 |----------|------|
 | `get_current_user(token, db)` | 从 JWT 解析用户，检查黑名单和活跃状态，返回 `User` 对象 |
 | `get_current_active_superuser(current_user)` | 在 `get_current_user` 基础上验证 `is_superuser` |
+
+### RBAC 权限框架
+
+- **`require_permission(code)`**: FastAPI 依赖注入工厂函数，superuser 直接通过，普通用户通过 Redis 缓存 + 数据库回查权限码
+- **`get_user_permissions(db, user_id)`**: 获取用户权限码集合，Redis 缓存优先（key: `user_perms:{user_id}`, TTL 300s），缓存未命中时联表查询
+- **`invalidate_user_permissions(user_id)`**: 主动失效用户权限缓存，角色/权限变更时调用
+- **9个端点文件**已从 `get_current_user` 替换为 `require_permission`，覆盖全部功能模块
+- **详细文档**: 参见 [RBAC.md](RBAC.md)
 
 ---
 
@@ -522,6 +533,23 @@ IP 地址解析工具类，支持以下输入格式：
 - `detect_pattern_type(ip_input)` — 检测输入类型（`single_ip` / `cidr` / `ip_range`）。
 - `validate_ip(ip)` — 验证单个 IP 地址合法性。
 
+#### Terminal 模型字段 (models/terminal.py)
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `id` | Integer, PK | 主键 |
+| `ip_address` | String(45), NOT NULL | IP 地址 |
+| `mac_address` | String(17), NOT NULL | MAC 地址 |
+| `mac_address_normalized` | String(12), nullable | 标准化 MAC（去除分隔符的大写 12 位字符串） |
+| `status` | String(20) | 终端状态：`blocked` / `unblocked` |
+| `comments` | Text, nullable | 备注 |
+| `timestamp` | DateTime(timezone=True) | 记录时间 |
+| `source` | String(50) | 数据来源：`arp` / `ipguard` / `whitelist` / `manual` |
+| `source_tag` | String(50), nullable | 数据源标签 |
+| `compliance_status` | String(20) | 合规状态：`compliant` / `bypass` / `non_compliant` / `unknown` |
+| `wl_match_type` | String(10), nullable | 白名单匹配类型：`mac` / `ip` / `both` / null |
+| `firewall_tag` | String(50), nullable | 封堵操作时写入的防火墙标签，解封时清除为 None |
+
 #### 搜索与分页
 
 4个搜索方法均返回 `PaginatedResponse`（含 `items`、`total`、`skip`、`limit`），支持服务端分页。
@@ -529,9 +557,28 @@ IP 地址解析工具类，支持以下输入格式：
 | 方法 | 说明 |
 |------|------|
 | `search_terminals(ip, mac, compliance_status, status, start_date, end_date, skip, limit)` | 搜索终端，IP/MAC 使用 ILIKE 模糊搜索 + OR 逻辑（任一匹配即可），支持 `compliance_status` 过滤 |
+| `search_macs(query)` | 搜索 MAC 地址，支持多种过滤条件（见下方详细说明），返回 `List[Terminal]` |
+| `search_macs_count(query)` | 统计 `search_macs` 搜索结果总数 |
 | `get_whitelist(query, start_date, end_date, skip, limit)` | 查询白名单，支持搜索（MAC/IP/备注）和日期范围。MAC 搜索使用格式无关匹配（`func.replace` 去除分隔符后 ILIKE） |
 | `get_blacklist(query, start_date, end_date, skip, limit)` | 查询黑名单，支持搜索和日期范围。MAC 搜索使用格式无关匹配（`func.replace` 去除分隔符后 ILIKE） |
 | `search_audit_logs(username, action, search, start_date, end_date, skip, limit)` | 搜索审计日志，支持用户名、操作类型、关键词、日期范围 |
+
+**search_macs 过滤条件：**
+
+`search_macs(query: TerminalQuery)` 接受 `TerminalQuery` 对象，支持以下过滤条件：
+
+| 参数 | 说明 |
+|------|------|
+| `ip` | IP 地址模糊搜索（ILIKE） |
+| `mac` | MAC 地址格式无关模糊搜索（标准化列 ILIKE） |
+| `status` | 终端状态精确匹配（`blocked` / `unblocked`） |
+| `compliance_status` | 合规状态精确匹配（`compliant` / `bypass` / `non_compliant` / `unknown`） |
+| `source_tag` | 按 `Terminal.source_tag` 过滤终端数据来源 |
+| `firewall_tag` | 按 `Blacklist.firewall_tag` 过滤终端（通过 Blacklist 子查询匹配 `Terminal.ip_address`） |
+| `start_date` / `end_date` | 日期范围过滤 |
+
+- IP 和 MAC 同时提供时使用 OR 逻辑（任一匹配即返回）。
+- `firewall_tag` 过滤通过 Blacklist 子查询实现：`Terminal.ip_address IN (SELECT ip_address FROM blacklist WHERE firewall_tag = :fw_tag)`。
 
 **PaginatedResponse 结构：**
 
@@ -584,7 +631,7 @@ model.mac_address_normalized.ilike(f'{_escape_like(mac_clean)}%')
 仪表盘统计，按 `compliance_status` 和 `status` 分组计数：
 
 - 仅统计 `source='arp'` 的终端。
-- 返回：`total`、`whitelisted`、`blocked`、`active`、`inactive`、`pending`、`compliant`、`bypass`、`non_compliant`、`unknown`。
+- 返回：`total`、`whitelisted`、`blocked`、`unblocked`、`compliant`、`bypass`、`non_compliant`、`unknown`。
 
 #### get_system_status
 
@@ -594,16 +641,20 @@ model.mac_address_normalized.ilike(f'{_escape_like(mac_clean)}%')
 
 封锁/解封操作：
 
-- `block_ip(ip_address, mac_address, username, block_time, firewall_tag)`：
+- `block_ip(ip_address, mac_address, username, block_time, firewall_tag, comments)`：
   - 通过 `firewall_tag` 查找对应的 `DataSource`（type=sangfor）获取防火墙服务实例。
-  - 调用深信服 API 封锁 IP。
-  - 更新 `Terminal.status` 为 `frozen`，`compliance_status` 为 `non_compliant`。
+  - 调用深信服 AF 黑白名单 API 永久封锁 IP（`POST /api/v1/namespaces/public/whiteblacklist`，`type=BLACK`）。
+  - 更新 `Terminal.status` 为 `blocked`，`compliance_status` 为 `non_compliant`。
+  - 写入 `firewall_tag` 到 Terminal 记录（`Terminal.firewall_tag = firewall_tag`）。
+  - 若提供 `comments` 参数，更新 `Terminal.comments` 为提供的备注内容。
   - 创建 `Blacklist` 记录（`source_tag="manual"`，`is_auto_blocked=False`）。
   - 记录审计日志。
 
-- `unblock_ip(ip_address, username, firewall_tag)`：
-  - 调用深信服 API 解封 IP。
-  - 恢复 `Terminal.status` 为 `unfrozen`，`compliance_status` 为 `unknown`。
+- `unblock_ip(self, ip_address, username, mac_address=None, firewall_tag=None, comments=None, client_ip=None)`：
+  - 调用深信服 AF 黑白名单 API 解封 IP（`DELETE /api/v1/namespaces/public/whiteblacklist/{ip}`）。
+  - 恢复 `Terminal.status` 为 `unblocked`，`compliance_status` 为 `unknown`。
+  - 清除 `firewall_tag` 为 None（`Terminal.firewall_tag = None`）。
+  - 若提供 `comments` 参数，更新 `Terminal.comments` 为提供的备注内容。
   - 删除对应 `Blacklist` 记录。
   - 记录审计日志。
 
@@ -635,7 +686,13 @@ model.mac_address_normalized.ilike(f'{_escape_like(mac_clean)}%')
 | 方法 | 说明 |
 |------|------|
 | `search_audit_logs(username, action, search, start_date, end_date, skip, limit)` | 搜索审计日志，返回 `PaginatedResponse`，支持用户名、操作类型、关键词、日期范围 |
-| `log_action(db, username, action, resource_type, resource_id, details, ip_address)` | 公共审计日志写入函数，`details` 接收 dict 并使用 `json.dumps(details, ensure_ascii=False)` 序列化，`ip_address` 参数记录操作来源 IP |
+| `log_action(db, username, action, resource_type, resource_id, details, ip_address, resource_name=None)` | 公共审计日志写入函数，`details` 接收 dict 并使用 `json.dumps(details, ensure_ascii=False)` 序列化，`ip_address` 参数记录操作来源 IP，`resource_name` 参数记录资源的人类可读名称 |
+
+**resource_name 参数说明：**
+
+- `resource_name`（str, nullable）：可选参数，用于存储资源的人类可读名称。
+- 当设置时，存储资源的可辨识名称（如用户名、数据源名称、IP 地址等），便于审计日志阅读时快速识别资源。
+- 替代了之前仅存储 `resource_id`（如 `#id` 格式）的做法，使审计日志更直观可读。
 
 **action 命名变更对照表：**
 
@@ -709,7 +766,7 @@ def _normalize_mac_raw(mac: str) -> str:
 
 - 一次性加载全部白名单和合规基准数据到内存，避免逐条查询。
 - 返回 `ComplianceCheckResult`：`total_checked`、`compliant`、`bypass`、`non_compliant`、`details`。
-- `details` 仅在条目数 <= 1000 时返回。
+- `details` 始终返回（包含 compliant/bypass/non_compliant 分类列表）。
 
 #### 白名单匹配规则
 
@@ -729,12 +786,17 @@ def _normalize_mac_raw(mac: str) -> str:
 
 #### 合规基准数据同步
 
-`sync_compliance_baseline_data(source_tag)`：
+`sync_ipguard_data(source_tag)`：
 
 - 从 `ComplianceBaseline` 表查找合规基准数据。
-- 使用 `asyncpg` 直连外部数据库，查询终端信息。
-- 结果缓存到 Redis，键 `compliance_baseline:{source_tag}`，TTL 10 分钟。
-- 更新 `DataSource.last_sync_status`。
+- 支持三种数据库类型：
+  - **MSSQL**（默认）：使用 `pyodbc` + FreeTDS 连接 SQL Server，查询 `AGENT.AGT_IP_MAC_STR` 字段（IPGuard OCULAR3 格式）
+  - **MySQL/MariaDB**：使用 `aiomysql` 连接，查询 `terminal_info` 表
+  - **PostgreSQL**：使用 `asyncpg` 连接，查询 `terminal_info` 表
+- 定时任务中使用 `decrypt_config(config)` 解密配置后再连接外部数据库。
+- 结果缓存到 Redis，键 `ipguard:{source_tag}`，TTL 10 分钟。
+- 更新 `ComplianceBaseline.last_sync_status`。
+- IPGuard 同步完成后自动触发 `recalculate_all_compliance()`，确保终端合规状态及时更新。
 
 #### 自动封锁
 
@@ -743,7 +805,7 @@ def _normalize_mac_raw(mac: str) -> str:
 1. 查找该 ARP 来源下 `compliance_status=non_compliant` 且未封锁的终端。
 2. 排除已在黑名单中的 IP。
 3. 通过 `DataSourceBinding` 查找关联的防火墙标签。
-4. 对每个关联防火墙调用封锁 API。
+4. 使用 `decrypt_config(config)` 解密防火墙配置后再调用封锁 API。
 5. 创建 `Blacklist` 记录（`is_auto_blocked=True`），每个防火墙一条。
 6. 支持 `dry_run` 模式（仅模拟，不实际封锁）。
 
@@ -753,8 +815,27 @@ def _normalize_mac_raw(mac: str) -> str:
 
 1. 查找 `is_auto_blocked=True` 且 `auto_unblocked=False` 的黑名单条目。
 2. 检查该 IP+MAC 是否已合规（白名单或合规基准匹配）。
-3. 合规则调用防火墙解封 API，标记 `auto_unblocked=True`。
+3. 合规则使用 `decrypt_config(config)` 解密防火墙配置后调用解封 API，标记 `auto_unblocked=True`。
 4. 白名单匹配的终端 `compliance_status` 设为 `bypass`，合规基准匹配的设为 `compliant`。
+
+#### 合规重算
+
+`recalculate_all_compliance()`：
+
+- 白名单增删后、IPGuard 同步后批量重算所有终端合规状态。
+- 合规重算联动封堵/解封：
+  - 终端从 `non_compliant` 变为 `bypass`/`compliant` 时自动解封（`status` → `unblocked`）。
+  - 终端从 `bypass` 变为 `non_compliant` 时自动封堵（`status` → `blocked`）。
+- 封堵/解封通过 `terminal.source_tag` → `DataSourceBinding` 查找关联防火墙标签。
+- 封堵时创建 `Blacklist` 记录（审计追踪 + 后续自动解封）。
+- 封堵/解封时写入 `firewall_tag` 到 Terminal 记录：
+  - 封堵时设置 `Terminal.firewall_tag = fw_tag`。
+  - 解封时清除 `Terminal.firewall_tag = None`。
+- 封堵/解封时更新 `Terminal.comments` 字段记录操作信息：
+  - 封堵操作：`Terminal.comments` 更新为 `Auto-blocked by TAM on firewall [{fw_tag}]`。
+  - 解封操作：`Terminal.comments` 更新为 `Auto-unblocked by TAM from firewall [{fw_tag}]`。
+- 白名单备注同步：当终端合规状态为 `bypass` 时，自动将白名单备注同步到终端（格式：`Whitelist: {comments}`），已有备注则追加。
+- 历史数据回填：对已封锁但缺少 `firewall_tag` 的终端，自动回填关联防火墙标签。
 
 #### 缓存策略
 
@@ -774,10 +855,12 @@ def _normalize_mac_raw(mac: str) -> str:
 
 `collect_from_ssh(source)`：
 
-- 使用 `paramiko` 连接交换机。
-- 执行配置的命令（默认 `show arp`）。
-- 超时 30 秒。
+- 使用 `netmiko` 连接交换机（支持 Huawei/H3C/Cisco 自动设备类型检测与回退）。
+- 自动处理分页（`--More--`）和提示符检测。
+- 执行配置的命令（默认 `display arp` 或 `show arp`）。
+- 超时 30 秒（连接）+ 60 秒（读取）。
 - 解析输出后调用 `process_arp_entries` 处理。
+- entries 为空时也更新 `last_sync_status="success"`。
 
 #### API 采集
 
@@ -793,7 +876,7 @@ def _normalize_mac_raw(mac: str) -> str:
 
 `process_arp_entries(entries, source_tag)`：
 
-1. **Upsert**：按 IP+MAC 查找，存在则更新时间戳和来源，不存在则新建（`compliance_status="unknown"`）。
+1. **Upsert**：按 IP+MAC 查找，存在则更新时间戳和来源并重置 `compliance_status="unknown"`（确保基线变更后重新评估），不存在则新建（`compliance_status="unknown"`）。
 2. **批量合规检查**：对 `compliance_status="unknown"` 的条目执行 `batch_check_compliance`。
 3. **更新合规状态**：根据检查结果更新 `compliance_status` 和 `wl_match_type`。
 4. **触发自动封锁**：若存在 `non_compliant` 条目，异步触发 `auto_block_non_compliant`（fire-and-forget）。
@@ -813,19 +896,77 @@ def _normalize_mac_raw(mac: str) -> str:
 `_parse_api_response(data)` 支持多种结构：
 
 - 直接列表：`[{ip, mac}, ...]`
-- 包装结构：`{data/entries/results: [{...}, ...]}`
-- 字段名兼容：`ip_address` / `ip` / `ipAddress`，`mac_address` / `mac` / `macAddress`
+- 包装结构：`{data/entries/results/arp/devices/records: [{...}, ...]}`
+- 字段名兼容：`ip_address` / `ipv4_address` / `ip` / `ipAddress`，`mac_address` / `mac` / `macAddress`
+- 认证方式：Bearer Token / Basic Auth / Custom Header（`X-Auth-Token` 等）
 
 #### 定时采集
 
 `run_scheduled_collection()`：
 
 - 查找所有启用的 ARP 数据源（`arp_ssh` + `arp_api`）。
+- 使用 `decrypt_config(source.config)` 解密配置后再执行采集。
 - 依次执行采集（SSH 或 API）。
 
 ---
 
-### 4.4 ConfigService (services/config_service.py)
+### 4.4 DataSourceService (services/data_source_service.py)
+
+#### 配置加解密机制
+
+数据源 `config` 字段中的敏感值（`password`、`secret_key` 等）使用 Fernet 加密存储，读取时解密。
+
+**expunge 隔离策略**：`decrypt_config` 修改 config 前先 `db.expunge(source)` 分离对象，防止解密后的明文在 session commit 时回写数据库。关键操作：
+
+| 操作 | expunge 时机 | 说明 |
+|------|-------------|------|
+| 读取数据源 | 解密前 expunge | `get_data_source_by_id`、`get_data_source_by_tag`、`list_data_sources` |
+| 更新数据源 | commit 后 expunge + 解密 | 先 commit 保存加密值，再 expunge + 解密用于响应返回 |
+| 删除数据源 | 无需 expunge | 直接删除，无需返回解密数据 |
+| 更新同步状态 | 直接查询（不 expunge） | `update_sync_status` 需要修改字段并 commit，对象必须留在 session 中 |
+
+#### API 数据源响应解析
+
+API 数据源响应解析支持以下包装键，自动从 JSON 响应中提取设备列表：
+
+`data` / `entries` / `results` / `arp` / `devices` / `records`
+
+#### IP 字段兼容
+
+API 响应中 IP 字段名兼容以下写法：
+
+`ip_address` / `ipv4_address` / `ip` / `ipAddress`
+
+#### 认证类型
+
+| 认证类型 | 说明 |
+|----------|------|
+| `bearer` | 通过 Bearer Token 传递认证信息 |
+| `header` | 通过自定义 Header 名（默认 `X-Auth-Token`）+ Token 值传递认证信息 |
+
+#### 核心方法
+
+| 方法 | 说明 |
+|------|------|
+| `create_data_source(data)` | 创建数据源，自动加密敏感配置字段 |
+| `update_data_source(source_id, data)` | 更新数据源，tag 字段不可修改（修改会抛出 ValueError） |
+| `delete_data_source(source_id)` | 删除数据源 |
+| `get_data_source_by_id(source_id)` | 按 ID 获取数据源详情，自动解密配置 |
+| `get_data_source_by_tag(tag)` | 按 tag 获取数据源，自动解密配置 |
+| `list_data_sources(type_filter, enabled_filter)` | 列出数据源，支持类型和启用状态过滤 |
+| `test_connection(source_id)` | 测试数据源连接 |
+| `preview_delete_data_source(source_id)` | 预览数据源删除影响，区分 ARP 源和 Sangfor 防火墙 |
+| `safe_delete_data_source(source_id, username, client_ip)` | 安全删除数据源，自动解封终端、清理黑名单、清理缓存 |
+| `preview_delete_binding(binding_id)` | 预览绑定关系删除影响 |
+| `safe_delete_binding(binding_id, username, client_ip)` | 安全删除绑定关系，自动解封终端、触发合规重算 |
+
+#### tag 修改限制
+
+数据源 `tag` 字段是系统全局标识符，被 Terminal.source_tag、Terminal.firewall_tag、Blacklist.source_tag、Blacklist.firewall_tag、DataSourceBinding.arp_source_tag、DataSourceBinding.firewall_tag 及 Redis 缓存键引用。修改 tag 会导致所有关联数据断裂，因此 `update_data_source` 方法禁止修改 tag 字段，尝试修改会抛出 `ValueError`。如需使用不同的 tag，应创建新数据源、迁移绑定关系、然后删除旧数据源。
+
+---
+
+### 4.5 ConfigService (services/config_service.py)
 
 #### DEFAULT_CONFIGS
 
@@ -846,8 +987,8 @@ def _normalize_mac_raw(mac: str) -> str:
 
 | 键 | 默认值 | 类型 | 说明 |
 |----|--------|------|------|
-| `rate_limit_per_minute` | `60` | int | 通用 API 限流（次/分钟） |
-| `auth_rate_limit_per_minute` | `5` | int | 认证端点限流（次/分钟） |
+| `rate_limit_per_minute` | `120` | int | 通用 API 限流（次/分钟） |
+| `auth_rate_limit_per_minute` | `10` | int | 认证端点限流（次/分钟） |
 
 **network（网络）**
 
@@ -918,11 +1059,36 @@ def _normalize_mac_raw(mac: str) -> str:
 
 ---
 
+### 4.6 SangforService (services/sangfor_service.py)
+
+#### 指数退避重试机制
+
+`_request_with_backoff()` 方法封装 `_request_with_retry()`，在请求失败时提供指数退避重试：
+
+| 配置项 | 值 | 说明 |
+|--------|-----|------|
+| 最大重试次数 | 3 | 加上首次请求，共 4 次尝试 |
+| 等待时间公式 | `min(2^attempt, 10)` 秒 | 指数递增，上限 10 秒 |
+| 实际等待序列 | 1s → 2s → 4s | 第 1 次重试等 1s，第 2 次等 2s，第 3 次等 4s |
+
+**重试条件：**
+
+| 异常类型 | 是否重试 | 说明 |
+|----------|---------|------|
+| `ConnectionError` | ✅ 重试 | 网络连接失败 |
+| `TimeoutError` | ✅ 重试 | 请求超时 |
+| `httpx.ConnectError` | ✅ 重试 | httpx 连接错误 |
+| `httpx.TimeoutException` | ✅ 重试 | httpx 超时异常 |
+| HTTP 5xx 响应 | ✅ 重试 | 服务端错误 |
+| HTTP 4xx 响应 | ❌ 不重试 | 客户端错误，重试无意义 |
+
+---
+
 ## 5. 定时任务
 
 | # | 函数名 | 配置项 | 默认间隔 | Fallback | 业务逻辑 |
 |---|--------|--------|----------|----------|----------|
-| 1 | `cleanup_expired_blacklist` | `scheduler_firewall_query_interval` | 300s | 3600（代码 fallback，DEFAULT_CONFIGS 种子值为 300） | 查找 `expires_at < now` 的黑名单条目，恢复 MAC 状态为 `unfrozen`，调用防火墙解封 API，删除黑名单记录，记录审计日志 |
+| 1 | `cleanup_expired_blacklist` | `scheduler_firewall_query_interval` | 300s | 3600（代码 fallback，DEFAULT_CONFIGS 种子值为 300） | 查找 `expires_at < now` 的黑名单条目，恢复 MAC 状态为 `unblocked`，调用防火墙解封 API，删除黑名单记录，记录审计日志 |
 | 2 | `scheduled_arp_collection` | `scheduler_arp_collection_interval` | 300s | 300s | 查找所有启用的 ARP 数据源（`arp_ssh` + `arp_api`），依次执行 SSH/API 采集 |
 | 3 | `scheduled_ipguard_sync` | `scheduler_ipguard_sync_interval` | 600s | 600s | 查找所有启用的合规基准数据源，逐个调用 `sync_compliance_baseline_data` 同步基线数据到 Redis |
 | 4 | `scheduled_compliance_check` | `scheduler_compliance_check_interval` | 300s | 300s | 查找所有启用的 ARP 数据源，对每个来源下 `compliance_status="unknown"` 的条目执行批量合规检查，更新合规状态 |
@@ -947,11 +1113,16 @@ def _normalize_mac_raw(mac: str) -> str:
 
 | 命令 | 说明 |
 |------|------|
-| `python cli.py setup` | 初始化数据库 + 创建 admin 用户（admin/Admin123） |
-| `python cli.py mock generate` | 生成 Demo 数据 |
-| `python cli.py mock clear` | 清除所有 Demo 数据（需输入 `DELETE` 确认，保留 admin 用户和系统配置） |
+| `python cli.py setup` | 初始化数据库 + 种子 RBAC 数据（5 角色 + 29 权限） + 创建 admin 用户（密码可通过 `ADMIN_PASSWORD` 环境变量自定义，默认 Admin123） |
+| `python cli.py mock generate` | 生成 Demo 数据（自动确保 RBAC 种子数据存在） |
+| `python cli.py mock clear` | 清除所有 Demo 数据（需输入 `DELETE` 确认，保留 admin 用户、系统配置和 5 个内置角色） |
 | `python cli.py validate` | 运行后端验证检查 |
 | `python cli.py test [args]` | 运行 pytest 测试套件 |
+| `python cli.py password reset <username> [--password <pw>]` | 重置用户密码（不指定密码则生成随机密码） |
+| `python cli.py user list` | 列出所有用户 |
+| `python cli.py user unlock <username>` | 解锁被锁定的用户账户 |
+| `python cli.py role list` | 列出所有角色 |
+| `python cli.py role permissions` | 列出所有权限码 |
 
 ### Demo 数据生成详情
 
@@ -979,6 +1150,57 @@ def _normalize_mac_raw(mac: str) -> str:
 6. 安全 — 硬编码密码检测、bcrypt 直接调用和 JWT 实现
 7. API 端点 — 关键端点关键词检测
 8. Docker — Dockerfile、健康检查、非 root 用户
+
+### 密码重置
+
+`password reset` 命令用于重置用户密码，适用于管理员忘记密码无法通过 Web UI 恢复的场景：
+
+```bash
+# 重置指定用户密码（自动生成随机密码）
+python cli.py password reset admin
+
+# 指定新密码
+python cli.py password reset admin --password NewPass123
+```
+
+- 密码必须满足复杂度要求：至少 8 位，包含大写字母、小写字母和数字
+- 重置后自动递增 Token 版本号，使该用户所有已登录会话失效
+- 同时清除 Redis 中的登录锁定状态
+
+### 用户管理
+
+`user list` 和 `user unlock` 命令提供 CLI 方式的用户管理，适用于无法访问 Web UI 的紧急运维场景：
+
+```bash
+# 列出所有用户
+python cli.py user list
+
+# 解锁被锁定的用户
+python cli.py user unlock john.doe
+```
+
+### 角色查看
+
+`role list` 和 `role permissions` 命令用于查看 RBAC 角色和权限配置：
+
+```bash
+# 列出所有角色
+python cli.py role list
+
+# 列出所有权限码
+python cli.py role permissions
+```
+
+### setup 行为变更（v3.2.0-r2）
+
+`setup` 命令现在在 `init_db()` 和 `_create_admin_user()` 之间自动调用 `_ensure_rbac_seed(db)`，确保初始化时自动填充 RBAC 种子数据：
+
+- 5 个内置角色：superadmin、admin、operator、auditor、viewer
+- 29 个权限码：覆盖 10 个功能模块
+- 4 组角色-权限映射：admin(23)、operator(10)、auditor(8)、viewer(10)
+- 幂等保护：`roles` 表已有 >= 5 条记录时跳过
+
+此修复解决了 `manage.sh init` 后角色管理页面为空、创建角色时无权限菜单可选的问题。
 
 ### firewall_query 任务修复
 
@@ -1013,8 +1235,9 @@ def _normalize_mac_raw(mac: str) -> str:
 | test_whitelist.py | TestWhitelistModel | 2 | 白名单模型字段 |
 | | TestWhitelistValidation | 1 | 白名单输入验证 |
 | test_blacklist.py | TestBlacklistModel | 2 | 黑名单模型字段 |
+| test_compliance_service.py | TestComplianceService | 22 | 合规服务状态转换、自动封锁/解封、清理、白名单匹配、合规重算 |
 | test_app.py | TestGlobalExceptionHandler | 4 | 全局异常处理器 |
-| **合计** | | **43+** | |
+| **合计** | | **65+** | |
 
 ### 7.3 运行测试
 
@@ -1041,6 +1264,8 @@ python -m pytest tests/test_security.py -v
 |------|-------------|------|
 | `POST /auth/login` | `login` | 用户登录成功时记录，details 包含登录用户名 |
 | `POST /auth/logout` | `logout` | 用户登出时记录，details 包含登出用户名 |
+| `POST /auth/refresh` | `token_refresh` | Token 刷新时记录，正确记录请求来源 IP 地址 |
+| `PUT /auth/me/password` | `change_password` | 用户修改密码时记录，正确记录请求来源 IP 地址 |
 
 **认证端点参数变更：**
 
@@ -1057,8 +1282,24 @@ python -m pytest tests/test_security.py -v
 | `DELETE /data-sources/{id}` | `delete_datasource` | 删除数据源 |
 | `POST /data-sources/{id}/test` | `test_datasource` | 测试数据源连接 |
 | `POST /data-sources/{id}/sync` | `sync_datasource` | 同步数据源 |
+| `POST /data-sources/{id}/delete-preview` | `preview_delete_datasource` | 预览数据源删除影响 |
+| `DELETE /data-sources/{id}/safe` | `safe_delete_datasource` | 安全删除数据源（含善后操作） |
+| `POST /data-sources/bindings/{id}/delete-preview` | `preview_delete_binding` | 预览绑定关系删除影响 |
+| `DELETE /data-sources/bindings/{id}/safe` | `safe_delete_binding` | 安全删除绑定关系（含善后操作） |
 
-### 8.3 用户管理端点 (users.py)
+### 8.3 合规基准端点 (compliance_baselines.py)
+
+| 端点 | 审计 action | 说明 |
+|------|-------------|------|
+| `POST /compliance-baselines/` | `create_baseline` | 创建合规基准 |
+| `PUT /compliance-baselines/{id}` | `update_baseline` | 更新合规基准（tag 字段不可修改，修改会抛出 ValueError） |
+| `DELETE /compliance-baselines/{id}` | `delete_baseline` | 删除合规基准 |
+| `POST /compliance-baselines/{id}/test` | `test_baseline` | 测试合规基准连接 |
+| `POST /compliance-baselines/{id}/sync` | `sync_baseline` | 同步合规基准数据 |
+| `POST /compliance-baselines/{id}/delete-preview` | `preview_delete_baseline` | 预览合规基准删除影响 |
+| `DELETE /compliance-baselines/{id}/safe` | `safe_delete_baseline` | 安全删除合规基准（清理缓存 + 触发合规重算） |
+
+### 8.4 用户管理端点 (users.py)
 
 | 端点 | 审计 action | 说明 |
 |------|-------------|------|
@@ -1068,8 +1309,33 @@ python -m pytest tests/test_security.py -v
 | `POST /users/{id}/reset-password` | `reset_password` | 重置用户密码 |
 | `POST /users/{id}/unlock` | `unlock_user` | 解锁用户账户 |
 
-### 8.4 系统配置端点 (settings.py)
+### 8.5 系统配置端点 (settings.py)
 
 | 端点 | 审计 action | 说明 |
 |------|-------------|------|
 | `PUT /settings/` | `update_config` | 更新系统配置 |
+| `POST /settings/upload` | `upload_branding` | 上传品牌资源（登录背景图/Favicon），正确记录请求来源 IP 地址 |
+
+---
+
+## 9. 性能优化
+
+### 9.1 N+1 查询优化
+
+针对高频定时任务和批量操作中的 N+1 查询问题，已实施以下优化：
+
+#### cleanup_expired_blacklist 优化
+
+| 优化项 | 优化前 | 优化后 |
+|--------|--------|--------|
+| 加载受影响终端 | 逐条查询 Terminal（N 次查询） | 批量预加载所有受影响 Terminal（1 次查询） |
+| 检查活跃黑名单 | 逐条查询 Blacklist（N 次查询） | 批量检查活跃 Blacklist 记录（1 次查询） |
+| 获取防火墙服务实例 | 每次重新创建 SangforService | 预缓存 SangforService 实例，按 firewall_tag 复用 |
+
+#### batch_check_compliance 优化
+
+| 优化项 | 优化前 | 优化后 |
+|--------|--------|--------|
+| 白名单数据 | 逐条查询白名单匹配 | 一次性加载全部白名单数据到内存 |
+| IPGuard 基线数据 | 逐条查询合规基准匹配 | 一次性加载全部 IPGuard 数据到内存 |
+| 匹配方式 | 每条记录一次数据库查询 | 内存中批量匹配，无需逐条查询 |

@@ -8,12 +8,12 @@ ENCRYPTION_KEY must be set in environment variables for production.
 If ENCRYPTION_KEY is not set, SECRET_KEY is used as fallback (development only).
 """
 
-from cryptography.fernet import Fernet
 import base64
-import os
 import hashlib
+from typing import Any
+
+from cryptography.fernet import Fernet
 from loguru import logger
-from typing import Optional, Any, Dict
 
 from app.core.config import settings
 
@@ -52,7 +52,7 @@ def decrypt_value(ciphertext: str) -> str:
 SENSITIVE_FIELDS = {"password", "secret", "api_key", "token", "passphrase"}
 
 
-def encrypt_config(config: Dict[str, Any]) -> Dict[str, Any]:
+def encrypt_config(config: dict[str, Any]) -> dict[str, Any]:
     """Encrypt sensitive fields in a config dict"""
     encrypted = {}
     for key, value in config.items():
@@ -65,7 +65,7 @@ def encrypt_config(config: Dict[str, Any]) -> Dict[str, Any]:
     return encrypted
 
 
-def decrypt_config(config: Dict[str, Any]) -> Dict[str, Any]:
+def decrypt_config(config: dict[str, Any]) -> dict[str, Any]:
     """Decrypt sensitive fields in a config dict"""
     decrypted = {}
     for key, value in config.items():

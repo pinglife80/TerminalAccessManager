@@ -1,6 +1,5 @@
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
-from sqlalchemy import text
 
 from app.core.config import settings
 
@@ -60,7 +59,3 @@ async def init_db():
     """
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-        # Make blacklist.ip_address nullable to allow blocking by MAC only
-        await conn.execute(text(
-            "ALTER TABLE blacklist ALTER COLUMN ip_address DROP NOT NULL"
-        ))

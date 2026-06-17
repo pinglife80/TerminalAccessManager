@@ -1,6 +1,4 @@
 """Tests for terminal management endpoints"""
-import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
 
 
 class TestTerminalSearch:

@@ -1,12 +1,15 @@
-"""Tests for security module — Redis fail-open and token management"""
+"""Tests for security module — Redis fail-closed/fail-open and token management"""
+from datetime import UTC
+from unittest.mock import patch
+
 import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
+
 from app.core.security import (
-    is_token_blacklisted,
+    check_captcha_required,
+    check_login_attempts,
     get_token_version,
     increment_token_version,
-    check_login_attempts,
-    check_captcha_required,
+    is_token_blacklisted,
     record_failed_login,
     reset_login_attempts,
     verify_captcha,
@@ -52,61 +55,67 @@ class TestNormalizeMac:
         assert _normalize_mac("AABBCCDDEEFF") == "AABBCCDDEEFF"
 
 
-class TestRedisFailOpen:
-    """Test that security functions degrade gracefully when Redis is unavailable"""
+class TestRedisFailureBehavior:
+    """Test that security functions behave correctly when Redis is unavailable
+
+    Security-critical functions (token blacklist, captcha) use fail-closed strategy:
+    return the safe/restrictive value when Redis is down.
+    Availability functions (login attempts, token version) use fail-open strategy:
+    return permissive defaults when Redis is down.
+    """
 
     @pytest.mark.asyncio
-    async def test_is_token_blacklisted_fail_open(self):
-        """Token blacklist should return False (allow) when Redis is unavailable"""
+    async def test_is_token_blacklisted_fail_closed(self):
+        """Token blacklist should return True (reject) when Redis is unavailable (fail-closed)"""
         with patch("app.core.security.get_redis_client", side_effect=Exception("Redis connection error")):
             result = await is_token_blacklisted("some-jti")
-            assert result is False
+            assert result is True
 
     @pytest.mark.asyncio
     async def test_get_token_version_fail_open(self):
-        """Token version should return 0 when Redis is unavailable"""
+        """Token version should return 0 when Redis is unavailable (fail-open)"""
         with patch("app.core.security.get_redis_client", side_effect=Exception("Redis connection error")):
             result = await get_token_version(1)
             assert result == 0
 
     @pytest.mark.asyncio
     async def test_increment_token_version_fail_open(self):
-        """Token version increment should return 0 when Redis is unavailable"""
+        """Token version increment should return 0 when Redis is unavailable (fail-open)"""
         with patch("app.core.security.get_redis_client", side_effect=Exception("Redis connection error")):
             result = await increment_token_version(1)
             assert result == 0
 
     @pytest.mark.asyncio
     async def test_check_login_attempts_fail_open(self):
-        """Login attempt check should return False (not locked) when Redis is unavailable"""
+        """Login attempt check should return False (not locked) when Redis is unavailable (fail-open)"""
         with patch("app.core.security.get_redis_client", side_effect=Exception("Redis connection error")):
             result = await check_login_attempts("testuser")
             assert result is False
 
     @pytest.mark.asyncio
     async def test_check_captcha_required_fail_open(self):
-        """Captcha check should return False (not required) when Redis is unavailable"""
+        """Captcha check should return False (not required) when Redis is unavailable (fail-open)"""
         with patch("app.core.security.get_redis_client", side_effect=Exception("Redis connection error")):
             result = await check_captcha_required("testuser")
             assert result is False
 
     @pytest.mark.asyncio
     async def test_record_failed_login_fail_open(self):
-        """Recording failed login should not raise when Redis is unavailable"""
+        """Recording failed login should not raise when Redis is unavailable (fail-open)"""
         with patch("app.core.security.get_redis_client", side_effect=Exception("Redis connection error")):
             # Should not raise
             await record_failed_login("testuser")
 
     @pytest.mark.asyncio
     async def test_reset_login_attempts_fail_open(self):
-        """Resetting login attempts should not raise when Redis is unavailable"""
+        """Resetting login attempts should not raise when Redis is unavailable (fail-open)"""
         with patch("app.core.security.get_redis_client", side_effect=Exception("Redis connection error")):
             # Should not raise
             await reset_login_attempts("testuser")
 
     @pytest.mark.asyncio
     async def test_verify_captcha_fail_closed(self):
-        """Captcha verification should return False when Redis is unavailable"""
+        """Captcha verification should return False when Redis is unavailable (fail-closed)"""
         with patch("app.core.security.get_redis_client", side_effect=Exception("Redis connection error")):
             result = await verify_captcha("some-id", "42")
             assert result is False
@@ -118,15 +127,15 @@ class TestRedisNormalOperation:
     @pytest.mark.asyncio
     async def test_token_blacklist_flow(self, mock_redis_patch):
         """Test adding and checking token blacklist"""
-        mock_redis = mock_redis_patch
         # Token not blacklisted initially
         result = await is_token_blacklisted("test-jti")
         assert result is False
 
         # Add to blacklist
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timedelta
+
         from app.core.security import add_token_to_blacklist
-        exp = datetime.now(timezone.utc) + timedelta(hours=1)
+        exp = datetime.now(UTC) + timedelta(hours=1)
         await add_token_to_blacklist("test-jti", exp)
 
         # Now should be blacklisted

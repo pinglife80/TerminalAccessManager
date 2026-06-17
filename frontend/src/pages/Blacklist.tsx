@@ -1,7 +1,7 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Search, Trash2, AlertTriangle, Clock, Server, Download, Eye, Shield, RefreshCw, ChevronDown } from 'lucide-react';
-import { useBlacklist, BlacklistEntry, useDataSources } from '@/hooks/useTerminalData';
+import { useBlacklist, BlacklistEntry } from '@/hooks/useTerminalData';
 import { apiClient } from '@/lib/api';
 import { toast } from 'sonner';
 import { API_ENDPOINTS } from '@/lib/constants';
@@ -11,9 +11,9 @@ import { EmptyState } from '@/components/StateDisplay';
 import { PageSkeleton } from '@/components/Skeleton';
 import { Modal } from '@/components/Modal';
 import { DateRangeFilter } from '@/components/DateRangeFilter';
-import { downloadCSV, formatDate, normalizeMacAddress, isValidMacAddress, isValidCidrOrRange, useDebounce, getErrorMessage } from '@/lib/utils';
+import { downloadCSV, formatDate, useDebounce, getErrorMessage } from '@/lib/utils';
 
-const REFRESH_OPTIONS = [
+const REFRESH_OPTIONS: { labelKey?: string; label: string; value: number }[] = [
   { labelKey: 'common.off', label: 'Off', value: 0 },
   { label: '30s', value: 30000 },
   { label: '1m', value: 60000 },
@@ -24,23 +24,12 @@ const REFRESH_OPTIONS = [
 const Blacklist: React.FC = () => {
   const { t } = useTranslation();
   const [searchTerm, setSearchTerm] = useState('');
-  const [showAddModal, setShowAddModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [showDetailsModal, setShowDetailsModal] = useState(false);
   const [deleteEntry, setDeleteEntry] = useState<BlacklistEntry | null>(null);
   const [selectedEntry, setSelectedEntry] = useState<BlacklistEntry | null>(null);
-  const [newEntry, setNewEntry] = useState({
-    mac_address: '',
-    ip_address: '',
-    reason: '',
-    block_time: '30d',
-    firewall_tag: '',
-  });
-  const [macError, setMacError] = useState('');
-  const [ipError, setIpError] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
-  const [isAdding, setIsAdding] = useState(false);
   const [isUnblocking, setIsUnblocking] = useState(false);
   const [filterCollapsed, setFilterCollapsed] = useState(false);
   const [startDate, setStartDate] = useState('');
@@ -48,7 +37,7 @@ const Blacklist: React.FC = () => {
   const [autoRefresh, setAutoRefresh] = useState<number>(0);
 
   // Debounce search term
-  const debouncedSearch = useDebounce(searchTerm, 300);
+  const debouncedSearch = useDebounce(searchTerm, 500);
 
   const { data: blacklistData, isLoading, refetch } = useBlacklist({
     search: debouncedSearch || undefined,
@@ -58,13 +47,6 @@ const Blacklist: React.FC = () => {
     limit: pageSize,
     refetchInterval: autoRefresh || undefined,
   });
-
-  const { data: dataSources } = useDataSources();
-
-  const firewallOptions = useMemo(
-    () => (dataSources || []).filter((ds) => ds.type === 'sangfor' && ds.enabled),
-    [dataSources],
-  );
 
   // Extract items and total from paginated response
   const filteredBlacklist = blacklistData?.items ?? [];
@@ -79,52 +61,6 @@ const Blacklist: React.FC = () => {
   const handlePageSizeChange = (size: number) => {
     setPageSize(size);
     setCurrentPage(1);
-  };
-
-  const handleAddBlacklist = async () => {
-    if (!newEntry.mac_address && !newEntry.ip_address) {
-      toast.error(t('blacklist.pleaseEnterMacOrIp'));
-      return;
-    }
-    if (!newEntry.reason) {
-      toast.error(t('blacklist.pleaseSelectReason'));
-      return;
-    }
-
-    // Validate MAC address format
-    if (newEntry.mac_address && !isValidMacAddress(newEntry.mac_address)) {
-      setMacError(t('blacklist.invalidMacFormat'));
-      return;
-    }
-    setMacError('');
-
-    // Validate IP address format
-    if (newEntry.ip_address && !isValidCidrOrRange(newEntry.ip_address)) {
-      setIpError(t('blacklist.invalidIpFormat'));
-      return;
-    }
-    setIpError('');
-
-    setIsAdding(true);
-    try {
-      const payload: Record<string, string> = {
-        reason: newEntry.reason,
-        block_time: newEntry.block_time,
-      };
-      if (newEntry.mac_address) payload['mac_address'] = normalizeMacAddress(newEntry.mac_address);
-      if (newEntry.ip_address) payload['ip_address'] = newEntry.ip_address;
-      if (newEntry.firewall_tag) payload['firewall_tag'] = newEntry.firewall_tag;
-
-      await apiClient.post(API_ENDPOINTS.BLACKLIST, payload);
-      toast.success(t('blacklist.terminalBlockedSuccessfully'));
-      setNewEntry({ mac_address: '', ip_address: '', reason: '', block_time: '30d', firewall_tag: '' });
-      setShowAddModal(false);
-      refetch();
-    } catch (error: unknown) {
-      toast.error(getErrorMessage(error, t('blacklist.failedToBlock')));
-    } finally {
-      setIsAdding(false);
-    }
   };
 
   const handleRemoveBlacklist = (entry: BlacklistEntry) => {
@@ -194,20 +130,12 @@ const Blacklist: React.FC = () => {
           <h1 className="text-2xl sm:text-3xl font-bold text-foreground">{t('blacklist.blockedTerminals')}</h1>
           <p className="text-muted-foreground mt-1">{t('blacklist.manageBlocked')}</p>
         </div>
-        <ButtonGroup>
-          <PrimaryButton
-            icon={Download}
-            label={t('common.export')}
-            variant="success"
-            onClick={handleExport}
-          />
-          <PrimaryButton
-            icon={Shield}
-            label={t('blacklist.blockTerminal')}
-            variant="danger"
-            onClick={() => setShowAddModal(true)}
-          />
-        </ButtonGroup>
+        <PrimaryButton
+          icon={Download}
+          label={t('common.export')}
+          variant="success"
+          onClick={handleExport}
+        />
       </div>
 
       {/* Search and Filter */}
@@ -261,7 +189,7 @@ const Blacklist: React.FC = () => {
                 variant="secondary"
                 size="sm"
                 title={t('common.refresh')}
-                onClick={() => refetch()}
+                onClick={async () => { await refetch(); toast.success(t('terminal.dataRefreshed')); }}
               />
 
               {/* Auto Refresh Selector */}
@@ -269,7 +197,15 @@ const Blacklist: React.FC = () => {
                 <Clock className="h-4 w-4 text-muted-foreground flex-shrink-0" />
                 <select
                   value={autoRefresh}
-                  onChange={(e) => setAutoRefresh(Number(e.target.value))}
+                  onChange={(e) => {
+                    const val = Number(e.target.value);
+                    setAutoRefresh(val);
+                    if (val > 0) {
+                      toast.success(t('terminal.autoRefreshEnabled', { seconds: val / 1000 }));
+                    } else {
+                      toast.info(t('terminal.autoRefreshDisabled'));
+                    }
+                  }}
                   className="bg-transparent py-1.5 text-sm text-muted-foreground focus:outline-none focus:ring-0 cursor-pointer font-medium min-w-[4rem]"
                 >
                   {REFRESH_OPTIONS.map((opt) => (
@@ -495,120 +431,6 @@ const Blacklist: React.FC = () => {
           variant="bottom"
         />
       </div>
-
-      {/* Add Modal */}
-      <Modal isOpen={showAddModal} onClose={() => { setShowAddModal(false); setNewEntry({ mac_address: '', ip_address: '', reason: '', block_time: '30d', firewall_tag: '' }); setMacError(''); setIpError(''); }} title={t('blacklist.blockTerminal')} size="md">
-        <p className="text-sm text-muted-foreground mb-6">{t('blacklist.enterMacIpOrBoth')}</p>
-        <div className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-muted-foreground mb-1">
-              {t('terminal.mac')} <span className="text-muted-foreground font-normal">({t('common.optional')})</span>
-            </label>
-            <input
-              type="text"
-              placeholder="00:11:22:33:44:55"
-              value={newEntry.mac_address}
-              onChange={(e) => {
-                setNewEntry({ ...newEntry, mac_address: e.target.value });
-                setMacError('');
-              }}
-              className={`w-full px-4 py-2.5 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono text-sm ${
-                macError ? 'border-red-500' : 'border-border'
-              }`}
-            />
-            {macError && <p className="text-red-600 text-xs mt-1">{macError}</p>}
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-muted-foreground mb-1">
-              {t('blacklist.ip')} <span className="text-muted-foreground font-normal">({t('common.optional')})</span>
-            </label>
-            <input
-              type="text"
-              placeholder="192.168.1.100 or 192.168.1.0/24"
-              value={newEntry.ip_address}
-              onChange={(e) => {
-                setNewEntry({ ...newEntry, ip_address: e.target.value });
-                setIpError('');
-              }}
-              className={`w-full px-4 py-2.5 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono text-sm ${
-                ipError ? 'border-red-500' : 'border-border'
-              }`}
-            />
-            {ipError && <p className="text-red-600 text-xs mt-1">{ipError}</p>}
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-muted-foreground mb-1">
-              {t('blacklist.reason')}
-            </label>
-            <select
-              value={newEntry.reason}
-              onChange={(e) => setNewEntry({ ...newEntry, reason: e.target.value })}
-              className="w-full px-4 py-2.5 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
-            >
-              <option value="">{t('blacklist.selectReason')}</option>
-              <option value="Unauthorized access attempt">{t('blacklist.unauthorizedAccess')}</option>
-              <option value="Security violation">{t('blacklist.securityViolation')}</option>
-              <option value="Malware detected">{t('blacklist.malwareDetected')}</option>
-              <option value="Policy violation">{t('blacklist.policyViolation')}</option>
-              <option value="Suspicious activity">{t('blacklist.suspiciousActivity')}</option>
-            </select>
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-muted-foreground mb-1">
-              {t('blacklist.blockDuration')}
-            </label>
-            <select
-              value={newEntry.block_time}
-              onChange={(e) => setNewEntry({ ...newEntry, block_time: e.target.value })}
-              className="w-full px-4 py-2.5 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
-            >
-              <option value="30m">{t('blacklist.minutes30')}</option>
-              <option value="1h">{t('blacklist.hour1')}</option>
-              <option value="7d">{t('blacklist.days7')}</option>
-              <option value="15d">{t('blacklist.days15')}</option>
-              <option value="30d">{t('blacklist.days30')}</option>
-            </select>
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-muted-foreground mb-1">
-              {t('blacklist.firewall')} <span className="text-muted-foreground font-normal">({t('common.optional')})</span>
-            </label>
-            <select
-              value={newEntry.firewall_tag}
-              onChange={(e) => setNewEntry({ ...newEntry, firewall_tag: e.target.value })}
-              className="w-full px-4 py-2.5 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
-            >
-              <option value="">{t('blacklist.defaultFirewall')}</option>
-              {firewallOptions.map((ds) => (
-                <option key={ds.id} value={ds.tag}>
-                  {ds.tag} ({ds.name})
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="flex gap-3 pt-2">
-            <PrimaryButton
-              label={t('common.cancel')}
-              variant="secondary"
-              onClick={() => {
-                setShowAddModal(false);
-                setNewEntry({ mac_address: '', ip_address: '', reason: '', block_time: '30d', firewall_tag: '' });
-                setMacError('');
-                setIpError('');
-              }}
-              className="flex-1"
-            />
-            <PrimaryButton
-              icon={Shield}
-              label={t('common.block')}
-              variant="danger"
-              onClick={handleAddBlacklist}
-              loading={isAdding}
-              className="flex-1"
-            />
-          </div>
-        </div>
-      </Modal>
 
       {/* Delete Confirmation Modal */}
       <Modal isOpen={showDeleteModal && !!deleteEntry} onClose={() => { setShowDeleteModal(false); setDeleteEntry(null); }} title={t('blacklist.confirmUnblock')} size="sm">

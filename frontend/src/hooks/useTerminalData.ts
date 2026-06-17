@@ -80,6 +80,7 @@ export const useStats = () => {
       const response = await apiClient.get('/stats/');
       return response.data as DashboardStats;
     },
+    refetchInterval: 30000, // Refresh every 30 seconds
   });
 };
 
@@ -102,6 +103,8 @@ export interface TerminalSearchParams {
   mac?: string;
   status?: string;
   compliance_status?: string;
+  source_tag?: string;
+  firewall_tag?: string;
   start_date?: string;
   end_date?: string;
   skip?: number;
@@ -166,19 +169,21 @@ export interface BlacklistSearchParams {
 }
 
 export const useBlacklist = (params?: BlacklistSearchParams) => {
+  // Separate refetchInterval from API params to avoid sending it to backend
+  const { refetchInterval, ...apiParams } = params || {};
   return useQuery({
-    queryKey: ['blacklist', params],
+    queryKey: ['blacklist', apiParams],
     queryFn: async () => {
-      const response = await apiClient.get('/blacklist/', { params });
+      const response = await apiClient.get('/blacklist/', { params: apiParams });
       return response.data as PaginatedResponse<BlacklistEntry>;
     },
     placeholderData: keepPreviousData,
-    refetchInterval: params?.refetchInterval,
+    refetchInterval: refetchInterval,
   });
 };
 
 // -------------------------------------------------------------------
-// Audit Logs hooks - server-side filtering
+// Audit Logs hooks - server-side filtering with cursor pagination
 // -------------------------------------------------------------------
 export interface AuditLogSearchParams {
   username?: string;
@@ -186,8 +191,16 @@ export interface AuditLogSearchParams {
   search?: string;
   start_date?: string;
   end_date?: string;
+  cursor?: string;
   skip?: number;
   limit?: number;
+}
+
+export interface CursorPaginatedResponse<T> {
+  items: T[];
+  total: number;
+  limit: number;
+  next_cursor: string | null;
 }
 
 export interface AuditLog {
@@ -195,6 +208,7 @@ export interface AuditLog {
   action: string;
   resource_type?: string;
   resource_id?: string;
+  resource_name?: string;
   username: string;
   ip_address?: string;
   timestamp: string;
@@ -206,7 +220,7 @@ export const useAuditLogs = (params?: AuditLogSearchParams) => {
     queryKey: ['audit-logs', params],
     queryFn: async () => {
       const response = await apiClient.get('/logs/search', { params });
-      return response.data as PaginatedResponse<AuditLog>;
+      return response.data as CursorPaginatedResponse<AuditLog>;
     },
     placeholderData: keepPreviousData,
   });
@@ -306,6 +320,8 @@ export interface UserItem {
   email: string | null;
   is_active: boolean;
   is_superuser: boolean;
+  roles: string[];
+  permissions: string[];
   created_at: string | null;
   updated_at: string | null;
 }
@@ -319,6 +335,7 @@ export const useUsers = (search?: string) => {
       });
       return response.data as UserItem[];
     },
+    placeholderData: keepPreviousData,
   });
 };
 

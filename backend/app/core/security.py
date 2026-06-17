@@ -1,15 +1,16 @@
-from datetime import datetime, timedelta, timezone
-from typing import Optional, Tuple
-from jose import JWTError, jwt
-import bcrypt
-from fastapi import Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
-import redis.asyncio as aioredis
-import uuid
+import json
 import random
+import uuid
+from datetime import UTC, datetime, timedelta
+
+import bcrypt
+import redis.asyncio as aioredis
+from fastapi import Depends, HTTPException, Request, status
+from fastapi.security import OAuth2PasswordBearer
+from jose import JWTError, jwt
 from loguru import logger
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.database import get_db
@@ -20,7 +21,27 @@ from app.schemas.auth import TokenData
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.API_V1_STR}/auth/login")
 
 # Redis client for token blacklist
-_redis_client: Optional[aioredis.Redis] = None
+_redis_client: aioredis.Redis | None = None
+
+
+def get_client_ip(request: Request) -> str | None:
+    """Extract real client IP from request, respecting proxy headers.
+
+    Checks X-Real-IP and X-Forwarded-For headers first (set by Nginx),
+    falls back to request.client.host.
+    """
+    if request is None:
+        return None
+    # X-Real-IP is set by Nginx with proxy_set_header X-Real-IP $remote_addr
+    real_ip = request.headers.get("x-real-ip")
+    if real_ip:
+        return real_ip.strip()
+    # X-Forwarded-For: client, proxy1, proxy2 - take the first one
+    forwarded_for = request.headers.get("x-forwarded-for")
+    if forwarded_for:
+        return forwarded_for.split(",")[0].strip()
+    # Fallback to direct connection IP
+    return request.client.host if request.client else None
 
 
 async def get_redis_client() -> aioredis.Redis:
@@ -30,7 +51,10 @@ async def get_redis_client() -> aioredis.Redis:
         _redis_client = aioredis.from_url(
             settings.REDIS_URL,
             encoding="utf-8",
-            decode_responses=True
+            decode_responses=True,
+            socket_timeout=5,
+            socket_connect_timeout=5,
+            retry_on_timeout=True,
         )
     return _redis_client
 
@@ -47,7 +71,7 @@ async def add_token_to_blacklist(jti: str, exp: datetime) -> None:
     """Add a JWT token to the blacklist in Redis"""
     try:
         redis_client = await get_redis_client()
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         ttl = int((exp - now).total_seconds())
 
         if ttl > 0:
@@ -67,8 +91,8 @@ async def is_token_blacklisted(jti: str) -> bool:
         redis_client = await get_redis_client()
         return await redis_client.exists(f"token_blacklist:{jti}") > 0
     except Exception as e:
-        logger.warning(f"Redis unavailable, allowing token (fail-open): {e}")
-        return False
+        logger.warning(f"Redis unavailable, treating token as blacklisted (fail-closed): {e}")
+        return True
 
 
 # ==================== Token Version Functions ====================
@@ -110,10 +134,7 @@ async def check_login_attempts(username: str) -> bool:
         lock_key = f"login_lock:{username}"
 
         # Check if account is locked
-        if await redis_client.exists(lock_key):
-            return True
-
-        return False
+        return bool(await redis_client.exists(lock_key))
     except Exception as e:
         logger.warning(f"Redis unavailable, allowing login (fail-open): {e}")
         return False
@@ -184,7 +205,7 @@ async def reset_login_attempts(username: str) -> None:
 CAPTCHA_TTL_SECONDS = 300  # 5 minutes
 
 
-async def generate_captcha() -> Tuple[str, str]:
+async def generate_captcha() -> tuple[str, str]:
     """Generate a server-side arithmetic captcha.
 
     Returns:
@@ -243,7 +264,7 @@ async def verify_captcha(captcha_id: str, user_answer: str) -> bool:
         except (ValueError, TypeError):
             return False
     except Exception as e:
-        logger.warning(f"Redis unavailable, captcha verification failed (fail-open): {e}")
+        logger.warning(f"Redis unavailable, captcha verification failed (fail-closed): {e}")
         return False
 
 
@@ -257,18 +278,18 @@ def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
 
-async def create_access_token_async(data: dict, expires_delta: Optional[timedelta] = None, user_id: Optional[int] = None) -> str:
+async def create_access_token_async(data: dict, expires_delta: timedelta | None = None, user_id: int | None = None) -> str:
     """Create a JWT access token with hot-reloadable expiration.
     Reads access_token_expire_minutes from ConfigService.
     Includes token version (ver) for invalidation on password change."""
     to_encode = data.copy()
 
     if expires_delta:
-        expire = datetime.now(timezone.utc) + expires_delta
+        expire = datetime.now(UTC) + expires_delta
     else:
         from app.services.config_service import get_config_value
         expire_minutes = await get_config_value("access_token_expire_minutes", settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-        expire = datetime.now(timezone.utc) + timedelta(minutes=expire_minutes)
+        expire = datetime.now(UTC) + timedelta(minutes=expire_minutes)
 
     jti = str(uuid.uuid4())
     to_encode.update({"exp": expire, "jti": jti, "type": "access"})
@@ -282,14 +303,14 @@ async def create_access_token_async(data: dict, expires_delta: Optional[timedelt
     return encoded_jwt
 
 
-async def create_refresh_token_async(data: dict, user_id: Optional[int] = None) -> str:
+async def create_refresh_token_async(data: dict, user_id: int | None = None) -> str:
     """Create a JWT refresh token with hot-reloadable expiration.
     Reads refresh_token_expire_days from ConfigService.
     Includes token version (ver) for invalidation on password change."""
     to_encode = data.copy()
     from app.services.config_service import get_config_value
     expire_days = await get_config_value("refresh_token_expire_days", settings.REFRESH_TOKEN_EXPIRE_DAYS)
-    expire = datetime.now(timezone.utc) + timedelta(days=expire_days)
+    expire = datetime.now(UTC) + timedelta(days=expire_days)
     jti = str(uuid.uuid4())
     to_encode.update({"exp": expire, "jti": jti, "type": "refresh"})
 
@@ -302,7 +323,7 @@ async def create_refresh_token_async(data: dict, user_id: Optional[int] = None) 
     return encoded_jwt
 
 
-async def authenticate_user(db: AsyncSession, username: str, password: str) -> Optional[User]:
+async def authenticate_user(db: AsyncSession, username: str, password: str) -> User | None:
     """Authenticate a user by username and password"""
     from sqlalchemy import select
 
@@ -379,3 +400,63 @@ async def get_current_active_superuser(
         )
 
     return current_user
+
+
+async def get_user_permissions(db: AsyncSession, user_id: int) -> set[str]:
+    """Get all permission codes for a user via their roles (with Redis cache)"""
+    try:
+        redis_client = await get_redis_client()
+        cache_key = f"user_perms:{user_id}"
+        cached = await redis_client.get(cache_key)
+        if cached:
+            return set(json.loads(cached))
+    except Exception as e:
+        logger.warning(f"Redis unavailable for permission cache: {e}")
+
+    from sqlalchemy import select
+
+    from app.models.role import Permission, RolePermission, UserRole
+
+    result = await db.execute(
+        select(Permission.code)
+        .join(RolePermission, RolePermission.permission_id == Permission.id)
+        .join(UserRole, UserRole.role_id == RolePermission.role_id)
+        .where(UserRole.user_id == user_id)
+    )
+    perms = set(result.scalars().all())
+
+    try:
+        redis_client = await get_redis_client()
+        await redis_client.setex(f"user_perms:{user_id}", 300, json.dumps(list(perms)))
+    except Exception as e:
+        logger.warning(f"Redis unavailable for permission cache write: {e}")
+
+    return perms
+
+
+async def invalidate_user_permissions(user_id: int) -> None:
+    """Invalidate cached permissions for a user"""
+    try:
+        redis_client = await get_redis_client()
+        await redis_client.delete(f"user_perms:{user_id}")
+    except Exception as e:
+        logger.warning(f"Redis unavailable for permission cache invalidation: {e}")
+
+
+def require_permission(permission_code: str):
+    """Dependency factory for permission-based access control.
+    Superusers always pass. Other users must have the specified permission."""
+    async def permission_checker(
+        current_user: User = Depends(get_current_user),
+        db: AsyncSession = Depends(get_db)
+    ) -> User:
+        if current_user.is_superuser:
+            return current_user
+        perms = await get_user_permissions(db, current_user.id)
+        if permission_code not in perms:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Permission denied: {permission_code}"
+            )
+        return current_user
+    return permission_checker

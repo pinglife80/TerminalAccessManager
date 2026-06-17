@@ -1,6 +1,6 @@
 # TerminalAccessManager - 部署与运维手册
 
-> 文档版本：v3.2.0 | 更新日期：2026-06-10
+> 文档版本：v3.3.0  更新日期：2026-06-17
 
 ## 目录
 
@@ -44,12 +44,14 @@ git clone https://github.com/pinglife80/TerminalAccessManager.git
 cd TerminalAccessManager
 ```
 
-### 2.2 一键 Demo 部署
+### 2.2 一键开发环境部署
 
 ```bash
 chmod +x manage.sh
-./manage.sh deploy --demo
+./manage.sh deploy --dev
 ```
+
+> **注意**：`--demo` 参数已废弃，请使用 `--dev` 代替。
 
 这将自动完成：
 1. 检查系统前提条件
@@ -69,7 +71,7 @@ chmod +x manage.sh
 
 > `<HOST_IP>` 为实际部署主机 IP 地址。本机部署时使用 `localhost`。
 
-> Demo 环境仅用于评估和测试，不适合生产使用。
+> 开发环境仅用于评估和测试，不适合生产使用。
 
 ---
 
@@ -124,18 +126,24 @@ vim .env                          # 编辑配置
 | `SWITCH_PASSWORD` | 否 | 交换机密码 |
 | `TZ` | 否 | 系统时区（默认 `Asia/Shanghai`），影响所有容器系统时间、后端日志时间戳、PostgreSQL 日志和查询时间。修改后需重启所有服务：`docker compose down && docker compose up -d` |
 
-### 3.5 docker-compose.yml 安全配置
+### 3.5 Docker Compose 三层架构
 
-- 所有敏感配置不再有默认值回退
-- 使用 `:?` 语法确保必需变量已设置
-- 未配置必需变量时 `docker compose up` 将报错并拒绝启动
+项目采用 Docker Compose 三层配置架构，实现开发与生产环境的分离：
 
-**容器安全加固：**
+| 层级 | 文件 | 用途 |
+|------|------|------|
+| 基础层 | `docker-compose.yml` | 共享配置，定义所有服务的基础定义 |
+| 开发覆盖层 | `docker-compose.dev.yml` | 开发环境覆盖，加载 `tam.dev.conf`，使用 HTTP，宽松的速率限制 |
+| 生产覆盖层 | `docker-compose.prod.yml` | 生产环境覆盖，安全加固（`no-new-privileges`、`cap_drop:ALL`、`read_only`） |
 
-docker-compose.yml 中包含生产环境安全加固项（标注 `Production hardening`），默认以注释形式提供：
+**自动选择机制：**
 
-- 开发环境直接运行即可，无需额外配置
-- 生产环境取消注释即可启用以下加固措施：
+`manage.sh` 中的 `dc()` 函数会根据 `ENVIRONMENT` 变量自动选择正确的覆盖文件：
+
+- `ENVIRONMENT=development` → 使用 `docker compose -f docker-compose.yml -f docker-compose.dev.yml`
+- `ENVIRONMENT=production` → 使用 `docker compose -f docker-compose.yml -f docker-compose.prod.yml`
+
+**生产覆盖层安全加固项：**
 
 | 措施 | 适用服务 | 说明 |
 |------|---------|------|
@@ -144,6 +152,8 @@ docker-compose.yml 中包含生产环境安全加固项（标注 `Production har
 | `cap_add: [NET_BIND_SERVICE]` | nginx | 需要绑定 80/443 低位端口 |
 | `read_only: true` | backend、nginx | 文件系统只读，防止运行时篡改 |
 | `restart: unless-stopped` | postgres、redis | 容器异常退出后自动重启 |
+
+> 开发环境直接使用 `docker-compose.dev.yml` 覆盖，无需手动配置安全加固项。
 
 ### 3.6 PostgreSQL 时区配置
 
@@ -155,6 +165,36 @@ docker-compose.yml 中 PostgreSQL 服务的 `command` 新增了以下时区参�
 | `timezone` | `${TZ:-Asia/Shanghai}` | PostgreSQL 查询和事务时区 |
 
 > 这两个参数默认读取 `.env` 中的 `TZ` 变量，若未设置则回退到 `Asia/Shanghai`。修改 `TZ` 后需重启所有服务使配置生效。
+
+### 3.7 Nginx 环境差异化配置
+
+开发与生产环境使用不同的 Nginx 配置文件，通过 Docker Compose 覆盖层自动加载：
+
+| 配置项 | 开发环境 (`tam.dev.conf`) | 生产环境 (`tam.conf`) |
+|--------|--------------------------|----------------------|
+| 协议 | HTTP | HTTPS（含 HTTP→HTTPS 重定向） |
+| 监听端口 | 8080 | 8443（HTTPS）+ 8080（HTTP 重定向） |
+| API 速率限制 | 120r/m | 60r/m |
+| 认证速率限制 | 30r/m | 10r/m |
+
+> 开发环境使用 HTTP 协议和宽松的速率限制，方便调试和测试。生产环境强制 HTTPS 并收紧速率限制，确保安全性。
+
+### 3.8 ENVIRONMENT 变量
+
+`ENVIRONMENT` 变量决定系统运行模式，由 `deploy` 向导自动设置：
+
+| 部署命令 | ENVIRONMENT 值 | 说明 |
+|---------|---------------|------|
+| `deploy --dev` | `development` | 开发环境，自动配置 + 示例数据 |
+| `deploy --prod` | `production` | 生产环境，交互式向导配置 |
+
+> `ENVIRONMENT` 变量由部署向导自动写入 `.env` 文件，无需手动设置。该变量影响 Docker Compose 覆盖层选择、Nginx 配置加载以及部分功能的行为差异。
+
+### 3.9 生产环境功能限制
+
+在 `ENVIRONMENT=production` 模式下，以下功能被限制：
+
+- **`mock generate` 被阻止**：生产环境禁止生成演示数据，避免污染真实数据。如需在开发环境生成测试数据，请使用 `deploy --dev` 部署。
 
 ---
 
@@ -170,12 +210,12 @@ docker-compose.yml 中 PostgreSQL 服务的 `command` 新增了以下时区参�
 
 ### 4.1 生命周期命令
 
-#### `deploy [--demo|--prod]`
+#### `deploy [--dev|--prod]`
 
 完整部署，包含初始化向导。
 
 ```bash
-./manage.sh deploy --demo        # Demo 模式（自动配置 + 示例数据）
+./manage.sh deploy --dev         # 开发模式（自动配置 + 示例数据），--demo 已废弃
 ./manage.sh deploy --prod        # 生产模式（交互式向导）
 ./manage.sh -y deploy --prod     # 生产模式（非交互，使用已有 .env）
 ```
@@ -184,7 +224,7 @@ docker-compose.yml 中 PostgreSQL 服务的 `command` 新增了以下时区参�
 
 - 新增 `_check_required_env` 环境变量检查，确保所有必需变量已配置
 - 生产向导自动生成 `ENCRYPTION_KEY`
-- Demo 模式自动生成 `ENCRYPTION_KEY`
+- 开发模式自动生成 `ENCRYPTION_KEY`
 
 #### `start`
 
@@ -364,6 +404,8 @@ Deployment:
 ```bash
 ./manage.sh mock generate
 ```
+
+> **注意**：`mock generate` 在生产环境（`ENVIRONMENT=production`）下被阻止，仅允许在开发环境中使用。
 
 生成内容：
 - 5 个用户（含 admin）
@@ -813,7 +855,7 @@ ss -tlnp | grep -E '8080|8443'
 
 ```bash
 ./manage.sh -y clean
-./manage.sh deploy --demo
+./manage.sh deploy --dev
 ```
 
 ---
@@ -868,7 +910,7 @@ ss -tlnp | grep -E '8080|8443'
 | 状态键 | 说明 |
 |--------|------|
 | `deployed` | 是否已部署 |
-| `deploy_mode` | 部署模式（demo/prod） |
+| `deploy_mode` | 部署模式（dev/prod） |
 | `deploy_time` | 部署时间 |
 | `db_initialized` | 数据库是否已初始化 |
 

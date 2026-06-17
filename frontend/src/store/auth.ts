@@ -6,6 +6,8 @@ interface User {
   email: string | null;
   is_active: boolean;
   is_superuser: boolean;
+  roles: string[];
+  permissions: string[];
 }
 
 interface AuthState {

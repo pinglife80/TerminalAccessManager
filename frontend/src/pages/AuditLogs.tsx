@@ -1,16 +1,16 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Search, Filter, Download, Clock, User, AlertCircle, X, FileText, RefreshCw, ChevronDown } from 'lucide-react';
+import { Search, Filter, Download, Clock, User, X, FileText, RefreshCw, ChevronDown, ChevronLeft, ChevronRight } from 'lucide-react';
 import { useAuditLogs, AuditLog as AuditLogType } from '@/hooks/useTerminalData';
 import { apiClient } from '@/lib/api';
 import { toast } from 'sonner';
 import { API_ENDPOINTS } from '@/lib/constants';
 import { PrimaryButton, IconButton } from '@/components/Button';
-import { Pagination } from '@/components/Pagination';
 import { EmptyState } from '@/components/StateDisplay';
 import { PageSkeleton } from '@/components/Skeleton';
 import { DateRangeFilter } from '@/components/DateRangeFilter';
 import { formatDate, useDebounce, getErrorMessage } from '@/lib/utils';
+import { usePermission } from '@/hooks/usePermission';
 
 const ACTION_CATEGORIES = [
   {
@@ -21,12 +21,12 @@ const ACTION_CATEGORIES = [
   {
     key: 'auth',
     labelKey: 'auditLogs.categories.auth',
-    actions: ['login', 'logout'],
+    actions: ['login', 'login_failed', 'logout', 'token_refresh', 'change_password'],
   },
   {
     key: 'terminal',
     labelKey: 'auditLogs.categories.terminal',
-    actions: ['block_terminal', 'unblock_terminal'],
+    actions: ['block_terminal', 'unblock_terminal', 'auto_block_terminal', 'auto_unblock_terminal'],
   },
   {
     key: 'whitelist',
@@ -36,79 +36,131 @@ const ACTION_CATEGORIES = [
   {
     key: 'blacklist',
     labelKey: 'auditLogs.categories.blacklist',
-    actions: ['block_blacklist', 'unblock_blacklist', 'cleanup_expired'],
+    actions: ['block_blacklist', 'unblock_blacklist', 'cleanup_expired_blacklist'],
   },
   {
     key: 'datasource',
     labelKey: 'auditLogs.categories.datasource',
-    actions: ['create_datasource', 'update_datasource', 'delete_datasource', 'test_datasource', 'sync_datasource'],
+    actions: ['create_datasource', 'update_datasource', 'delete_datasource', 'test_datasource', 'sync_datasource', 'bind_datasource', 'unbind_datasource'],
   },
   {
     key: 'user',
     labelKey: 'auditLogs.categories.user',
-    actions: ['create_user', 'update_user', 'delete_user', 'reset_password', 'unlock_user'],
+    actions: ['create_user', 'update_user', 'delete_user', 'reset_password', 'unlock_user', 'change_role', 'assign_role'],
+  },
+  {
+    key: 'role',
+    labelKey: 'auditLogs.categories.role',
+    actions: ['create_role', 'update_role', 'delete_role'],
+  },
+  {
+    key: 'compliance',
+    labelKey: 'auditLogs.categories.compliance',
+    actions: ['create_baseline', 'update_baseline', 'delete_baseline'],
   },
   {
     key: 'system',
     labelKey: 'auditLogs.categories.system',
-    actions: ['update_config'],
+    actions: ['update_config', 'upload_branding', 'export_audit_logs'],
   },
 ] as const;
 
 const actionLabelKeys: Record<string, string> = {
   login: 'auditLogs.actionLabels.login',
+  login_failed: 'auditLogs.actionLabels.login_failed',
   logout: 'auditLogs.actionLabels.logout',
+  token_refresh: 'auditLogs.actionLabels.token_refresh',
+  change_password: 'auditLogs.actionLabels.change_password',
   block_terminal: 'auditLogs.actionLabels.block_terminal',
   unblock_terminal: 'auditLogs.actionLabels.unblock_terminal',
+  auto_block_terminal: 'auditLogs.actionLabels.auto_block_terminal',
+  auto_unblock_terminal: 'auditLogs.actionLabels.auto_unblock_terminal',
   add_whitelist: 'auditLogs.actionLabels.add_whitelist',
   remove_whitelist: 'auditLogs.actionLabels.remove_whitelist',
   block_blacklist: 'auditLogs.actionLabels.block_blacklist',
   unblock_blacklist: 'auditLogs.actionLabels.unblock_blacklist',
-  cleanup_expired: 'auditLogs.actionLabels.cleanup_expired',
+  cleanup_expired_blacklist: 'auditLogs.actionLabels.cleanup_expired_blacklist',
   create_datasource: 'auditLogs.actionLabels.create_datasource',
   update_datasource: 'auditLogs.actionLabels.update_datasource',
   delete_datasource: 'auditLogs.actionLabels.delete_datasource',
   test_datasource: 'auditLogs.actionLabels.test_datasource',
   sync_datasource: 'auditLogs.actionLabels.sync_datasource',
+  bind_datasource: 'auditLogs.actionLabels.bind_datasource',
+  unbind_datasource: 'auditLogs.actionLabels.unbind_datasource',
   create_user: 'auditLogs.actionLabels.create_user',
   update_user: 'auditLogs.actionLabels.update_user',
   delete_user: 'auditLogs.actionLabels.delete_user',
   reset_password: 'auditLogs.actionLabels.reset_password',
   unlock_user: 'auditLogs.actionLabels.unlock_user',
+  change_role: 'auditLogs.actionLabels.change_role',
+  assign_role: 'auditLogs.actionLabels.assign_role',
+  create_role: 'auditLogs.actionLabels.create_role',
+  update_role: 'auditLogs.actionLabels.update_role',
+  delete_role: 'auditLogs.actionLabels.delete_role',
+  create_baseline: 'auditLogs.actionLabels.create_baseline',
+  update_baseline: 'auditLogs.actionLabels.update_baseline',
+  delete_baseline: 'auditLogs.actionLabels.delete_baseline',
   update_config: 'auditLogs.actionLabels.update_config',
+  upload_branding: 'auditLogs.actionLabels.upload_branding',
+  export_audit_logs: 'auditLogs.actionLabels.export_audit_logs',
   // Legacy action names (backward compatibility)
   block_ip: 'auditLogs.actionLabels.block_terminal',
   unblock_ip: 'auditLogs.actionLabels.unblock_terminal',
   block: 'auditLogs.actionLabels.block_blacklist',
   unblock: 'auditLogs.actionLabels.unblock_blacklist',
+  auto_block: 'auditLogs.actionLabels.auto_block_terminal',
+  auto_unblock: 'auditLogs.actionLabels.auto_unblock_terminal',
+  cleanup_expired: 'auditLogs.actionLabels.cleanup_expired_blacklist',
+  role_change: 'auditLogs.actionLabels.change_role',
 };
 
 const ACTION_CATEGORY_MAP: Record<string, string> = {
   login: 'auth',
+  login_failed: 'auth',
   logout: 'auth',
+  token_refresh: 'auth',
+  change_password: 'auth',
   block_terminal: 'terminal',
   unblock_terminal: 'terminal',
+  auto_block_terminal: 'terminal',
+  auto_unblock_terminal: 'terminal',
   add_whitelist: 'whitelist',
   remove_whitelist: 'whitelist',
   block_blacklist: 'blacklist',
   unblock_blacklist: 'blacklist',
-  cleanup_expired: 'blacklist',
+  cleanup_expired_blacklist: 'blacklist',
   create_datasource: 'datasource',
   update_datasource: 'datasource',
   delete_datasource: 'datasource',
   test_datasource: 'datasource',
   sync_datasource: 'datasource',
+  bind_datasource: 'datasource',
+  unbind_datasource: 'datasource',
   create_user: 'user',
   update_user: 'user',
   delete_user: 'user',
   reset_password: 'user',
   unlock_user: 'user',
+  change_role: 'user',
+  assign_role: 'user',
+  create_role: 'role',
+  update_role: 'role',
+  delete_role: 'role',
+  create_baseline: 'compliance',
+  update_baseline: 'compliance',
+  delete_baseline: 'compliance',
   update_config: 'system',
+  upload_branding: 'system',
+  export_audit_logs: 'system',
   // Legacy action names
   block_ip: 'terminal',
   unblock_ip: 'terminal',
   block: 'blacklist',
   unblock: 'blacklist',
+  auto_block: 'terminal',
+  auto_unblock: 'terminal',
+  cleanup_expired: 'blacklist',
+  role_change: 'user',
 };
 
 const CATEGORY_BADGE_STYLES: Record<string, string> = {
@@ -118,6 +170,8 @@ const CATEGORY_BADGE_STYLES: Record<string, string> = {
   blacklist: 'bg-red-100 text-red-800',
   datasource: 'bg-purple-100 text-purple-800',
   user: 'bg-cyan-100 text-cyan-800',
+  role: 'bg-indigo-100 text-indigo-800',
+  compliance: 'bg-teal-100 text-teal-800',
   system: 'bg-gray-100 text-gray-800',
 };
 
@@ -130,11 +184,25 @@ const getResourceDisplay = (log: AuditLogType, t: (key: string) => string) => {
     blacklist: t('auditLogs.resourceTypes.blacklist'),
     datasource: t('auditLogs.resourceTypes.datasource'),
     user: t('auditLogs.resourceTypes.user'),
+    role: t('auditLogs.resourceTypes.role'),
+    compliance: t('auditLogs.resourceTypes.compliance'),
     system: t('auditLogs.resourceTypes.system'),
   };
 
   const typeLabel = typeLabels[log.resource_type || ''] || log.resource_type || '-';
-  const resourceId = log.resource_id || '';
+
+  // Use resource_name when available (human-readable name)
+  if (log.resource_name) {
+    return { typeLabel, resourceId: log.resource_name };
+  }
+
+  // Format resource_id based on resource_type (fallback for legacy records)
+  let resourceId = log.resource_id || '';
+  if (resourceId && ['auth', 'user', 'datasource', 'role', 'compliance'].includes(log.resource_type || '')) {
+    // Numeric IDs: show as "Type #ID"
+    const typeName = typeLabels[log.resource_type || ''] || log.resource_type || '';
+    resourceId = `${typeName} #${resourceId}`;
+  }
 
   return { typeLabel, resourceId };
 };
@@ -152,21 +220,51 @@ const parseDetails = (details: string | null | undefined) => {
   }
 };
 
+const DETAIL_KEY_LABELS: Record<string, string> = {
+  message: 'auditLogs.detailKeys.message',
+  ip: 'auditLogs.detailKeys.ip',
+  mac: 'auditLogs.detailKeys.mac',
+  duration: 'auditLogs.detailKeys.duration',
+  reason: 'auditLogs.detailKeys.reason',
+  name: 'auditLogs.detailKeys.name',
+  type: 'auditLogs.detailKeys.type',
+  tag: 'auditLogs.detailKeys.tag',
+  success: 'auditLogs.detailKeys.success',
+  count: 'auditLogs.detailKeys.count',
+  key: 'auditLogs.detailKeys.key',
+  username: 'auditLogs.detailKeys.username',
+  role: 'auditLogs.detailKeys.role',
+  old_role: 'auditLogs.detailKeys.old_role',
+  new_role: 'auditLogs.detailKeys.new_role',
+  target_user: 'auditLogs.detailKeys.target_user',
+  match_type: 'auditLogs.detailKeys.match_type',
+  ip_pattern: 'auditLogs.detailKeys.ip_pattern',
+  arp_source_tag: 'auditLogs.detailKeys.arp_source_tag',
+  firewall_tag: 'auditLogs.detailKeys.firewall_tag',
+  purpose: 'auditLogs.detailKeys.purpose',
+  url: 'auditLogs.detailKeys.url',
+  record_count: 'auditLogs.detailKeys.record_count',
+};
+
 const AuditLogs: React.FC = () => {
   const { t } = useTranslation();
+  const { hasPermission } = usePermission();
   const [searchTerm, setSearchTerm] = useState('');
   const [filterCategory, setFilterCategory] = useState<string>('all');
   const [filterAction, setFilterAction] = useState<string>('all');
   const [selectedLog, setSelectedLog] = useState<AuditLogType | null>(null);
   const [showModal, setShowModal] = useState(false);
   const [filterCollapsed, setFilterCollapsed] = useState(false);
-  const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
 
+  // Cursor-based pagination state
+  const [cursorHistory, setCursorHistory] = useState<(string | null)[]>([null]);
+  const [currentCursorIndex, setCurrentCursorIndex] = useState(0);
+
   // Debounce search term
-  const debouncedSearch = useDebounce(searchTerm, 300);
+  const debouncedSearch = useDebounce(searchTerm, 500);
 
   // Get available actions for the selected category
   const availableActions = useMemo(() => {
@@ -176,20 +274,20 @@ const AuditLogs: React.FC = () => {
   }, [filterCategory]);
 
   // Determine the action parameter for the API
-  // When a specific action is selected within a category, pass it to the API
-  // When a category is selected but no specific action, pass undefined (filter client-side)
   const apiActionParam = useMemo(() => {
     if (filterCategory === 'all') return undefined;
     if (filterAction !== 'all') return filterAction;
     return undefined;
   }, [filterCategory, filterAction]);
 
+  const currentCursor = cursorHistory[currentCursorIndex] ?? undefined;
+
   const { data: logsData, isLoading, refetch } = useAuditLogs({
     search: debouncedSearch || undefined,
     action: apiActionParam,
     start_date: startDate || undefined,
     end_date: endDate || undefined,
-    skip: (currentPage - 1) * pageSize,
+    cursor: currentCursor,
     limit: pageSize,
   });
 
@@ -202,34 +300,51 @@ const AuditLogs: React.FC = () => {
     return items.filter((log) => (category.actions as readonly string[]).includes(log.action));
   }, [logsData?.items, filterCategory, filterAction]);
 
-  const totalFromServer = useMemo(() => {
-    if (filterCategory === 'all' || filterAction !== 'all') {
-      return logsData?.total ?? 0;
+  const totalFromServer = logsData?.total ?? 0;
+  const hasNextPage = logsData?.next_cursor != null;
+  const hasPrevPage = currentCursorIndex > 0;
+
+  // Estimate current page for display
+  const estimatedPage = currentCursorIndex + 1;
+
+  const handleNextPage = useCallback(() => {
+    if (logsData?.next_cursor) {
+      setCursorHistory(prev => [...prev.slice(0, currentCursorIndex + 1), logsData.next_cursor!]);
+      setCurrentCursorIndex(prev => prev + 1);
     }
-    // When filtering client-side, use the filtered count
-    return filteredLogs.length;
-  }, [logsData?.total, filterCategory, filterAction, filteredLogs.length]);
+  }, [logsData?.next_cursor, currentCursorIndex]);
 
-  const totalPages = Math.ceil(totalFromServer / pageSize);
+  const handlePrevPage = useCallback(() => {
+    if (currentCursorIndex > 0) {
+      setCurrentCursorIndex(prev => prev - 1);
+    }
+  }, [currentCursorIndex]);
 
-  const handlePageChange = (page: number) => {
-    setCurrentPage(page);
-  };
+  const handleFirstPage = useCallback(() => {
+    setCurrentCursorIndex(0);
+  }, []);
 
   const handlePageSizeChange = (size: number) => {
     setPageSize(size);
-    setCurrentPage(1);
+    // Reset cursor navigation
+    setCursorHistory([null]);
+    setCurrentCursorIndex(0);
   };
+
+  const resetPagination = useCallback(() => {
+    setCursorHistory([null]);
+    setCurrentCursorIndex(0);
+  }, []);
 
   const handleCategoryChange = (category: string) => {
     setFilterCategory(category);
     setFilterAction('all');
-    setCurrentPage(1);
+    resetPagination();
   };
 
   const handleActionChange = (action: string) => {
     setFilterAction(action);
-    setCurrentPage(1);
+    resetPagination();
   };
 
   const handleExport = async () => {
@@ -266,7 +381,7 @@ const AuditLogs: React.FC = () => {
     setFilterAction('all');
     setStartDate('');
     setEndDate('');
-    setCurrentPage(1);
+    resetPagination();
   };
 
   const getActionBadgeStyle = (action: string) => {
@@ -285,7 +400,7 @@ const AuditLogs: React.FC = () => {
       return <p className="text-foreground whitespace-pre-wrap">{String(parsed.message)}</p>;
     }
 
-    // If it's a JSON object, render key-value pairs
+    // If it's a JSON object, render key-value pairs with translated keys
     const message = parsed.message;
     const otherEntries = Object.entries(parsed).filter(([key]) => key !== 'message');
 
@@ -298,7 +413,9 @@ const AuditLogs: React.FC = () => {
           <div className="space-y-1.5">
             {otherEntries.map(([key, value]) => (
               <div key={key} className="flex gap-2 text-sm">
-                <span className="text-muted-foreground min-w-fit">{key}:</span>
+                <span className="text-muted-foreground min-w-fit">
+                  {DETAIL_KEY_LABELS[key] ? t(DETAIL_KEY_LABELS[key]) : key}:
+                </span>
                 <span className="text-foreground font-mono break-all">
                   {typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value)}
                 </span>
@@ -322,12 +439,14 @@ const AuditLogs: React.FC = () => {
           <h1 className="text-2xl sm:text-3xl font-bold text-foreground">{t('auditLogs.title')}</h1>
           <p className="text-muted-foreground mt-1">{t('auditLogs.trackAllActivities')}</p>
         </div>
-        <PrimaryButton
-          icon={Download}
-          label={t('auditLogs.exportLogs')}
-          variant="success"
-          onClick={handleExport}
-        />
+        {hasPermission('audit:export') && (
+          <PrimaryButton
+            icon={Download}
+            label={t('auditLogs.exportLogs')}
+            variant="success"
+            onClick={handleExport}
+          />
+        )}
       </div>
 
       {/* Search and Filters */}
@@ -356,7 +475,7 @@ const AuditLogs: React.FC = () => {
                 value={searchTerm}
                 onChange={(e) => {
                   setSearchTerm(e.target.value);
-                  setCurrentPage(1);
+                  resetPagination();
                 }}
                 className="w-full pl-10 pr-4 py-2.5 border border-border rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm transition-all"
               />
@@ -405,7 +524,7 @@ const AuditLogs: React.FC = () => {
                 onChange={({ startDate, endDate }) => {
                   setStartDate(startDate);
                   setEndDate(endDate);
-                  setCurrentPage(1);
+                  resetPagination();
                 }}
               />
 
@@ -422,18 +541,22 @@ const AuditLogs: React.FC = () => {
         </div>
 
         {/* Top Pagination - Info Row */}
-        {totalPages > 1 && (
+        {totalFromServer > 0 && (
           <div className="px-4 sm:px-5 py-3 bg-background border-t border-border">
-            <Pagination
-              currentPage={currentPage}
-              totalPages={totalPages}
-              onPageChange={handlePageChange}
-              pageSize={pageSize}
-              onPageSizeChange={handlePageSizeChange}
-              totalItems={totalFromServer}
-              variant="top"
-              showPageSizeSelector={false}
-            />
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
+              <div className="text-sm text-muted-foreground font-medium">
+                <span className="flex items-center gap-1.5">
+                  <FileText className="h-4 w-4 text-muted-foreground" />
+                  {t('auditLogs.totalLogs')}: <span className="text-foreground font-semibold">{totalFromServer}</span>
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-muted-foreground">Page</span>
+                <span className="px-3 py-1.5 bg-blue-50 text-blue-700 font-semibold rounded-lg text-sm">
+                  {estimatedPage}
+                </span>
+              </div>
+            </div>
           </div>
         )}
         </>
@@ -441,7 +564,7 @@ const AuditLogs: React.FC = () => {
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-6">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-6">
         <div className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden">
           <div className="p-4 text-center">
             <div className="text-xl sm:text-2xl font-bold text-foreground">{totalFromServer}</div>
@@ -451,21 +574,12 @@ const AuditLogs: React.FC = () => {
         </div>
         <div className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden">
           <div className="p-4 text-center">
-            <div className="text-xl sm:text-2xl font-bold text-blue-600">
-              {new Set(filteredLogs.map((l) => l.username)).size || 0}
+            <div className="text-xl sm:text-2xl font-bold text-red-600">
+              {filteredLogs.filter((l) => ['login_failed', 'block_terminal', 'block_blacklist', 'auto_block_terminal'].includes(l.action)).length}
             </div>
-            <div className="text-xs sm:text-sm text-muted-foreground mt-1">{t('auditLogs.uniqueUsers')}</div>
+            <div className="text-xs sm:text-sm text-muted-foreground mt-1">{t('auditLogs.securityEvents')}</div>
           </div>
-          <div className="h-1 bg-gradient-to-r from-blue-400 to-blue-600" />
-        </div>
-        <div className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden">
-          <div className="p-4 text-center">
-            <div className="text-xl sm:text-2xl font-bold text-green-600">
-              {new Set(filteredLogs.map((l) => l.action)).size || 0}
-            </div>
-            <div className="text-xs sm:text-sm text-muted-foreground mt-1">{t('auditLogs.uniqueActions')}</div>
-          </div>
-          <div className="h-1 bg-gradient-to-r from-green-400 to-green-600" />
+          <div className="h-1 bg-gradient-to-r from-red-400 to-red-600" />
         </div>
       </div>
 
@@ -539,19 +653,25 @@ const AuditLogs: React.FC = () => {
                         )}
                       </td>
                       <td className="px-4 sm:px-6 py-4 whitespace-nowrap font-mono text-sm text-muted-foreground">
-                        {log.ip_address || '-'}
+                        {log.username === 'system' ? t('auditLogs.systemLabel') : (log.ip_address || '-')}
                       </td>
-                      <td className="px-4 sm:px-6 py-4 whitespace-nowrap">
-                        <IconButton
-                          icon={AlertCircle}
-                          variant="primary"
-                          size="sm"
-                          title={log.details ? t('terminal.viewDetails') : t('common.noDetails')}
+                      <td className="px-4 sm:px-6 py-4">
+                        <div
+                          className="text-sm text-muted-foreground truncate max-w-[200px] cursor-pointer hover:text-foreground transition-colors"
+                          title={(() => {
+                            const parsed = parseDetails(log.details);
+                            return parsed?.message || t('common.noDetails');
+                          })()}
                           onClick={() => {
                             setSelectedLog(log);
                             setShowModal(true);
                           }}
-                        />
+                        >
+                          {(() => {
+                            const parsed = parseDetails(log.details);
+                            return parsed?.message || '-';
+                          })()}
+                        </div>
                       </td>
                     </tr>
                   );
@@ -561,16 +681,70 @@ const AuditLogs: React.FC = () => {
           </table>
         </div>
 
-        {/* Bottom Pagination - Full Features */}
-        <Pagination
-          currentPage={currentPage}
-          totalPages={totalPages}
-          onPageChange={handlePageChange}
-          pageSize={pageSize}
-          onPageSizeChange={handlePageSizeChange}
-          totalItems={filteredLogs.length}
-          variant="bottom"
-        />
+        {/* Bottom Pagination - Cursor-based Navigation */}
+        <div className="bg-card border-t border-border px-4 sm:px-6 py-4">
+          <div className="flex flex-col lg:flex-row items-center justify-between gap-4">
+            {/* Left: info + page size */}
+            <div className="flex items-center gap-4 text-sm">
+              <span className="text-muted-foreground">
+                {t('auditLogs.totalLogs')}: <span className="font-semibold text-foreground">{totalFromServer}</span>
+              </span>
+              <div className="flex items-center gap-2">
+                <span className="text-muted-foreground">Per page</span>
+                <select
+                  value={pageSize}
+                  onChange={(e) => handlePageSizeChange(Number(e.target.value))}
+                  className="px-3 py-1.5 border border-border rounded-lg text-sm font-medium text-muted-foreground bg-card hover:border-border focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-colors cursor-pointer"
+                >
+                  {[10, 20, 50, 100].map((size) => (
+                    <option key={size} value={size}>{size}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            {/* Right: cursor navigation */}
+            <nav className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={handleFirstPage}
+                disabled={!hasPrevPage}
+                className="inline-flex items-center justify-center p-2 rounded-lg border border-border bg-card text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-150 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:offset-1"
+                title="First page"
+                aria-label="First page"
+              >
+                <ChevronLeft className="h-4 w-4" />
+                <ChevronLeft className="h-4 w-4 -ml-2" />
+              </button>
+
+              <button
+                type="button"
+                onClick={handlePrevPage}
+                disabled={!hasPrevPage}
+                className="inline-flex items-center justify-center p-2 rounded-lg border border-border bg-card text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-150 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:offset-1"
+                title="Previous page"
+                aria-label="Previous page"
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </button>
+
+              <div className="px-3 py-1.5 bg-blue-50 text-blue-700 font-semibold rounded-lg text-sm mx-1">
+                {estimatedPage}
+              </div>
+
+              <button
+                type="button"
+                onClick={handleNextPage}
+                disabled={!hasNextPage}
+                className="inline-flex items-center justify-center p-2 rounded-lg border border-border bg-card text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-150 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:offset-1"
+                title="Next page"
+                aria-label="Next page"
+              >
+                <ChevronRight className="h-4 w-4" />
+              </button>
+            </nav>
+          </div>
+        </div>
       </div>
 
       {/* Details Modal */}
@@ -622,7 +796,9 @@ const AuditLogs: React.FC = () => {
 
               <div className="flex justify-between items-center py-2 border-b border-border">
                 <span className="text-muted-foreground">{t('auditLogs.ip')}</span>
-                <span className="font-mono text-foreground">{selectedLog.ip_address || '-'}</span>
+                <span className="font-mono text-foreground">
+                  {selectedLog.username === 'system' ? t('auditLogs.systemLabel') : (selectedLog.ip_address || '-')}
+                </span>
               </div>
 
               <div className="py-2">

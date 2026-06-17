@@ -1,5 +1,4 @@
 """Tests for blacklist management"""
-import pytest
 
 
 class TestBlacklistModel:

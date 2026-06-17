@@ -11,6 +11,7 @@ import { toast } from 'sonner';
 import { API_ENDPOINTS } from '@/lib/constants';
 import { getErrorMessage, formatDate } from '@/lib/utils';
 import { PrimaryButton, IconButton } from '@/components/Button';
+import { DeletePreviewModal, DeletePreviewData } from '@/components/DeletePreviewModal';
 import { Pagination } from '@/components/Pagination';
 import { EmptyState, LoadingState } from '@/components/StateDisplay';
 import { Modal } from '@/components/Modal';
@@ -45,7 +46,10 @@ const BindingsTab = forwardRef<{ openAddModal: () => void }, BindingsTabProps>((
   // Delete Binding modal
   const [showDeleteBindModal, setShowDeleteBindModal] = useState(false);
   const [deleteBindId, setDeleteBindId] = useState<number | null>(null);
+  const [deleteBindInfo, setDeleteBindInfo] = useState<{ arpTag: string; fwTag: string } | null>(null);
   const [isDeletingBind, setIsDeletingBind] = useState(false);
+  const [bindPreviewData, setBindPreviewData] = useState<DeletePreviewData | null>(null);
+  const [isLoadingBindPreview, setIsLoadingBindPreview] = useState(false);
 
   // Derived data
   const bindList = bindings || [];
@@ -59,12 +63,12 @@ const BindingsTab = forwardRef<{ openAddModal: () => void }, BindingsTabProps>((
 
   // ARP sources for binding dropdown (arp_ssh / arp_api)
   const arpSourceOptions = useMemo(
-    () => dsList.filter((ds) => (ds.type === 'arp_ssh' || ds.type === 'arp_api') && ds.enabled),
+    () => dsList.filter((ds) => ds.type === 'arp_ssh' || ds.type === 'arp_api'),
     [dsList],
   );
   // Firewall sources for binding dropdown (sangfor)
   const firewallOptions = useMemo(
-    () => dsList.filter((ds) => ds.type === 'sangfor' && ds.enabled),
+    () => dsList.filter((ds) => ds.type === 'sangfor'),
     [dsList],
   );
 
@@ -96,6 +100,23 @@ const BindingsTab = forwardRef<{ openAddModal: () => void }, BindingsTabProps>((
     }
   };
 
+  const openDeleteBindModal = async (bindingId: number, arpTag: string, fwTag: string) => {
+    setDeleteBindId(bindingId);
+    setDeleteBindInfo({ arpTag, fwTag });
+    setShowDeleteBindModal(true);
+    setIsLoadingBindPreview(true);
+    setBindPreviewData(null);
+    try {
+      const response = await apiClient.post(`${API_ENDPOINTS.DATA_SOURCE_BINDING_DELETE_PREVIEW}${bindingId}/delete-preview`);
+      setBindPreviewData(response.data);
+    } catch (error: unknown) {
+      setBindPreviewData(null);
+      toast.error(getErrorMessage(error, t('deletePreview.failedToAnalyze')));
+    } finally {
+      setIsLoadingBindPreview(false);
+    }
+  };
+
   const handleDeleteBinding = async () => {
     if (!deleteBindId) return;
     setIsDeletingBind(true);
@@ -109,6 +130,8 @@ const BindingsTab = forwardRef<{ openAddModal: () => void }, BindingsTabProps>((
       setIsDeletingBind(false);
       setShowDeleteBindModal(false);
       setDeleteBindId(null);
+      setDeleteBindInfo(null);
+      setBindPreviewData(null);
     }
   };
 
@@ -169,7 +192,7 @@ const BindingsTab = forwardRef<{ openAddModal: () => void }, BindingsTabProps>((
                         variant="danger"
                         size="md"
                         title={t('bindings.deleteBindingTitle')}
-                        onClick={() => { setDeleteBindId(b.id); setShowDeleteBindModal(true); }}
+                        onClick={() => openDeleteBindModal(b.id, b.arp_source_tag, b.firewall_tag)}
                       />
                     </td>
                   </tr>
@@ -203,11 +226,14 @@ const BindingsTab = forwardRef<{ openAddModal: () => void }, BindingsTabProps>((
             >
               <option value="">{t('bindings.selectArpSource')}</option>
               {arpSourceOptions.map((ds) => (
-                <option key={ds.id} value={ds.tag}>
-                  {ds.tag} ({ds.name} - {TYPE_BADGE[ds.type]?.label || ds.type})
+                <option key={ds.id} value={ds.tag} disabled={!ds.enabled}>
+                  {ds.tag} ({ds.name} - {TYPE_BADGE[ds.type]?.label || ds.type}){!ds.enabled ? ` [${t('common.disabled')}]` : ''}
                 </option>
               ))}
             </select>
+            {arpSourceOptions.length > 0 && arpSourceOptions.every(ds => !ds.enabled) && (
+              <p className="mt-1 text-xs text-amber-600">{t('bindings.allArpSourcesDisabled')}</p>
+            )}
             {arpSourceOptions.length === 0 && (
               <p className="mt-1 text-xs text-amber-600">{t('bindings.noArpSourcesAvailable')}</p>
             )}
@@ -221,11 +247,14 @@ const BindingsTab = forwardRef<{ openAddModal: () => void }, BindingsTabProps>((
             >
               <option value="">{t('bindings.selectFirewall')}</option>
               {firewallOptions.map((ds) => (
-                <option key={ds.id} value={ds.tag}>
-                  {ds.tag} ({ds.name})
+                <option key={ds.id} value={ds.tag} disabled={!ds.enabled}>
+                  {ds.tag} ({ds.name}){!ds.enabled ? ` [${t('common.disabled')}]` : ''}
                 </option>
               ))}
             </select>
+            {firewallOptions.length > 0 && firewallOptions.every(ds => !ds.enabled) && (
+              <p className="mt-1 text-xs text-amber-600">{t('bindings.allFirewallSourcesDisabled')}</p>
+            )}
             {firewallOptions.length === 0 && (
               <p className="mt-1 text-xs text-amber-600">{t('bindings.noSangforSourcesAvailable')}</p>
             )}
@@ -250,35 +279,16 @@ const BindingsTab = forwardRef<{ openAddModal: () => void }, BindingsTabProps>((
       </Modal>
 
       {/* Delete Binding Modal */}
-      <Modal isOpen={showDeleteBindModal} onClose={() => { setShowDeleteBindModal(false); setDeleteBindId(null); }} title={t('bindings.deleteBindingTitle')} size="sm">
-        <div className="flex items-center gap-4 mb-4">
-          <div className="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center">
-            <Trash2 className="h-6 w-6 text-red-600" />
-          </div>
-          <div>
-            <p className="text-sm text-muted-foreground">{t('common.cannotBeUndone')}</p>
-          </div>
-        </div>
-        <p className="text-muted-foreground mb-6">
-          {t('bindings.areYouSureDeleteBinding')}
-        </p>
-        <div className="flex gap-3">
-          <PrimaryButton
-            label={t('common.cancel')}
-            variant="secondary"
-            onClick={() => { setShowDeleteBindModal(false); setDeleteBindId(null); }}
-            className="flex-1"
-          />
-          <PrimaryButton
-            icon={Trash2}
-            label={t('common.delete')}
-            variant="danger"
-            onClick={handleDeleteBinding}
-            loading={isDeletingBind}
-            className="flex-1"
-          />
-        </div>
-      </Modal>
+      <DeletePreviewModal
+        isOpen={showDeleteBindModal}
+        onClose={() => { setShowDeleteBindModal(false); setDeleteBindId(null); setDeleteBindInfo(null); setBindPreviewData(null); }}
+        onConfirm={handleDeleteBinding}
+        title={t('bindings.deleteBindingTitle')}
+        itemName={deleteBindInfo ? `${deleteBindInfo.arpTag} \u2192 ${deleteBindInfo.fwTag}` : ''}
+        previewData={bindPreviewData}
+        isLoadingPreview={isLoadingBindPreview}
+        isDeleting={isDeletingBind}
+      />
     </>
   );
 });

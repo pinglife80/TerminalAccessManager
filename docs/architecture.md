@@ -1,6 +1,6 @@
 # TerminalAccessManager 系统架构设计文档
 
-> 文档版本：v3.2.0 | 更新日期：2026-06-10
+> 文档版本：v3.3.0 | 更新日期：2026-06-17
 
 ## 1. 系统概述
 
@@ -23,9 +23,9 @@ TerminalAccessManager 是基于 MAC 地址和 IP 地址的网络终端准入管�
 | 反向代理 | Nginx (Alpine) |
 | 容器编排 | Docker Compose |
 | ORM | SQLAlchemy 2.0 (async) |
-| 认证 | JWT (python-jose) + bcrypt |
+| 认证 | JWT (python-jose) + bcrypt + RBAC |
 | HTTP 客户端 | httpx (async) |
-| SSH 客户端 | paramiko |
+| SSH 客户端 | netmiko |
 | 监控 | Prometheus (可选) |
 
 ---
@@ -146,25 +146,60 @@ ARP 数据采集          合规判定              准入执行
                  │              │     │     non_compliant │
                  └──────┬───────┘     └────────┬─────────┘
                         │                      │
-              ┌─────────▼─────────┐    ┌───────▼────────┐
+              ┌───────────────────┐    ┌────────────────┐
               │ 自动封禁          │    │ 自动解封        │
               │ non_compliant     │    │ 已合规/白名单   │
               │ → 防火墙封禁 API  │    │ → 防火墙解封 API│
               │ → Blacklist 记录  │    │ → 更新状态      │
-              │ → status=frozen   │    │ → status=       │
-              └───────────────────┘    │   unfrozen      │
+              │ → status=blocked  │    │ → status=       │
+              └───────────────────┘    │   unblocked     │
                                        └────────────────┘
 ```
 
 **详细步骤：**
 
-1. **ARP 数据采集** -- 定时任务通过 SSH 或 API 从交换机获取 ARP 表，解析后写入 `Terminal` 表（`compliance_status=unknown`）
+1. **ARP 数据采集** -- 定时任务通过 SSH 或 API 从交换机获取 ARP 表，解析后写入 `Terminal` 表（`compliance_status=unknown`）；已有终端更新时重置 `compliance_status=unknown` 确保重新评估
 2. **合规判定** -- 合规检查引擎依次执行：
    - 白名单匹配（IP 精确匹配 / CIDR 匹配 / IP 范围匹配 + MAC 精确匹配）→ `bypass`，记录 `wl_match_type`（`mac` / `ip` / `both`）
    - 合规基准匹配（IP + MAC 同时匹配）→ `compliant`
    - 均不匹配 → `non_compliant`
-3. **自动封禁** -- `non_compliant` 终端按 `DataSourceBinding` 路由到对应防火墙，调用深信服 API 封禁，创建 `Blacklist` 记录（`is_auto_blocked=True`），终端状态置为 `frozen`
-4. **自动解封** -- 已封禁终端若恢复合规或匹配白名单，调用防火墙解封 API，更新 `Blacklist.auto_unblocked=True`，终端状态置为 `unfrozen`
+3. **自动封禁** -- `non_compliant` 终端按 `DataSourceBinding` 路由到对应防火墙，调用深信服 AF 黑白名单 API 永久封禁（`type=BLACK`，description 带 `TAM-` 前缀），创建 `Blacklist` 记录（`is_auto_blocked=True`），终端状态置为 `blocked`，`comments` 记录封堵信息
+4. **自动解封** -- 已封禁终端若恢复合规或匹配白名单，调用深信服 AF 黑白名单 API 按 IP 精确删除，更新 `Blacklist.auto_unblocked=True`，终端状态置为 `unblocked`，`comments` 记录解封信息
+5. **合规重算** -- 白名单增删、IPGuard 同步后触发 `recalculate_all_compliance`，批量重算所有终端合规状态，合规变更联动封堵/解封
+
+**Terminal 状态模型：**
+
+Terminal 模型包含两个正交维度——**Status**（封堵状态）和 **Compliance**（合规状态），二者独立变化：
+
+| 维度 | 字段 | 取值 | 说明 |
+|------|------|------|------|
+| Status | `status` | `blocked` | 已被防火墙封堵 |
+| | | `unblocked` | 未被封堵（默认） |
+| Compliance | `compliance_status` | `unknown` | 待检查 |
+| | | `compliant` | 合规（匹配合规基准） |
+| | | `non_compliant` | 不合规 |
+| | | `bypass` | 白名单放行 |
+
+Status 描述的是终端在网络层的实际封堵情况，Compliance 描述的是终端的合规判定结果。二者正交：一个 `non_compliant` 终端可能因防火墙不可用而仍为 `unblocked`；一个 `blocked` 终端可能因合规基准更新后变为 `compliant` 而触发解封。
+
+**终端管理页面操作按钮矩阵：**
+
+终端管理页面根据终端的合规状态与封堵状态组合，动态显示不同的操作按钮：
+
+| 合规状态 | 封堵状态 | 附加条件 | 可用操作 |
+|----------|----------|----------|----------|
+| compliant | unblocked | — | 仅查看详情，无操作按钮 |
+| compliant | blocked | — | 查看 + 解封（含确认+comment） |
+| bypass | unblocked | — | 查看 + 移出白名单（含确认） |
+| non_compliant | blocked | — | 仅查看详情，无操作按钮 |
+| non_compliant | unblocked | 在黑名单 | 查看 + 移出黑名单（含确认+comment） |
+| non_compliant | unblocked | — | 查看 + 封锁（含确认+comment） |
+| unknown | unblocked | — | 查看 + 加白名单（含comment） |
+| unknown | blocked | — | 查看 + 解封（含确认+comment） |
+
+**黑名单管理页面定位：**
+
+黑名单管理页面定位为审计视图，仅提供黑名单记录的查看与搜索功能，移除了手动添加黑名单功能。封堵操作统一从终端管理页面发起，确保操作入口唯一、审计链路完整。
 
 ### 3.2 数据源路由机制
 
@@ -293,9 +328,9 @@ ARP 数据采集          合规判定              准入执行
 
 | 数据流 | 方向 | 协议/方式 | 说明 |
 |--------|------|-----------|------|
-| 交换机 → ARP 采集服务 | 入站 | SSH (paramiko) / HTTP API (httpx) | 定时采集 ARP 表，支持 Cisco/Huawei/H3C 格式解析 |
+| 交换机 → ARP 采集服务 | 入站 | SSH (netmiko) / HTTP API (httpx) | 定时采集 ARP 表，支持 Cisco/Huawei/H3C 格式解析 |
 | 合规基准 → 合规检查引擎 | 入站 | 数据库直连 (asyncpg) | 定时同步 IP+MAC 基准数据到 Redis 缓存 |
-| 白名单 → 合规检查引擎 | 入站 | 内存加载 (Redis 缓存) | 白名单数据加载到内存进行 IP/MAC 匹配 |
+| 白名单 → 合规检查引擎 | 入站 | 内存加载 (Redis 缓存) | 白名单数据加载到内存进行 IP/MAC 匹配；白名单增删后触发合规状态批量重算（`recalculate_all_compliance`），合规状态变更联动封堵/解封操作 |
 | 合规检查引擎 → 深信服防火墙 | 出站 | REST API (httpx) | 封禁/解封 IP 地址 |
 | 深信服防火墙 → 合规检查引擎 | 入站 | REST API 响应 | 封禁/解封结果确认 |
 
@@ -323,8 +358,8 @@ ARP 数据采集          合规判定              准入执行
 |------|--------|----------|------|
 | 过期黑名单清理 | `scheduler_firewall_query_interval` | 300s（DEFAULT_CONFIGS 种子值；代码 fallback 为 3600s） | 清理已过期的 Blacklist 记录 |
 | ARP 数据采集 | `scheduler_arp_collection_interval` | 300s | 遍历所有启用的 ARP 数据源，采集并处理 |
-| 合规基准数据同步 | `scheduler_ipguard_sync_interval` | 600s | 遍历所有启用的合规基准数据源，同步基准数据到 Redis |
-| 合规检查 | `scheduler_compliance_check_interval` | 300s | 遍历所有 ARP 源中 `compliance_status=unknown` 的记录，执行批量合规判定 |
+| 合规基准数据同步 | `scheduler_ipguard_sync_interval` | 600s | 遍历所有启用的合规基准数据源，同步基准数据到 Redis；同步完成后自动触发合规重算 |
+| 合规检查 | `scheduler_compliance_check_interval` | 300s | 遍历所有 ARP 源中 `compliance_status=unknown` 的记录，执行批量合规判定；发现 `non_compliant` 终端后自动触发封堵 |
 | 自动解封 | `scheduler_auto_unblock_interval` | 600s | 检查已自动封禁的终端，若恢复合规则调用防火墙解封 |
 
 **调度方式特点：**
@@ -374,7 +409,7 @@ ARP 数据采集          合规判定              准入执行
 | 登录计数 | `login_attempts:{username}` | 锁定时长 | 递增计数 | 首次设置时指定过期时间 |
 | 登录锁定 | `login_lock:{username}` | 锁定时长 | 超过阈值时写入 | 值为失败次数 |
 | 暂停控制 | `scheduler:ctrl:{task_name}` | 无（手动管理） | `manage.sh scheduler pause` 写入、`resume` 删除 | 标记定时任务暂停状态，值为 `"paused"`，`_is_task_paused()` 在任务循环中检查 |
-| fail-open 降级 | 所有 Redis 交互 | — | try/except 异常捕获 | Redis 不可用时按策略降级（黑名单放行、版本号返回 0、登录防护放行等），避免 Redis 故障导致服务完全不可用 |
+| Redis 故障降级 | 所有 Redis 交互 | — | try/except 异常捕获 | Redis 不可用时按混合策略降级（黑名单/验证码校验 fail-closed 拒绝，版本号/登录防护 fail-open 放行等），详见 7.7 节 |
 
 **速率限制算法（Sorted Set 滑动窗口）：**
 
@@ -428,19 +463,31 @@ ARP 数据采集          合规判定              准入执行
 - `get_current_active_superuser` 依赖守卫超管专用端点（用户管理、系统配置等）
 - `get_current_user` 依赖守卫常规认证端点
 
+### RBAC 权限控制架构
+
+系统采用基于角色的访问控制（RBAC）模型，通过角色（Role）将权限（Permission）与用户（User）关联：
+
+- **数据模型**: 4张核心表（roles, permissions, user_roles, role_permissions），5个预设角色，29个权限码
+- **权限检查**: `require_permission(code)` FastAPI 依赖注入工厂函数，superuser 直接通过，普通用户通过 Redis 缓存（TTL 300s）+ 数据库回查
+- **前端控制**: `usePermission` Hook + `ProtectedRoute` 路由守卫 + 侧边栏导航过滤 + 按钮级权限控制
+- **超管隔离**: 非超管用户不可见/不可管理超管用户，superadmin 角色不可分配/修改
+- **详细文档**: 参见 [RBAC.md](RBAC.md)
+
 ### 7.7 Redis 故障降级
 
-系统采用 fail-open 策略处理 Redis 不可用场景，10 个 Redis 交互函数统一添加 try/except 异常处理：
+系统采用混合策略处理 Redis 不可用场景，10 个 Redis 交互函数统一添加 try/except 异常处理，根据安全级别选择 fail-closed 或 fail-open：
 
-| 场景 | 降级行为 | 安全影响 |
-|------|---------|---------|
-| 令牌黑名单不可用 | 放行请求（`is_token_blacklisted` 返回 `False`） | 已注销的 token 短暂可用，但 token 本身仍有有效期限制 |
-| Token 版本号不可用 | 视为初始版本（`get_token_version` 返回 `0`） | 密码变更后旧 token 短暂可用 |
-| 登录防护不可用 | 放行登录（`check_login_attempts`/`check_captcha_required` 返回 `False`） | 暴力破解防护短暂失效 |
-| 验证码生成不可用 | 抛出异常（`generate_captcha` 必须 Redis） | 需要验证码的登录暂时不可用 |
-| 限流不可用 | 放行请求（`RateLimitMiddleware` 降级） | API 限流短暂失效 |
+| 场景 | 降级行为 | 策略 | 安全影响 |
+|------|---------|------|---------|
+| 令牌黑名单不可用 | 拒绝请求（`is_token_blacklisted` 返回 `True`） | fail-closed | 已注销的 token 不可用，但合法 token 也可能被误拒；确保已注销 token 不会被复用 |
+| 验证码校验不可用 | 校验失败（`verify_captcha` 返回 `False`） | fail-closed | 验证码校验不可用时拒绝验证，防止绕过验证码保护 |
+| Token 版本号不可用 | 视为初始版本（`get_token_version` 返回 `0`） | fail-open | 密码变更后旧 token 短暂可用 |
+| Token 版本递增不可用 | 静默降级（`increment_token_version` 返回 `0`） | fail-open | 密码变更后旧 token 短暂可用 |
+| 登录防护不可用 | 放行登录（`check_login_attempts`/`check_captcha_required` 返回 `False`） | fail-open | 暴力破解防护短暂失效 |
+| 验证码生成不可用 | 抛出异常（`generate_captcha` 必须 Redis） | — | 需要验证码的登录暂时不可用 |
+| 限流不可用 | 放行请求（`RateLimitMiddleware` 降级） | fail-open | API 限流短暂失效 |
 
-设计原则：**可用性优先于安全性** — Redis 故障时系统保持可用，安全防护降级而非阻断服务。所有降级行为均记录 `logger.warning` 日志，便于运维发现和排查。
+设计原则：**安全性优先于可用性**（fail-closed）与 **可用性优先于安全性**（fail-open）混合 — 涉及令牌黑名单和验证码校验等关键安全检查采用 fail-closed 策略，确保安全边界不被突破；登录防护、版本号等非关键路径采用 fail-open 策略，避免 Redis 故障导致服务完全不可用。所有降级行为均记录 `logger.warning` 日志，便于运维发现和排查。
 
 ---
 
@@ -588,6 +635,7 @@ WHERE mac_address_normalized ILIKE 'AABBCCDDEEFF%'
 | **scheduler** | scheduler_arp_collection_interval, scheduler_ipguard_sync_interval, scheduler_firewall_query_interval, scheduler_compliance_check_interval, scheduler_auto_unblock_interval | 是 |
 | **general** | environment, debug, log_level | environment/debug 只读 |
 | **branding** | app_name, app_short_name, app_subtitle, login_heading, login_subheading, login_footer_text, login_bg_url, favicon_url, footer_copyright, footer_icp_number, footer_icp_url | 是 |
+| **backup** | backup_retain_count | 是 |
 
 ### 10.3 只读配置
 
@@ -599,6 +647,14 @@ WHERE mac_address_normalized ILIKE 'AABBCCDDEEFF%'
 - JWT 令牌过期时间从 `ConfigService` 读取，修改后新签发的令牌使用新过期时间
 - 速率限制阈值从 `ConfigService` 读取，修改后即时生效
 - 登录安全阈值（验证码/锁定）从 `ConfigService` 读取，修改后即时生效
+
+### 10.5 新增环境变量（v3.2.0-r2）
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `ADMIN_PASSWORD` | — | 自定义初始管理员密码，deploy/init 时写入 .env |
+| `BACKUP_RETAIN_COUNT` | `0`（保留全部） | 备份文件保留数量，超出时自动清理最旧的备份 |
+| `TAM_LOG_ENABLED` | `false` | manage.sh 操作日志开关，启用后所有命令执行记录写入 `.manage/logs/` |
 
 ---
 
@@ -614,11 +670,11 @@ WHERE mac_address_normalized ILIKE 'AABBCCDDEEFF%'
 
 当前支持类型：
 
-| 类型 | 说明 | 采集方式 |
-|------|------|----------|
-| `arp_ssh` | 交换机 SSH 采集 | paramiko SSH 连接，执行命令解析 ARP 表 |
-| `arp_api` | 交换机 API 采集 | httpx HTTP 请求，解析 JSON 响应 |
-| `sangfor` | 深信服防火墙 | httpx HTTP 请求，REST API 封禁/解封 |
+| 类型 | 说明 | 采集方式 | 认证方式 |
+|------|------|----------|----------|
+| `arp_ssh` | 交换机 SSH 采集 | netmiko SSH 连接，自动分页和设备类型检测，解析 ARP 表 | password（SSH 用户名+密码） |
+| `arp_api` | 交换机 API 采集 | httpx HTTP 请求，解析 JSON 响应 | basic / bearer / header（自定义 Header 名+值） |
+| `sangfor` | 深信服防火墙 | httpx HTTP 请求，黑白名单 API 永久封堵/解封 | basic / bearer / header（自定义 Header 名+值） |
 
 合规基准数据通过独立的 `ComplianceBaseline` 模型管理，支持 CRUD、测试连接和手动同步操作。
 
@@ -751,9 +807,9 @@ WHERE mac_address_normalized ILIKE 'AABBCCDDEEFF%'
 | `unlock_user` | 解锁用户 |
 | `update_config` | 更新系统配置 |
 
-### 14.2 8 类分类体系
+### 14.2 10 类分类体系
 
-前端审计日志按 8 个分类进行过滤展示：
+前端审计日志按 10 个分类进行过滤展示：
 
 | 分类 | 包含的 action | badge 颜色 |
 |------|---------------|------------|
@@ -763,6 +819,8 @@ WHERE mac_address_normalized ILIKE 'AABBCCDDEEFF%'
 | 认证 | login, logout | 紫色/灰色 |
 | 数据源 | create_datasource, update_datasource, delete_datasource, test_datasource, sync_datasource | 青色 |
 | 用户管理 | create_user, update_user, delete_user, reset_password, unlock_user | 橙色 |
+| 角色 | create_role, update_role, delete_role, assign_role, remove_role | 靛色 |
+| 合规 | compliance_check, compliance_recalculate | 棕色 |
 | 系统配置 | update_config | 黄色 |
 | 定时任务 | cleanup_expired | 灰色 |
 
@@ -774,9 +832,18 @@ WHERE mac_address_normalized ILIKE 'AABBCCDDEEFF%'
 {"message": "Blocked terminal 192.168.1.100", "ip_address": "192.168.1.100", "mac_address": "AA-BB-CC-DD-EE-FF"}
 ```
 
-前端审计日志页面解析 `details` 字段时，对 JSON 格式内容进行解析并格式化展示。
+前端审计日志页面解析 `details` 字段时，对 JSON 格式内容进行解析并格式化展示。详情 key 支持翻译显示，通过 i18n 映射将 key（如 `ip_address`、`mac_address`）翻译为当前语言的标签。
 
-### 14.4 log_action 公共函数
+### 14.4 统计卡片
+
+审计日志页面顶部统计卡片优化为两个核心指标：
+
+| 卡片 | 说明 |
+|------|------|
+| 日志总数 | 当前筛选条件下的审计日志总量 |
+| 安全事件 | 封堵/解封/黑名单等安全相关操作的数量统计 |
+
+### 14.5 log_action 公共函数
 
 `TerminalService._log_action` 改为公共函数 `log_action`，新增 `ip_address` 参数：
 
@@ -884,9 +951,9 @@ Sidebar 菜单项在鼠标 hover 时预加载对应页面的数据（通过 Reac
 
 **error_id 机制：** 未捕获异常生成 8 位 UUID 前缀作为 error_id，同时写入 `logger.error` 日志和响应体，运维可通过 error_id 在日志中快速定位具体异常。
 
-### 16.2 Redis fail-open 降级
+### 16.2 Redis 故障降级
 
-所有 Redis 交互函数采用 try/except + fail-open 策略，异常时记录 `logger.warning` 并按策略降级（详见 7.7 Redis 故障降级）。
+所有 Redis 交互函数采用 try/except + 混合降级策略（fail-closed / fail-open），异常时记录 `logger.warning` 并按策略降级（详见 7.7 Redis 故障降级）。
 
 ---
 

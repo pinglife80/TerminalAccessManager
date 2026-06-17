@@ -1,11 +1,11 @@
 """Rate limiting middleware using Redis sliding window with Sorted Sets"""
 import time
-from fastapi import Request, HTTPException, status
+
+import redis.asyncio as aioredis
+from fastapi import Request, status
+from loguru import logger
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
-from loguru import logger
-import redis.asyncio as aioredis
-from typing import Optional
 
 from app.core.config import settings
 
@@ -16,7 +16,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     def __init__(self, app, redis_url: str = None):
         super().__init__(app)
         self.redis_url = redis_url or settings.REDIS_URL
-        self._redis: Optional[aioredis.Redis] = None
+        self._redis: aioredis.Redis | None = None
 
     async def get_redis(self) -> aioredis.Redis:
         """Get or create Redis client"""
@@ -24,7 +24,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             self._redis = aioredis.from_url(
                 self.redis_url,
                 encoding="utf-8",
-                decode_responses=True
+                decode_responses=True,
+                socket_timeout=5,
+                socket_connect_timeout=5,
+                retry_on_timeout=True,
             )
         return self._redis
 
@@ -53,7 +56,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
     async def _check_rate_limit(self, client_id: str, path: str, rate_limit: int) -> tuple[bool, int]:
         """Check rate limit using sliding window algorithm with Redis Sorted Set.
-        
+
         Returns (is_allowed, retry_after_seconds).
         """
         redis = await self.get_redis()

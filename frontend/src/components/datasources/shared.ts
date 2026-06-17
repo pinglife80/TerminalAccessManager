@@ -9,6 +9,8 @@ export interface ConfigFieldDef {
   placeholder?: string;
   options?: { value: string; label: string }[];
   defaultValue?: string;
+  /** Only show this field when the condition matches (e.g., { auth_type: 'header' }) */
+  showWhen?: Record<string, string>;
 }
 
 export const CONFIG_FIELDS: Record<string, ConfigFieldDef[]> = {
@@ -22,9 +24,10 @@ export const CONFIG_FIELDS: Record<string, ConfigFieldDef[]> = {
   arp_api: [
     { key: 'url', label: 'URL', type: 'text', placeholder: 'https://api.example.com/arp' },
     { key: 'method', label: 'Method', type: 'select', options: [{ value: 'GET', label: 'GET' }, { value: 'POST', label: 'POST' }], defaultValue: 'GET' },
-    { key: 'headers', label: 'Headers (JSON)', type: 'text', placeholder: '{"Authorization": "Bearer ..."}' },
-    { key: 'auth_type', label: 'Auth Type', type: 'select', options: [{ value: 'none', label: 'None' }, { value: 'bearer', label: 'Bearer Token' }, { value: 'basic', label: 'Basic Auth' }], defaultValue: 'none' },
+    { key: 'auth_type', label: 'Auth Type', type: 'select', options: [{ value: 'none', label: 'None' }, { value: 'bearer', label: 'Bearer Token' }, { value: 'header', label: 'Custom Header' }, { value: 'basic', label: 'Basic Auth' }], defaultValue: 'none' },
+    { key: 'header_name', label: 'Header Name', type: 'text', placeholder: 'X-Auth-Token', defaultValue: 'X-Auth-Token', showWhen: { auth_type: 'header' } },
     { key: 'token', label: 'Token / Password', type: 'password', placeholder: '********' },
+    { key: 'headers', label: 'Extra Headers (JSON)', type: 'text', placeholder: '{"X-Custom": "value"}' },
   ],
   sangfor: [
     { key: 'base_url', label: 'Base URL', type: 'text', placeholder: 'https://sangfor.example.com' },
@@ -43,11 +46,16 @@ export const TYPE_BADGE: Record<string, { label: string; className: string }> = 
 
 export const BASELINE_CONFIG_FIELDS: Record<string, ConfigFieldDef[]> = {
   ipguard: [
+    { key: 'db_type', label: 'Database Type', type: 'select', options: [
+      { value: 'mssql', label: 'SQL Server' },
+      { value: 'mysql', label: 'MySQL / MariaDB' },
+      { value: 'postgresql', label: 'PostgreSQL' },
+    ], defaultValue: 'mssql' },
     { key: 'host', label: 'Host', type: 'text', placeholder: '192.168.1.100' },
-    { key: 'port', label: 'Port', type: 'number', placeholder: '3306', defaultValue: '3306' },
+    { key: 'port', label: 'Port', type: 'number', placeholder: '1433', defaultValue: '1433' },
     { key: 'username', label: 'Username', type: 'text', placeholder: 'admin' },
     { key: 'password', label: 'Password', type: 'password', placeholder: '********' },
-    { key: 'database', label: 'Database', type: 'text', placeholder: 'ipguard' },
+    { key: 'database', label: 'Database', type: 'text', placeholder: 'OCULAR3' },
   ],
 };
 
@@ -74,8 +82,6 @@ export function buildConfigPayload(
         else if (f.key === 'verify_ssl') config[f.key] = val === 'true';
         else config[f.key] = val;
       }
-    } else if (f.key === 'port') {
-      config[f.key] = Number(val);
     } else {
       config[f.key] = val;
     }

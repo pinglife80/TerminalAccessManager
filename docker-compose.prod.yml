@@ -1,0 +1,39 @@
+# Production environment overrides
+# Usage: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+# Or: ENVIRONMENT=production bash manage.sh deploy
+
+services:
+  postgres:
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  redis:
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  backend:
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /app/uploads
+
+  nginx:
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx
+      - /var/run
+      - /tmp

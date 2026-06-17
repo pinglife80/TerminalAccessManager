@@ -1,6 +1,6 @@
 # 品牌自定义指南
 
-> 文档版本：v3.1.0 | 更新日期：2026-06-09
+> 文档版本：v3.3.0 | 更新日期：2026-06-17
 
 ## 概述
 
@@ -192,7 +192,7 @@ logo: {
 },
 ```
 
-**支持的图片格式**：SVG（推荐）、PNG、JPG、WebP
+**支持的图片格式**：PNG、JPG、WebP（SVG 不再支持，可嵌入 JavaScript，存在 XSS 风险）
 
 **推荐尺寸**：64×64px 或更大（侧边栏显示为 32×32px，登录页显示为 40×40px）
 
@@ -211,7 +211,7 @@ favicon: '/favicon.ico',
 <link rel="icon" type="image/x-icon" href="/favicon.ico" />
 ```
 
-**支持的格式**：SVG（推荐）、ICO、PNG
+**支持的格式**：ICO、PNG（SVG 不再支持，可嵌入 JavaScript，存在 XSS 风险）
 
 **推荐尺寸**：32×32px 或 64×64px
 
@@ -341,8 +341,8 @@ frontend/public/
 
 | 资源类型 | 推荐格式 | 推荐尺寸 | 最大文件大小 |
 |----------|----------|----------|-------------|
-| Favicon | SVG、ICO | 32×32px | 10KB |
-| Logo | SVG | 64×64px+ | 50KB |
+| Favicon | ICO、PNG | 32×32px | 10KB |
+| Logo | PNG、JPG、WebP | 64×64px+ | 50KB |
 | 登录背景 | WebP、JPG | 1920×1080px+ | 500KB |
 
 ## Lucide 图标参考
@@ -557,6 +557,19 @@ docker compose up -d --build frontend
 2. **生产环境**：需重新构建前端，因为资源会在构建时被复制到 `dist/` 目录
 3. **Docker 环境**：需重新构建 frontend 容器
 
+### 配置变更生效方式（v3.2.0-r2）
+
+通过 `manage.sh config set` 修改配置时，系统会提示该配置变更的生效方式：
+
+| 生效方式 | 配置项 | 说明 |
+|---------|--------|------|
+| **热重载**（无需重启） | 限流阈值、登录安全、调度间隔、JWT 有效期、品牌配置 | 修改后即时生效，ConfigService 写穿透 + Redis 缓存失效 |
+| **需重启服务** | LOG_LEVEL、TZ、DEBUG、ENCRYPTION_KEY、数据库连接、Redis 连接 | 修改 .env 后需执行 `./manage.sh restart backend` |
+
+`manage.sh config set` 执行时会自动判断并提示：
+- 热重载配置：显示 "✓ 配置已热重载生效"
+- 需重启配置：显示 "⚠ 此配置需要重启 backend 服务才能生效: ./manage.sh restart backend"
+
 ## 主题切换
 
 主题切换功能已从 Sidebar 移至 **HeaderControls** 组件（页面顶部右上角），登录页和登录后均可见。
@@ -603,6 +616,28 @@ docker compose up -d --build frontend
 
 - 副标题：i18n 键 `auth.signInToAccount` → branding 配置 `login.subheading` 作为回退值
 - 页脚文字：i18n 键 `auth.secureAuthFooter` → branding 配置 `login.footerText` 作为回退值
+
+## Terminal 状态标签
+
+终端状态在界面中以标签（Badge）形式展示，当前支持以下两种状态：
+
+| 状态值 | 中文标签 | 英文标签 | 说明 |
+|--------|---------|---------|------|
+| `blocked` | 已封堵 | Blocked | 终端已被防火墙阻断 |
+| `unblocked` | 未封堵 | Unblocked | 终端未被封堵（默认状态） |
+
+> **v3.2.0-r4 变更说明：** 终端状态从 6 值（active/inactive/frozen/pending/unfrozen）精简为 2 值（blocked/unblocked），标签文案同步更新。合规状态由 `compliance_status` 字段独立追踪，不再混入终端状态。
+
+## 数据源配置表单
+
+数据源配置表单中，`arp_api` 类型支持以下认证方式：
+
+| 认证方式 | auth_type 值 | 表单字段 | 说明 |
+|---------|-------------|---------|------|
+| Basic Auth | `basic`（默认） | 用户名 + 密码 | HTTP 基本认证 |
+| Custom Header | `header` | Header 名称 + Header 值 | 自定义请求头认证（如 `X-API-Key`），选择此项后需填写 `header_name` 字段指定 Header 名称 |
+
+> **Custom Header 认证说明：** 当 `auth_type=header` 时，系统在请求 API 时会将 `header_name` 指定的 Header 名称和密码字段中的值作为请求头发送，适用于基于 API Key 等非标准认证方式的数据源。
 
 ## 常见问题
 
