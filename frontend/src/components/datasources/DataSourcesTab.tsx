@@ -13,7 +13,7 @@ import {
   Database,
   AlertTriangle,
 } from 'lucide-react';
-import { useDataSources, useDataSourceBindings, DataSourceItem } from '@/hooks/useTerminalData';
+import { useDataSources, useDataSourceBindings, DataSourceItem, DataSourceBindingItem } from '@/hooks/useTerminalData';
 import { apiClient } from '@/lib/api';
 import { toast } from 'sonner';
 import { API_ENDPOINTS } from '@/lib/constants';
@@ -95,7 +95,12 @@ const DataSourcesTab = forwardRef<{ openAddModal: () => void }, DataSourcesTabPr
 
   // Disable impact warning
   const [showDisableWarning, setShowDisableWarning] = useState(false);
-  const [disablePreviewData, setDisablePreviewData] = useState<any>(null);
+  const [disablePreviewData, setDisablePreviewData] = useState<{
+    can_disable: boolean;
+    warnings: string[];
+    affected_terminals: number;
+    actions: { action: string; description: string; firewall_tag?: string; count?: number }[];
+  } | null>(null);
 
   // Derived data
   const dsList = dataSources || [];
@@ -243,7 +248,7 @@ const DataSourcesTab = forwardRef<{ openAddModal: () => void }, DataSourcesTabPr
     // Warn when enabling an ARP source without binding
     if (editDsForm.enabled && currentDs && !currentDs.enabled &&
         (editDsForm.type === 'arp_ssh' || editDsForm.type === 'arp_api')) {
-      const bindingCount = dsBindings?.filter((b: any) => b.arp_source_tag === editDsForm.tag).length || 0;
+      const bindingCount = dsBindings?.filter((b: DataSourceBindingItem) => b.arp_source_tag === editDsForm.tag).length || 0;
       if (bindingCount === 0) {
         setShowEnableWarning(true);
         return;
@@ -360,21 +365,21 @@ const DataSourcesTab = forwardRef<{ openAddModal: () => void }, DataSourcesTabPr
 
   const getBindingCount = (dsTag: string) => {
     if (!dsBindings) return 0;
-    return dsBindings.filter((b: any) => b.arp_source_tag === dsTag || b.firewall_tag === dsTag).length;
+    return dsBindings.filter((b: DataSourceBindingItem) => b.arp_source_tag === dsTag || b.firewall_tag === dsTag).length;
   };
 
   const getBindingInfo = (ds: DataSourceItem) => {
     if (ds.type === 'sangfor') {
-      const count = dsBindings?.filter((b: any) => b.firewall_tag === ds.tag).length || 0;
+      const count = dsBindings?.filter((b: DataSourceBindingItem) => b.firewall_tag === ds.tag).length || 0;
       return count > 0 ? `${count} ${t('bindings.bindingCount')}` : t('bindings.noFirewallBindings');
     }
     // arp_ssh or arp_api
     if (!ds.enabled) {
       return t('bindings.complianceFrozen');
     }
-    const count = dsBindings?.filter((b: any) => b.arp_source_tag === ds.tag).length || 0;
+    const count = dsBindings?.filter((b: DataSourceBindingItem) => b.arp_source_tag === ds.tag).length || 0;
     return count > 0
-      ? `${count} ${t('bindings.boundTo')}${dsBindings?.filter((b: any) => b.arp_source_tag === ds.tag).map((b: any) => b.firewall_tag).join(', ')}`
+      ? `${count} ${t('bindings.boundTo')}${dsBindings?.filter((b: DataSourceBindingItem) => b.arp_source_tag === ds.tag).map((b: DataSourceBindingItem) => b.firewall_tag).join(', ')}`
       : t('bindings.notBound');
   };
 
@@ -759,7 +764,7 @@ const DataSourcesTab = forwardRef<{ openAddModal: () => void }, DataSourcesTabPr
           <div className="mb-4">
             <p className="text-xs font-medium text-muted-foreground mb-2">{t('dataSources.disableActions')}</p>
             <ul className="space-y-1">
-              {disablePreviewData.actions.map((a: any, i: number) => (
+              {disablePreviewData.actions.map((a: { action: string; description: string }, i: number) => (
                 <li key={i} className="text-sm text-foreground flex items-start gap-2">
                   <span className="text-red-500 mt-0.5">•</span>
                   <span>{a.description}</span>

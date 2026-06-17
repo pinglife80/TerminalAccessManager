@@ -275,7 +275,7 @@ const Terminals: React.FC = () => {
       try {
         const bindingsResponse = await apiClient.get(`${API_ENDPOINTS.DATA_SOURCE_BINDINGS}?arp_source_tag=${mac.source_tag}`);
         const bindings = bindingsResponse.data || [];
-        const fwTags = bindings.map((b: any) => b.firewall_tag).filter(Boolean);
+        const fwTags = bindings.map((b: { firewall_tag: string }) => b.firewall_tag).filter(Boolean);
         setAvailableFirewallTags(fwTags);
         if (fwTags.length === 0) {
           setHasNoBinding(true);
