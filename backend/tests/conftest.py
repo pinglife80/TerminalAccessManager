@@ -1,12 +1,9 @@
 """Pytest configuration and fixtures"""
 import asyncio
 import os
-import sys
 from unittest.mock import AsyncMock, patch
 
 import pytest
-
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 # Set test environment variables BEFORE importing app modules
 os.environ["ENVIRONMENT"] = "test"
