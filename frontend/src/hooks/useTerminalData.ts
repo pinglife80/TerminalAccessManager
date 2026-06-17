@@ -163,6 +163,7 @@ export interface BlacklistSearchParams {
   search?: string;
   start_date?: string;
   end_date?: string;
+  status?: string;  // active / unblocked / all
   skip?: number;
   limit?: number;
   refetchInterval?: number;

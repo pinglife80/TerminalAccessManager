@@ -855,8 +855,20 @@ class TerminalService:
     # ------------------------------------------------------------------
     async def get_blacklist(self, query: BlacklistQuery | None = None,
                             skip: int = 0, limit: int = 50) -> list[Blacklist]:
-        """Get blacklist entries with optional search and date filtering"""
+        """Get blacklist entries with optional search and date filtering.
+        Default shows only active (auto_unblocked=False) records."""
         conditions = []
+
+        # Status filtering: default to active only
+        if query and query.status:
+            if query.status == 'active':
+                conditions.append(Blacklist.auto_unblocked == False)  # noqa: E712
+            elif query.status == 'unblocked':
+                conditions.append(Blacklist.auto_unblocked == True)  # noqa: E712
+            # 'all' or other values: no filter
+        else:
+            # Default: only show active (not auto-unblocked) records
+            conditions.append(Blacklist.auto_unblocked == False)  # noqa: E712
 
         if query:
             # Search by MAC or IP
@@ -890,8 +902,18 @@ class TerminalService:
         return result.scalars().all()
 
     async def get_blacklist_count(self, query: BlacklistQuery | None = None) -> int:
-        """Get total count of blacklist entries matching search criteria"""
+        """Get total count of blacklist entries matching search criteria.
+        Default counts only active (auto_unblocked=False) records."""
         conditions = []
+
+        # Status filtering: default to active only
+        if query and query.status:
+            if query.status == 'active':
+                conditions.append(Blacklist.auto_unblocked == False)  # noqa: E712
+            elif query.status == 'unblocked':
+                conditions.append(Blacklist.auto_unblocked == True)  # noqa: E712
+        else:
+            conditions.append(Blacklist.auto_unblocked == False)  # noqa: E712
 
         if query:
             # Search by MAC or IP

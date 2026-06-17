@@ -326,6 +326,10 @@ const ja = {
     invalidIpFormat: 'IPアドレスの形式が正しくありません。対応：192.168.1.100、192.168.1.0/24、192.168.1.1-100',
     pleaseEnterMacOrIp: 'MACアドレスまたはIPアドレスのいずれかを入力してください',
     searchByMacOrIp: 'MACアドレスまたはIPアドレスで検索...',
+    activeTab: 'アクティブ',
+    unblockedTab: 'ブロック解除',
+    allTab: 'すべて',
+    unblockedLabel: 'ブロック解除済み',
   },
   auditLogs: {
     title: '監査ログ',

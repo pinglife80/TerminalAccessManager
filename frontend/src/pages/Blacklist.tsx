@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Search, Trash2, AlertTriangle, Clock, Server, Download, Eye, Shield, RefreshCw, ChevronDown } from 'lucide-react';
+import { Search, Trash2, AlertTriangle, Clock, Server, Download, Eye, Shield, RefreshCw, ChevronDown, Unlock } from 'lucide-react';
 import { useBlacklist, BlacklistEntry } from '@/hooks/useTerminalData';
 import { apiClient } from '@/lib/api';
 import { toast } from 'sonner';
@@ -21,6 +21,8 @@ const REFRESH_OPTIONS: { labelKey?: string; label: string; value: number }[] = [
   { label: '10m', value: 600000 },
 ];
 
+type BlacklistTab = 'active' | 'unblocked' | 'all';
+
 const Blacklist: React.FC = () => {
   const { t } = useTranslation();
   const [searchTerm, setSearchTerm] = useState('');
@@ -35,14 +37,19 @@ const Blacklist: React.FC = () => {
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [autoRefresh, setAutoRefresh] = useState<number>(0);
+  const [activeTab, setActiveTab] = useState<BlacklistTab>('active');
 
   // Debounce search term
   const debouncedSearch = useDebounce(searchTerm, 500);
+
+  // Determine status parameter based on active tab
+  const statusParam = activeTab === 'active' ? 'active' : activeTab === 'unblocked' ? 'unblocked' : 'all';
 
   const { data: blacklistData, isLoading, refetch } = useBlacklist({
     search: debouncedSearch || undefined,
     start_date: startDate || undefined,
     end_date: endDate || undefined,
+    status: statusParam,
     skip: (currentPage - 1) * pageSize,
     limit: pageSize,
     refetchInterval: autoRefresh || undefined,
@@ -60,6 +67,11 @@ const Blacklist: React.FC = () => {
 
   const handlePageSizeChange = (size: number) => {
     setPageSize(size);
+    setCurrentPage(1);
+  };
+
+  const handleTabChange = (tab: BlacklistTab) => {
+    setActiveTab(tab);
     setCurrentPage(1);
   };
 
@@ -118,6 +130,12 @@ const Blacklist: React.FC = () => {
 
   const isExpired = (expiresAt: string | null) => expiresAt ? new Date(expiresAt) < new Date() : false;
 
+  const tabs: { key: BlacklistTab; labelKey: string }[] = [
+    { key: 'active', labelKey: 'blacklist.activeTab' },
+    { key: 'unblocked', labelKey: 'blacklist.unblockedTab' },
+    { key: 'all', labelKey: 'blacklist.allTab' },
+  ];
+
   return (
     <div className="min-h-full bg-background p-4 sm:p-6 lg:p-8">
       {isLoading && !blacklistData ? (
@@ -136,6 +154,25 @@ const Blacklist: React.FC = () => {
           variant="success"
           onClick={handleExport}
         />
+      </div>
+
+      {/* Tab Navigation */}
+      <div className="mb-6">
+        <div className="flex gap-1 bg-muted/50 p-1 rounded-xl w-fit">
+          {tabs.map((tab) => (
+            <button
+              key={tab.key}
+              onClick={() => handleTabChange(tab.key)}
+              className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                activeTab === tab.key
+                  ? 'bg-card text-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground hover:bg-card/50'
+              }`}
+            >
+              {t(tab.labelKey)}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* Search and Filter */}
@@ -343,8 +380,8 @@ const Blacklist: React.FC = () => {
                   <tr
                     key={item.id}
                     className={`hover:bg-blue-50/30 transition-colors ${
-                      isExpired(item.expires_at) ? 'opacity-50' : ''
-                    } ${item.is_auto_blocked ? 'bg-orange-50/30' : ''}`}
+                      item.auto_unblocked ? 'opacity-60' : isExpired(item.expires_at) ? 'opacity-50' : ''
+                    } ${!item.auto_unblocked && item.is_auto_blocked ? 'bg-orange-50/30' : ''}`}
                   >
                     <td className="px-4 sm:px-6 py-4 whitespace-nowrap">
                       <div className="flex items-center">
@@ -371,6 +408,11 @@ const Blacklist: React.FC = () => {
                       ) : (
                         <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
                           {t('blacklist.manual')}
+                        </span>
+                      )}
+                      {item.auto_unblocked && (
+                        <span className="ml-1 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                          {t('blacklist.unblockedLabel')}
                         </span>
                       )}
                     </td>
@@ -404,13 +446,15 @@ const Blacklist: React.FC = () => {
                           title={t('terminal.viewDetails')}
                           onClick={() => handleViewDetails(item)}
                         />
-                        <IconButton
-                          icon={Trash2}
-                          variant="success"
-                          size="md"
-                          title={t('terminal.unblockTerminal')}
-                          onClick={() => handleRemoveBlacklist(item)}
-                        />
+                        {!item.auto_unblocked && (
+                          <IconButton
+                            icon={Trash2}
+                            variant="success"
+                            size="md"
+                            title={t('terminal.unblockTerminal')}
+                            onClick={() => handleRemoveBlacklist(item)}
+                          />
+                        )}
                       </ButtonGroup>
                     </td>
                   </tr>
@@ -489,8 +533,12 @@ const Blacklist: React.FC = () => {
       <Modal isOpen={showDetailsModal && !!selectedEntry} onClose={() => { setShowDetailsModal(false); setSelectedEntry(null); }} title={t('blacklist.blockedTerminalDetails')} size="md">
         <div className="space-y-4">
           <div className="flex items-center gap-3 mb-2">
-            <div className="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center">
-              <AlertTriangle className="h-6 w-6 text-red-600" />
+            <div className={`w-12 h-12 rounded-full flex items-center justify-center ${selectedEntry?.auto_unblocked ? 'bg-green-100' : 'bg-red-100'}`}>
+              {selectedEntry?.auto_unblocked ? (
+                <Unlock className="h-6 w-6 text-green-600" />
+              ) : (
+                <AlertTriangle className="h-6 w-6 text-red-600" />
+              )}
             </div>
             <p className="text-sm text-muted-foreground">ID: {selectedEntry?.id}</p>
           </div>
@@ -553,24 +601,36 @@ const Blacklist: React.FC = () => {
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">{t('common.status')}</span>
-                <span className={`px-2.5 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${isExpired(selectedEntry?.expires_at || null) ? 'bg-muted text-foreground' : 'bg-red-100 text-red-800'}`}>
-                  {isExpired(selectedEntry?.expires_at || null) ? t('common.expired') : t('common.active')}
+                <span className={`px-2.5 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${
+                  selectedEntry?.auto_unblocked
+                    ? 'bg-green-100 text-green-800'
+                    : isExpired(selectedEntry?.expires_at || null)
+                      ? 'bg-muted text-foreground'
+                      : 'bg-red-100 text-red-800'
+                }`}>
+                  {selectedEntry?.auto_unblocked
+                    ? t('blacklist.unblockedLabel')
+                    : isExpired(selectedEntry?.expires_at || null)
+                      ? t('common.expired')
+                      : t('common.active')}
                 </span>
               </div>
             </div>
           </div>
 
-          <PrimaryButton
-            icon={Trash2}
-            label={t('terminal.unblockTerminal')}
-            variant="success"
-            onClick={() => {
-              if (selectedEntry) handleRemoveBlacklist(selectedEntry);
-              setShowDetailsModal(false);
-              setSelectedEntry(null);
-            }}
-            className="w-full"
-          />
+          {!selectedEntry?.auto_unblocked && (
+            <PrimaryButton
+              icon={Trash2}
+              label={t('terminal.unblockTerminal')}
+              variant="success"
+              onClick={() => {
+                if (selectedEntry) handleRemoveBlacklist(selectedEntry);
+                setShowDetailsModal(false);
+                setSelectedEntry(null);
+              }}
+              className="w-full"
+            />
+          )}
         </div>
       </Modal>
       </>

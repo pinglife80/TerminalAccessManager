@@ -15,18 +15,22 @@ async def get_blacklist(
     search: str = Query(None, description="Search by MAC or IP"),
     start_date: str = Query(None, description="Filter by start date (YYYY-MM-DD)"),
     end_date: str = Query(None, description="Filter by end date (YYYY-MM-DD)"),
+    status: str = Query(None, description="Filter by status: active/unblocked/all"),
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_permission("blacklist:read"))
 ):
-    """Get all blacklisted terminals with search and date filtering"""
+    """Get blacklisted terminals with search and date filtering.
+    Default shows only active (auto_unblocked=False) records.
+    Use status='unblocked' for unblocked history, 'all' for all records."""
     query = None
-    if search or start_date or end_date:
+    if search or start_date or end_date or status:
         query = BlacklistQuery(
             search=search,
             start_date=start_date,
             end_date=end_date,
+            status=status,
             skip=skip,
             limit=limit
         )

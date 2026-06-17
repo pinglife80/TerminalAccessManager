@@ -8,6 +8,31 @@
 
 ---
 
+## [v3.3.1] - 2026-06-17
+
+### Bug 修复
+
+- **黑名单显示已解封记录**：黑名单管理页面默认查询不再返回 `auto_unblocked=True` 的历史记录，仅展示当前仍被封堵的活跃记录。新增 `status` 查询参数和前端 Tab 切换支持查看已解封历史记录。
+
+### 变更文件
+
+- `backend/app/services/terminal_service.py` — get_blacklist/get_blacklist_count 添加 auto_unblocked 过滤
+- `backend/app/schemas/terminal.py` — BlacklistQuery 添加 status 字段
+- `backend/app/api/v1/endpoints/blacklist.py` — get_blacklist endpoint 添加 status 参数
+- `frontend/src/hooks/useTerminalData.ts` — BlacklistSearchParams 添加 status 字段
+- `frontend/src/pages/Blacklist.tsx` — 添加 Tab 切换、已解封记录样式区分、隐藏解封按钮
+- `frontend/src/i18n/locales/zh.ts` — 添加中文翻译键
+- `frontend/src/i18n/locales/en.ts` — 添加英文翻译键
+- `frontend/src/i18n/locales/ja.ts` — 添加日文翻译键
+- `manage.sh` — VERSION 3.3.0 → 3.3.1
+- `backend/app/core/config.py` — VERSION 3.3.0 → 3.3.1
+- `frontend/package.json` — version 3.3.0 → 3.3.1
+- `.env.example` — VERSION 3.3.0 → 3.3.1
+- `docs/changelog.md` — 追加 [3.3.1] 条目
+- `docs/release-notes.md` — 追加 [v3.3.1] 条目
+
+---
+
 ## [v3.3.0] - 2026-06-17
 
 ### RBAC 权限控制 + 审计日志优化 + 生产就绪改进
