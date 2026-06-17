@@ -66,7 +66,7 @@ const Users: React.FC = () => {
     defaultValues: { is_active: true, is_superuser: false, role_id: null },
   });
 
-  const filteredUsers = users || [];
+  const filteredUsers = useMemo(() => users || [], [users]);
 
   const totalPages = useMemo(() => Math.ceil(filteredUsers.length / pageSize), [filteredUsers, pageSize]);
   const paginatedUsers = useMemo(() => {
