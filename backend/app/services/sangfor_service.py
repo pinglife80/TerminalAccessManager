@@ -1,5 +1,6 @@
-import httpx
 from typing import Any
+
+import httpx
 from loguru import logger
 
 from app.core.config import settings

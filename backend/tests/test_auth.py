@@ -1,21 +1,21 @@
 """
 Comprehensive test suite for authentication endpoints
 """
+import os
+import sys
+
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
-import sys
-import os
 
 # Add backend to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from app.main import app
 from app.core.database import Base, get_db
 from app.core.security import hash_password
+from app.main import app
 from app.models.user import User
-
 
 # Create test database engine (SQLite for testing)
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
@@ -57,10 +57,10 @@ async def db_session():
     """Create a fresh database session for each test"""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    
+
     async with TestingSessionLocal() as session:
         yield session
-    
+
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
 
@@ -74,8 +74,7 @@ def client(db_session):
 @pytest.fixture
 async def test_user(db_session: AsyncSession):
     """Create a test user"""
-    from sqlalchemy import select
-    
+
     user = User(
         username="testuser",
         email="test@example.com",
@@ -83,19 +82,18 @@ async def test_user(db_session: AsyncSession):
         is_active=True,
         is_superuser=False
     )
-    
+
     db_session.add(user)
     await db_session.commit()
     await db_session.refresh(user)
-    
+
     return user
 
 
 @pytest.fixture
 async def admin_user(db_session: AsyncSession):
     """Create an admin user"""
-    from sqlalchemy import select
-    
+
     user = User(
         username="admin",
         email="admin@example.com",
@@ -103,17 +101,17 @@ async def admin_user(db_session: AsyncSession):
         is_active=True,
         is_superuser=True
     )
-    
+
     db_session.add(user)
     await db_session.commit()
     await db_session.refresh(user)
-    
+
     return user
 
 
 class TestAuthEndpoints:
     """Test authentication endpoints"""
-    
+
     def test_register_new_user(self, client: TestClient):
         """Test user registration - disabled by default (ALLOW_REGISTRATION=False)"""
         response = client.post(
@@ -127,7 +125,7 @@ class TestAuthEndpoints:
 
         # Registration is disabled by default, expect 403
         assert response.status_code == 403
-    
+
     def test_register_duplicate_username(self, client: TestClient, test_user):
         """Test registration is disabled by default"""
         response = client.post(
@@ -141,7 +139,7 @@ class TestAuthEndpoints:
 
         # Registration is disabled by default, expect 403
         assert response.status_code == 403
-    
+
     def test_login_success(self, client: TestClient, test_user):
         """Test successful login"""
         response = client.post(
@@ -151,13 +149,13 @@ class TestAuthEndpoints:
                 "password": "testpassword123"
             }
         )
-        
+
         assert response.status_code == 200
         data = response.json()
         assert "access_token" in data
         assert "refresh_token" in data
         assert data["token_type"] == "bearer"
-    
+
     def test_login_wrong_password(self, client: TestClient, test_user):
         """Test login with wrong password fails"""
         response = client.post(
@@ -175,7 +173,7 @@ class TestAuthEndpoints:
             assert "Invalid credentials" in detail.get("message", "")
         else:
             assert "Invalid credentials" in detail
-    
+
     def test_login_nonexistent_user(self, client: TestClient):
         """Test login with non-existent user fails"""
         response = client.post(
@@ -185,9 +183,9 @@ class TestAuthEndpoints:
                 "password": "password123"
             }
         )
-        
+
         assert response.status_code == 401
-    
+
     def test_get_current_user(self, client: TestClient, test_user):
         """Test getting current user info"""
         # First login to get token
@@ -198,29 +196,29 @@ class TestAuthEndpoints:
                 "password": "testpassword123"
             }
         )
-        
+
         token = login_response.json()["access_token"]
-        
+
         # Get current user
         response = client.get(
             "/api/v1/auth/me",
             headers={"Authorization": f"Bearer {token}"}
         )
-        
+
         assert response.status_code == 200
         data = response.json()
         assert data["username"] == "testuser"
         assert data["email"] == "test@example.com"
-    
+
     def test_get_current_user_invalid_token(self, client: TestClient):
         """Test getting current user with invalid token fails"""
         response = client.get(
             "/api/v1/auth/me",
             headers={"Authorization": "Bearer invalidtoken"}
         )
-        
+
         assert response.status_code == 401
-    
+
     def test_refresh_token(self, client: TestClient, test_user):
         """Test token refresh - refresh endpoint uses Body(embed=True)"""
         # Login to get tokens
@@ -244,7 +242,7 @@ class TestAuthEndpoints:
         data = response.json()
         assert "access_token" in data
         assert "refresh_token" in data
-    
+
     def test_logout(self, client: TestClient, test_user):
         """Test logout endpoint"""
         # Login first
@@ -255,22 +253,22 @@ class TestAuthEndpoints:
                 "password": "testpassword123"
             }
         )
-        
+
         token = login_response.json()["access_token"]
-        
+
         # Logout
         response = client.post(
             "/api/v1/auth/logout",
             headers={"Authorization": f"Bearer {token}"}
         )
-        
+
         assert response.status_code == 200
         assert response.json()["success"] is True
 
 
 class TestHealthAndRoot:
     """Test basic application endpoints"""
-    
+
     def test_root_endpoint(self, client: TestClient):
         """Test root endpoint"""
         response = client.get("/")
@@ -292,17 +290,17 @@ class TestHealthAndRoot:
         assert "status" in data
         assert "version" in data
         assert "environment" in data
-    
+
     def test_api_docs_available(self, client: TestClient):
         """Test that API docs are accessible"""
         response = client.get("/api/v1/docs")
-        
+
         assert response.status_code == 200
-    
+
     def test_openapi_schema(self, client: TestClient):
         """Test OpenAPI schema generation"""
         response = client.get("/api/v1/openapi.json")
-        
+
         assert response.status_code == 200
         data = response.json()
         assert "openapi" in data

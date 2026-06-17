@@ -1,15 +1,16 @@
-from datetime import datetime, timedelta, timezone
-from jose import JWTError, jwt
-import bcrypt
-from fastapi import Depends, HTTPException, status, Request
-from fastapi.security import OAuth2PasswordBearer
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
-import redis.asyncio as aioredis
-import uuid
 import json
 import random
+import uuid
+from datetime import UTC, datetime, timedelta
+
+import bcrypt
+import redis.asyncio as aioredis
+from fastapi import Depends, HTTPException, Request, status
+from fastapi.security import OAuth2PasswordBearer
+from jose import JWTError, jwt
 from loguru import logger
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.database import get_db
@@ -70,7 +71,7 @@ async def add_token_to_blacklist(jti: str, exp: datetime) -> None:
     """Add a JWT token to the blacklist in Redis"""
     try:
         redis_client = await get_redis_client()
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         ttl = int((exp - now).total_seconds())
 
         if ttl > 0:
@@ -133,10 +134,7 @@ async def check_login_attempts(username: str) -> bool:
         lock_key = f"login_lock:{username}"
 
         # Check if account is locked
-        if await redis_client.exists(lock_key):
-            return True
-
-        return False
+        return bool(await redis_client.exists(lock_key))
     except Exception as e:
         logger.warning(f"Redis unavailable, allowing login (fail-open): {e}")
         return False
@@ -287,11 +285,11 @@ async def create_access_token_async(data: dict, expires_delta: timedelta | None 
     to_encode = data.copy()
 
     if expires_delta:
-        expire = datetime.now(timezone.utc) + expires_delta
+        expire = datetime.now(UTC) + expires_delta
     else:
         from app.services.config_service import get_config_value
         expire_minutes = await get_config_value("access_token_expire_minutes", settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-        expire = datetime.now(timezone.utc) + timedelta(minutes=expire_minutes)
+        expire = datetime.now(UTC) + timedelta(minutes=expire_minutes)
 
     jti = str(uuid.uuid4())
     to_encode.update({"exp": expire, "jti": jti, "type": "access"})
@@ -312,7 +310,7 @@ async def create_refresh_token_async(data: dict, user_id: int | None = None) -> 
     to_encode = data.copy()
     from app.services.config_service import get_config_value
     expire_days = await get_config_value("refresh_token_expire_days", settings.REFRESH_TOKEN_EXPIRE_DAYS)
-    expire = datetime.now(timezone.utc) + timedelta(days=expire_days)
+    expire = datetime.now(UTC) + timedelta(days=expire_days)
     jti = str(uuid.uuid4())
     to_encode.update({"exp": expire, "jti": jti, "type": "refresh"})
 
@@ -416,6 +414,7 @@ async def get_user_permissions(db: AsyncSession, user_id: int) -> set[str]:
         logger.warning(f"Redis unavailable for permission cache: {e}")
 
     from sqlalchemy import select
+
     from app.models.role import Permission, RolePermission, UserRole
 
     result = await db.execute(

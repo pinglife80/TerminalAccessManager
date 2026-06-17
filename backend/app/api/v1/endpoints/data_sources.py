@@ -1,33 +1,32 @@
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
-from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.security import get_current_user, require_permission, get_client_ip
-from app.models.user import User
-from app.models.data_source import DataSource, DataSourceBinding
+from app.core.security import get_client_ip, require_permission
 from app.models.blacklist import Blacklist
+from app.models.data_source import DataSourceBinding
+from app.models.user import User
 from app.schemas.data_source import (
-    DataSourceCreate,
-    DataSourceUpdate,
-    DataSourceResponse,
-    DataSourceBindingCreate,
-    DataSourceBindingResponse,
-    ConnectionTestResult,
-    SyncResult,
-    ComplianceCheckRequest,
-    ComplianceCheckResult,
     AutoBlockRequest,
     AutoBlockResult,
     AutoUnblockResult,
+    ComplianceCheckRequest,
+    ComplianceCheckResult,
+    ConnectionTestResult,
+    DataSourceBindingCreate,
+    DataSourceBindingResponse,
+    DataSourceCreate,
+    DataSourceResponse,
+    DataSourceUpdate,
     DeletePreviewResponse,
-    DeletePreviewAffected,
+    SyncResult,
 )
-from app.services.data_source_service import DataSourceService
 from app.services.arp_collector_service import ArpCollectorService
 from app.services.compliance_service import ComplianceService
+from app.services.data_source_service import DataSourceService
 
 logger = logging.getLogger(__name__)
 
@@ -225,7 +224,7 @@ async def update_data_source(
                     )
 
             elif current_source.type in ("arp_ssh", "arp_api"):
-                from app.models.terminal import Terminal, TerminalStatus
+                from app.models.terminal import Terminal
                 # Count affected terminals before reset
                 terminal_stmt = select(Terminal).where(
                     Terminal.source_tag == current_source.tag,
@@ -520,7 +519,8 @@ async def compliance_check(
     current_user: User = Depends(require_permission("datasource:compliance")),
 ):
     """Manually trigger compliance check (requires datasource:compliance permission)"""
-    from sqlalchemy import select, and_
+    from sqlalchemy import and_, select
+
     from app.models.terminal import Terminal
 
     compliance_service = ComplianceService(db)

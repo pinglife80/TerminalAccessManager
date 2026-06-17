@@ -5,17 +5,20 @@ CRUD operations for DataSource and DataSourceBinding,
 plus connection testing functionality.
 """
 
-import json
 
-from sqlalchemy import select, delete
-from sqlalchemy.ext.asyncio import AsyncSession
+from datetime import UTC
+
 from loguru import logger
+from sqlalchemy import delete, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.crypto import decrypt_config, encrypt_config
 from app.models.data_source import DataSource, DataSourceBinding
 from app.schemas.data_source import (
-    DataSourceCreate, DataSourceUpdate, ConnectionTestResult,
+    ConnectionTestResult,
+    DataSourceCreate,
+    DataSourceUpdate,
 )
-from app.core.crypto import encrypt_config, decrypt_config
 
 
 class DataSourceService:
@@ -101,8 +104,8 @@ class DataSourceService:
 
     async def preview_delete_data_source(self, source_id: int) -> dict:
         """Preview the impact of deleting a data source without making any changes"""
-        from app.models.terminal import Terminal
         from app.models.blacklist import Blacklist
+        from app.models.terminal import Terminal
 
         stmt = select(DataSource).where(DataSource.id == source_id)
         result = await self.db.execute(stmt)
@@ -215,7 +218,7 @@ class DataSourceService:
                     actions.append(f"删除 {bl_count} 条黑名单记录")
                 if bind_count > 0:
                     actions.append(f"删除 {bind_count} 条数据源绑定关系")
-                actions.append(f"清理已封堵终端的 firewall_tag 引用")
+                actions.append("清理已封堵终端的 firewall_tag 引用")
                 actions.append(f"删除数据源 [{source_name}]")
             else:
                 actions.append("请确保防火墙连接正常后重试")
@@ -249,8 +252,8 @@ class DataSourceService:
 
     async def safe_delete_data_source(self, source_id: int, username: str = None, client_ip: str = None) -> bool:
         """Safely delete a data source with automatic cleanup of dependent data"""
-        from app.models.terminal import Terminal
         from app.models.blacklist import Blacklist
+        from app.models.terminal import Terminal
         from app.services.terminal_service import TerminalService
 
         stmt = select(DataSource).where(DataSource.id == source_id)
@@ -417,7 +420,7 @@ class DataSourceService:
             ts = TerminalService(self.db)
             await ts.log_action(
                 username, "delete_datasource", "datasource", str(source_id),
-                {"message": f"Safely deleted datasource with cleanup", "name": source_name, "tag": tag},
+                {"message": "Safely deleted datasource with cleanup", "name": source_name, "tag": tag},
                 ip_address=client_ip,
                 resource_name=source_name,
             )
@@ -427,7 +430,6 @@ class DataSourceService:
 
     async def preview_delete_binding(self, binding_id: int) -> dict:
         """Preview the impact of deleting a data source binding"""
-        from app.models.terminal import Terminal
         from app.models.blacklist import Blacklist
 
         stmt = select(DataSourceBinding).where(DataSourceBinding.id == binding_id)
@@ -484,8 +486,8 @@ class DataSourceService:
 
     async def safe_delete_binding(self, binding_id: int, username: str = None, client_ip: str = None) -> bool:
         """Safely delete a binding with automatic cleanup"""
-        from app.models.terminal import Terminal
         from app.models.blacklist import Blacklist
+        from app.models.terminal import Terminal
         from app.services.terminal_service import TerminalService
 
         stmt = select(DataSourceBinding).where(DataSourceBinding.id == binding_id)
@@ -555,7 +557,7 @@ class DataSourceService:
                     terminal.comments = None
                 else:
                     # Still blocked on other firewalls - just remove this fw_tag
-                    remaining_tags = [bl.firewall_tag for bl in other_bl if bl.firewall_tag]
+                    [bl.firewall_tag for bl in other_bl if bl.firewall_tag]
                     if terminal.firewall_tag:
                         current_tags = [t.strip() for t in terminal.firewall_tag.split(",") if t.strip() != fw_tag]
                         terminal.firewall_tag = ",".join(current_tags) if current_tags else None
@@ -662,8 +664,8 @@ class DataSourceService:
         result = await self.db.execute(stmt)
         source = result.scalar_one_or_none()
         if source:
-            from datetime import datetime, timezone
-            source.last_sync_at = datetime.now(timezone.utc)
+            from datetime import datetime
+            source.last_sync_at = datetime.now(UTC)
             source.last_sync_status = status
             source.last_sync_error = error
             await self.db.commit()

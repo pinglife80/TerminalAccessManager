@@ -1,19 +1,21 @@
-import re
-import json
-import ipaddress
 import base64
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc, and_, or_, func, tuple_
+import contextlib
+import ipaddress
+import json
+import re
+from datetime import UTC, datetime, timedelta
 from typing import Any
-from datetime import datetime, timedelta, timezone
-from loguru import logger
 
+from loguru import logger
+from sqlalchemy import and_, desc, func, or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models.blacklist import Blacklist
+from app.models.data_source import DataSource
+from app.models.log import AuditLog
 from app.models.terminal import Terminal, TerminalStatus
 from app.models.whitelist import Whitelist
-from app.models.blacklist import Blacklist
-from app.models.log import AuditLog
-from app.models.data_source import DataSource
-from app.schemas.terminal import TerminalQuery, WhitelistQuery, BlacklistQuery, AuditLogQuery
+from app.schemas.terminal import AuditLogQuery, BlacklistQuery, TerminalQuery, WhitelistQuery
 from app.services.sangfor_service import SangforService
 
 
@@ -32,14 +34,14 @@ def _parse_date_range(start_date: str | None, end_date: str | None):
     conditions = []
     if start_date:
         try:
-            start_dt = datetime.strptime(start_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            start_dt = datetime.strptime(start_date, "%Y-%m-%d").replace(tzinfo=UTC)
             conditions.append(lambda col: col >= start_dt)
         except ValueError:
             pass
     if end_date:
         try:
             end_dt = datetime.strptime(end_date, "%Y-%m-%d").replace(
-                hour=23, minute=59, second=59, tzinfo=timezone.utc
+                hour=23, minute=59, second=59, tzinfo=UTC
             )
             conditions.append(lambda col: col <= end_dt)
         except ValueError:
@@ -241,8 +243,8 @@ class TerminalService:
         # Check Sangfor AF connectivity via DataSource table
         sangfor_status = {"connected": False, "error": None}
         try:
-            from app.models.data_source import DataSource
             from app.core.crypto import decrypt_config
+            from app.models.data_source import DataSource
 
             stmt = select(DataSource).where(DataSource.type == "sangfor", DataSource.enabled == True)
             result = await self.db.execute(stmt)
@@ -486,7 +488,7 @@ class TerminalService:
                         mac_record.comments = comments
 
                 # Add to blacklist with configurable expiration
-                expires_at = datetime.now(timezone.utc) + _parse_block_time(block_time)
+                expires_at = datetime.now(UTC) + _parse_block_time(block_time)
                 blacklist_entry = Blacklist(
                     ip_address=ip_address,
                     mac_address=mac_address,
@@ -930,7 +932,7 @@ class TerminalService:
             if mac_address:
                 normalized_mac = self._normalize_mac(mac_address)
 
-            expires_at = datetime.now(timezone.utc) + _parse_block_time(block_time)
+            expires_at = datetime.now(UTC) + _parse_block_time(block_time)
 
             # Call Sangfor API to block IP if available
             sangfor_success = False
@@ -1103,7 +1105,7 @@ class TerminalService:
         """Remove expired blacklist entries and restore terminal status.
         Returns the number of entries cleaned up."""
         try:
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             stmt = select(Blacklist).where(
                 (Blacklist.expires_at < now) &
                 (Blacklist.auto_unblocked == False)
@@ -1217,10 +1219,8 @@ class TerminalService:
                 # Close all cached SangforService instances
                 for svc in sangfor_cache.values():
                     if svc:
-                        try:
+                        with contextlib.suppress(Exception):
                             await svc.close()
-                        except Exception:
-                            pass
 
             if count > 0:
                 await self.log_action("system", "cleanup_expired_blacklist", "blacklist", None,

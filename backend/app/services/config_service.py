@@ -9,22 +9,28 @@ Provides a cached, hot-reloadable configuration layer on top of the database.
 """
 
 import json
+from datetime import UTC, datetime
 from typing import Any
-from datetime import datetime, timezone
 
-from sqlalchemy import select, update
-from sqlalchemy.ext.asyncio import AsyncSession
 from loguru import logger
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.models.system_config import SystemConfig
 from app.schemas.system_config import (
-    SystemConfigCreate, SystemConfigUpdate, SystemConfigResponse,
-    ConfigCategory, ConfigValueType, ConfigUpdateResult,
-    SecurityConfigResponse, RateLimitConfigResponse, NetworkConfigResponse,
-    SchedulerConfigResponse, GeneralConfigResponse, BrandingConfigResponse, AllConfigsResponse,
+    AllConfigsResponse,
+    BrandingConfigResponse,
+    ConfigUpdateResult,
+    ConfigValueType,
+    GeneralConfigResponse,
+    NetworkConfigResponse,
+    RateLimitConfigResponse,
+    SchedulerConfigResponse,
+    SecurityConfigResponse,
+    SystemConfigResponse,
+    SystemConfigUpdate,
 )
-from app.core.config import settings
-
 
 # Redis cache key prefix and TTL
 CONFIG_CACHE_PREFIX = "sys_config:"
@@ -289,7 +295,7 @@ class ConfigService:
         # Update database
         config.value = value
         config.updated_by = updated_by
-        config.updated_at = datetime.now(timezone.utc)
+        config.updated_at = datetime.now(UTC)
         await self.db.commit()
 
         # Invalidate Redis cache

@@ -1,12 +1,11 @@
 """
 Simple test to verify the FastAPI application starts correctly
 """
+import os
+import sys
+
 import pytest
 from fastapi.testclient import TestClient
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-import sys
-import os
 
 # Add backend to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'backend'))
@@ -60,16 +59,14 @@ class TestGlobalExceptionHandler:
 
     def test_unhandled_exception_returns_500(self):
         """Unhandled exceptions should return 500 with error_id for tracing"""
+        import asyncio
+        from unittest.mock import MagicMock
+
+        from fastapi import Request
+
         from app.middleware.error_handler import (
-            http_exception_handler,
-            validation_exception_handler,
             unhandled_exception_handler,
         )
-        from starlette.exceptions import HTTPException as StarletteHTTPException
-        from fastapi.exceptions import RequestValidationError
-        from fastapi import Request
-        from unittest.mock import MagicMock
-        import asyncio
 
         # Test unhandled exception handler
         request_mock = MagicMock(spec=Request)
@@ -93,11 +90,13 @@ class TestGlobalExceptionHandler:
 
     def test_http_exception_handler_passthrough(self):
         """HTTPException handler should pass through detail unchanged"""
-        from app.middleware.error_handler import http_exception_handler
-        from starlette.exceptions import HTTPException as StarletteHTTPException
-        from fastapi import Request
-        from unittest.mock import MagicMock
         import asyncio
+        from unittest.mock import MagicMock
+
+        from fastapi import Request
+        from starlette.exceptions import HTTPException as StarletteHTTPException
+
+        from app.middleware.error_handler import http_exception_handler
 
         request_mock = MagicMock(spec=Request)
 

@@ -5,15 +5,15 @@ All database calls and external API calls are mocked so the tests
 do NOT require Docker, PostgreSQL, or Redis to be running.
 """
 
+from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch, call
-from datetime import datetime, timedelta, timezone
 
-from app.services.compliance_service import ComplianceService
-from app.models.terminal import Terminal, TerminalStatus
 from app.models.blacklist import Blacklist
+from app.models.terminal import Terminal, TerminalStatus
 from app.models.whitelist import Whitelist
-
+from app.services.compliance_service import ComplianceService
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -61,7 +61,7 @@ def create_mock_blacklist(
     b.source_tag = source_tag
     b.is_auto_blocked = is_auto_blocked
     b.auto_unblocked = auto_unblocked
-    b.expires_at = expires_at or datetime.now(timezone.utc) + timedelta(days=30)
+    b.expires_at = expires_at or datetime.now(UTC) + timedelta(days=30)
     b.reason = "Auto-blocked: non-compliant"
     b.blocked_by = "system"
     return b
@@ -248,7 +248,7 @@ class TestAutoBlockTerminal:
     @pytest.mark.asyncio
     async def test_auto_block_skips_already_blocked(self, service, mock_db):
         """Terminal already blocked -> no duplicate Blacklist record."""
-        terminal = create_mock_terminal(
+        create_mock_terminal(
             ip="192.168.1.100",
             mac="AA:BB:CC:DD:EE:FF",
             compliance_status="non_compliant",
@@ -560,7 +560,7 @@ class TestCleanupExpiredBlacklist:
         Blacklist entry, the cleanup should only delete the expired entry from DB
         without calling the firewall unblock API.
         """
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         expired_entry = create_mock_blacklist(
             ip="192.168.1.100",
             mac="AA:BB:CC:DD:EE:FF",
@@ -577,7 +577,7 @@ class TestCleanupExpiredBlacklist:
         term_result_mock.scalars.return_value.all.return_value = []
 
         # Third query: active blocks for same IP (non-expired)
-        active_entry = create_mock_blacklist(
+        create_mock_blacklist(
             ip="192.168.1.100",
             mac="AA:BB:CC:DD:EE:FF",
             firewall_tag="fw1",
@@ -614,7 +614,7 @@ class TestCleanupExpiredBlacklist:
         If a terminal's status is already 'unblocked' (e.g. manually unblocked),
         the cleanup should not change it back to 'unblocked' again.
         """
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         expired_entry = create_mock_blacklist(
             ip="192.168.1.100",
             mac="AA:BB:CC:DD:EE:FF",
@@ -666,7 +666,7 @@ class TestCleanupExpiredBlacklist:
         mock_sangfor.close = AsyncMock()
 
         with patch.object(ts_service, "_get_sangfor_service_by_tag", return_value=mock_sangfor):
-            result = await ts_service.cleanup_expired_blacklist()
+            await ts_service.cleanup_expired_blacklist()
 
         # Only the blocked terminal should have its status changed
         assert blocked_terminal.status == TerminalStatus.UNBLOCKED.value

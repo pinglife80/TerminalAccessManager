@@ -1,10 +1,11 @@
 """Rate limiting middleware using Redis sliding window with Sorted Sets"""
 import time
-from fastapi import Request, HTTPException, status
+
+import redis.asyncio as aioredis
+from fastapi import Request, status
+from loguru import logger
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
-from loguru import logger
-import redis.asyncio as aioredis
 
 from app.core.config import settings
 
@@ -55,7 +56,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
     async def _check_rate_limit(self, client_id: str, path: str, rate_limit: int) -> tuple[bool, int]:
         """Check rate limit using sliding window algorithm with Redis Sorted Set.
-        
+
         Returns (is_allowed, retry_after_seconds).
         """
         redis = await self.get_redis()

@@ -8,24 +8,27 @@ Core compliance checking logic:
 - Redis caching for performance optimization
 """
 
-import json
+import contextlib
 import ipaddress
+import json
+from datetime import UTC
 
-from sqlalchemy import select, and_, or_
-from sqlalchemy.sql import func
-from sqlalchemy.ext.asyncio import AsyncSession
 from loguru import logger
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql import func
 
+from app.models.blacklist import Blacklist
+from app.models.compliance_baseline import ComplianceBaseline
+from app.models.data_source import DataSource
+from app.models.log import AuditLog
 from app.models.terminal import Terminal
 from app.models.whitelist import Whitelist
-from app.models.blacklist import Blacklist
-from app.models.data_source import DataSource, DataSourceBinding
-from app.models.compliance_baseline import ComplianceBaseline
-from app.models.log import AuditLog
 from app.schemas.data_source import (
-    ComplianceCheckResult, AutoBlockResult, AutoUnblockResult,
+    AutoBlockResult,
+    AutoUnblockResult,
+    ComplianceCheckResult,
 )
-
 
 # Redis cache key patterns and TTLs
 IPGUARD_CACHE_PREFIX = "ipguard:"
@@ -114,7 +117,7 @@ class ComplianceService:
         for entry in entries:
             ip_addr = entry.get("ip_address", "")
             mac_addr = entry.get("mac_address", "")
-            source_tag = entry.get("source_tag", "")
+            entry.get("source_tag", "")
 
             # Check whitelist
             wl_result = self._match_whitelist_in_memory(whitelist_data, ip_addr, mac_addr)
@@ -186,8 +189,9 @@ class ComplianceService:
                 # SQL Server (IPGuard OCULAR3 typically uses this)
                 # IPGuard OCULAR3 stores IP+MAC in AGENT.AGT_IP_MAC_STR
                 # Format: "MAC(IP),MAC(),MAC()" — only pairs with IP are useful
-                import pyodbc
                 import re
+
+                import pyodbc
                 conn_str = (
                     f"DRIVER={{FreeTDS}};"
                     f"SERVER={host};"
@@ -375,8 +379,8 @@ class ComplianceService:
                     fw_source = fw_result.scalar_one_or_none()
 
                     if fw_source and fw_source.enabled:
-                        from app.services.sangfor_service import SangforService
                         from app.core.crypto import decrypt_config
+                        from app.services.sangfor_service import SangforService
                         config = fw_source.config
                         if config:
                             config = decrypt_config(config)
@@ -450,7 +454,7 @@ class ComplianceService:
 
                 # Create a separate Blacklist record for each firewall
                 import re
-                from datetime import datetime, timedelta, timezone
+                from datetime import datetime, timedelta
 
                 match = re.match(r'^(\d+)([dhm])$', block_time.lower())
                 td = timedelta(days=30)
@@ -472,7 +476,7 @@ class ComplianceService:
                         mac_address_normalized=mac_norm,
                         reason=f"Auto-blocked: non-compliant (source={arp_source_tag})",
                         blocked_by="system",
-                        expires_at=datetime.now(timezone.utc) + td,
+                        expires_at=datetime.now(UTC) + td,
                         source_tag=arp_source_tag,
                         firewall_tag=fw_tag,
                         is_auto_blocked=True,
@@ -494,10 +498,8 @@ class ComplianceService:
         # Close all pre-resolved SangforService instances
         for svc in sangfor_services.values():
             if svc:
-                try:
+                with contextlib.suppress(Exception):
                     await svc.close()
-                except Exception:
-                    pass
 
         if not dry_run and blocked > 0:
             # Audit log for auto-block (before commit so it's persisted in the same transaction)
@@ -535,7 +537,7 @@ class ComplianceService:
         stmt = (
             select(Blacklist)
             .where(
-                (Blacklist.auto_unblocked == False)
+                Blacklist.auto_unblocked == False
             )
         )
         result = await self.db.execute(stmt)
@@ -720,9 +722,8 @@ class ComplianceService:
             elif entry.get("ip_pattern"):
                 if ip_match:
                     return {"match_type": "ip", "comments": entry.get("comments")}
-            elif entry.get("mac_address"):
-                if mac_match:
-                    return {"match_type": "mac", "comments": entry.get("comments")}
+            elif entry.get("mac_address") and mac_match:
+                return {"match_type": "mac", "comments": entry.get("comments")}
 
         return None
 
@@ -779,7 +780,7 @@ class ComplianceService:
         """Match IP+MAC against in-memory IPGuard data from all sources"""
         normalized_mac = mac_address.upper().replace(":", "-")
 
-        for source_tag, entries in ipguard_data.items():
+        for _source_tag, entries in ipguard_data.items():
             for entry in entries:
                 entry_mac = entry.get("mac_address", "").upper().replace(":", "-")
                 if entry.get("ip_address") == ip_address and entry_mac == normalized_mac:
@@ -885,8 +886,8 @@ class ComplianceService:
                 logger.warning(f"Firewall '{firewall_tag}' not found or disabled")
                 return False
 
-            from app.services.sangfor_service import SangforService
             from app.core.crypto import decrypt_config
+            from app.services.sangfor_service import SangforService
             config = fw_source.config
             if config:
                 config = decrypt_config(config)
@@ -921,8 +922,8 @@ class ComplianceService:
                 logger.warning(f"Firewall '{firewall_tag}' not found or disabled")
                 return False
 
-            from app.services.sangfor_service import SangforService
             from app.core.crypto import decrypt_config
+            from app.services.sangfor_service import SangforService
             config = fw_source.config
             if config:
                 config = decrypt_config(config)
@@ -1106,7 +1107,7 @@ class ComplianceService:
                                 terminal.comments = block_comment
                             # Create Blacklist record for each firewall with expires_at
                             import re
-                            from datetime import datetime, timedelta, timezone
+                            from datetime import datetime, timedelta
                             block_time = await self._get_block_time()
                             match = re.match(r'^(\d+)([dhm])$', block_time.lower())
                             td = timedelta(days=30)
@@ -1127,7 +1128,7 @@ class ComplianceService:
                                     mac_address_normalized=mac_norm,
                                     reason="Auto-blocked: non-compliant (compliance recalculation)",
                                     blocked_by="system",
-                                    expires_at=datetime.now(timezone.utc) + td,
+                                    expires_at=datetime.now(UTC) + td,
                                     source_tag=terminal.source_tag,
                                     firewall_tag=fw_tag,
                                     is_auto_blocked=True,

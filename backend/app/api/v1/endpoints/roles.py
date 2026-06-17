@@ -1,14 +1,18 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
 
 from app.core.database import get_db
-from app.core.security import get_current_user, require_permission, invalidate_user_permissions, get_client_ip
+from app.core.security import get_client_ip, invalidate_user_permissions, require_permission
+from app.models.role import Permission, Role, RolePermission, UserRole
 from app.models.user import User
-from app.models.role import Role, Permission, UserRole, RolePermission
 from app.schemas.role import (
-    RoleResponse, RoleDetailResponse, RoleCreate, RoleUpdate,
-    PermissionResponse, UserRoleUpdate, RoleUserResponse,
+    PermissionResponse,
+    RoleCreate,
+    RoleDetailResponse,
+    RoleUpdate,
+    RoleUserResponse,
+    UserRoleUpdate,
 )
 from app.schemas.terminal import ResponseMessage
 

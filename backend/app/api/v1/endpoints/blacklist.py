@@ -1,16 +1,10 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.security import require_permission
 from app.models.user import User
-from app.schemas.terminal import (
-    BlacklistCreate,
-    BlacklistResponse,
-    BlacklistQuery,
-    PaginatedResponse,
-    ResponseMessage
-)
+from app.schemas.terminal import BlacklistCreate, BlacklistQuery, BlacklistResponse, PaginatedResponse, ResponseMessage
 from app.services.terminal_service import TerminalService
 
 router = APIRouter(prefix="/blacklist", tags=["Blacklist"])

@@ -1,5 +1,4 @@
 """Tests for whitelist management"""
-import pytest
 
 
 class TestWhitelistModel:

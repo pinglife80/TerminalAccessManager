@@ -1,37 +1,44 @@
-from datetime import timedelta, datetime, timezone
-from fastapi import APIRouter, Body, Depends, HTTPException, status, Request
-from fastapi.security import OAuth2PasswordRequestForm, OAuth2PasswordBearer
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
-from jose import JWTError, jwt
+from datetime import UTC, datetime
 
+from fastapi import APIRouter, Body, Depends, HTTPException, Request, status
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from jose import JWTError, jwt
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.config import settings
 from app.core.database import get_db
 from app.core.security import (
-    authenticate_user,
-    verify_password,
+    add_token_to_blacklist,
+    check_captcha_required,
+    check_login_attempts,
     create_access_token_async,
     create_refresh_token_async,
-    hash_password,
-    get_current_user,
-    add_token_to_blacklist,
-    is_token_blacklisted,
-    check_login_attempts,
-    check_captcha_required,
-    record_failed_login,
-    reset_login_attempts,
     generate_captcha,
-    verify_captcha,
-    require_permission,
-    invalidate_user_permissions,
-    get_user_permissions,
     get_client_ip,
+    get_current_user,
+    get_user_permissions,
+    hash_password,
+    invalidate_user_permissions,
+    is_token_blacklisted,
+    record_failed_login,
+    require_permission,
+    reset_login_attempts,
+    verify_captcha,
+    verify_password,
 )
-from app.core.config import settings
+from app.models.role import Permission, Role, UserRole
 from app.models.user import User
-from app.models.role import Role, UserRole, RolePermission, Permission
 from app.schemas.auth import (
-    Token, UserCreate, UserResponse, UserDetailResponse,
-    UserUpdate, AdminUserCreate, PasswordChange, AdminPasswordReset, ProfileUpdate,
+    AdminPasswordReset,
+    AdminUserCreate,
+    PasswordChange,
+    ProfileUpdate,
+    Token,
+    UserCreate,
+    UserDetailResponse,
+    UserResponse,
+    UserUpdate,
 )
 from app.schemas.terminal import ResponseMessage
 
@@ -121,6 +128,7 @@ async def login(
 
     # Step 1: Check if user exists
     from sqlalchemy import select
+
     from app.models.user import User as UserModel
     result = await db.execute(select(UserModel).where(UserModel.username == username))
     user = result.scalar_one_or_none()
@@ -381,7 +389,7 @@ async def refresh_token(
 
         # Blacklist old refresh token
         if jti:
-            exp = datetime.fromtimestamp(payload.get("exp", 0), tz=timezone.utc)
+            exp = datetime.fromtimestamp(payload.get("exp", 0), tz=UTC)
             await add_token_to_blacklist(jti, exp)
 
         # Audit log for token refresh
@@ -419,7 +427,7 @@ async def logout(
         exp = payload.get("exp")
 
         if jti and exp:
-            exp_dt = datetime.fromtimestamp(exp, tz=timezone.utc)
+            exp_dt = datetime.fromtimestamp(exp, tz=UTC)
             await add_token_to_blacklist(jti, exp_dt)
     except Exception:
         pass  # Even if token parsing fails, return success

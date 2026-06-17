@@ -8,9 +8,10 @@ Centralized logging configuration for TerminalAccessManager.
 - Request-ID auto-injection via format function + ContextVar
 - Timezone controlled by TZ config / environment variable
 """
+import logging
 import os
 import sys
-import logging
+
 from loguru import logger
 
 from app.core.config import settings

@@ -1,16 +1,17 @@
-from pydantic import BaseModel, Field, field_validator
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
+
+from pydantic import BaseModel, Field, field_validator
 
 
-class ConfigValueType(str, Enum):
+class ConfigValueType(StrEnum):
     STRING = "string"
     INT = "int"
     BOOL = "bool"
     JSON = "json"
 
 
-class ConfigCategory(str, Enum):
+class ConfigCategory(StrEnum):
     SECURITY = "security"
     RATE_LIMIT = "rate_limit"
     AUTH = "auth"

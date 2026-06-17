@@ -1,16 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException, Request, status, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.security import require_permission, get_client_ip
-from app.models.user import User
+from app.core.security import get_client_ip, require_permission
 from app.models.terminal import Terminal
-from app.schemas.terminal import (
-    TerminalResponse,
-    TerminalQuery,
-    PaginatedResponse,
-    ResponseMessage
-)
+from app.models.user import User
+from app.schemas.terminal import PaginatedResponse, ResponseMessage, TerminalQuery, TerminalResponse
 from app.services.terminal_service import TerminalService
 
 router = APIRouter(prefix="/terminals", tags=["Terminals"])

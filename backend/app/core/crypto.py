@@ -8,12 +8,12 @@ ENCRYPTION_KEY must be set in environment variables for production.
 If ENCRYPTION_KEY is not set, SECRET_KEY is used as fallback (development only).
 """
 
-from cryptography.fernet import Fernet
 import base64
-import os
 import hashlib
-from loguru import logger
 from typing import Any
+
+from cryptography.fernet import Fernet
+from loguru import logger
 
 from app.core.config import settings
 

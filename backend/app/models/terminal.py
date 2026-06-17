@@ -1,11 +1,12 @@
 import enum
-from sqlalchemy import Column, Integer, String, DateTime, Text, Index, Enum, UniqueConstraint
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+
+from sqlalchemy import Column, DateTime, Index, Integer, String, Text, UniqueConstraint
 
 from app.core.database import Base
 
 
-class TerminalStatus(str, enum.Enum):
+class TerminalStatus(enum.StrEnum):
     """Terminal status enum - represents firewall block state only.
 
     Compliance state is tracked separately via compliance_status field.
@@ -27,7 +28,7 @@ class Terminal(Base):
         String(20), default=TerminalStatus.UNBLOCKED.value, index=True
     )  # blocked, unblocked
     comments = Column(Text, nullable=True)
-    timestamp = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True)
+    timestamp = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True)
     source = Column(String(50), default="arp")  # arp, ipguard, whitelist, manual
     source_tag = Column(String(50), nullable=True, index=True)  # Data source tag
     compliance_status = Column(String(20), default="unknown", index=True)  # compliant / bypass / non_compliant / unknown

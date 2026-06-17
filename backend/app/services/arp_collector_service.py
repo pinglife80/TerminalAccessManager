@@ -5,16 +5,17 @@ Collects ARP data from switches via SSH or API,
 processes entries, and triggers compliance checks.
 """
 
-import re
 import asyncio
+import re
+from datetime import UTC
 from typing import Any
 
+from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from loguru import logger
 
-from app.models.terminal import Terminal, TerminalStatus
 from app.models.data_source import DataSource
+from app.models.terminal import Terminal, TerminalStatus
 from app.schemas.data_source import SyncResult
 
 
@@ -299,8 +300,8 @@ class ArpCollectorService:
 
                 if existing:
                     # Update timestamp and source_tag
-                    from datetime import datetime, timezone
-                    existing.timestamp = datetime.now(timezone.utc)
+                    from datetime import datetime
+                    existing.timestamp = datetime.now(UTC)
                     existing.source_tag = source_tag
                     existing.source = "arp"
                     # Reset compliance_status to "unknown" so the next

@@ -1,10 +1,11 @@
 """Global exception handler middleware for consistent error responses"""
 import uuid
+
 from fastapi import Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from starlette.exceptions import HTTPException as StarletteHTTPException
 from loguru import logger
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 
 async def http_exception_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:

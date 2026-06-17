@@ -1,14 +1,15 @@
-from fastapi import APIRouter, Depends, Query, Response, Request
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc, and_, or_
 import csv
 from io import StringIO
 
+from fastapi import APIRouter, Depends, Query, Request, Response
+from sqlalchemy import and_, desc, or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.core.database import get_db
-from app.core.security import get_current_user, require_permission, get_client_ip
-from app.models.user import User
+from app.core.security import get_client_ip, require_permission
 from app.models.log import AuditLog
-from app.schemas.terminal import AuditLogResponse, AuditLogQuery, PaginatedResponse, CursorPaginatedResponse
+from app.models.user import User
+from app.schemas.terminal import AuditLogQuery, AuditLogResponse, CursorPaginatedResponse
 from app.services.terminal_service import TerminalService, _parse_date_range
 
 router = APIRouter(prefix="/logs", tags=["Audit Logs"])

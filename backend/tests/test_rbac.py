@@ -1,7 +1,9 @@
 """Tests for RBAC permission system — get_user_permissions, invalidate_user_permissions, require_permission"""
-import pytest
 import json
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
 from app.core.security import (
     get_user_permissions,
     invalidate_user_permissions,
@@ -48,7 +50,6 @@ class TestGetUserPermissions:
     @pytest.mark.asyncio
     async def test_cache_miss_empty_permissions(self, mock_redis_patch):
         """Should handle user with no permissions"""
-        mock_redis = mock_redis_patch
         mock_db = AsyncMock()
 
         mock_result = MagicMock()

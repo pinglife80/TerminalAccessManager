@@ -1,19 +1,17 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.security import get_current_user, require_permission, get_client_ip
-from app.models.user import User
+from app.core.security import get_client_ip, require_permission
 from app.models.compliance_baseline import ComplianceBaseline
+from app.models.user import User
 from app.schemas.compliance_baseline import (
     ComplianceBaselineCreate,
-    ComplianceBaselineUpdate,
     ComplianceBaselineResponse,
+    ComplianceBaselineUpdate,
 )
-from app.schemas.data_source import ConnectionTestResult, SyncResult, DeletePreviewResponse, DeletePreviewAffected
+from app.schemas.data_source import ConnectionTestResult, DeletePreviewAffected, DeletePreviewResponse, SyncResult
 from app.services.compliance_service import ComplianceService
-from sqlalchemy import func
-
 
 router = APIRouter(prefix="/compliance-baselines", tags=["Compliance Baselines"])
 
@@ -155,7 +153,6 @@ async def preview_delete_baseline(
 
     # Count terminals with compliance_status determined by this baseline
     from app.models.terminal import Terminal
-    from app.models.data_source import DataSourceBinding
 
     # Count terminals with non-unknown compliance status
     terminal_stmt = select(Terminal).where(Terminal.compliance_status.in_(["compliant", "non_compliant"]))

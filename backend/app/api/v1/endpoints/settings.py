@@ -1,15 +1,17 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File, Request
-from sqlalchemy.ext.asyncio import AsyncSession
 import os
 import uuid
-import shutil
+
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.security import require_permission, get_client_ip
+from app.core.security import get_client_ip, require_permission
 from app.models.user import User
 from app.schemas.system_config import (
-    SystemConfigResponse, SystemConfigUpdate, ConfigUpdateResult,
-    AllConfigsResponse, ConfigCategory,
+    AllConfigsResponse,
+    ConfigUpdateResult,
+    SystemConfigResponse,
+    SystemConfigUpdate,
 )
 from app.services.config_service import ConfigService
 

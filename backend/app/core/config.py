@@ -1,6 +1,6 @@
-from pydantic_settings import BaseSettings
-import os
 import sys
+
+from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
@@ -90,8 +90,8 @@ _INSECURE_DEFAULTS = [
 
 if settings.ENVIRONMENT == "production":
     if settings.SECRET_KEY in _INSECURE_DEFAULTS:
-        print(f"ERROR: SECRET_KEY is set to an insecure default value. "
-              f"Generate a strong key with: python3 -c \"import secrets; print(secrets.token_urlsafe(32))\"",
+        print("ERROR: SECRET_KEY is set to an insecure default value. "
+              "Generate a strong key with: python3 -c \"import secrets; print(secrets.token_urlsafe(32))\"",
               file=sys.stderr)
         sys.exit(1)
 
@@ -103,15 +103,15 @@ if settings.ENVIRONMENT == "production":
         sys.exit(1)
 
     if not settings.ENCRYPTION_KEY:
-        print(f"ERROR: ENCRYPTION_KEY is not set in production environment. "
-              f"ENCRYPTION_KEY must be set separately from SECRET_KEY for field-level encryption. "
-              f"Generate a strong key with: python3 -c \"import secrets; print(secrets.token_urlsafe(32))\"",
+        print("ERROR: ENCRYPTION_KEY is not set in production environment. "
+              "ENCRYPTION_KEY must be set separately from SECRET_KEY for field-level encryption. "
+              "Generate a strong key with: python3 -c \"import secrets; print(secrets.token_urlsafe(32))\"",
               file=sys.stderr)
         sys.exit(1)
 
     if settings.ENCRYPTION_KEY == settings.SECRET_KEY:
-        print(f"ERROR: ENCRYPTION_KEY must be different from SECRET_KEY in production. "
-              f"Using the same key for both JWT signing and field encryption violates key separation principle.",
+        print("ERROR: ENCRYPTION_KEY must be different from SECRET_KEY in production. "
+              "Using the same key for both JWT signing and field encryption violates key separation principle.",
               file=sys.stderr)
         sys.exit(1)
 

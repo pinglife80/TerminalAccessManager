@@ -1,6 +1,17 @@
 from fastapi import APIRouter
 
-from app.api.v1.endpoints import auth, terminals, whitelist, logs, blacklist, stats, settings, data_sources, compliance_baselines, roles
+from app.api.v1.endpoints import (
+    auth,
+    blacklist,
+    compliance_baselines,
+    data_sources,
+    logs,
+    roles,
+    settings,
+    stats,
+    terminals,
+    whitelist,
+)
 
 api_router = APIRouter()
 

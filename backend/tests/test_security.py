@@ -1,18 +1,18 @@
 """Tests for security module — Redis fail-closed/fail-open and token management"""
+from datetime import UTC
+from unittest.mock import patch
+
 import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
+
 from app.core.security import (
-    is_token_blacklisted,
+    check_captcha_required,
+    check_login_attempts,
     get_token_version,
     increment_token_version,
-    check_login_attempts,
-    check_captcha_required,
+    is_token_blacklisted,
     record_failed_login,
     reset_login_attempts,
     verify_captcha,
-    get_user_permissions,
-    invalidate_user_permissions,
-    require_permission,
 )
 from app.services.terminal_service import _escape_like, _normalize_mac
 
@@ -127,15 +127,15 @@ class TestRedisNormalOperation:
     @pytest.mark.asyncio
     async def test_token_blacklist_flow(self, mock_redis_patch):
         """Test adding and checking token blacklist"""
-        mock_redis = mock_redis_patch
         # Token not blacklisted initially
         result = await is_token_blacklisted("test-jti")
         assert result is False
 
         # Add to blacklist
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timedelta
+
         from app.core.security import add_token_to_blacklist
-        exp = datetime.now(timezone.utc) + timedelta(hours=1)
+        exp = datetime.now(UTC) + timedelta(hours=1)
         await add_token_to_blacklist("test-jti", exp)
 
         # Now should be blacklisted
