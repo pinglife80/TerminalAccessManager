@@ -61,9 +61,9 @@ async def add_to_whitelist(
         )
 
 
-@router.delete("/{identifier}", response_model=ResponseMessage)
+@router.delete("/", response_model=ResponseMessage)
 async def delete_from_whitelist(
-    identifier: str,
+    identifier: str = Query(..., description="MAC address or IP pattern to remove"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_permission("whitelist:write"))
 ):
