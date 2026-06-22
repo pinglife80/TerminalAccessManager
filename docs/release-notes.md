@@ -1,10 +1,65 @@
 # 版本跟踪记录
 
-> 文档版本：v3.3.0 | 更新日期：2026-06-17
+> 文档版本：v3.4.0 | 更新日期：2026-06-22
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
+
+---
+
+## [v3.4.0] - 2026-06-22
+
+### 功能增强 + Bug 修复
+
+#### 系统版本与环境展示
+- 前端页脚显示系统版本号（从 /health API 获取）
+- Dashboard System Status 页面显示版本号和部署模式
+- 新增 `/health` API 返回版本和环境信息
+- Nginx 配置添加 /health 路径代理
+
+#### 角色权限国际化
+- 5 个内置角色名称和描述三语言翻译（中文/英文/日语）
+- 29 个权限码名称和描述三语言翻译
+- 修复 roles.permissions 键命名冲突（表头 vs 权限对象）
+- i18n 配置禁用 nsSeparator 支持权限代码中的冒号
+
+#### 多环境配置分离
+- docker-compose.yml 支持双层 env_file（.env + .env.{ENVIRONMENT}）
+- 开发环境配置模板 .env.dev
+- 生产环境配置模板 .env.prod
+- Nginx 镜像版本锁定为 1.27-alpine
+
+#### Bug 修复
+- 白名单删除 404 错误：修复删除端点路由匹配问题
+- 白名单删除 MAC 匹配错误：使用 mac_address_normalized 字段查询
+- 超管角色初始化错误：修复 admin 用户未正确关联 superadmin 角色
+
+### 变更文件
+
+- `manage.sh` — VERSION 3.3.1 → 3.4.0
+- `frontend/package.json` — version 3.3.1 → 3.4.0
+- `backend/app/core/config.py` — VERSION 3.3.1 → 3.4.0
+- `.env.example` — VERSION 3.3.1 → 3.4.0
+- `.env.dev` — 新增开发环境配置模板
+- `.env.prod` — 新增生产环境配置模板
+- `frontend/Dockerfile.dev` — 新增开发环境 Dockerfile
+- `docker-compose.yml` — 添加双层 env_file 配置、锁定 nginx 版本
+- `nginx/etc/conf.d/tam.conf` — 添加 /health 路径代理
+- `frontend/src/store/branding.ts` — 添加系统版本和环境状态
+- `frontend/src/pages/Dashboard.tsx` — System Status 页面显示版本信息
+- `frontend/src/components/Layout.tsx` — 页脚显示版本号
+- `frontend/src/i18n/index.ts` — 添加 nsSeparator: false
+- `frontend/src/i18n/locales/en.ts` — 角色权限翻译
+- `frontend/src/i18n/locales/zh.ts` — 角色权限翻译
+- `frontend/src/i18n/locales/ja.ts` — 角色权限翻译
+- `frontend/src/pages/Roles.tsx` — 权限列标题翻译键修正
+- `backend/cli.py` — 修复 admin 用户角色关联
+- `backend/app/services/terminal_service.py` — 修复白名单删除逻辑
+- `backend/app/api/v1/endpoints/whitelist.py` — 修复删除端点
+- `docs/changelog.md` — 追加 [3.4.0] 条目
+- `docs/release-notes.md` — 追加 [v3.4.0] 条目
+- `docs/release-plan.md` — 更新为 v3.4.0 内容
 
 ---
 

@@ -1,0 +1,38 @@
+- [ ] api.md: `"status": "unfrozen"` changed to `"status": "unblocked"` in example response
+- [ ] api.md: Rate limit defaults updated from 60/5 to 120/10 in settings response example
+- [ ] api.md: `mac_address` query parameter added to `POST /terminals/unblock/{ip_address}` endpoint documentation
+- [ ] api.md: Deprecation notice added to `POST /blacklist/` section (5.2)
+- [ ] api.md: New section added for `POST /data-sources/{id}/disable-preview` endpoint
+- [ ] api.md: Version header updated to v3.2.0-r11 with date 2026-06-16
+- [ ] RBAC.md: `blacklist:write` description changed from "添加/解封" to "解封"
+- [ ] RBAC.md: Deprecation note added to `POST /blacklist/` endpoint mapping
+- [ ] RBAC.md: Delete-preview endpoint permission mappings added (3 entries with `datasource:read`)
+- [ ] RBAC.md: Disable-preview endpoint permission mapping added (`datasource:read`)
+- [ ] RBAC.md: Blacklist page "封禁终端" changed to "解封终端"
+- [ ] RBAC.md: Version header updated to v3.2.0-r11 with date 2026-06-16
+- [ ] datasource-lifecycle.md: 7 new API endpoint entries added to section 13 tables
+- [ ] datasource-lifecycle.md: `datasource:delete` changed to `datasource:write` (2 places)
+- [ ] datasource-lifecycle.md: `baseline:delete` changed to `baseline:write` (1 place)
+- [ ] datasource-lifecycle.md: Version header updated to v3.2.0-r11 with date 2026-06-16
+- [ ] architecture.md: Block action for `unknown + unblocked` state changed to "—" (disabled)
+- [ ] architecture.md: Version header updated to v3.2.0-r11 with date 2026-06-16
+- [ ] backend.md: `mac_address` parameter added to `unblock_ip()` function signature
+- [ ] backend.md: Rate limit defaults updated from 60/5 to 120/10 (2 places: env vars table and settings table)
+- [ ] backend.md: Version header updated to v3.2.0-r11 with date 2026-06-16
+- [ ] branding.md: SVG removed from file format recommendations table
+- [ ] branding.md: XSS risk note added for SVG uploads
+- [ ] branding.md: Version header updated from v3.2.0-r8 to v3.2.0-r11 with date 2026-06-16
+- [ ] implementation.md: "添加黑名单条目" description line removed from blacklist section
+- [ ] implementation.md: `POST /api/v1/blacklist/` integration point removed
+- [ ] implementation.md: Version header updated to v3.2.0-r11 with date 2026-06-16
+- [ ] production-readiness-assessment.md: logging-guide.md and git-workflow-guide.md added to document inventory table
+- [ ] production-readiness-assessment.md: Version alignment fixed in document inventory table
+- [ ] production-readiness-assessment.md: `.env VERSION=2.0.0` changed to `VERSION=3.2.0`
+- [ ] production-readiness-assessment.md: Version header updated to v3.2.0-r11 with date 2026-06-16
+- [ ] deployment.md: Version header updated from v3.2.0-r8 to v3.2.0-r11 with date 2026-06-16
+- [ ] manage-sh-reference.md: Version header updated from v3.2.0-r8 to v3.2.0-r11 with date 2026-06-16
+- [ ] logging-guide.md: Version header updated from v3.2.0-r8 to v3.2.0-r11 with date 2026-06-16
+- [ ] git-workflow-guide.md: Version header updated from v1.0 to v3.2.0-r11 with date 2026-06-16
+- [ ] database.md: Version header updated from v3.2.0-r10 to v3.2.0-r11 with date 2026-06-16
+- [ ] changelog.md: Version header present and updated to v3.2.0-r11 if applicable
+- [ ] release-notes.md: v3.2.0-r11 section added with disable-preview and doc consistency entries

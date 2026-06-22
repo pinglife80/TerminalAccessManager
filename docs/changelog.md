@@ -1,6 +1,6 @@
 # 更新日志
 
-> 文档版本：v3.3.0  更新日期：2026-06-17
+> 文档版本：v3.4.0  更新日期：2026-06-22
 
 本文件记录 TerminalAccessManager 的所有重要变更。
 
@@ -10,6 +10,24 @@
 ---
 
 ## [Unreleased]
+
+---
+
+## [3.4.0] - 2026-06-22
+
+### 新增
+
+- 系统版本和环境信息展示：前端页脚和 Dashboard System Status 页面显示版本号和部署模式
+- 角色权限 i18n 完整实现：5个内置角色和29个权限的三语言翻译（中文/英文/日语）
+- 多环境配置分离：支持双层 env_file（.env + .env.{ENVIRONMENT}），开发/生产环境独立配置
+- Nginx 镜像版本锁定：docker-compose.yml 锁定 nginx:1.27-alpine
+
+### 修复
+
+- 白名单删除 404 错误：修复删除端点路由匹配问题，支持 MAC-only、IP-only、复合条目删除
+- 白名单删除 MAC 匹配错误：使用 mac_address_normalized 字段查询，确保标准化格式匹配
+- 超管角色初始化错误：修复系统初始化时 admin 用户未正确关联 superadmin 角色的问题
+- 权限列 i18n 命名冲突：修复 roles.permissions 键同时定义为字符串和对象的问题
 
 ---
 

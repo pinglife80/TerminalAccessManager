@@ -42,13 +42,13 @@ export const downloadCSV = (headers: string[], rows: (string | number | boolean 
       return String(cell);
     })
   );
-  
+
   const csvContent = [headers.join(','), ...escapedRows.map((row) => row.join(','))].join('\n');
-  
+
   const blob = new Blob([`\uFEFF${csvContent}`], { type: 'text/csv;charset=utf-8;' });
   const url = window.URL.createObjectURL(blob);
   const link = document.createElement('a');
-  
+
   link.href = url;
   link.download = `${filename}-${new Date().toISOString().split('T')[0]}.csv`;
   document.body.appendChild(link);

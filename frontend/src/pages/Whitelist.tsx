@@ -161,7 +161,7 @@ const Whitelist: React.FC = () => {
 
     setIsDeleting(true);
     try {
-      await apiClient.delete(`${API_ENDPOINTS.WHITELIST}${identifier}`);
+      await apiClient.delete(`${API_ENDPOINTS.WHITELIST}?identifier=${encodeURIComponent(identifier)}`);
       toast.success(t('whitelist.removedSuccessfully'));
       refetch();
     } catch (error: unknown) {
