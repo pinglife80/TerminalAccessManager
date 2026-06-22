@@ -807,8 +807,8 @@ class TerminalService:
                 result = await self.db.execute(stmt)
                 whitelist_entry = result.scalar_one_or_none()
             elif len(cleaned_identifier) == 12 and cleaned_identifier.isalnum():
-                normalized_mac = self._normalize_mac(identifier)
-                stmt = select(Whitelist).where(Whitelist.mac_address == normalized_mac)
+                normalized_mac = _normalize_mac(identifier)
+                stmt = select(Whitelist).where(Whitelist.mac_address_normalized == normalized_mac)
                 result = await self.db.execute(stmt)
                 whitelist_entry = result.scalar_one_or_none()
             else:
@@ -817,9 +817,9 @@ class TerminalService:
                 whitelist_entry = result.scalar_one_or_none()
 
             if not whitelist_entry and '.' not in identifier and len(cleaned_identifier) == 12 and cleaned_identifier.isalnum():
-                normalized_mac = self._normalize_mac(identifier)
+                normalized_mac = _normalize_mac(identifier)
                 stmt = select(Whitelist).where(
-                    (Whitelist.mac_address == normalized_mac) &
+                    (Whitelist.mac_address_normalized == normalized_mac) &
                     (Whitelist.ip_pattern.is_not(None))
                 )
                 result = await self.db.execute(stmt)
@@ -828,7 +828,7 @@ class TerminalService:
             if not whitelist_entry:
                 stmt = select(Whitelist).where(
                     (Whitelist.ip_pattern == identifier) &
-                    (Whitelist.mac_address.is_not(None))
+                    (Whitelist.mac_address_normalized.is_not(None))
                 )
                 result = await self.db.execute(stmt)
                 whitelist_entry = result.scalar_one_or_none()

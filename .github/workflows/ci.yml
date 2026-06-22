@@ -57,8 +57,22 @@ jobs:
     needs: [backend-lint, backend-test]
     steps:
       - uses: actions/checkout@v4
-      - name: Build Docker image
-        run: docker build -t tam-backend:ci ./backend
+      - name: Build Docker image with retries
+        run: |
+          max_attempts=3
+          for attempt in $(seq 1 $max_attempts); do
+            echo "Attempt $attempt of $max_attempts..."
+            if docker build -t tam-backend:ci ./backend; then
+              echo "Build successful"
+              exit 0
+            fi
+            if [ $attempt -lt $max_attempts ]; then
+              echo "Build failed, waiting 30 seconds before retry..."
+              sleep 30
+            fi
+          done
+          echo "Build failed after $max_attempts attempts"
+          exit 1
 
   # ==================== Frontend Jobs ====================
   frontend-lint:
@@ -103,5 +117,19 @@ jobs:
     needs: [frontend-lint, frontend-test]
     steps:
       - uses: actions/checkout@v4
-      - name: Build Docker image
-        run: docker build -t tam-frontend:ci ./frontend
+      - name: Build Docker image with retries
+        run: |
+          max_attempts=3
+          for attempt in $(seq 1 $max_attempts); do
+            echo "Attempt $attempt of $max_attempts..."
+            if docker build -t tam-frontend:ci ./frontend; then
+              echo "Build successful"
+              exit 0
+            fi
+            if [ $attempt -lt $max_attempts ]; then
+              echo "Build failed, waiting 30 seconds before retry..."
+              sleep 30
+            fi
+          done
+          echo "Build failed after $max_attempts attempts"
+          exit 1

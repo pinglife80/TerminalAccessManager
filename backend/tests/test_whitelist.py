@@ -78,13 +78,13 @@ class TestWhitelistDeletion:
         )
         db_session.add(mac_entry)
         await db_session.commit()
-        
+
         # Delete by MAC
         service = TerminalService(db_session)
         result = await service.delete_from_whitelist("AA:BB:CC:DD:EE:FF", "test_user")
-        
+
         assert result is True
-        
+
         # Verify entry is deleted
         stmt = Whitelist.__table__.select().where(Whitelist.mac_address == "AABBCCDDEEFF")
         result = await db_session.execute(stmt)
@@ -102,13 +102,13 @@ class TestWhitelistDeletion:
         )
         db_session.add(ip_entry)
         await db_session.commit()
-        
+
         # Delete by IP
         service = TerminalService(db_session)
         result = await service.delete_from_whitelist("192.168.1.100", "test_user")
-        
+
         assert result is True
-        
+
         # Verify entry is deleted
         stmt = Whitelist.__table__.select().where(Whitelist.ip_pattern == "192.168.1.100")
         result = await db_session.execute(stmt)
@@ -126,13 +126,13 @@ class TestWhitelistDeletion:
         )
         db_session.add(cidr_entry)
         await db_session.commit()
-        
+
         # Delete by CIDR
         service = TerminalService(db_session)
         result = await service.delete_from_whitelist("10.8.31.0/24", "test_user")
-        
+
         assert result is True
-        
+
         # Verify entry is deleted
         stmt = Whitelist.__table__.select().where(Whitelist.ip_pattern == "10.8.31.0/24")
         result = await db_session.execute(stmt)
@@ -152,13 +152,13 @@ class TestWhitelistDeletion:
         )
         db_session.add(combined_entry)
         await db_session.commit()
-        
+
         # Delete by MAC
         service = TerminalService(db_session)
         result = await service.delete_from_whitelist("AABBCCDDEEFF", "test_user")
-        
+
         assert result is True
-        
+
         # Verify entry is deleted
         stmt = Whitelist.__table__.select().where(
             (Whitelist.mac_address == "AABBCCDDEEFF") &
@@ -181,13 +181,13 @@ class TestWhitelistDeletion:
         )
         db_session.add(combined_entry)
         await db_session.commit()
-        
+
         # Delete by IP
         service = TerminalService(db_session)
         result = await service.delete_from_whitelist("192.168.1.200", "test_user")
-        
+
         assert result is True
-        
+
         # Verify entry is deleted
         stmt = Whitelist.__table__.select().where(
             (Whitelist.mac_address == "AABBCCDDEEFF") &
@@ -201,5 +201,5 @@ class TestWhitelistDeletion:
         """Test deleting a non-existent entry returns False"""
         service = TerminalService(db_session)
         result = await service.delete_from_whitelist("00:11:22:33:44:55", "test_user")
-        
+
         assert result is False
