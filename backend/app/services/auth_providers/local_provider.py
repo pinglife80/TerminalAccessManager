@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import verify_password
 from app.models.user import User
-from app.services.auth_providers.base import AuthCredentials, AuthProviderBase, AuthProviderType, AuthResult
+from app.services.auth_providers.base import AuthProviderBase, AuthProviderType, AuthResult
 
 
 class LocalProvider(AuthProviderBase):

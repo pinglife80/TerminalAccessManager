@@ -9,7 +9,12 @@ import random
 from loguru import logger
 
 try:
-    from app.services.email_service import invalidate_email_codes, send_email_code, verify_email_code, generate_verification_code
+    from app.services.email_service import (
+        generate_verification_code,
+        invalidate_email_codes,
+        send_email_code,
+        verify_email_code,
+    )
     EMAIL_SERVICE_AVAILABLE = True
 except ImportError:
     invalidate_email_codes = None

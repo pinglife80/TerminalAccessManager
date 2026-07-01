@@ -8,7 +8,7 @@ import re
 import ssl
 from typing import Any
 
-from app.services.auth_providers.base import AuthCredentials, AuthProviderBase, AuthProviderType, AuthResult
+from app.services.auth_providers.base import AuthProviderBase, AuthProviderType, AuthResult
 
 try:
     import ldap3

@@ -4,7 +4,6 @@ Feishu (飞书) Notification Channel for TerminalAccessManager.
 Sends notifications via Feishu webhook robot.
 """
 
-from datetime import datetime
 from typing import Any
 
 import httpx

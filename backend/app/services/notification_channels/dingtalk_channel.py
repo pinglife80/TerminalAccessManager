@@ -9,7 +9,6 @@ import hashlib
 import hmac
 import time
 import urllib.parse
-from datetime import datetime
 from typing import Any
 
 import httpx

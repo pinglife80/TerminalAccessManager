@@ -4,7 +4,6 @@ WeCom (企业微信) Notification Channel for TerminalAccessManager.
 Sends notifications via WeCom webhook robot.
 """
 
-from datetime import datetime
 from typing import Any
 
 import httpx
