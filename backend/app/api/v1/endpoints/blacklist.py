@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.security import require_permission
 from app.models.user import User
-from app.schemas.terminal import BlacklistCreate, BlacklistQuery, BlacklistResponse, PaginatedResponse, ResponseMessage
+from app.schemas.terminal import BlacklistCheckItem, BlacklistCheckRequest, BlacklistCreate, BlacklistQuery, BlacklistResponse, PaginatedResponse, ResponseMessage
 from app.services.terminal_service import TerminalService
 
 router = APIRouter(prefix="/blacklist", tags=["Blacklist"])
@@ -39,6 +39,23 @@ async def get_blacklist(
     blacklist = await service.get_blacklist(query=query, skip=skip, limit=limit)
     total = await service.get_blacklist_count(query=query)
     return {"items": blacklist, "total": total, "skip": skip, "limit": limit}
+
+
+@router.post("/check", response_model=list[BlacklistCheckItem])
+async def check_blacklist(
+    request: BlacklistCheckRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permission("blacklist:read"))
+):
+    """Batch-check which MAC/IP addresses are currently active in the blacklist.
+    Returns only matching entries (mac_address, ip_address, firewall_tag).
+    Uses indexed IN() query for efficient bulk lookup."""
+    service = TerminalService(db)
+    results = await service.check_blacklist(
+        mac_addresses=request.mac_addresses,
+        ip_addresses=request.ip_addresses,
+    )
+    return results
 
 
 @router.post("/", status_code=status.HTTP_201_CREATED)

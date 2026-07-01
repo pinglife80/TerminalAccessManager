@@ -46,6 +46,7 @@ export const API_ENDPOINTS = {
   TERMINALS_UNBLOCK: '/terminals/unblock/',
   WHITELIST: '/whitelist/',
   BLACKLIST: '/blacklist/',
+  BLACKLIST_CHECK: '/blacklist/check',
   AUDIT_LOGS: '/logs/',
   AUDIT_LOGS_SEARCH: '/logs/search',
   AUDIT_LOGS_EXPORT: '/logs/export',

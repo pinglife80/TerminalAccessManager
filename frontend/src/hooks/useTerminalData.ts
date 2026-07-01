@@ -187,6 +187,35 @@ export const useBlacklist = (params?: BlacklistSearchParams) => {
 };
 
 // -------------------------------------------------------------------
+// Blacklist batch check - for Terminals page efficient lookup
+// -------------------------------------------------------------------
+export interface BlacklistCheckItem {
+  mac_address: string | null;
+  ip_address: string | null;
+  firewall_tag: string | null;
+}
+
+export interface BlacklistCheckParams {
+  mac_addresses: string[];
+  ip_addresses: string[];
+}
+
+export const useBlacklistCheck = (params: BlacklistCheckParams) => {
+  return useQuery({
+    queryKey: ['blacklist-check', params.mac_addresses, params.ip_addresses],
+    queryFn: async () => {
+      const response = await apiClient.post('/blacklist/check', {
+        mac_addresses: params.mac_addresses,
+        ip_addresses: params.ip_addresses,
+      });
+      return response.data as BlacklistCheckItem[];
+    },
+    enabled: params.mac_addresses.length > 0 || params.ip_addresses.length > 0,
+    placeholderData: keepPreviousData,
+  });
+};
+
+// -------------------------------------------------------------------
 // Audit Logs hooks - server-side filtering with cursor pagination
 // -------------------------------------------------------------------
 export interface AuditLogSearchParams {
@@ -326,6 +355,8 @@ export interface UserItem {
   is_superuser: boolean;
   roles: string[];
   permissions: string[];
+  provider: string;
+  provider_user_id: string | null;
   created_at: string | null;
   updated_at: string | null;
 }
