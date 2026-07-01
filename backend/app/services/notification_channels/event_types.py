@@ -24,6 +24,8 @@ class EventType(StrEnum):
     LOGIN_LOCKED = "security.login_locked"
     PASSWORD_CHANGED = "security.password_changed"
     PASSWORD_RESET = "security.password_reset"
+    PASSWORD_RESET_REQUESTED = "security.password_reset_requested"
+    VERIFICATION_CODE_SENT = "security.verification_code_sent"
     USER_CREATED = "security.user_created"
     USER_DELETED = "security.user_deleted"
     USER_UPDATED = "security.user_updated"
@@ -109,6 +111,18 @@ EVENT_METADATA = {
     EventType.PASSWORD_CHANGED: {
         "name": "密码变更",
         "description": "用户密码已更改",
+        "severity": "info",
+        "category": "security",
+    },
+    EventType.PASSWORD_RESET_REQUESTED: {
+        "name": "密码重置请求",
+        "description": "用户请求重置密码",
+        "severity": "info",
+        "category": "security",
+    },
+    EventType.VERIFICATION_CODE_SENT: {
+        "name": "验证码发送",
+        "description": "验证码已发送给用户",
         "severity": "info",
         "category": "security",
     },

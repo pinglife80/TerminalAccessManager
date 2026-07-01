@@ -11,9 +11,10 @@ import { PrimaryButton } from '@/components/Button';
 interface NotificationChannel {
   id: number;
   name: string;
-  channel_type: string;
+  type: string;
   config: Record<string, unknown>;
   enabled: boolean;
+  events: string[];
   description?: string;
   created_at: string;
   updated_at: string;
@@ -24,6 +25,7 @@ interface ChannelFormData {
   channel_type: string;
   description: string;
   enabled: boolean;
+  events: string[];
   // Email config
   smtp_server: string;
   smtp_port: number;
@@ -56,12 +58,13 @@ const Notifications: React.FC = () => {
   const [testLoading, setTestLoading] = useState<number | null>(null);
   const [eventTypes, setEventTypes] = useState<{ id: string; name: string; description: string }[]>([]);
 
-  const { register, handleSubmit, reset, watch, formState: { errors } } = useForm<ChannelFormData>({
+  const { register, handleSubmit, reset, watch, setValue, formState: { errors } } = useForm<ChannelFormData>({
     defaultValues: {
       name: '',
       channel_type: 'email',
       description: '',
       enabled: true,
+      events: [],
       smtp_server: '',
       smtp_port: 587,
       smtp_username: '',
@@ -122,9 +125,10 @@ const Notifications: React.FC = () => {
 
       const payload = {
         name: data.name,
-        channel_type: data.channel_type,
+        type: data.channel_type,
         description: data.description,
         enabled: data.enabled,
+        events: data.events,
         config,
       };
 
@@ -173,9 +177,10 @@ const Notifications: React.FC = () => {
       setEditingChannel(channel);
       reset({
         name: channel.name,
-        channel_type: channel.channel_type,
+        channel_type: channel.type,
         description: channel.description || '',
         enabled: channel.enabled,
+        events: channel.events || [],
         smtp_server: (channel.config as Record<string, unknown>).smtp_server as string || '',
         smtp_port: ((channel.config as Record<string, unknown>).smtp_port as number) || 587,
         smtp_username: (channel.config as Record<string, unknown>).smtp_username as string || '',
@@ -191,6 +196,15 @@ const Notifications: React.FC = () => {
       reset();
     }
     setShowModal(true);
+  };
+
+  const toggleEvent = (eventId: string) => {
+    const currentEvents = watch('events');
+    if (currentEvents.includes(eventId)) {
+      setValue('events', currentEvents.filter((e) => e !== eventId));
+    } else {
+      setValue('events', [...currentEvents, eventId]);
+    }
   };
 
   const getChannelIcon = (type: string) => {
@@ -243,14 +257,14 @@ const Notifications: React.FC = () => {
               ) : (
                 <div className="space-y-3">
                   {channels.map((channel) => {
-                    const Icon = getChannelIcon(channel.channel_type);
+                    const Icon = getChannelIcon(channel.type);
                     return (
                       <div key={channel.id} className="bg-background rounded-xl p-4 border border-border">
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-4">
                             <div className={`w-10 h-10 rounded-full flex items-center justify-center ${
-                              channel.channel_type === 'email' ? 'bg-blue-100 text-blue-600' :
-                              channel.channel_type === 'webhook' ? 'bg-green-100 text-green-600' :
+                              channel.type === 'email' ? 'bg-blue-100 text-blue-600' :
+                              channel.type === 'webhook' ? 'bg-green-100 text-green-600' :
                               'bg-purple-100 text-purple-600'
                             }`}>
                               <Icon className="h-5 w-5" />
@@ -258,8 +272,11 @@ const Notifications: React.FC = () => {
                             <div>
                               <h3 className="font-semibold text-foreground">{channel.name}</h3>
                               <p className="text-sm text-muted-foreground">
-                                {CHANNEL_TYPES.find(c => c.value === channel.channel_type)?.label}
+                                {CHANNEL_TYPES.find(c => c.value === channel.type)?.label}
                                 {channel.enabled ? '' : ' - '}{channel.enabled ? '' : t('common.disabled')}
+                              </p>
+                              <p className="text-xs text-muted-foreground mt-0.5">
+                                {t('notifications.subscribedEvents', { count: channel.events?.length || 0 })}
                               </p>
                             </div>
                           </div>
@@ -395,6 +412,35 @@ const Notifications: React.FC = () => {
                     <input {...register('enabled')} type="checkbox" className="rounded border-border" />
                     {t('notifications.enabled')}
                   </label>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-muted-foreground mb-2">
+                    {t('notifications.subscribedEvents')}
+                  </label>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2 max-h-60 overflow-y-auto">
+                    {eventTypes.map((event) => (
+                      <label
+                        key={event.id}
+                        className={`flex items-center gap-2 p-2 rounded-lg cursor-pointer border transition-colors ${
+                          watch('events').includes(event.id)
+                            ? 'bg-blue-50 border-blue-200 text-blue-700'
+                            : 'bg-background border-border text-foreground hover:border-blue-200'
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={watch('events').includes(event.id)}
+                          onChange={() => toggleEvent(event.id)}
+                          className="rounded border-border text-blue-600 focus:ring-blue-500"
+                        />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium truncate">{event.name}</p>
+                          <p className="text-xs text-muted-foreground truncate">{event.description}</p>
+                        </div>
+                      </label>
+                    ))}
+                  </div>
                 </div>
 
                 {/* Email Config */}

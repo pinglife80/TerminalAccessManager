@@ -10,6 +10,7 @@ import { logger } from './lib/logger';
 
 // Lazy-loaded pages for code splitting
 const Login = lazy(() => import('./pages/Login'));
+const PasswordReset = lazy(() => import('./pages/PasswordReset'));
 const Dashboard = lazy(() => import('./pages/Dashboard'));
 const Terminals = lazy(() => import('./pages/Terminals'));
 const Whitelist = lazy(() => import('./pages/Whitelist'));
@@ -142,6 +143,15 @@ const App: React.FC = () => {
                 </div>
               }>
                 <Login />
+              </Suspense>
+            } />
+            <Route path="/password-reset" element={
+              <Suspense fallback={
+                <div className="h-screen w-screen flex items-center justify-center bg-background">
+                  <div className="h-8 w-8 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
+                </div>
+              }>
+                <PasswordReset />
               </Suspense>
             } />
             <Route path="/403" element={
