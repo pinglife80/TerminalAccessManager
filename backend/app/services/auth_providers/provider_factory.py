@@ -10,8 +10,14 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.auth_providers.base import AuthProviderBase, AuthProviderType
-from app.services.auth_providers.ldap_provider import LDAPProvider
 from app.services.auth_providers.local_provider import LocalProvider
+
+try:
+    from app.services.auth_providers.ldap_provider import LDAPProvider
+    LDAP_AVAILABLE = True
+except ImportError:
+    LDAPProvider = None
+    LDAP_AVAILABLE = False
 
 
 class AuthProviderFactory:
@@ -25,8 +31,10 @@ class AuthProviderFactory:
 
     _providers: dict[str, type[AuthProviderBase]] = {
         AuthProviderType.LOCAL.value: LocalProvider,
-        AuthProviderType.LDAP.value: LDAPProvider,
     }
+
+    if LDAP_AVAILABLE:
+        _providers[AuthProviderType.LDAP.value] = LDAPProvider
 
     @classmethod
     def register_provider(cls, provider_type: str, provider_class: type[AuthProviderBase]) -> None:
@@ -142,7 +150,10 @@ class AuthProviderFactory:
             Authentication result dictionary
         """
         provider = await cls.create_provider(provider_type, {}, db)
-        auth_result = await provider.authenticate(credentials)
+        auth_result = await provider.authenticate(
+            credentials.get("username", ""),
+            credentials.get("password", ""),
+        )
 
         return {
             "success": auth_result.success,

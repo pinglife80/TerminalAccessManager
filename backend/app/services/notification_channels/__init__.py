@@ -10,7 +10,7 @@ from app.services.notification_channels.base import (
     NotificationEvent,
     NotificationResult,
 )
-from app.services.notification_channels.dingtalk_channel import DingtalkChannel
+from app.services.notification_channels.dingtalk_channel import DingTalkChannel
 from app.services.notification_channels.email_channel import EmailChannel
 from app.services.notification_channels.event_types import (
     CHANNEL_METADATA,
@@ -20,15 +20,15 @@ from app.services.notification_channels.event_types import (
 )
 from app.services.notification_channels.feishu_channel import FeishuChannel
 from app.services.notification_channels.webhook_channel import WebhookChannel
-from app.services.notification_channels.wecom_channel import WecomChannel
+from app.services.notification_channels.wecom_channel import WeComChannel
 
 # Channel registry for factory pattern
 CHANNEL_REGISTRY = {
     "email": EmailChannel,
     "webhook": WebhookChannel,
     "feishu": FeishuChannel,
-    "dingtalk": DingtalkChannel,
-    "wecom": WecomChannel,
+    "dingtalk": DingTalkChannel,
+    "wecom": WeComChannel,
 }
 
 
@@ -64,8 +64,8 @@ __all__ = [
     "EmailChannel",
     "WebhookChannel",
     "FeishuChannel",
-    "DingtalkChannel",
-    "WecomChannel",
+    "DingTalkChannel",
+    "WeComChannel",
     "get_channel",
     "CHANNEL_REGISTRY",
 ]

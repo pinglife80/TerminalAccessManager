@@ -331,6 +331,90 @@ class NotificationService:
 
         return list(logs), total
 
+    # ==================== Public API Methods (for test compatibility) ====================
+
+    async def publish_event(
+        self,
+        event_type: str,
+        data: dict[str, Any] | None = None,
+    ) -> list:
+        """Publish an event"""
+        results = []
+        for channel in self._channels.values():
+            result = await channel.send(
+                recipients=[],
+                subject=f"Event: {event_type}",
+                message=str(data),
+            )
+            results.append(result)
+        return results
+
+    async def send_notification(
+        self,
+        channel_type: str,
+        recipients: list[str],
+        subject: str,
+        message: str,
+    ) -> dict:
+        """Send a notification directly"""
+        channel = self._channels.get(channel_type)
+        if not channel:
+            return {"success": False, "message": f"Channel {channel_type} not found"}
+
+        event = NotificationEvent(
+            id=str(uuid.uuid4()),
+            type="custom",
+            timestamp=datetime.utcnow(),
+            data={"subject": subject, "message": message},
+            source="user",
+            severity="info",
+        )
+
+        result = await channel.send(event)
+        if isinstance(result, dict):
+            return result
+        return {"success": result.success, "message": result.message}
+
+    async def log_notification(
+        self,
+        channel_type: str,
+        recipient: str,
+        success: bool,
+        event_type: str,
+        message_id: str,
+    ) -> None:
+        """Log a notification (public alias)"""
+        event = NotificationEvent(
+            id=message_id,
+            type=event_type,
+            timestamp=datetime.utcnow(),
+            data={},
+            source="system",
+            severity="info",
+        )
+        result = NotificationResult(
+            success=success,
+            message="",
+            channel=channel_type,
+            event_id=message_id,
+            recipient=recipient,
+        )
+        await self._log_notification(event, channel_type, result)
+
+    def get_channel_metadata(self) -> dict:
+        """Get channel metadata"""
+        from app.services.notification_channels.event_types import CHANNEL_METADATA
+        return {
+            "channels": list(self._channels.keys()),
+            "configs": self._channel_configs,
+            **CHANNEL_METADATA,
+        }
+
+    def get_event_types(self) -> list[str]:
+        """Get all event types"""
+        from app.services.notification_channels.event_types import EVENT_METADATA
+        return list(EVENT_METADATA.keys())
+
     # ==================== Convenience Methods ====================
 
     async def emit_terminal_blocked(

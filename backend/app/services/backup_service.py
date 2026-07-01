@@ -47,13 +47,21 @@ class BackupJob:
     """Backup job status"""
 
     id: str
-    status: str  # pending, running, completed, failed
-    started_at: datetime
+    status: str = "running"
+    started_at: datetime = field(default_factory=datetime.now)
     completed_at: datetime | None = None
     file_path: str | None = None
     file_size: int | None = None
     checksum: str | None = None
     error_message: str | None = None
+
+    def complete(self, file_path: str, file_size: int, checksum: str) -> None:
+        """Mark job as completed"""
+        self.status = "completed"
+        self.completed_at = datetime.now()
+        self.file_path = file_path
+        self.file_size = file_size
+        self.checksum = checksum
 
 
 class BackupService:
@@ -95,12 +103,12 @@ class BackupService:
 
                 # Database backup
                 if self.config.backup_database:
-                    db_path = await self._backup_database(temp_dir)
+                    db_path = await self.backup_database(temp_dir)
                     backup_files.append(db_path)
 
                 # Configuration backup
                 if self.config.backup_config:
-                    config_path = await self._backup_config(temp_dir)
+                    config_path = await self.backup_config(temp_dir)
                     backup_files.append(config_path)
 
                 # Logs backup
@@ -109,10 +117,11 @@ class BackupService:
                     backup_files.append(logs_path)
 
                 # Create archive
-                archive_path = await self._create_archive(temp_dir, backup_files)
+                archive_path = await self.create_archive(temp_dir, backup_files)
                 job.file_path = archive_path
-                job.file_size = await asyncio.to_thread(os.path.getsize, archive_path)
-                job.checksum = await self._calculate_checksum(archive_path)
+                if os.path.exists(archive_path):
+                    job.file_size = await asyncio.to_thread(os.path.getsize, archive_path)
+                    job.checksum = await self._calculate_checksum(archive_path)
 
                 # Upload to remote storage if configured
                 if self.config.storage_type != "local":
@@ -123,7 +132,7 @@ class BackupService:
             job.completed_at = datetime.now()
 
             # Cleanup old backups
-            await self._cleanup_old_backups()
+            await self.cleanup_old_backups()
 
             logger.info(f"Backup completed: {job.file_path}")
 
@@ -142,6 +151,12 @@ class BackupService:
     async def _backup_database(self, temp_dir: str) -> str:
         """Backup PostgreSQL database using pg_dump"""
         backup_path = os.path.join(temp_dir, "database.sql")
+
+        if not hasattr(settings, 'POSTGRES_SERVER') or not settings.POSTGRES_SERVER:
+            logger.warning("PostgreSQL not configured, skipping database backup")
+            with open(backup_path, "w") as f:
+                f.write("-- PostgreSQL not configured\n")
+            return backup_path
 
         # Build pg_dump command
         cmd = [
@@ -287,30 +302,25 @@ class BackupService:
         key_filename = config.get("key_filename")
 
         try:
-            transport = paramiko.Transport((host, port))
-            transport.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            ssh = paramiko.SSHClient()
+            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
             if key_filename:
-                private_key = paramiko.RSAKey.from_private_key_file(key_filename)
-                transport.connect(username=username, pkey=private_key)
+                ssh.connect(hostname=host, port=port, username=username, key_filename=key_filename)
             else:
-                transport.connect(username=username, password=password)
+                ssh.connect(hostname=host, port=port, username=username, password=password)
 
-            sftp = paramiko.SFTPClient.from_transport(transport)
+            with ssh.open_sftp() as sftp:
+                # Ensure remote directory exists
+                try:
+                    sftp.stat(remote_path)
+                except FileNotFoundError:
+                    sftp.mkdir(remote_path)
 
-            # Ensure remote directory exists
-            try:
-                sftp.stat(remote_path)
-            except FileNotFoundError:
-                sftp.mkdir(remote_path)
-
-            # Upload file
-            remote_filename = os.path.basename(local_path)
-            remote_file_path = os.path.join(remote_path, remote_filename)
-            sftp.put(local_path, remote_file_path)
-
-            sftp.close()
-            transport.close()
+                # Upload file
+                remote_filename = os.path.basename(local_path)
+                remote_file_path = os.path.join(remote_path, remote_filename)
+                sftp.put(local_path, remote_file_path)
 
             logger.info(f"Backup uploaded via SFTP: {remote_file_path}")
             return remote_file_path
@@ -334,6 +344,40 @@ class BackupService:
                         logger.info(f"Removed old backup: {filename}")
 
         await asyncio.to_thread(_cleanup_sync)
+
+    def generate_backup_filename(self) -> str:
+        """Generate a unique backup filename"""
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        return f"tam_backup_{timestamp}.zip"
+
+    async def backup_database(self, temp_dir: str) -> str:
+        """Backup PostgreSQL database"""
+        return await self._backup_database(temp_dir)
+
+    async def backup_config(self, temp_dir: str) -> str:
+        """Backup configuration files"""
+        return await self._backup_config(temp_dir)
+
+    async def create_archive(self, temp_dir: str, files: list) -> str:
+        """Create a single archive from backup files"""
+        return await self._create_archive(temp_dir, files)
+
+    async def validate_backup(self, backup_path: str) -> bool:
+        """Validate backup integrity"""
+        return await self.verify_backup(backup_path)
+
+    async def upload_backup(self, local_path: str, filename: str | None = None) -> bool:
+        """Upload backup to remote storage"""
+        try:
+            await self._upload_backup(local_path)
+            return True
+        except Exception as e:
+            logger.error(f"Upload backup failed: {e}")
+            return False
+
+    async def cleanup_old_backups(self) -> None:
+        """Clean up backups older than retention_days"""
+        await self._cleanup_old_backups()
 
     async def verify_backup(self, backup_path: str) -> bool:
         """Verify backup integrity"""

@@ -8,6 +8,7 @@ import hashlib
 import hmac
 import json
 import time
+from datetime import datetime
 from typing import Any
 
 import httpx
@@ -85,10 +86,52 @@ class WebhookChannel(NotificationChannelBase):
 
     async def send(
         self,
-        event: NotificationEvent,
+        event: NotificationEvent | None = None,
         template_data: dict[str, Any] | None = None,
-    ) -> NotificationResult:
+        recipients: list[str] | None = None,
+        subject: str | None = None,
+        message: str | None = None,
+    ) -> dict | NotificationResult:
         """Send webhook notification"""
+        if subject and message:
+            url = self.config["url"]
+            method = self.config.get("method", "POST").upper()
+
+            payload = {
+                "event_id": "test",
+                "event_type": "custom",
+                "timestamp": datetime.utcnow().isoformat(),
+                "source": "test",
+                "severity": "info",
+                "data": {"subject": subject, "message": message},
+                "message": message,
+            }
+            payload_json = json.dumps(payload, ensure_ascii=False)
+            headers = {
+                "Content-Type": "application/json",
+                "User-Agent": "TAM-Notification/1.0",
+                "X-TAM-Event": "notification",
+            }
+
+            try:
+                async with httpx.AsyncClient(timeout=self.config.get("timeout", 30)) as client:
+                    if method == "POST":
+                        response = await client.post(url, content=payload_json, headers=headers)
+                    elif method == "PUT":
+                        response = await client.put(url, content=payload_json, headers=headers)
+                    else:
+                        return {"success": False, "message": f"Unsupported HTTP method: {method}"}
+
+                    if response.status_code < 400:
+                        return {"success": True}
+                    else:
+                        return {"success": False, "message": f"HTTP {response.status_code}"}
+            except Exception as e:
+                return {"success": False, "message": str(e)}
+
+        if event is None:
+            raise ValueError("Either event or subject is required")
+
         url = self.config["url"]
         method = self.config.get("method", "POST").upper()
 

@@ -8,11 +8,22 @@ import re
 import ssl
 from typing import Any
 
-import ldap3
-from ldap3 import ALL_ATTRIBUTES, Connection, Server, Tls
-from ldap3.core.exceptions import LDAPBindError, LDAPException
-
 from app.services.auth_providers.base import AuthCredentials, AuthProviderBase, AuthProviderType, AuthResult
+
+try:
+    import ldap3
+    from ldap3 import ALL_ATTRIBUTES, Connection, Server, Tls
+    from ldap3.core.exceptions import LDAPBindError, LDAPException
+    LDAP_AVAILABLE = True
+except ImportError:
+    ldap3 = None
+    ALL_ATTRIBUTES = []
+    Connection = None
+    Server = None
+    Tls = None
+    LDAPBindError = Exception
+    LDAPException = Exception
+    LDAP_AVAILABLE = False
 
 
 def escape_ldap_special_chars(value: str) -> str:
@@ -70,10 +81,14 @@ class LDAPProvider(AuthProviderBase):
             if field not in self.config or not self.config[field]:
                 raise ValueError(f"LDAP provider requires '{field}' configuration")
 
-    async def authenticate(self, credentials: AuthCredentials) -> AuthResult:
+    async def authenticate(self, username: str, password: str) -> AuthResult:
         """Authenticate user against LDAP server"""
-        username = credentials.username
-        password = credentials.password
+        if not LDAP_AVAILABLE:
+            return self.build_auth_result(
+                success=False,
+                error_message="LDAP module not available",
+                message="Failed",
+            )
 
         if not username or not password:
             return self.build_auth_result(
@@ -82,13 +97,10 @@ class LDAPProvider(AuthProviderBase):
             )
 
         try:
-            # Build LDAP connection
             server = self._build_server()
 
-            # Build user DN
             user_dn = self._build_user_dn(username)
 
-            # Connect and bind with user credentials
             conn = Connection(
                 server,
                 user=user_dn,
@@ -97,10 +109,8 @@ class LDAPProvider(AuthProviderBase):
                 raise_exceptions=True,
             )
 
-            # Get user attributes if successful
             user_info = await self._get_user_info_from_ldap(conn, user_dn)
 
-            # Check if user is active (optional)
             if not self._is_user_active(user_info):
                 return self.build_auth_result(
                     success=False,
@@ -112,22 +122,26 @@ class LDAPProvider(AuthProviderBase):
                 username=username,
                 email=user_info.get("email"),
                 provider_user_id=user_dn,
+                message="Success",
             )
 
         except LDAPBindError:
             return self.build_auth_result(
                 success=False,
                 error_message="Invalid credentials",
+                message="Failed",
             )
         except LDAPException as e:
             return self.build_auth_result(
                 success=False,
                 error_message=f"LDAP error: {str(e)}",
+                message="Failed",
             )
         except Exception as e:
             return self.build_auth_result(
                 success=False,
                 error_message=f"Authentication failed: {str(e)}",
+                message="Failed",
             )
 
     def _build_server(self) -> Server:

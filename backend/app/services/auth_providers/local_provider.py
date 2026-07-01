@@ -32,18 +32,14 @@ class LocalProvider(AuthProviderBase):
             config: Provider configuration
             db: Database session
         """
-        super().__init__(config)
-        self.db = db
+        super().__init__(config, db)
 
     def _validate_config(self) -> None:
         """Local provider has no required config fields"""
         pass
 
-    async def authenticate(self, credentials: AuthCredentials) -> AuthResult:
+    async def authenticate(self, username: str, password: str) -> AuthResult:
         """Authenticate user against local database"""
-        username = credentials.username
-        password = credentials.password
-
         if not username or not password:
             return self.build_auth_result(
                 success=False,
@@ -51,13 +47,12 @@ class LocalProvider(AuthProviderBase):
             )
 
         try:
-            # Find user by username or email
             result = await self.db.execute(
                 select(User).where(
                     (User.username == username) | (User.email == username)
                 )
             )
-            user = result.scalar_one_or_none()
+            user = await result.scalar_one_or_none()
 
             if not user:
                 return self.build_auth_result(
@@ -75,9 +70,9 @@ class LocalProvider(AuthProviderBase):
                 return self.build_auth_result(
                     success=False,
                     error_message="Invalid credentials",
+                    message="Invalid username or password",
                 )
 
-            # Check if 2FA is required
             requires_2fa = self.config.get("require_2fa", False)
 
             return self.build_auth_result(
@@ -87,12 +82,15 @@ class LocalProvider(AuthProviderBase):
                 email=user.email,
                 provider_user_id=str(user.id),
                 requires_2fa=requires_2fa,
+                user=user,
+                message="Success",
             )
 
         except Exception as e:
             return self.build_auth_result(
                 success=False,
                 error_message=f"Authentication failed: {str(e)}",
+                message="Failed",
             )
 
     async def get_user_info(self, user_id: str) -> dict[str, Any]:
@@ -101,7 +99,7 @@ class LocalProvider(AuthProviderBase):
             result = await self.db.execute(
                 select(User).where(User.id == int(user_id))
             )
-            user = result.scalar_one_or_none()
+            user = await result.scalar_one_or_none()
 
             if user:
                 return {

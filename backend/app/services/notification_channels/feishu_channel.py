@@ -4,6 +4,7 @@ Feishu (飞书) Notification Channel for TerminalAccessManager.
 Sends notifications via Feishu webhook robot.
 """
 
+from datetime import datetime
 from typing import Any
 
 import httpx
@@ -124,10 +125,46 @@ class FeishuChannel(NotificationChannelBase):
 
     async def send(
         self,
-        event: NotificationEvent,
+        event: NotificationEvent | None = None,
         template_data: dict[str, Any] | None = None,
-    ) -> NotificationResult:
+        recipients: list[str] | None = None,
+        subject: str | None = None,
+        message: str | None = None,
+    ) -> dict | NotificationResult:
         """Send Feishu notification"""
+        if subject and message:
+            webhook_url = self.config["webhook_url"]
+
+            payload = {
+                "msg_type": "text",
+                "content": {
+                    "text": f"{subject}\n{message}",
+                },
+            }
+
+            try:
+                async with httpx.AsyncClient(timeout=self.config.get("timeout", 30)) as client:
+                    response = await client.post(
+                        webhook_url,
+                        json=payload,
+                        headers={"Content-Type": "application/json"},
+                    )
+
+                    try:
+                        result = await response.json()
+                    except TypeError:
+                        result = response.json()
+
+                    if result.get("code") == 0 or response.status_code == 200:
+                        return {"success": True}
+                    else:
+                        return {"success": False, "message": result.get("msg", "Unknown error")}
+            except Exception as e:
+                return {"success": False, "message": str(e)}
+
+        if event is None:
+            raise ValueError("Either event or subject is required")
+
         webhook_url = self.config["webhook_url"]
 
         payload = self._build_card(event)

@@ -27,9 +27,12 @@ class AuthResult:
     username: str | None = None
     email: str | None = None
     provider: str | None = None
-    provider_user_id: str | None = None  # Third-party user ID
+    provider_user_id: str | None = None
     error_message: str | None = None
-    requires_2fa: bool = False              # Whether 2FA is required
+    requires_2fa: bool = False
+    user: Any | None = None
+    message: str = ""
+    mfa_required: bool = False
 
 
 @dataclass
@@ -69,14 +72,16 @@ class AuthProviderBase(ABC):
     provider_type: AuthProviderType = AuthProviderType.LOCAL
     provider_name: str = "Base Provider"
 
-    def __init__(self, config: dict[str, Any]):
+    def __init__(self, config: dict[str, Any], db: Any | None = None):
         """
         Initialize the provider with configuration.
 
         Args:
             config: Provider configuration dictionary
+            db: Database session
         """
         self.config = config
+        self.db = db
         self._validate_config()
 
     @abstractmethod
@@ -85,12 +90,13 @@ class AuthProviderBase(ABC):
         pass
 
     @abstractmethod
-    async def authenticate(self, credentials: AuthCredentials) -> AuthResult:
+    async def authenticate(self, username: str, password: str) -> AuthResult:
         """
         Authenticate user with provided credentials.
 
         Args:
-            credentials: User credentials
+            username: Username
+            password: Password
 
         Returns:
             AuthResult indicating success or failure
@@ -139,6 +145,8 @@ class AuthProviderBase(ABC):
         provider_user_id: str | None = None,
         error_message: str | None = None,
         requires_2fa: bool = False,
+        user: Any | None = None,
+        message: str = "",
     ) -> AuthResult:
         """
         Build an AuthResult instance.
@@ -151,6 +159,8 @@ class AuthProviderBase(ABC):
             provider_user_id: Provider-specific user ID
             error_message: Error message if failed
             requires_2fa: Whether 2FA is required
+            user: User object
+            message: Result message
 
         Returns:
             AuthResult instance
@@ -164,6 +174,8 @@ class AuthProviderBase(ABC):
             provider_user_id=provider_user_id,
             error_message=error_message,
             requires_2fa=requires_2fa,
+            user=user,
+            message=message,
         )
 
 

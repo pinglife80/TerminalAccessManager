@@ -4,6 +4,7 @@ WeCom (企业微信) Notification Channel for TerminalAccessManager.
 Sends notifications via WeCom webhook robot.
 """
 
+from datetime import datetime
 from typing import Any
 
 import httpx
@@ -17,7 +18,7 @@ from app.services.notification_channels.base import (
 )
 
 
-class WecomChannel(NotificationChannelBase):
+class WeComChannel(NotificationChannelBase):
     """
     WeCom (企业微信) webhook robot notification channel.
 
@@ -60,10 +61,46 @@ class WecomChannel(NotificationChannelBase):
 
     async def send(
         self,
-        event: NotificationEvent,
+        event: NotificationEvent | None = None,
         template_data: dict[str, Any] | None = None,
-    ) -> NotificationResult:
+        recipients: list[str] | None = None,
+        subject: str | None = None,
+        message: str | None = None,
+    ) -> dict | NotificationResult:
         """Send WeCom notification"""
+        if subject and message:
+            webhook_url = self.config["webhook_url"]
+
+            payload = {
+                "msgtype": "text",
+                "text": {
+                    "content": f"{subject}\n{message}",
+                },
+            }
+
+            try:
+                async with httpx.AsyncClient(timeout=self.config.get("timeout", 30)) as client:
+                    response = await client.post(
+                        webhook_url,
+                        json=payload,
+                        headers={"Content-Type": "application/json"},
+                    )
+
+                    try:
+                        result = await response.json()
+                    except TypeError:
+                        result = response.json()
+
+                    if result.get("errcode") == 0:
+                        return {"success": True}
+                    else:
+                        return {"success": False, "message": result.get("errmsg", "Unknown error")}
+            except Exception as e:
+                return {"success": False, "message": str(e)}
+
+        if event is None:
+            raise ValueError("Either event or subject is required")
+
         webhook_url = self.config["webhook_url"]
         payload = self._build_message(event)
 

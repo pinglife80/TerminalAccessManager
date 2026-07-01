@@ -9,6 +9,7 @@ import hashlib
 import hmac
 import time
 import urllib.parse
+from datetime import datetime
 from typing import Any
 
 import httpx
@@ -22,7 +23,7 @@ from app.services.notification_channels.base import (
 )
 
 
-class DingtalkChannel(NotificationChannelBase):
+class DingTalkChannel(NotificationChannelBase):
     """
     DingTalk webhook robot notification channel.
 
@@ -105,10 +106,46 @@ class DingtalkChannel(NotificationChannelBase):
 
     async def send(
         self,
-        event: NotificationEvent,
+        event: NotificationEvent | None = None,
         template_data: dict[str, Any] | None = None,
-    ) -> NotificationResult:
+        recipients: list[str] | None = None,
+        subject: str | None = None,
+        message: str | None = None,
+    ) -> dict | NotificationResult:
         """Send DingTalk notification"""
+        if subject and message:
+            webhook_url = self._get_webhook_url()
+
+            payload = {
+                "msgtype": "text",
+                "text": {
+                    "content": f"{subject}\n{message}",
+                },
+            }
+
+            try:
+                async with httpx.AsyncClient(timeout=self.config.get("timeout", 30)) as client:
+                    response = await client.post(
+                        webhook_url,
+                        json=payload,
+                        headers={"Content-Type": "application/json"},
+                    )
+
+                    try:
+                        result = await response.json()
+                    except TypeError:
+                        result = response.json()
+
+                    if result.get("errcode") == 0:
+                        return {"success": True}
+                    else:
+                        return {"success": False, "message": result.get("errmsg", "Unknown error")}
+            except Exception as e:
+                return {"success": False, "message": str(e)}
+
+        if event is None:
+            raise ValueError("Either event or subject is required")
+
         webhook_url = self._get_webhook_url()
         payload = self._build_message(event)
 
