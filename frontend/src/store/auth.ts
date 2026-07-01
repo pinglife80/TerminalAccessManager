@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { apiClient } from '@/lib/api';
 
 interface User {
   id: number;
@@ -45,9 +46,7 @@ export const useAuthStore = create<AuthState>()((set) => ({
     }
 
     try {
-      const { default: axios } = await import('axios');
-      const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api/v1';
-      const response = await axios.get(`${API_BASE_URL}/auth/me`, {
+      const response = await apiClient.get('/auth/me', {
         headers: { Authorization: `Bearer ${token}` },
         timeout: AUTH_TIMEOUT,
       });
@@ -57,9 +56,7 @@ export const useAuthStore = create<AuthState>()((set) => ({
       const refreshToken = sessionStorage.getItem('refresh_token');
       if (refreshToken) {
         try {
-          const { default: axios } = await import('axios');
-          const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api/v1';
-          const response = await axios.post(`${API_BASE_URL}/auth/refresh`, {
+          const response = await apiClient.post('/auth/refresh', {
             refresh_token: refreshToken,
           }, {
             timeout: AUTH_TIMEOUT,
@@ -69,7 +66,7 @@ export const useAuthStore = create<AuthState>()((set) => ({
           sessionStorage.setItem('refresh_token', new_refresh);
 
           // Fetch user info with new token
-          const meResponse = await axios.get(`${API_BASE_URL}/auth/me`, {
+          const meResponse = await apiClient.get('/auth/me', {
             headers: { Authorization: `Bearer ${access_token}` },
             timeout: AUTH_TIMEOUT,
           });
