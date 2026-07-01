@@ -359,16 +359,14 @@ app.add_exception_handler(StarletteHTTPException, http_exception_handler)
 app.add_exception_handler(RequestValidationError, validation_exception_handler)
 app.add_exception_handler(Exception, unhandled_exception_handler)
 
-# Add rate limiting middleware
-app.add_middleware(RateLimitMiddleware)
+# Add request-id middleware (registered last so it runs first)
+app.add_middleware(RequestIDMiddleware)
 
-# Add request logging middleware (must be AFTER RequestIDMiddleware so request_id is available)
+# Add request logging middleware (registered second so it runs second, after request_id is set)
 app.add_middleware(RequestLoggingMiddleware)
 
-# Add request-id middleware (must be registered AFTER RequestLoggingMiddleware
-# because Starlette applies middleware in reverse registration order —
-# the last registered middleware wraps the outermost layer, so it runs first)
-app.add_middleware(RequestIDMiddleware)
+# Add rate limiting middleware (registered first so it runs last)
+app.add_middleware(RateLimitMiddleware)
 
 # Configure CORS
 if settings.BACKEND_CORS_ORIGINS:
@@ -472,14 +470,80 @@ async def root():
     }
 
 
-# Prometheus monitoring (optional, controlled by environment)
-if settings.ENVIRONMENT != "production":
+# Prometheus monitoring (enabled in all environments for observability)
+try:
+    from prometheus_fastapi_instrumentator import Instrumentator
+    Instrumentator().instrument(app).expose(app)
+
+    # Expose custom business metrics at /metrics/custom
+    from app.services.metrics_service import get_metrics
+    from fastapi.responses import Response
+
+    @app.get("/metrics/custom", include_in_schema=False)
+    async def custom_metrics():
+        """Custom business metrics for Prometheus"""
+        return Response(content=get_metrics(), media_type="text/plain")
+
+    logger.info("Prometheus metrics enabled at /metrics and /metrics/custom")
+except ImportError:
+    logger.warning("prometheus-fastapi-instrumentator not installed, metrics disabled")
+
+
+# Enhanced health check endpoints
+@app.get("/health/ready", tags=["Health"])
+async def readiness_check():
+    """
+    Readiness check - verifies all dependencies are available.
+    Used by Kubernetes readinessProbe.
+    """
+    import redis.asyncio as aioredis
+    from sqlalchemy import text
+
+    from app.core.database import engine
+
+    checks = {
+        "database": "unknown",
+        "redis": "unknown",
+    }
+
+    # Check database
     try:
-        from prometheus_fastapi_instrumentator import Instrumentator
-        Instrumentator().instrument(app).expose(app)
-        logger.info("Prometheus metrics enabled at /metrics")
-    except ImportError:
-        logger.warning("prometheus-fastapi-instrumentator not installed, metrics disabled")
+        async with engine.connect() as conn:
+            await conn.execute(text("SELECT 1"))
+        checks["database"] = "ok"
+    except Exception as e:
+        checks["database"] = f"error: {str(e)[:50]}"
+
+    # Check Redis
+    try:
+        redis_client = aioredis.from_url(settings.REDIS_URL)
+        await redis_client.ping()
+        await redis_client.close()
+        checks["redis"] = "ok"
+    except Exception as e:
+        checks["redis"] = f"error: {str(e)[:50]}"
+
+    # Determine overall status
+    all_ok = all(v == "ok" for v in checks.values())
+
+    return {
+        "status": "ready" if all_ok else "not_ready",
+        "checks": checks,
+        "version": settings.VERSION,
+        "environment": settings.ENVIRONMENT,
+    }
+
+
+@app.get("/health/live", tags=["Health"])
+async def liveness_check():
+    """
+    Liveness check - verifies the application is running.
+    Used by Kubernetes livenessProbe.
+    """
+    return {
+        "status": "alive",
+        "version": settings.VERSION,
+    }
 
 
 if __name__ == "__main__":

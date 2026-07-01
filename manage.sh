@@ -71,7 +71,7 @@ readonly BACKUP_DIR="${SCRIPT_DIR}/backups"
 readonly LOCK_FILE="/tmp/tam_manage.lock"
 readonly STATE_DIR="${SCRIPT_DIR}/.manage"
 readonly STATE_FILE="${STATE_DIR}/state.env"
-readonly VERSION="3.4.0"
+readonly VERSION="3.5.0"
 
 # Docker Compose project name (derived from directory name)
 readonly COMPOSE_PROJECT_NAME="tam"
@@ -288,8 +288,8 @@ ensure_env() {
             [[ "$key" =~ ^#.*$ || -z "$key" ]] && continue
             # Remove quotes from value
             value=$(echo "$value" | sed 's/^"\(.*\)"$/\1/' | sed "s/^'\(.*\)'$/\1/")
-            # Export the variable if not already set
-            if [ -z "${!key:-}" ]; then
+            # Export the variable (skip readonly variables, force override others)
+            if ! readonly | grep -q "^declare -r ${key}=" 2>/dev/null; then
                 export "$key=$value"
             fi
         done < "${ENV_FILE}"
@@ -718,6 +718,9 @@ cmd_deploy() {
     else
         _configure_production_wizard
     fi
+
+    # Reload environment variables from .env (after configuration changes)
+    ensure_env
 
     # ─── Step 5: Build & Start ───────────────────────────────────────────
     log_step "Step 4/6: Building and Starting Services"

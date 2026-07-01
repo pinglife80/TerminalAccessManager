@@ -186,6 +186,9 @@ class SystemStatus(BaseModel):
     database: str = "connected"
     sangfor: SangforStatus | None = None
     network_scanner: str = "pending"
+    uptime: str | None = None
+    version: str | None = None
+    environment: str | None = None
 
 
 # Generic response schema

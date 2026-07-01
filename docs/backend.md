@@ -1,6 +1,6 @@
 # TerminalAccessManager 后端实现文档
 
-> 文档版本：v3.3.0 | 更新日期：2026-06-17
+> 文档版本：v3.5.0 | 更新日期：2026-07-01
 
 ## 1. 概述
 
@@ -47,6 +47,8 @@ backend/
 │   │   ├── data_source.py              # 数据源模型 + DataSourceBinding
 │   │   ├── compliance_baseline.py       # 合规基准模型
 │   │   ├── role.py                      # RBAC 模型（Role, Permission, UserRole, RolePermission）
+│   │   ├── notification.py              # 通知模型（NotificationChannel, NotificationLog）
+│   │   ├── auth_provider.py             # 认证提供者模型
 │   ├── schemas/
 │   │   ├── __init__.py
 │   │   ├── auth.py                      # 认证相关 Schema

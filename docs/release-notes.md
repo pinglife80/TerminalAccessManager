@@ -1,10 +1,92 @@
 # 版本跟踪记录
 
-> 文档版本：v3.4.0 | 更新日期：2026-06-22
+> 文档版本：v3.5.0 | 更新日期：2026-07-01
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
+
+---
+
+## [v3.5.0] - 2026-07-01
+
+### 功能增强 + 安全修复 + 性能优化
+
+#### 事件通知服务
+
+- 事件总线架构：支持多渠道事件发布订阅
+- 通知渠道类型：邮件（SMTP）、钉钉（Webhook）、企业微信（Webhook）、通用 Webhook
+- 通知日志：完整记录每条通知发送状态、重试次数、错误信息
+- 测试连接：支持通知渠道连通性测试
+- 事件类型：登录、终端封堵、终端解封、合规变更、配置变更、备份完成等
+
+#### 认证提供者系统
+
+- 插件化认证架构：接口抽象 + 具体实现模式
+- 本地认证：用户名密码验证（已有）
+- LDAP认证：支持 Active Directory 和 OpenLDAP，用户名验证和 DN 注入防护
+- OAuth认证：预留接口，支持后续扩展
+- 认证提供者管理：CRUD API + 前端配置页面
+
+#### SFTP备份服务
+
+- 数据库备份：pg_dump 全量备份
+- 配置文件备份：docker-compose.yml、manage.sh（排除 .env 敏感文件）
+- SFTP远程上传：paramiko 安全传输，主机密钥验证
+- 备份轮转：按保留天数自动清理旧备份
+- 校验和验证：SHA256 完整性校验
+
+#### 系统设置前端页面
+
+- 统一导航入口："系统设置"分组
+- 通用设置：系统名称、Logo、页脚等品牌配置
+- 认证提供者：LDAP/本地认证配置管理
+- 备份配置：存储类型、保留策略、SFTP参数配置
+- 通知管理：通知渠道配置、测试、日志查看
+- 用户管理：用户 CRUD、角色分配
+- 角色管理：角色 CRUD、权限配置
+
+#### 安全修复
+
+- **路径遍历漏洞**：backup.py 添加路径检查和文件名净化
+- **LDAP DN注入**：ldap_provider.py 添加用户名验证和特殊字符转义
+- **2FA验证码暴力破解防护**：email_service.py 添加最大尝试次数限制（5次）
+- **敏感信息备份泄露**：backup_service.py 排除 .env 文件备份
+- **FTP支持移除**：强制使用 SFTP 安全传输
+- **SFTP主机密钥验证**：添加主机密钥验证策略
+
+#### 性能优化
+
+- **N+1查询优化**：roles.py 使用 JOIN 批量获取权限和用户计数
+- **异步性能优化**：backup_service.py 使用 asyncio.to_thread 包装同步操作
+- **通知模块权限控制**：notifications.py 添加 permission 依赖
+
+#### 前端优化
+
+- **导航重构**：嵌套导航结构，系统设置分组
+- **国际化完善**：补全备份、认证、通知模块中/英/日翻译
+- **Nginx限流调整**：API限流 60→300 r/m，认证限流 10→30 r/m
+
+### 变更文件
+
+- `manage.sh` — VERSION 3.4.0 → 3.5.0
+- `backend/app/core/config.py` — VERSION 3.4.0 → 3.5.0
+- `frontend/package.json` — version 3.4.0 → 3.5.0
+- `.env.example` — VERSION 3.4.0 → 3.5.0
+- `backend/app/services/notification_service.py` — 新增通知服务
+- `backend/app/services/auth_providers/ldap_provider.py` — LDAP认证实现
+- `backend/app/services/auth_providers/base.py` — 认证提供者接口
+- `backend/app/services/backup_service.py` — SFTP备份服务
+- `backend/app/api/v1/endpoints/notifications.py` — 通知模块API
+- `backend/app/api/v1/endpoints/auth_providers.py` — 认证提供者API
+- `backend/app/api/v1/endpoints/backup.py` — 备份服务API
+- `frontend/src/pages/Settings.tsx` — 系统设置页面
+- `frontend/src/pages/AuthProviders.tsx` — 认证提供者页面
+- `frontend/src/pages/Backup.tsx` — 备份配置页面
+- `frontend/src/pages/Notifications.tsx` — 通知管理页面
+- `nginx/etc/conf.d/tam.conf` — 限流配置调整
+- `docs/changelog.md` — 追加 [3.5.0] 条目
+- `docs/release-notes.md` — 追加 [v3.5.0] 条目
 
 ---
 

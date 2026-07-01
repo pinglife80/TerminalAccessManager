@@ -19,6 +19,10 @@ const AuditLogs = lazy(() => import('./pages/AuditLogs'));
 const Profile = lazy(() => import('./pages/Profile'));
 const Users = lazy(() => import('./pages/Users'));
 const Roles = lazy(() => import('./pages/Roles'));
+const AuthProviders = lazy(() => import('./pages/AuthProviders'));
+const Backup = lazy(() => import('./pages/Backup'));
+const Notifications = lazy(() => import('./pages/Notifications'));
+const SystemSettings = lazy(() => import('./pages/SystemSettings'));
 const Forbidden = lazy(() => import('./pages/Forbidden'));
 
 // Preload page components on hover to eliminate lazy-load flash
@@ -32,6 +36,10 @@ export const pagePreloadMap: Record<string, () => Promise<unknown>> = {
   '/profile': () => import('./pages/Profile'),
   '/users': () => import('./pages/Users'),
   '/roles': () => import('./pages/Roles'),
+  '/auth-providers': () => import('./pages/AuthProviders'),
+  '/backup': () => import('./pages/Backup'),
+  '/notifications': () => import('./pages/Notifications'),
+  '/system-settings': () => import('./pages/SystemSettings'),
 };
 import { apiClient } from './lib/api';
 import { useAuthStore } from './store/auth';
@@ -160,6 +168,10 @@ const App: React.FC = () => {
               <Route path="blacklist" element={<ProtectedRoute requiredPermission="blacklist:read"><Blacklist /></ProtectedRoute>} />
               <Route path="data-sources" element={<ProtectedRoute requiredPermission="datasource:read"><DataSources /></ProtectedRoute>} />
               <Route path="audit-logs" element={<ProtectedRoute requiredPermission="audit:read"><AuditLogs /></ProtectedRoute>} />
+              <Route path="system-settings" element={<ProtectedRoute requiredPermission="system:manage"><SystemSettings /></ProtectedRoute>} />
+              <Route path="auth-providers" element={<ProtectedRoute requiredPermission="system:manage"><AuthProviders /></ProtectedRoute>} />
+              <Route path="backup" element={<ProtectedRoute requiredPermission="system:manage"><Backup /></ProtectedRoute>} />
+              <Route path="notifications" element={<ProtectedRoute requiredPermission="system:manage"><Notifications /></ProtectedRoute>} />
               <Route path="profile" element={<Profile />} />
               <Route path="users" element={<ProtectedRoute requiredPermission="user:read"><Users /></ProtectedRoute>} />
               <Route path="roles" element={<ProtectedRoute requiredPermission="role:read"><Roles /></ProtectedRoute>} />

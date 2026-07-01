@@ -13,11 +13,18 @@ import {
   UserCircle,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
+  ChevronUp,
+  Settings,
+  Key,
+  HardDrive,
+  Bell,
+  X,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useAuthStore } from '@/store/auth';
 import { useBrandingStore } from '@/store/branding';
-import { NAV_ITEMS } from '@/lib/constants';
+import { NAV_ITEMS, NavItem } from '@/lib/constants';
 import { pagePreloadMap } from '@/App';
 
 // Map icon names from NAV_ITEMS to Lucide components
@@ -30,6 +37,10 @@ const iconMap: Record<string, React.ComponentType<{ className?: string }>> = {
   Database,
   Users,
   Shield,
+  Settings,
+  Key,
+  HardDrive,
+  Bell,
 };
 
 // Map NAV_ITEMS label to i18n key
@@ -40,6 +51,11 @@ const navLabelKeyMap: Record<string, string> = {
   'Blocked': 'nav.blacklist',
   'Audit Logs': 'nav.auditLogs',
   'Data Sources': 'nav.dataSources',
+  'System Settings': 'nav.systemSettings',
+  'General': 'nav.general',
+  'Auth Providers': 'nav.authProviders',
+  'Backup': 'nav.backup',
+  'Notifications': 'nav.notifications',
   'Users': 'nav.users',
   'Roles': 'nav.roles',
 };
@@ -49,27 +65,129 @@ const Sidebar: React.FC = () => {
   const { user, logout } = useAuthStore();
   const { appShortName, appSubtitle } = useBrandingStore();
   const [collapsed, setCollapsed] = useState(false);
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set(['/system-settings']));
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
 
-  const navItems = NAV_ITEMS
-    .filter((item) => {
-      // If requiredPermission is set, always check it (unified permission-based access)
-      if (item.requiredPermission) {
-        return user?.is_superuser || user?.permissions?.includes(item.requiredPermission);
-      }
-      // No requiredPermission: if adminOnly, check is_superuser
-      if (item.adminOnly) {
-        return !!user?.is_superuser;
-      }
-      return true;
-    })
-    .map((item) => ({
-      path: item.path,
-      label: navLabelKeyMap[item.label] ? t(navLabelKeyMap[item.label]) : item.label,
-      icon: iconMap[item.iconName] || Shield,
-    }));
+  const hasPermission = (item: NavItem): boolean => {
+    if (item.requiredPermission) {
+      return !!(user?.is_superuser || user?.permissions?.includes(item.requiredPermission));
+    }
+    if (item.adminOnly) {
+      return !!user?.is_superuser;
+    }
+    return true;
+  };
+
+  const toggleGroup = (path: string) => {
+    const newExpanded = new Set(expandedGroups);
+    if (newExpanded.has(path)) {
+      newExpanded.delete(path);
+    } else {
+      newExpanded.add(path);
+    }
+    setExpandedGroups(newExpanded);
+  };
 
   const handleNavHover = (path: string) => {
     pagePreloadMap[path]?.();
+  };
+
+  const renderNavItem = (item: NavItem) => {
+    const Icon = iconMap[item.iconName] || Shield;
+    const label = navLabelKeyMap[item.label] ? t(navLabelKeyMap[item.label]) : item.label;
+    const isExpanded = expandedGroups.has(item.path);
+    const hasChildren = item.children && item.children.length > 0;
+
+    if (!hasPermission(item)) {
+      return null;
+    }
+
+    if (hasChildren) {
+      return (
+        <li key={item.path}>
+          <button
+            onClick={() => toggleGroup(item.path)}
+            className={`flex items-center ${collapsed ? 'justify-center' : 'space-x-3'} px-3 py-2.5 rounded-lg transition-colors group w-full ${
+              isExpanded
+                ? 'bg-blue-600 text-white'
+                : 'text-gray-300 hover:bg-gray-800 hover:text-white'
+            }`}
+            title={collapsed ? label : undefined}
+          >
+            <Icon className="h-5 w-5 flex-shrink-0" />
+            {!collapsed && (
+              <>
+                <span className="text-sm font-medium whitespace-nowrap flex-1 text-left">{label}</span>
+                {isExpanded ? (
+                  <ChevronUp className="h-4 w-4" />
+                ) : (
+                  <ChevronDown className="h-4 w-4" />
+                )}
+              </>
+            )}
+            {collapsed && (
+              <div className="absolute left-full ml-2 px-2 py-1 bg-gray-800 text-white text-xs rounded-md opacity-0 group-hover:opacity-100 pointer-events-none whitespace-nowrap z-50 shadow-lg transition-opacity">
+                {label}
+              </div>
+            )}
+          </button>
+          {!collapsed && isExpanded && item.children && (
+            <ul className="ml-4 mt-1 space-y-1">
+              {item.children.map((child) => {
+                if (!hasPermission(child)) return null;
+                const ChildIcon = iconMap[child.iconName] || Shield;
+                const childLabel = navLabelKeyMap[child.label] ? t(navLabelKeyMap[child.label]) : child.label;
+                return (
+                  <li key={child.path}>
+                    <NavLink
+                      to={child.path}
+                      onMouseEnter={() => handleNavHover(child.path)}
+                      className={({ isActive }) =>
+                        `flex items-center space-x-3 px-3 py-2 rounded-lg transition-colors ${
+                          isActive
+                            ? 'bg-blue-600 text-white'
+                            : 'text-gray-400 hover:bg-gray-800 hover:text-white'
+                        }`
+                      }
+                    >
+                      <ChildIcon className="h-4 w-4 flex-shrink-0" />
+                      <span className="text-sm whitespace-nowrap">{childLabel}</span>
+                    </NavLink>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </li>
+      );
+    }
+
+    return (
+      <li key={item.path}>
+        <NavLink
+          to={item.path}
+          onMouseEnter={() => handleNavHover(item.path)}
+          className={({ isActive }) =>
+            `flex items-center ${collapsed ? 'justify-center' : 'space-x-3'} px-3 py-2.5 rounded-lg transition-colors group ${
+              isActive
+                ? 'bg-blue-600 text-white'
+                : 'text-gray-300 hover:bg-gray-800 hover:text-white'
+            }`
+          }
+          title={collapsed ? label : undefined}
+        >
+          <Icon className="h-5 w-5 flex-shrink-0" />
+          {!collapsed && (
+            <span className="text-sm font-medium whitespace-nowrap">{label}</span>
+          )}
+          {collapsed && (
+            <div className="absolute left-full ml-2 px-2 py-1 bg-gray-800 text-white text-xs rounded-md opacity-0 group-hover:opacity-100 pointer-events-none whitespace-nowrap z-50 shadow-lg transition-opacity">
+              {label}
+            </div>
+          )}
+        </NavLink>
+      </li>
+    );
   };
 
   return (
@@ -108,33 +226,7 @@ const Sidebar: React.FC = () => {
       {/* Navigation */}
       <nav className="flex-1 py-4 overflow-y-auto overflow-x-hidden">
         <ul className="space-y-1 px-3">
-          {navItems.map((item) => (
-            <li key={item.path}>
-              <NavLink
-                to={item.path}
-                onMouseEnter={() => handleNavHover(item.path)}
-                className={({ isActive }) =>
-                  `flex items-center ${collapsed ? 'justify-center' : 'space-x-3'} px-3 py-2.5 rounded-lg transition-colors group ${
-                    isActive
-                      ? 'bg-blue-600 text-white'
-                      : 'text-gray-300 hover:bg-gray-800 hover:text-white'
-                  }`
-                }
-                title={collapsed ? item.label : undefined}
-              >
-                <item.icon className="h-5 w-5 flex-shrink-0" />
-                {!collapsed && (
-                  <span className="text-sm font-medium whitespace-nowrap">{item.label}</span>
-                )}
-                {/* Tooltip for collapsed state */}
-                {collapsed && (
-                  <div className="absolute left-full ml-2 px-2 py-1 bg-gray-800 text-white text-xs rounded-md opacity-0 group-hover:opacity-100 pointer-events-none whitespace-nowrap z-50 shadow-lg transition-opacity">
-                    {item.label}
-                  </div>
-                )}
-              </NavLink>
-            </li>
-          ))}
+          {NAV_ITEMS.map(renderNavItem)}
         </ul>
       </nav>
 
@@ -168,7 +260,7 @@ const Sidebar: React.FC = () => {
                 <UserCircle className="h-4 w-4" />
               </NavLink>
               <button
-                onClick={logout}
+                onClick={() => setShowLogoutConfirm(true)}
                 className="p-2 text-gray-400 hover:text-white hover:bg-gray-800 rounded-lg transition-colors flex-shrink-0"
                 title={t('nav.logout')}
               >
@@ -180,12 +272,58 @@ const Sidebar: React.FC = () => {
         {collapsed && (
           <div className="mt-2 flex items-center justify-center gap-1">
             <button
-              onClick={logout}
+              onClick={() => setShowLogoutConfirm(true)}
               className="p-2 text-gray-400 hover:text-white hover:bg-gray-800 rounded-lg transition-colors"
               title={t('nav.logout')}
             >
               <LogOut className="h-4 w-4" />
             </button>
+          </div>
+        )}
+
+        {/* Logout Confirmation Dialog */}
+        {showLogoutConfirm && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+            onClick={() => setShowLogoutConfirm(false)}
+            role="presentation"
+          >
+            <div
+              className="bg-card rounded-lg shadow-xl border border-border w-full max-w-sm mx-4"
+              onClick={(e) => e.stopPropagation()}
+              role="dialog"
+              aria-modal="true"
+            >
+              <div className="flex items-center justify-between px-6 py-4 border-b border-border">
+                <h2 className="text-lg font-semibold text-foreground">
+                  {t('auth.confirmLogout')}
+                </h2>
+                <button
+                  onClick={() => setShowLogoutConfirm(false)}
+                  className="p-1 text-muted-foreground hover:text-foreground rounded transition-colors"
+                  aria-label="Close"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+              <div className="px-6 py-4 flex justify-end gap-3">
+                <button
+                  onClick={() => setShowLogoutConfirm(false)}
+                  className="px-4 py-2 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  {t('common.cancel')}
+                </button>
+                <button
+                  onClick={() => {
+                    setShowLogoutConfirm(false);
+                    logout();
+                  }}
+                  className="px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors"
+                >
+                  {t('nav.logout')}
+                </button>
+              </div>
+            </div>
           </div>
         )}
       </div>

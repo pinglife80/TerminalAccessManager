@@ -7,10 +7,13 @@ Centralized logging configuration for TerminalAccessManager.
 - Unified timestamp format with timezone info
 - Request-ID auto-injection via format function + ContextVar
 - Timezone controlled by TZ config / environment variable
+- JSON format logging for production (structured logs)
 """
+import json
 import logging
 import os
 import sys
+from datetime import datetime, timezone
 
 from loguru import logger
 
@@ -61,12 +64,41 @@ def _log_format(record) -> str:
     )
 
 
+def _json_format(record) -> str:
+    """JSON format for structured logging in production.
+
+    Outputs structured JSON logs that can be easily parsed by log aggregators
+    like ELK, Loki, or cloud logging services.
+    """
+    log_data = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "level": record["level"].name,
+        "message": record["message"],
+        "module": record["name"],
+        "function": record["function"],
+        "line": record["line"],
+        "request_id": record["extra"].get("request_id", "-"),
+    }
+
+    # Add exception info if present
+    if record["exception"]:
+        log_data["exception"] = str(record["exception"])
+
+    # Add extra fields
+    for key, value in record["extra"].items():
+        if key != "request_id":
+            log_data[key] = value
+
+    return json.dumps(log_data) + "\n"
+
+
 def setup_logging() -> None:
     """Initialize logging configuration.
 
     - Set system timezone from TZ config / environment variable
     - Remove default loguru handler
     - Add stdout handler with configured log level
+    - Use JSON format in production, colored format in development
     - Add file handler with rotation (10MB, 30 days retention, gz compression)
     - Intercept standard library logging
     """
@@ -82,18 +114,23 @@ def setup_logging() -> None:
     # Remove default loguru handler
     logger.remove()
 
+    # Determine log format based on environment
+    use_json = settings.ENVIRONMENT == "production"
+    log_format = _json_format if use_json else _log_format
+
     # Stdout handler — always enabled
     logger.add(
         sys.stdout,
-        format=_log_format,
+        format=log_format,
         level=settings.LOG_LEVEL,
+        colorize=not use_json,
     )
 
-    # File handler — with rotation and retention
+    # File handler — with rotation and retention (JSON format for log aggregation)
     try:
         logger.add(
             "/var/log/tam/app.log",
-            format=_log_format,
+            format=_json_format,  # Always use JSON for file logs
             level=settings.LOG_LEVEL,
             rotation="10 MB",
             retention="30 days",
@@ -121,4 +158,4 @@ def setup_logging() -> None:
     ]:
         logging.getLogger(noisy_logger).setLevel(logging.WARNING)
 
-    logger.info(f"Logging initialized [level={settings.LOG_LEVEL}]")
+    logger.info(f"Logging initialized [level={settings.LOG_LEVEL}, format={'json' if use_json else 'colored'}]")

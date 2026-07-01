@@ -184,7 +184,7 @@ const Roles: React.FC = () => {
                       </div>
                     </td>
                     <td className="px-4 sm:px-6 py-4 text-sm text-muted-foreground">
-                      {role.description || '—'}
+                      {t(`roles.descriptions.${role.name}`, role.description || '—')}
                     </td>
                     <td className="px-4 sm:px-6 py-4 whitespace-nowrap text-center">
                       <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
@@ -300,7 +300,7 @@ const Roles: React.FC = () => {
           <div className="space-y-3 max-h-[70vh] overflow-y-auto">
             <div className="mb-3">
               <span className="text-sm text-muted-foreground">{t('roles.description')}: </span>
-              <span className="text-sm text-foreground">{viewingRole.description || '—'}</span>
+              <span className="text-sm text-foreground">{t(`roles.descriptions.${viewingRole.name}`, viewingRole.description || '—')}</span>
             </div>
             {viewingRole.name === 'superadmin' ? (
               <div className="p-3 bg-purple-50 border border-purple-200 rounded-lg">

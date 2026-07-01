@@ -8,7 +8,7 @@ class Settings(BaseSettings):
 
     # Application
     PROJECT_NAME: str = "Terminal Access Manager"
-    VERSION: str = "3.4.0"
+    VERSION: str = "3.5.0"
     API_V1_STR: str = "/api/v1"
     DEBUG: bool = False
     ENVIRONMENT: str = "development"
@@ -71,6 +71,25 @@ class Settings(BaseSettings):
 
     # Upload
     UPLOAD_DIR: str = "./uploads"
+
+    # Email Configuration
+    EMAIL_HOST: str | None = None
+    EMAIL_PORT: int = 465
+    EMAIL_USE_TLS: bool = False
+    EMAIL_USE_SSL: bool = True
+    EMAIL_USERNAME: str | None = None
+    EMAIL_PASSWORD: str | None = None
+    EMAIL_FROM: str | None = None
+    EMAIL_FROM_NAME: str = "TAM System"
+    EMAIL_SMTP_URL: str | None = None  # HTTP SMTP relay URL (optional)
+
+    # Email Rate Limiting
+    EMAIL_RATE_LIMIT_PER_MINUTE: int = 10
+    EMAIL_CODE_EXPIRE_MINUTES: int = 10
+
+    # Company Info (for email templates)
+    COMPANY_NAME: str = "TAM"
+    SUPPORT_EMAIL: str | None = None
 
     class Config:
         env_file = ".env"
