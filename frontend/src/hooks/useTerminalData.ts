@@ -61,6 +61,9 @@ export interface SystemStatus {
   database: string;
   sangfor: SangforStatus | null;
   network_scanner: string;
+  uptime?: string;
+  version?: string;
+  environment?: string;
 }
 
 export interface PaginatedResponse<T> {

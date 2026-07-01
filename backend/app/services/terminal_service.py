@@ -240,7 +240,11 @@ class TerminalService:
 
     async def get_system_status(self) -> dict:
         """Get system status including Sangfor AF and data source connectivity"""
-        # Check Sangfor AF connectivity via DataSource table
+        import asyncio
+
+        from app.core.config import settings
+
+        # Check Sangfor AF connectivity via DataSource table (with timeout)
         sangfor_status = {"connected": False, "error": None}
         try:
             from app.core.crypto import decrypt_config
@@ -261,13 +265,19 @@ class TerminalService:
                             username=config.get("username", ""),
                             password=config.get("password", ""),
                         )
-                        connected = await svc.test_connection()
-                        if connected:
-                            sangfor_status = {"connected": True, "error": None}
+                        # Add timeout to connection test (max 3 seconds)
+                        try:
+                            connected = await asyncio.wait_for(svc.test_connection(), timeout=3.0)
+                            if connected:
+                                sangfor_status = {"connected": True, "error": None}
+                                await svc.close()
+                                break
+                            else:
+                                sangfor_status["error"] = f"Connection test failed for '{source.tag}'"
+                        except TimeoutError:
+                            sangfor_status["error"] = f"Connection timeout for '{source.tag}'"
                             await svc.close()
-                            break
-                        else:
-                            sangfor_status["error"] = f"Connection test failed for '{source.tag}'"
+                            continue
                         await svc.close()
                     except Exception as e:
                         sangfor_status["error"] = f"Sangfor '{source.tag}': {str(e)}"
@@ -300,11 +310,25 @@ class TerminalService:
         except Exception:
             pass
 
+        import time
+
+        from app.api.v1.endpoints.system import start_time
+
+        uptime_seconds = max(0, time.time() - start_time)
+        days = int(uptime_seconds // (24 * 3600))
+        hours = int((uptime_seconds % (24 * 3600)) // 3600)
+        minutes = int((uptime_seconds % 3600) // 60)
+        seconds = int(uptime_seconds % 60)
+        uptime_str = f"{days}d {hours}h {minutes}m {seconds}s"
+
         return {
             "backend_api": "connected",
-            "database": "connected",
+            "database": "healthy",
             "sangfor": sangfor_status,
             "network_scanner": network_scanner_status,
+            "uptime": uptime_str,
+            "version": settings.VERSION,
+            "environment": settings.ENVIRONMENT,
         }
 
     # ------------------------------------------------------------------

@@ -1,0 +1,104 @@
+import React from 'react';
+import { useTranslation } from 'react-i18next';
+import { Link } from 'react-router-dom';
+import { Settings, Key, HardDrive, Bell, Shield } from 'lucide-react';
+
+const SystemSettings: React.FC = () => {
+  const { t } = useTranslation();
+
+  const configCards = [
+    {
+      title: t('systemSettings.general'),
+      description: t('systemSettings.generalDesc'),
+      icon: Settings,
+      path: '/system-settings',
+      color: 'bg-blue-500',
+      lightColor: 'bg-blue-50',
+      textColor: 'text-blue-600',
+    },
+    {
+      title: t('systemSettings.authProviders'),
+      description: t('systemSettings.authProvidersDesc'),
+      icon: Key,
+      path: '/auth-providers',
+      color: 'bg-green-500',
+      lightColor: 'bg-green-50',
+      textColor: 'text-green-600',
+    },
+    {
+      title: t('systemSettings.backup'),
+      description: t('systemSettings.backupDesc'),
+      icon: HardDrive,
+      path: '/backup',
+      color: 'bg-purple-500',
+      lightColor: 'bg-purple-50',
+      textColor: 'text-purple-600',
+    },
+    {
+      title: t('systemSettings.notifications'),
+      description: t('systemSettings.notificationsDesc'),
+      icon: Bell,
+      path: '/notifications',
+      color: 'bg-orange-500',
+      lightColor: 'bg-orange-50',
+      textColor: 'text-orange-600',
+    },
+    {
+      title: t('systemSettings.users'),
+      description: t('systemSettings.usersDesc'),
+      icon: Shield,
+      path: '/users',
+      color: 'bg-cyan-500',
+      lightColor: 'bg-cyan-50',
+      textColor: 'text-cyan-600',
+    },
+    {
+      title: t('systemSettings.roles'),
+      description: t('systemSettings.rolesDesc'),
+      icon: Shield,
+      path: '/roles',
+      color: 'bg-red-500',
+      lightColor: 'bg-red-50',
+      textColor: 'text-red-600',
+    },
+  ];
+
+  return (
+    <div className="min-h-full bg-background p-4 sm:p-6 lg:p-8">
+      <div className="max-w-6xl mx-auto">
+        {/* Page Header */}
+        <div className="flex items-center justify-between mb-6">
+          <div>
+            <h1 className="text-2xl sm:text-3xl font-bold text-foreground flex items-center gap-2">
+              <Settings className="h-6 w-6" />
+              {t('systemSettings.title')}
+            </h1>
+            <p className="text-muted-foreground mt-1">{t('systemSettings.description')}</p>
+          </div>
+        </div>
+
+        {/* Configuration Cards */}
+        <div className="bg-card rounded-xl border border-border p-6">
+          <h2 className="text-lg font-semibold text-foreground mb-6">{t('systemSettings.configuration')}</h2>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {configCards.map((card) => (
+              <Link
+                key={card.path}
+                to={card.path}
+                className={`${card.lightColor} rounded-xl p-5 hover:shadow-md transition-all duration-200 group cursor-pointer`}
+              >
+                <div className={`w-12 h-12 rounded-lg ${card.color} flex items-center justify-center mb-4 group-hover:scale-110 transition-transform`}>
+                  <card.icon className="h-6 w-6 text-white" />
+                </div>
+                <h3 className={`font-semibold ${card.textColor} mb-2`}>{card.title}</h3>
+                <p className="text-sm text-muted-foreground">{card.description}</p>
+              </Link>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default SystemSettings;

@@ -128,9 +128,9 @@ services:
     # read_only: true
     tmpfs:
       - /tmp
-      - /app/uploads
     volumes:
       - tam-logs:/var/log/tam
+      - tam-uploads:/app/uploads
     logging:
       driver: json-file
       options:
@@ -213,6 +213,7 @@ volumes:
   redis_data:
   frontend_dist:
   tam-logs:
+  tam-uploads:
 
 networks:
   tam_network:

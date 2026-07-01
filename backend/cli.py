@@ -52,6 +52,7 @@ async def _create_admin_user():
     from app.core.database import async_session_maker
     from app.core.security import hash_password
     from app.models.user import User
+    from app.models.role import Role, UserRole
 
     async with async_session_maker() as db:
         result = await db.execute(select(User).where(User.username == "admin"))
@@ -66,6 +67,14 @@ async def _create_admin_user():
                 is_superuser=True,
             )
             db.add(admin)
+            await db.flush()
+
+            superadmin_role = await db.execute(select(Role).where(Role.name == "superadmin"))
+            superadmin_role = superadmin_role.scalar_one_or_none()
+            if superadmin_role:
+                db.add(UserRole(user_id=admin.id, role_id=superadmin_role.id))
+                print(_green("✓ Superadmin role assigned to admin user"))
+
             await db.commit()
             print(_green("✓ Admin user created successfully!"))
             print("  Username: admin")

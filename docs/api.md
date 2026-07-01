@@ -1,6 +1,6 @@
 # TerminalAccessManager API 文档
 
-> 文档版本：v3.3.0 | 更新日期：2026-06-17
+> 文档版本：v3.5.0 | 更新日期：2026-07-01
 
 > 基于 MAC 地址和 IP 地址的网络终端准入管理平台
 
@@ -31,8 +31,11 @@
 - [11. 统计 /stats](#11-统计-stats)
 - [12. 系统设置 /settings](#12-系统设置-settings)
 - [13. 角色管理 /roles](#13-角色管理-roles)
-- [14. 权限码参考](#14-权限码参考)
-- [15. 健康检查 /health](#15-健康检查-health)
+- [14. 通知管理 /notifications](#14-通知管理-notifications)
+- [15. 认证提供者 /auth/providers](#15-认证提供者-authproviders)
+- [16. 备份管理 /backup](#16-备份管理-backup)
+- [17. 权限码参考](#17-权限码参考)
+- [18. 健康检查 /health](#18-健康检查-health)
 
 ---
 
@@ -3038,9 +3041,475 @@ GET /api/v1/roles/{role_id}/users
 
 ---
 
-## 14. 权限码参考
+## 14. 通知管理 /notifications
 
-系统共定义29个权限码，按10个功能模块分组：
+### 14.1 获取通知渠道列表
+
+```
+GET /api/v1/notifications/channels
+```
+
+**所需权限**: `notification:read`
+
+**响应**:
+
+```json
+[
+  {
+    "id": 1,
+    "name": "邮件通知",
+    "type": "email",
+    "description": "发送邮件通知",
+    "config": {
+      "smtp_host": "smtp.example.com",
+      "smtp_port": 587,
+      "smtp_user": "notifications@example.com"
+    },
+    "events": ["login", "block", "unblock"],
+    "enabled": true,
+    "created_by": "admin",
+    "created_at": "2026-07-01T00:00:00",
+    "updated_at": "2026-07-01T00:00:00"
+  }
+]
+```
+
+### 14.2 创建通知渠道
+
+```
+POST /api/v1/notifications/channels
+```
+
+**所需权限**: `notification:manage`
+
+**请求体**:
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| name | string | 是 | 渠道名称 |
+| type | string | 是 | 渠道类型（email/dingtalk/wecom/webhook） |
+| config | object | 是 | 渠道配置 |
+| events | string[] | 是 | 订阅事件列表 |
+| description | string | 否 | 渠道描述 |
+| enabled | boolean | 是 | 是否启用 |
+
+**请求示例**:
+
+```json
+{
+  "name": "钉钉通知",
+  "type": "dingtalk",
+  "config": {
+    "webhook_url": "https://oapi.dingtalk.com/robot/send?access_token=xxx"
+  },
+  "events": ["login", "compliance_change"],
+  "description": "钉钉群机器人通知",
+  "enabled": true
+}
+```
+
+### 14.3 获取通知渠道详情
+
+```
+GET /api/v1/notifications/channels/{channel_id}
+```
+
+**所需权限**: `notification:read`
+
+**响应**: 同获取列表返回格式
+
+### 14.4 更新通知渠道
+
+```
+PUT /api/v1/notifications/channels/{channel_id}
+```
+
+**所需权限**: `notification:manage`
+
+**请求体**: 同创建请求体（所有字段可选）
+
+### 14.5 删除通知渠道
+
+```
+DELETE /api/v1/notifications/channels/{channel_id}
+```
+
+**所需权限**: `notification:manage`
+
+**响应**: `204 No Content`
+
+### 14.6 测试通知渠道
+
+```
+POST /api/v1/notifications/channels/{channel_id}/test
+```
+
+**所需权限**: `notification:manage`
+
+**响应**:
+
+```json
+{
+  "success": true,
+  "message": "测试消息发送成功"
+}
+```
+
+### 14.7 获取通知日志
+
+```
+GET /api/v1/notifications/logs
+```
+
+**所需权限**: `notification:read`
+
+**请求参数**:
+
+| 参数 | 位置 | 类型 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| channel_name | Query | string | - | 按渠道名称过滤 |
+| event_type | Query | string | - | 按事件类型过滤 |
+| status | Query | string | - | 按状态过滤（sent/failed） |
+| limit | Query | int | 100 | 每页记录数（1-500） |
+| offset | Query | int | 0 | 偏移量 |
+
+**响应**:
+
+```json
+{
+  "items": [
+    {
+      "id": 1,
+      "channel_name": "邮件通知",
+      "event_type": "login",
+      "status": "sent",
+      "message": "用户 admin 登录系统",
+      "created_at": "2026-07-01T10:00:00"
+    }
+  ],
+  "total": 50,
+  "limit": 100,
+  "offset": 0
+}
+```
+
+### 14.8 获取可用事件类型
+
+```
+GET /api/v1/notifications/events
+```
+
+**所需权限**: 需认证
+
+**响应**:
+
+```json
+{
+  "events": [
+    {
+      "type": "login",
+      "name": "用户登录",
+      "description": "用户成功登录系统",
+      "severity": "info",
+      "category": "security"
+    }
+  ]
+}
+```
+
+### 14.9 获取可用渠道类型
+
+```
+GET /api/v1/notifications/channel-types
+```
+
+**所需权限**: 需认证
+
+**响应**:
+
+```json
+{
+  "channels": [
+    {
+      "type": "email",
+      "name": "邮件",
+      "description": "通过 SMTP 发送邮件通知",
+      "config_fields": [
+        {"name": "smtp_host", "label": "SMTP 主机", "type": "string"},
+        {"name": "smtp_port", "label": "SMTP 端口", "type": "number"},
+        {"name": "smtp_user", "label": "用户名", "type": "string"},
+        {"name": "smtp_password", "label": "密码", "type": "password"}
+      ]
+    }
+  ]
+}
+```
+
+---
+
+## 15. 认证提供者 /auth/providers
+
+### 15.1 获取认证提供者列表
+
+```
+GET /api/v1/auth/providers
+```
+
+**所需权限**: 需认证
+
+**响应**:
+
+```json
+[
+  {
+    "id": 1,
+    "name": "本地认证",
+    "provider_type": "local",
+    "description": "用户名密码认证",
+    "config": {},
+    "enabled": true,
+    "priority": 1,
+    "created_by": "admin",
+    "created_at": "2026-07-01T00:00:00",
+    "updated_at": "2026-07-01T00:00:00"
+  }
+]
+```
+
+### 15.2 创建认证提供者
+
+```
+POST /api/v1/auth/providers
+```
+
+**所需权限**: `auth.manage`
+
+**请求体**:
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| name | string | 是 | 提供者名称 |
+| provider_type | string | 是 | 提供者类型（local/ldap） |
+| config | object | 是 | 提供者配置 |
+| enabled | boolean | 是 | 是否启用 |
+| priority | int | 是 | 优先级（数值越小优先级越高） |
+| description | string | 否 | 描述 |
+
+**LDAP 配置示例**:
+
+```json
+{
+  "name": "LDAP认证",
+  "provider_type": "ldap",
+  "config": {
+    "server_uri": "ldap://ldap.example.com:389",
+    "base_dn": "dc=example,dc=com",
+    "user_search_base": "ou=users",
+    "user_search_filter": "(sAMAccountName={username})",
+    "bind_dn": "cn=admin,dc=example,dc=com",
+    "bind_password": "secret"
+  },
+  "enabled": true,
+  "priority": 2,
+  "description": "Active Directory 认证"
+}
+```
+
+### 15.3 获取认证提供者详情
+
+```
+GET /api/v1/auth/providers/{provider_id}
+```
+
+**所需权限**: 需认证
+
+**响应**: 同获取列表返回格式
+
+### 15.4 更新认证提供者
+
+```
+PUT /api/v1/auth/providers/{provider_id}
+```
+
+**所需权限**: `auth.manage`
+
+**请求体**: 同创建请求体（所有字段可选）
+
+### 15.5 删除认证提供者
+
+```
+DELETE /api/v1/auth/providers/{provider_id}
+```
+
+**所需权限**: `auth.manage`
+
+**响应**: `204 No Content`
+
+### 15.6 测试认证提供者
+
+```
+POST /api/v1/auth/providers/{provider_id}/test
+```
+
+**所需权限**: `auth.manage`
+
+**响应**:
+
+```json
+{
+  "success": true,
+  "message": "LDAP 连接测试成功"
+}
+```
+
+---
+
+## 16. 备份管理 /backup
+
+### 16.1 获取备份配置
+
+```
+GET /api/v1/backup/config
+```
+
+**所需权限**: 需认证
+
+**响应**:
+
+```json
+{
+  "enabled": true,
+  "schedule": "daily",
+  "retention_days": 7,
+  "storage_type": "local",
+  "storage_config": {},
+  "backup_database": true,
+  "backup_config": true,
+  "backup_logs": false,
+  "encrypt_backup": false
+}
+```
+
+### 16.2 更新备份配置
+
+```
+PUT /api/v1/backup/config
+```
+
+**所需权限**: `system.manage`
+
+**请求体**: 同获取配置返回格式
+
+### 16.3 执行手动备份
+
+```
+POST /api/v1/backup/run
+```
+
+**所需权限**: `system.manage`
+
+**响应**:
+
+```json
+{
+  "id": "backup-20260701-100000",
+  "status": "completed",
+  "started_at": "2026-07-01T10:00:00",
+  "completed_at": "2026-07-01T10:00:30",
+  "file_path": "/backups/backup-20260701-100000.zip",
+  "file_size": 102400,
+  "checksum": "abc123...",
+  "error_message": null
+}
+```
+
+### 16.4 获取备份列表
+
+```
+GET /api/v1/backup/list
+```
+
+**所需权限**: 需认证
+
+**响应**:
+
+```json
+{
+  "backups": [
+    {
+      "filename": "backup-20260701-100000.zip",
+      "file_path": "/backups/backup-20260701-100000.zip",
+      "file_size": 102400,
+      "created_at": "2026-07-01T10:00:00"
+    }
+  ]
+}
+```
+
+### 16.5 下载备份文件
+
+```
+GET /api/v1/backup/download/{filename}
+```
+
+**所需权限**: `system.manage`
+
+**响应**: 文件下载（application/zip）
+
+### 16.6 恢复备份
+
+```
+POST /api/v1/backup/restore/{filename}
+```
+
+**所需权限**: `system.manage`
+
+**响应**:
+
+```json
+{
+  "success": true,
+  "message": "Backup restored successfully",
+  "backup_file": "backup-20260701-100000.zip"
+}
+```
+
+### 16.7 删除备份文件
+
+```
+DELETE /api/v1/backup/{filename}
+```
+
+**所需权限**: `system.manage`
+
+**响应**: `204 No Content`
+
+### 16.8 测试备份配置
+
+```
+POST /api/v1/backup/test
+```
+
+**所需权限**: `system.manage`
+
+**响应**:
+
+```json
+{
+  "success": true,
+  "message": "Backup configuration test successful",
+  "details": {
+    "database": "connected",
+    "storage_type": "local"
+  }
+}
+```
+
+---
+
+## 17. 权限码参考
+
+系统共定义34个权限码，按12个功能模块分组：
 
 | 模块 | 权限码 | 名称 |
 |------|--------|------|
@@ -3073,3 +3542,7 @@ GET /api/v1/roles/{role_id}/users
 | role | `role:read` | 查看角色 |
 | role | `role:write` | 管理角色 |
 | role | `role:delete` | 删除角色 |
+| notification | `notification:read` | 查看通知 |
+| notification | `notification:manage` | 管理通知 |
+| auth | `auth.manage` | 管理认证提供者 |
+| system | `system.manage` | 系统管理（备份/恢复） |

@@ -3,20 +3,43 @@ export const STATUS_CONFIG: Record<string, { label: string; className: string }>
   unblocked: { label: 'Unblocked', className: 'bg-blue-100 text-blue-800' },
 };
 
-export const NAV_ITEMS = [
+export interface NavItem {
+  path: string;
+  label: string;
+  iconName: string;
+  adminOnly: boolean;
+  requiredPermission: string | null;
+  children?: NavItem[];
+}
+
+export const NAV_ITEMS: NavItem[] = [
   { path: '/dashboard', label: 'Dashboard', iconName: 'LayoutDashboard', adminOnly: false, requiredPermission: null },
   { path: '/terminals', label: 'Terminals', iconName: 'Network', adminOnly: false, requiredPermission: 'terminal:read' },
   { path: '/whitelist', label: 'Whitelist', iconName: 'List', adminOnly: false, requiredPermission: 'whitelist:read' },
   { path: '/blacklist', label: 'Blocked', iconName: 'ShieldOff', adminOnly: false, requiredPermission: 'blacklist:read' },
   { path: '/audit-logs', label: 'Audit Logs', iconName: 'FileText', adminOnly: false, requiredPermission: 'audit:read' },
   { path: '/data-sources', label: 'Data Sources', iconName: 'Database', adminOnly: true, requiredPermission: 'datasource:read' },
-  { path: '/users', label: 'Users', iconName: 'Users', adminOnly: true, requiredPermission: 'user:read' },
-  { path: '/roles', label: 'Roles', iconName: 'Shield', adminOnly: true, requiredPermission: 'role:read' },
+  { 
+    path: '/system-settings', 
+    label: 'System Settings', 
+    iconName: 'Settings', 
+    adminOnly: true, 
+    requiredPermission: 'system:manage',
+    children: [
+      { path: '/system-settings', label: 'General', iconName: 'Settings', adminOnly: true, requiredPermission: 'system:manage' },
+      { path: '/auth-providers', label: 'Auth Providers', iconName: 'Key', adminOnly: true, requiredPermission: 'system:manage' },
+      { path: '/backup', label: 'Backup', iconName: 'HardDrive', adminOnly: true, requiredPermission: 'system:manage' },
+      { path: '/notifications', label: 'Notifications', iconName: 'Bell', adminOnly: true, requiredPermission: 'system:manage' },
+      { path: '/users', label: 'Users', iconName: 'Users', adminOnly: true, requiredPermission: 'user:read' },
+      { path: '/roles', label: 'Roles', iconName: 'Shield', adminOnly: true, requiredPermission: 'role:read' },
+    ]
+  },
 ];
 
 export const API_ENDPOINTS = {
   STATS: '/stats/',
-  SYSTEM_STATUS: '/stats/system-status',
+  SYSTEM_STATUS: '/system/status',
+  SYSTEM_CONFIG: '/system/config',
   TERMINALS_SEARCH: '/terminals/search',
   TERMINALS_LIST: '/terminals/',
   TERMINALS_BLOCK: '/terminals/block/',
@@ -34,6 +57,8 @@ export const API_ENDPOINTS = {
   AUTH_REFRESH: '/auth/refresh',
   AUTH_REGISTER: '/auth/register',
   AUTH_USERS: '/auth/users',
+  AUTH_PROVIDERS: '/auth/providers',
+  AUTH_PROVIDERS_TEST: '/auth/providers/{{id}}/test',
   DATA_SOURCES: '/data-sources/',
   DATA_SOURCE_BINDINGS: '/data-sources/bindings/',
   DATA_SOURCE_DELETE_PREVIEW: '/data-sources/',
@@ -48,6 +73,17 @@ export const API_ENDPOINTS = {
   ROLES: '/roles/',
   ROLES_PERMISSIONS: '/roles/permissions',
   AUTH_USER_ROLES: '/roles/users/',
+  BACKUP_CONFIG: '/backup/config',
+  BACKUP_RUN: '/backup/run',
+  BACKUP_LIST: '/backup/list',
+  BACKUP_DOWNLOAD: '/backup/download/{{filename}}',
+  BACKUP_RESTORE: '/backup/restore/{{filename}}',
+  BACKUP_DELETE: '/backup/{{filename}}',
+  BACKUP_TEST: '/backup/test',
+  NOTIFICATION_CHANNELS: '/notifications/channels',
+  NOTIFICATION_CHANNELS_TEST: '/notifications/channels/{{id}}/test',
+  NOTIFICATION_LOGS: '/notifications/logs',
+  NOTIFICATION_EVENTS: '/notifications/events',
 };
 
 export const PAGE_SIZE_OPTIONS = [10, 20, 50, 100];

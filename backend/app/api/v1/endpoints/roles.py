@@ -39,25 +39,33 @@ async def list_roles(
     db: AsyncSession = Depends(get_db),
 ):
     """List all roles with user count and permission codes"""
-    result = await db.execute(select(Role).order_by(Role.id))
-    roles = result.scalars().all()
+    role_result = await db.execute(select(Role).order_by(Role.id))
+    roles = role_result.scalars().all()
+
+    role_ids = [role.id for role in roles]
+
+    perm_result = await db.execute(
+        select(RolePermission.role_id, Permission.code)
+        .join(Permission, Permission.id == RolePermission.permission_id)
+        .where(RolePermission.role_id.in_(role_ids))
+    )
+    perm_rows = perm_result.all()
+    role_permissions = {}
+    for role_id, code in perm_rows:
+        if role_id not in role_permissions:
+            role_permissions[role_id] = []
+        role_permissions[role_id].append(code)
+
+    count_result = await db.execute(
+        select(UserRole.role_id, func.count(UserRole.user_id))
+        .where(UserRole.role_id.in_(role_ids))
+        .group_by(UserRole.role_id)
+    )
+    count_rows = count_result.all()
+    role_user_counts = {role_id: count for role_id, count in count_rows}
 
     response = []
     for role in roles:
-        # Get permission codes
-        perm_result = await db.execute(
-            select(Permission.code)
-            .join(RolePermission, RolePermission.permission_id == Permission.id)
-            .where(RolePermission.role_id == role.id)
-        )
-        perm_codes = list(perm_result.scalars().all())
-
-        # Get user count
-        count_result = await db.execute(
-            select(func.count(UserRole.user_id)).where(UserRole.role_id == role.id)
-        )
-        user_count = count_result.scalar() or 0
-
         response.append(RoleDetailResponse(
             id=role.id,
             name=role.name,
@@ -65,8 +73,8 @@ async def list_roles(
             is_default=role.is_default,
             created_at=role.created_at,
             updated_at=role.updated_at,
-            permissions=perm_codes,
-            user_count=user_count,
+            permissions=role_permissions.get(role.id, []),
+            user_count=role_user_counts.get(role.id, 0),
         ))
 
     return response

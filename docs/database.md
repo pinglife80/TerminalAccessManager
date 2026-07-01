@@ -1,6 +1,6 @@
 # TerminalAccessManager 数据库设计文档
 
-> 文档版本：v3.3.0  更新日期：2026-06-17
+> 文档版本：v3.5.0  更新日期：2026-07-01
 
 ## 1. 概述
 
@@ -565,6 +565,106 @@ docker-compose.yml 中 PostgreSQL 的 `command` 参数列表如下：
 幂等保护：`roles` 表已有 >= 5 条记录时跳过种子操作。
 
 > **注意**：通过 `alembic upgrade head` 升级的已有数据库，由 006_rbac_tables.py 迁移脚本负责种子数据填充。
+
+---
+
+### 3.11 notification_channels — 通知渠道表
+
+存储通知渠道配置，支持邮件、钉钉、企业微信、通用 Webhook 等多种通知方式。
+
+| 字段 | 类型 | 约束 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| id | INTEGER | PK, INDEX | 自增 | 主键 |
+| name | VARCHAR(100) | UNIQUE, NOT NULL | — | 渠道名称 |
+| channel_type | VARCHAR(20) | NOT NULL | — | 渠道类型 |
+| config | JSON | NOT NULL | `{}` | 渠道配置（JSON 格式，敏感字段加密存储） |
+| events | TEXT[] | | `[]` | 订阅的事件类型列表 |
+| description | TEXT | | NULL | 渠道描述 |
+| enabled | BOOLEAN | | TRUE | 是否启用 |
+| created_by | VARCHAR(50) | | NULL | 创建人用户名 |
+| created_at | TIMESTAMP WITH TZ | server_default=now() | — | 创建时间 |
+| updated_at | TIMESTAMP WITH TZ | server_default=now(), onupdate=now() | — | 更新时间 |
+
+**数据字典 — channel_type：**
+
+| 值 | 说明 |
+|------|------|
+| email | SMTP 邮件通知 |
+| dingtalk | 钉钉 Webhook |
+| wecom | 企业微信 Webhook |
+| webhook | 通用 Webhook |
+
+**索引：**
+
+| 索引名 | 类型 | 字段 |
+|------|------|------|
+| ix_notification_channels_name | UNIQUE | name |
+| ix_notification_channels_type | SINGLE | channel_type |
+
+---
+
+### 3.12 notification_logs — 通知日志表
+
+记录每条通知的发送状态和结果，用于问题排查和审计。
+
+| 字段 | 类型 | 约束 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| id | INTEGER | PK, INDEX | 自增 | 主键 |
+| channel_id | INTEGER | FK → notification_channels.id | NOT NULL | 关联的通知渠道 |
+| event_type | VARCHAR(50) | NOT NULL | — | 事件类型 |
+| status | VARCHAR(20) | NOT NULL | 'pending' | 发送状态 |
+| error_message | TEXT | | NULL | 错误信息 |
+| retries | INTEGER | | 0 | 重试次数 |
+| created_at | TIMESTAMP WITH TZ | server_default=now() | — | 创建时间 |
+| updated_at | TIMESTAMP WITH TZ | server_default=now(), onupdate=now() | — | 更新时间 |
+
+**数据字典 — status：**
+
+| 值 | 说明 |
+|------|------|
+| pending | 待发送 |
+| sent | 发送成功 |
+| failed | 发送失败 |
+| retrying | 重试中 |
+
+**索引：**
+
+| 索引名 | 类型 | 字段 |
+|------|------|------|
+| ix_notification_logs_channel | COMPOSITE | (channel_id, created_at DESC) |
+| ix_notification_logs_status | SINGLE | status |
+| ix_notification_logs_event | SINGLE | event_type |
+
+---
+
+### 3.13 auth_providers — 认证提供者表
+
+存储认证提供者配置，支持本地认证、LDAP认证、OAuth认证等多种认证方式。
+
+| 字段 | 类型 | 约束 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| id | INTEGER | PK, INDEX | 自增 | 主键 |
+| name | VARCHAR(100) | UNIQUE, NOT NULL | — | 提供者名称 |
+| provider_type | VARCHAR(20) | NOT NULL | — | 提供者类型 |
+| config | JSON | NOT NULL | `{}` | 认证配置（JSON 格式，敏感字段加密存储） |
+| enabled | BOOLEAN | | TRUE | 是否启用 |
+| created_at | TIMESTAMP WITH TZ | server_default=now() | — | 创建时间 |
+| updated_at | TIMESTAMP WITH TZ | server_default=now(), onupdate=now() | — | 更新时间 |
+
+**数据字典 — provider_type：**
+
+| 值 | 说明 |
+|------|------|
+| local | 本地认证（用户名密码） |
+| ldap | LDAP/Active Directory 认证 |
+| oauth | OAuth 认证（预留扩展） |
+
+**索引：**
+
+| 索引名 | 类型 | 字段 |
+|------|------|------|
+| ix_auth_providers_name | UNIQUE | name |
+| ix_auth_providers_type | SINGLE | provider_type |
 
 ---
 

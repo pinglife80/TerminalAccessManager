@@ -1,11 +1,11 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useAuthStore } from '@/store/auth';
 import { useStats, useSystemStatus } from '@/hooks/useTerminalData';
 import {
   Server, List, ShieldOff, AlertCircle, Search, FileText,
-  Network, Shield, Activity, Wifi, Database, ArrowRight, Clock
+  Network, Shield, Activity, Wifi, Database, ArrowRight, Clock, X
 } from 'lucide-react';
 import { DashboardSkeleton } from '@/components/Skeleton';
 import { PrimaryButton } from '@/components/Button';
@@ -15,7 +15,29 @@ const Dashboard: React.FC = () => {
   const navigate = useNavigate();
   const { user } = useAuthStore();
   const { data: stats, isLoading, error, dataUpdatedAt } = useStats();
-  const { data: systemStatus } = useSystemStatus();
+  const { data: systemStatus, refetch: refetchSystemStatus, isRefetching } = useSystemStatus();
+  const [showHealthCheck, setShowHealthCheck] = useState(false);
+  const [healthCheckData, setHealthCheckData] = useState<Record<string, any> | null>(null);
+  const [healthCheckLoading, setHealthCheckLoading] = useState(false);
+
+  useEffect(() => {
+    if (showHealthCheck) {
+      fetchHealthCheck();
+    }
+  }, [showHealthCheck]);
+
+  const fetchHealthCheck = async () => {
+    setHealthCheckLoading(true);
+    try {
+      const response = await fetch('/health/ready');
+      const data = await response.json();
+      setHealthCheckData(data);
+    } catch (err) {
+      setHealthCheckData({ status: 'error', error: 'Failed to fetch health check' });
+    } finally {
+      setHealthCheckLoading(false);
+    }
+  };
 
   if (error) {
     return (
@@ -89,15 +111,15 @@ const Dashboard: React.FC = () => {
   const systemStatusItems = [
     {
       name: t('dashboard.backendApi'),
-      status: (systemStatus?.backend_api === 'connected' ? 'connected' : 'disconnected') as 'connected' | 'pending',
+      status: 'connected' as 'connected' | 'pending',
       icon: Activity,
-      detail: systemStatus?.backend_api === 'connected' ? t('dashboard.running') : t('dashboard.disconnected'),
+      detail: t('dashboard.running'),
     },
     {
       name: t('dashboard.database'),
-      status: (systemStatus?.database === 'connected' ? 'connected' : 'pending') as 'connected' | 'pending',
+      status: (systemStatus?.database === 'healthy' ? 'connected' : 'pending') as 'connected' | 'pending',
       icon: Database,
-      detail: systemStatus?.database === 'connected' ? t('dashboard.activeStatus') : t('dashboard.unavailable'),
+      detail: systemStatus?.database === 'healthy' ? t('dashboard.healthy') : t('dashboard.unhealthy'),
     },
     {
       name: t('dashboard.sangforAf'),
@@ -230,7 +252,7 @@ const Dashboard: React.FC = () => {
 
         {/* System Status - Takes 1 column */}
         <div className="lg:col-span-1">
-          <div className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden h-full">
+          <div className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden">
             <div className="px-6 py-5 border-b border-border">
               <div className="flex items-center gap-2">
                 <Activity className="h-5 w-5 text-muted-foreground" />
@@ -238,7 +260,8 @@ const Dashboard: React.FC = () => {
               </div>
             </div>
             <div className="p-4 sm:p-6">
-              <div className="space-y-4">
+              {/* Service Status Items */}
+              <div className="space-y-3 mb-4">
                 {systemStatusItems.map((item) => (
                   <div
                     key={item.name}
@@ -277,8 +300,43 @@ const Dashboard: React.FC = () => {
                 ))}
               </div>
 
+              {/* System Info Cards */}
+              <div className="grid grid-cols-2 gap-3 mb-4">
+                <div className="bg-background rounded-xl p-3">
+                  <p className="text-xs text-muted-foreground mb-1">{t('dashboard.uptime')}</p>
+                  <p className="text-sm font-semibold text-foreground">{systemStatus?.uptime || '--'}</p>
+                </div>
+                <div className="bg-background rounded-xl p-3">
+                  <p className="text-xs text-muted-foreground mb-1">{t('dashboard.version')}</p>
+                  <p className="text-sm font-semibold text-foreground">{systemStatus?.version || '--'}</p>
+                </div>
+                <div className="bg-background rounded-xl p-3 col-span-2">
+                  <p className="text-xs text-muted-foreground mb-1">{t('dashboard.environment')}</p>
+                  <p className="text-sm font-semibold text-foreground capitalize">{systemStatus?.environment || '--'}</p>
+                </div>
+              </div>
+
+              {/* Quick Actions */}
+              <div className="flex flex-wrap gap-2">
+                <button
+                  onClick={() => refetchSystemStatus()}
+                  disabled={isRefetching}
+                  className="px-3 py-2 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition-colors flex items-center gap-1.5 text-xs font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Activity className={`h-3.5 w-3.5 ${isRefetching ? 'animate-spin' : ''}`} />
+                  {t('dashboard.refreshStatus')}
+                </button>
+                <button
+                  onClick={() => setShowHealthCheck(true)}
+                  className="px-3 py-2 bg-green-50 text-green-600 rounded-lg hover:bg-green-100 transition-colors flex items-center gap-1.5 text-xs font-medium"
+                >
+                  <Shield className="h-3.5 w-3.5" />
+                  {t('dashboard.healthCheck')}
+                </button>
+              </div>
+
               {/* Last updated indicator */}
-              <div className="mt-6 pt-4 border-t border-border">
+              <div className="mt-4 pt-4 border-t border-border">
                 <div className="flex items-center gap-2 text-xs text-muted-foreground">
                   <Clock className="h-3.5 w-3.5" />
                   <span>{t('common.lastUpdated')}: {dataUpdatedAt ? new Date(dataUpdatedAt).toLocaleTimeString() : '—'}</span>
@@ -287,6 +345,115 @@ const Dashboard: React.FC = () => {
             </div>
           </div>
         </div>
+
+        {/* Health Check Modal */}
+        {showHealthCheck && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+            onClick={() => setShowHealthCheck(false)}
+            role="presentation"
+          >
+            <div
+              className="bg-card rounded-xl shadow-xl border border-border w-full max-w-lg mx-4 max-h-[80vh] overflow-y-auto"
+              onClick={(e) => e.stopPropagation()}
+              role="dialog"
+              aria-modal="true"
+            >
+              <div className="flex items-center justify-between px-6 py-4 border-b border-border">
+                <div className="flex items-center gap-2">
+                  <Shield className="h-5 w-5 text-green-600" />
+                  <h2 className="text-lg font-semibold text-foreground">{t('dashboard.healthCheck')}</h2>
+                </div>
+                <button
+                  onClick={() => setShowHealthCheck(false)}
+                  className="p-1 text-muted-foreground hover:text-foreground rounded transition-colors"
+                  aria-label="Close"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+              <div className="p-6">
+                {healthCheckLoading ? (
+                  <div className="flex items-center justify-center py-8">
+                    <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin" />
+                  </div>
+                ) : healthCheckData ? (
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between p-4 bg-background rounded-xl">
+                      <span className="text-sm font-medium text-foreground">{t('dashboard.overallStatus')}</span>
+                      <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${
+                        healthCheckData.status === 'ready' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+                      }`}>
+                        {healthCheckData.status === 'ready' ? t('dashboard.healthy') : t('dashboard.unhealthy')}
+                      </span>
+                    </div>
+                    {healthCheckData.db && (
+                      <div className="flex items-center justify-between p-4 bg-background rounded-xl">
+                        <span className="text-sm font-medium text-foreground">{t('dashboard.database')}</span>
+                        <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${
+                          healthCheckData.db === 'ok' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+                        }`}>
+                          {healthCheckData.db === 'ok' ? t('dashboard.healthy') : healthCheckData.db}
+                        </span>
+                      </div>
+                    )}
+                    {healthCheckData.redis && (
+                      <div className="flex items-center justify-between p-4 bg-background rounded-xl">
+                        <span className="text-sm font-medium text-foreground">Redis</span>
+                        <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${
+                          healthCheckData.redis === 'ok' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+                        }`}>
+                          {healthCheckData.redis === 'ok' ? t('dashboard.healthy') : healthCheckData.redis}
+                        </span>
+                      </div>
+                    )}
+                    {healthCheckData.timestamp && (
+                      <div className="flex items-center justify-between p-4 bg-background rounded-xl">
+                        <span className="text-sm font-medium text-foreground">{t('dashboard.timestamp')}</span>
+                        <span className="text-sm text-muted-foreground">{new Date(healthCheckData.timestamp).toLocaleString()}</span>
+                      </div>
+                    )}
+                    {healthCheckData.services && (
+                      <div className="space-y-2">
+                        <p className="text-sm font-medium text-foreground">{t('dashboard.services')}</p>
+                        {Object.entries(healthCheckData.services).map(([name, status]) => (
+                          <div key={name} className="flex items-center justify-between p-3 bg-background rounded-lg">
+                            <span className="text-sm text-muted-foreground capitalize">{name}</span>
+                            <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
+                              status === 'ok' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+                            }`}>
+                              {status === 'ok' ? t('dashboard.healthy') : String(status)}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="text-center py-8">
+                    <AlertCircle className="h-12 w-12 text-red-500 mx-auto mb-4" />
+                    <p className="text-muted-foreground">{t('dashboard.failedToLoadHealth')}</p>
+                  </div>
+                )}
+                <div className="mt-6 flex justify-end gap-3">
+                  <button
+                    onClick={() => setShowHealthCheck(false)}
+                    className="px-4 py-2 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    {t('common.close')}
+                  </button>
+                  <button
+                    onClick={fetchHealthCheck}
+                    disabled={healthCheckLoading}
+                    className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {t('dashboard.refresh')}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

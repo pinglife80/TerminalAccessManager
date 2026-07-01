@@ -52,7 +52,7 @@ const branding: BrandingConfig = {
   appSubtitle: 'Manager',
 
   /** Version number displayed in footer */
-  version: 'v2.0.0',
+  version: 'v3.4.0',
 
   /** Browser tab title (used in index.html and dynamic title updates) */
   title: 'Terminal Access Manager',

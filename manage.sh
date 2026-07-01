@@ -71,7 +71,7 @@ readonly BACKUP_DIR="${SCRIPT_DIR}/backups"
 readonly LOCK_FILE="/tmp/tam_manage.lock"
 readonly STATE_DIR="${SCRIPT_DIR}/.manage"
 readonly STATE_FILE="${STATE_DIR}/state.env"
-readonly VERSION="3.4.0"
+readonly VERSION="3.5.0"
 
 # Docker Compose project name (derived from directory name)
 readonly COMPOSE_PROJECT_NAME="tam"
@@ -274,19 +274,33 @@ dc() {
             compose_files="${compose_files} -f ${SCRIPT_DIR}/docker-compose.dev.yml"
         fi
     fi
-    docker compose --env-file "${ENV_FILE}" ${compose_files} "$@"
+    docker compose -p "${COMPOSE_PROJECT_NAME}" --env-file "${ENV_FILE}" ${compose_files} "$@"
 }
 
-# Ensure .env file exists (idempotent — never overwrites existing)
+# Ensure .env file exists and load environment variables (idempotent — never overwrites existing)
 ensure_env() {
     if [ -f "${ENV_FILE}" ]; then
         log_verbose ".env file exists"
+        # Load environment variables from .env file
+        # Use a subshell to avoid polluting the current shell with 'export'
+        while IFS='=' read -r key value || [[ -n "$key" ]]; do
+            # Skip comments and empty lines
+            [[ "$key" =~ ^#.*$ || -z "$key" ]] && continue
+            # Remove quotes from value
+            value=$(echo "$value" | sed 's/^"\(.*\)"$/\1/' | sed "s/^'\(.*\)'$/\1/")
+            # Export the variable (skip readonly variables, force override others)
+            if ! readonly | grep -q "^declare -r ${key}=" 2>/dev/null; then
+                export "$key=$value"
+            fi
+        done < "${ENV_FILE}"
         return 0
     fi
 
     if [ -f "${ENV_EXAMPLE}" ]; then
         cp "${ENV_EXAMPLE}" "${ENV_FILE}"
         log_info "Created .env from .env.example"
+        # Load the newly created .env file
+        ensure_env
     else
         log_error "No .env or .env.example found. Cannot continue."
         exit 1
@@ -704,6 +718,9 @@ cmd_deploy() {
     else
         _configure_production_wizard
     fi
+
+    # Reload environment variables from .env (after configuration changes)
+    ensure_env
 
     # ─── Step 5: Build & Start ───────────────────────────────────────────
     log_step "Step 4/6: Building and Starting Services"
@@ -3799,6 +3816,9 @@ main() {
 
     # Always cd to script directory
     cd "${SCRIPT_DIR}"
+
+    # Ensure environment is loaded
+    ensure_env
 
     # Log command execution
     _log_to_file "CMD" "Command: $command $*"

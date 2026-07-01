@@ -1,6 +1,6 @@
 # 更新日志
 
-> 文档版本：v3.4.0  更新日期：2026-06-22
+> 文档版本：v3.5.0  更新日期：2026-07-01
 
 本文件记录 TerminalAccessManager 的所有重要变更。
 
@@ -10,6 +10,35 @@
 ---
 
 ## [Unreleased]
+
+---
+
+## [3.5.0] - 2026-07-01
+
+### 新增
+
+- **事件通知服务**：事件总线架构、多通知渠道（邮件/钉钉/企业微信/Webhook）、通知日志、测试连接
+- **认证提供者系统**：插件化认证架构，支持本地认证、LDAP认证（Active Directory/OpenLDAP）、OAuth认证预留
+- **SFTP备份服务**：数据库备份、配置文件备份、SFTP远程上传、备份轮转、校验和验证
+- **系统设置前端页面**：统一系统设置导航入口，包含通用设置、认证提供者、备份配置、通知管理、用户管理、角色管理
+- **前端导航重构**：嵌套导航结构，创建"系统设置"分组，整合配置管理页面
+
+### 修复
+
+- **路径遍历漏洞**：backup.py download/restore/delete端点添加路径检查和文件名净化
+- **LDAP DN注入**：ldap_provider.py添加用户名验证和特殊字符转义函数
+- **2FA验证码暴力破解防护**：email_service.py添加验证码最大尝试次数限制（默认5次）
+- **敏感信息备份泄露**：backup_service.py移除.env文件备份，只备份docker-compose.yml和manage.sh
+- **FTP支持移除**：删除FTP上传代码，强制使用SFTP安全传输
+- **SFTP主机密钥验证**：添加AutoAddPolicy主机密钥验证策略
+
+### 优化
+
+- **N+1查询优化**：roles.py使用JOIN一次性获取所有角色权限和用户计数
+- **异步性能优化**：backup_service.py使用asyncio.to_thread包装同步文件操作
+- **通知模块权限控制**：notifications.py添加notification:read/manage权限检查
+- **Nginx限流调整**：API限流从60r/m提升至300r/m，认证限流从10r/m提升至30r/m
+- **前端国际化完善**：补全备份、认证、通知模块的中/英/日翻译
 
 ---
 
