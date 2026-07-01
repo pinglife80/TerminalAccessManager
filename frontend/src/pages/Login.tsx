@@ -42,6 +42,7 @@ const Login: React.FC = () => {
   const [showError, setShowError] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [loginBgUrl, setLoginBgUrl] = useState('');
+  const [appVersion, setAppVersion] = useState(branding.version);
   const errorTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const { register, handleSubmit, formState: { errors } } = useForm<LoginFormData>();
@@ -61,7 +62,7 @@ const Login: React.FC = () => {
     }
   };
 
-  // Load branding config (background image, favicon) on mount
+  // Load branding config (background image, favicon) and version on mount
   useEffect(() => {
     const loadBranding = async () => {
       try {
@@ -83,7 +84,20 @@ const Login: React.FC = () => {
         // Silently use defaults
       }
     };
+
+    const loadVersion = async () => {
+      try {
+        const response = await apiClient.get('/health');
+        if (response.data.version) {
+          setAppVersion(`v${response.data.version}`);
+        }
+      } catch {
+        // Silently use fallback version from branding config
+      }
+    };
+
     loadBranding();
+    loadVersion();
   }, []);
 
   // Countdown timer for lock
@@ -454,7 +468,7 @@ const Login: React.FC = () => {
         <div className="flex flex-col sm:flex-row items-center justify-center gap-2 text-xs text-muted-foreground mt-3">
           <span>{branding.footer.copyright.replace('{year}', String(new Date().getFullYear()))}</span>
           <span className="hidden sm:inline">|</span>
-          <span>{branding.version}</span>
+          <span>{appVersion}</span>
           {branding.footer.icpNumber && (
             <>
               <span className="hidden sm:inline">|</span>
