@@ -28,6 +28,14 @@ interface CaptchaData {
   question: string;
 }
 
+interface AuthProvider {
+  id: string;
+  name: string;
+  provider_type: string;
+  description: string;
+  enabled: boolean;
+}
+
 const Login: React.FC = () => {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -43,6 +51,8 @@ const Login: React.FC = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [loginBgUrl, setLoginBgUrl] = useState('');
   const [appVersion, setAppVersion] = useState(branding.version);
+  const [authProviders, setAuthProviders] = useState<AuthProvider[]>([]);
+  const [selectedProvider, setSelectedProvider] = useState('local');
   const errorTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const { register, handleSubmit, formState: { errors } } = useForm<LoginFormData>();
@@ -96,8 +106,25 @@ const Login: React.FC = () => {
       }
     };
 
+    const loadAuthProviders = async () => {
+      try {
+        const response = await apiClient.get(`${API_ENDPOINTS.AUTH_PROVIDERS}available`);
+        setAuthProviders(response.data);
+      } catch {
+        // Fallback to local provider only
+        setAuthProviders([{
+          id: 'local',
+          name: 'Local',
+          provider_type: 'local',
+          description: 'Local account authentication',
+          enabled: true,
+        }]);
+      }
+    };
+
     loadBranding();
     loadVersion();
+    loadAuthProviders();
   }, []);
 
   // Countdown timer for lock
@@ -130,7 +157,9 @@ const Login: React.FC = () => {
       formData.append('password', data.password);
 
       // Pass captcha_id and captcha answer to backend if required
-      const params: Record<string, string> = {};
+      const params: Record<string, string> = {
+        provider: selectedProvider,
+      };
       if (captcha && data.captcha) {
         params.captcha_id = captcha.captcha_id;
         params.captcha = data.captcha;
@@ -325,6 +354,30 @@ const Login: React.FC = () => {
             )}
 
             <form onSubmit={handleSubmit(onSubmit)} className="space-y-5">
+              {authProviders.length > 1 && (
+                <div>
+                  <label className="block text-sm font-semibold text-muted-foreground mb-2">
+                    {t('auth.authMethod')}
+                  </label>
+                  <div className="relative">
+                    <select
+                      value={selectedProvider}
+                      onChange={(e) => setSelectedProvider(e.target.value)}
+                      disabled={isLocked}
+                      className={`w-full px-4 py-3 border-2 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all text-foreground bg-background ${
+                        isLocked ? 'bg-muted cursor-not-allowed opacity-60' : 'border-border focus:bg-card'
+                      }`}
+                    >
+                      {authProviders.map((provider) => (
+                        <option key={provider.id} value={provider.provider_type}>
+                          {provider.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              )}
+
               <div>
                 <label className="block text-sm font-semibold text-muted-foreground mb-2">
                   {t('auth.username')}
@@ -446,6 +499,16 @@ const Login: React.FC = () => {
                   t('auth.signIn')
                 )}
               </button>
+
+              <div className="mt-4 text-center">
+                <button
+                  type="button"
+                  onClick={() => navigate('/password-reset')}
+                  className="text-sm text-blue-600 hover:text-blue-700 transition-colors"
+                >
+                  {t('auth.forgotPassword')}
+                </button>
+              </div>
             </form>
 
             {/* Captcha/Lock status indicator */}

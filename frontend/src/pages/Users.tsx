@@ -270,6 +270,9 @@ const Users: React.FC = () => {
                   {t('users.role')}
                 </th>
                 <th className="px-4 sm:px-6 py-3.5 text-center text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                  {t('users.providerLabel')}
+                </th>
+                <th className="px-4 sm:px-6 py-3.5 text-center text-xs font-semibold text-muted-foreground uppercase tracking-wider">
                   {t('common.status')}
                 </th>
                 <th className="px-4 sm:px-6 py-3.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider">
@@ -283,7 +286,7 @@ const Users: React.FC = () => {
             <tbody className="bg-card divide-y divide-border">
               {filteredUsers.length === 0 ? (
                 <tr>
-                  <td colSpan={6}>
+                  <td colSpan={7}>
                     <EmptyState
                       icon={UsersIcon}
                       title={t('users.noUsersFound')}
@@ -301,7 +304,7 @@ const Users: React.FC = () => {
                     <td className="px-4 sm:px-6 py-4 whitespace-nowrap">
                       <div className="flex items-center gap-3">
                         <div className="w-9 h-9 rounded-full bg-blue-600 flex items-center justify-center flex-shrink-0">
-                          <span className="text-sm font-medium text-white">{user.username.charAt(0).toUpperCase()}</span>
+                          <span className="text-sm font-medium text-white">{(user.username || 'U').charAt(0).toUpperCase()}</span>
                         </div>
                         <div>
                           <p className="font-medium text-foreground">{user.username}</p>
@@ -337,6 +340,17 @@ const Users: React.FC = () => {
                       </div>
                     </td>
                     <td className="px-4 sm:px-6 py-4 whitespace-nowrap text-center">
+                      <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                        user.provider === 'local'
+                          ? 'bg-green-100 text-green-800'
+                          : user.provider === 'ldap'
+                          ? 'bg-orange-100 text-orange-800'
+                          : 'bg-gray-100 text-gray-700'
+                      }`}>
+                        {t(`users.provider.${user.provider || 'local'}`, (user.provider || 'local').charAt(0).toUpperCase() + (user.provider || 'local').slice(1))}
+                      </span>
+                    </td>
+                    <td className="px-4 sm:px-6 py-4 whitespace-nowrap text-center">
                       <button
                         onClick={() => !isSelf(user) && hasPermission('user:write') && handleToggleActive(user)}
                         disabled={isSelf(user) || !hasPermission('user:write')}
@@ -362,7 +376,7 @@ const Users: React.FC = () => {
                             onClick={() => handleUnlock(user)}
                           />
                           )}
-                          {hasPermission('user:password') && (
+                          {hasPermission('user:password') && user.provider === 'local' && (
                           <IconButton
                             icon={KeyRound}
                             variant="primary"

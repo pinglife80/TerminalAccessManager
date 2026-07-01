@@ -52,7 +52,7 @@ class LocalProvider(AuthProviderBase):
                     (User.username == username) | (User.email == username)
                 )
             )
-            user = await result.scalar_one_or_none()
+            user = result.scalar_one_or_none()
 
             if not user:
                 return self.build_auth_result(
@@ -99,7 +99,7 @@ class LocalProvider(AuthProviderBase):
             result = await self.db.execute(
                 select(User).where(User.id == int(user_id))
             )
-            user = await result.scalar_one_or_none()
+            user = result.scalar_one_or_none()
 
             if user:
                 return {

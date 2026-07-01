@@ -633,6 +633,11 @@ const zh = {
     mustContainLowercase: '必须包含小写字母',
     mustContainNumber: '必须包含数字',
     searchByUsernameOrEmail: '搜索用户名或邮箱...',
+    providerLabel: '认证来源',
+    provider: {
+      local: '本地',
+      ldap: 'LDAP',
+    },
   },
   roles: {
     title: '角色管理',

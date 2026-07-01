@@ -633,6 +633,11 @@ const ja = {
     mustContainNumber: '数字を含む必要があります',
     searchByUsernameOrEmail: 'ユーザー名またはメールアドレスで検索...',
     superadminRoleFixed: 'スーパー管理者ロールは変更できません',
+    providerLabel: '認証プロバイダー',
+    provider: {
+      local: 'ローカル',
+      ldap: 'LDAP',
+    },
   },
   roles: {
     title: 'ロール管理',

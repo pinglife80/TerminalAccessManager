@@ -633,6 +633,11 @@ const en = {
     mustContainNumber: 'Must contain a number',
     searchByUsernameOrEmail: 'Search by username or email...',
     superadminRoleFixed: 'Superadmin role cannot be modified',
+    providerLabel: 'Auth Provider',
+    provider: {
+      local: 'Local',
+      ldap: 'LDAP',
+    },
   },
   roles: {
     title: 'Role Management',

@@ -23,6 +23,38 @@ from app.services.auth_providers.provider_factory import AuthProviderFactory
 router = APIRouter(prefix="/auth/providers", tags=["Authentication Providers"])
 
 
+@router.get("/available")
+async def get_available_providers(db: AsyncSession = Depends(get_db)):
+    """Get all enabled authentication providers for login selection"""
+    from sqlalchemy import select
+    from app.services.auth_providers.base import AuthProviderType
+
+    providers = []
+
+    providers.append({
+        "id": "local",
+        "name": "Local",
+        "provider_type": AuthProviderType.LOCAL.value,
+        "description": "Local account authentication",
+        "enabled": True,
+    })
+
+    stmt = select(AuthConfig).where(AuthConfig.enabled == True).order_by(AuthConfig.priority)
+    result = await db.execute(stmt)
+    configs = result.scalars().all()
+
+    for config in configs:
+        providers.append({
+            "id": str(config.id),
+            "name": config.name,
+            "provider_type": config.provider_type,
+            "description": config.description or "",
+            "enabled": config.enabled,
+        })
+
+    return providers
+
+
 @router.get("", response_model=list[AuthProviderResponse])
 async def list_providers(
     db: AsyncSession = Depends(get_db),
