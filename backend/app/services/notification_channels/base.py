@@ -7,9 +7,7 @@ Defines the abstract base class for all notification channels.
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Optional
-
-from loguru import logger
+from typing import Any
 
 
 @dataclass
@@ -19,11 +17,11 @@ class NotificationEvent:
     id: str
     type: str  # EventType value
     timestamp: datetime
-    data: Dict[str, Any] = field(default_factory=dict)
+    data: dict[str, Any] = field(default_factory=dict)
     source: str = "system"  # system / user / scheduler
     severity: str = "info"  # info / warning / error
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
             "type": self.type,
@@ -41,12 +39,12 @@ class NotificationResult:
     success: bool
     message: str
     channel: str
-    event_id: Optional[str] = None
-    recipient: Optional[str] = None
-    error_code: Optional[str] = None
-    details: Optional[Dict[str, Any]] = None
+    event_id: str | None = None
+    recipient: str | None = None
+    error_code: str | None = None
+    details: dict[str, Any] | None = None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "success": self.success,
             "message": self.message,
@@ -64,7 +62,7 @@ class ChannelTestResult:
 
     success: bool
     message: str
-    details: Optional[Dict[str, Any]] = None
+    details: dict[str, Any] | None = None
 
 
 class NotificationChannelBase(ABC):
@@ -76,7 +74,7 @@ class NotificationChannelBase(ABC):
     channel_type: str = "base"
     channel_name: str = "Base Channel"
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: dict[str, Any]):
         """
         Initialize the channel with configuration.
 
@@ -86,6 +84,7 @@ class NotificationChannelBase(ABC):
         self.config = config
         self._validate_config()
 
+    @abstractmethod
     def _validate_config(self) -> None:
         """Validate required configuration fields. Override in subclasses."""
         pass
@@ -94,7 +93,7 @@ class NotificationChannelBase(ABC):
     async def send(
         self,
         event: NotificationEvent,
-        template_data: Optional[Dict[str, Any]] = None,
+        template_data: dict[str, Any] | None = None,
     ) -> NotificationResult:
         """
         Send a notification.
@@ -158,7 +157,7 @@ class NotificationChannelBase(ABC):
 
         return message
 
-    def format_data(self, event: NotificationEvent) -> Dict[str, Any]:
+    def format_data(self, event: NotificationEvent) -> dict[str, Any]:
         """
         Format the event data for structured notifications.
 
@@ -183,7 +182,7 @@ class NotificationChannelBase(ABC):
             "data": event.data,
         }
 
-    def get_recipients(self) -> List[str]:
+    def get_recipients(self) -> list[str]:
         """
         Get the list of recipients for this channel.
 
@@ -205,7 +204,7 @@ class AsyncNotificationChannelBase(NotificationChannelBase):
     async def send(
         self,
         event: NotificationEvent,
-        template_data: Optional[Dict[str, Any]] = None,
+        template_data: dict[str, Any] | None = None,
     ) -> NotificationResult:
         """
         Send notification asynchronously.

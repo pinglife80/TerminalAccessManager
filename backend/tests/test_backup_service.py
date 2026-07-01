@@ -1,14 +1,15 @@
 """Unit tests for backup service"""
 import os
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 # Set test environment
 os.environ["ENVIRONMENT"] = "test"
 os.environ["SECRET_KEY"] = "test-secret-key-at-least-32-characters-long-for-testing"
 os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
 
-from app.services.backup_service import BackupService, BackupJob
+from app.services.backup_service import BackupJob, BackupService
 
 
 class TestBackupService:

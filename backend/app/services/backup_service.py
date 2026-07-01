@@ -8,13 +8,12 @@ import asyncio
 import hashlib
 import os
 import shutil
-import subprocess
 import tempfile
 import time
 import zipfile
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any
 
 import paramiko
 from loguru import logger
@@ -32,7 +31,7 @@ class BackupConfig:
 
     # Storage configuration
     storage_type: str = "local"  # local, sftp, ftp
-    storage_config: Dict[str, Any] = field(default_factory=dict)
+    storage_config: dict[str, Any] = field(default_factory=dict)
 
     # Backup content
     backup_database: bool = True
@@ -50,11 +49,11 @@ class BackupJob:
     id: str
     status: str  # pending, running, completed, failed
     started_at: datetime
-    completed_at: Optional[datetime] = None
-    file_path: Optional[str] = None
-    file_size: Optional[int] = None
-    checksum: Optional[str] = None
-    error_message: Optional[str] = None
+    completed_at: datetime | None = None
+    file_path: str | None = None
+    file_size: int | None = None
+    checksum: str | None = None
+    error_message: str | None = None
 
 
 class BackupService:
@@ -69,11 +68,11 @@ class BackupService:
     - Retention policy management
     """
 
-    def __init__(self, config: Optional[BackupConfig] = None):
+    def __init__(self, config: BackupConfig | None = None):
         """Initialize backup service"""
         self.config = config or BackupConfig()
         self.backup_dir = os.path.join(settings.UPLOAD_DIR, "backups")
-        
+
         try:
             os.makedirs(self.backup_dir, exist_ok=True)
         except PermissionError:
@@ -208,7 +207,7 @@ class BackupService:
         # Create archive of config directory
         archive_path = os.path.join(temp_dir, "config.zip")
         with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as zipf:
-            for root, dirs, files in os.walk(config_path):
+            for root, _dirs, files in os.walk(config_path):
                 for file in files:
                     file_path = os.path.join(root, file)
                     arcname = os.path.relpath(file_path, temp_dir)
@@ -234,7 +233,7 @@ class BackupService:
         # Create archive
         archive_path = os.path.join(temp_dir, "logs.zip")
         with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as zipf:
-            for root, dirs, files in os.walk(logs_path):
+            for root, _dirs, files in os.walk(logs_path):
                 for file in files:
                     file_path = os.path.join(root, file)
                     arcname = os.path.relpath(file_path, temp_dir)

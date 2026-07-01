@@ -4,7 +4,7 @@ Local Authentication Provider for TerminalAccessManager.
 Authenticates users against local database.
 """
 
-from typing import Any, Dict, Optional
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,7 +24,7 @@ class LocalProvider(AuthProviderBase):
     provider_type = AuthProviderType.LOCAL
     provider_name = "Local"
 
-    def __init__(self, config: Dict[str, Any], db: AsyncSession):
+    def __init__(self, config: dict[str, Any], db: AsyncSession):
         """
         Initialize local provider.
 
@@ -34,6 +34,10 @@ class LocalProvider(AuthProviderBase):
         """
         super().__init__(config)
         self.db = db
+
+    def _validate_config(self) -> None:
+        """Local provider has no required config fields"""
+        pass
 
     async def authenticate(self, credentials: AuthCredentials) -> AuthResult:
         """Authenticate user against local database"""
@@ -91,7 +95,7 @@ class LocalProvider(AuthProviderBase):
                 error_message=f"Authentication failed: {str(e)}",
             )
 
-    async def get_user_info(self, user_id: str) -> Dict[str, Any]:
+    async def get_user_info(self, user_id: str) -> dict[str, Any]:
         """Get user information from local database"""
         try:
             result = await self.db.execute(

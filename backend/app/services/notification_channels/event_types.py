@@ -4,10 +4,10 @@ Notification Event Types for TerminalAccessManager.
 Defines all event types that can trigger notifications.
 """
 
-from enum import Enum
+from enum import StrEnum
 
 
-class EventType(str, Enum):
+class EventType(StrEnum):
     """Event type enumeration"""
 
     # Terminal events
@@ -52,7 +52,7 @@ class EventType(str, Enum):
     PERMISSION_CHANGED = "admin.permission_changed"
 
 
-class ChannelType(str, Enum):
+class ChannelType(StrEnum):
     """Notification channel type enumeration"""
 
     EMAIL = "email"

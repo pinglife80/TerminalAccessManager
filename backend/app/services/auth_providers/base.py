@@ -6,11 +6,11 @@ Defines the abstract base class for all authentication providers.
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from enum import Enum
-from typing import Any, Dict, Optional
+from enum import StrEnum
+from typing import Any
 
 
-class AuthProviderType(str, Enum):
+class AuthProviderType(StrEnum):
     """Authentication provider type enumeration"""
     LOCAL = "local"
     LDAP = "ldap"
@@ -23,12 +23,12 @@ class AuthProviderType(str, Enum):
 class AuthResult:
     """Authentication result data structure"""
     success: bool
-    user_id: Optional[int] = None
-    username: Optional[str] = None
-    email: Optional[str] = None
-    provider: Optional[str] = None
-    provider_user_id: Optional[str] = None  # Third-party user ID
-    error_message: Optional[str] = None
+    user_id: int | None = None
+    username: str | None = None
+    email: str | None = None
+    provider: str | None = None
+    provider_user_id: str | None = None  # Third-party user ID
+    error_message: str | None = None
     requires_2fa: bool = False              # Whether 2FA is required
 
 
@@ -36,9 +36,9 @@ class AuthResult:
 class AuthCredentials:
     """Authentication credentials data structure"""
     username: str
-    password: Optional[str] = None
-    code: Optional[str] = None              # 2FA code
-    provider: Optional[str] = None          # Provider type
+    password: str | None = None
+    code: str | None = None              # 2FA code
+    provider: str | None = None          # Provider type
     remember_me: bool = False
 
 
@@ -46,19 +46,19 @@ class AuthCredentials:
 class OAuthToken:
     """OAuth token information"""
     access_token: str
-    refresh_token: Optional[str] = None
+    refresh_token: str | None = None
     expires_in: int = 0
     token_type: str = "Bearer"
-    scope: Optional[str] = None
+    scope: str | None = None
 
 
 @dataclass
 class ProviderConfig:
     """Authentication provider configuration"""
-    id: Optional[int] = None
+    id: int | None = None
     name: str = "Default"
     provider_type: AuthProviderType = AuthProviderType.LOCAL
-    config: Dict[str, Any] = field(default_factory=dict)
+    config: dict[str, Any] = field(default_factory=dict)
     enabled: bool = True
     priority: int = 100                    # Lower number = higher priority
 
@@ -69,7 +69,7 @@ class AuthProviderBase(ABC):
     provider_type: AuthProviderType = AuthProviderType.LOCAL
     provider_name: str = "Base Provider"
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: dict[str, Any]):
         """
         Initialize the provider with configuration.
 
@@ -79,6 +79,7 @@ class AuthProviderBase(ABC):
         self.config = config
         self._validate_config()
 
+    @abstractmethod
     def _validate_config(self) -> None:
         """Validate required configuration fields. Override in subclasses."""
         pass
@@ -97,7 +98,7 @@ class AuthProviderBase(ABC):
         pass
 
     @abstractmethod
-    async def get_user_info(self, user_id: str) -> Dict[str, Any]:
+    async def get_user_info(self, user_id: str) -> dict[str, Any]:
         """
         Get user information from the provider.
 
@@ -132,11 +133,11 @@ class AuthProviderBase(ABC):
     def build_auth_result(
         self,
         success: bool,
-        username: Optional[str] = None,
-        email: Optional[str] = None,
-        user_id: Optional[int] = None,
-        provider_user_id: Optional[str] = None,
-        error_message: Optional[str] = None,
+        username: str | None = None,
+        email: str | None = None,
+        user_id: int | None = None,
+        provider_user_id: str | None = None,
+        error_message: str | None = None,
         requires_2fa: bool = False,
     ) -> AuthResult:
         """
@@ -199,7 +200,7 @@ class TwoFactorProviderBase(ABC):
         pass
 
     @abstractmethod
-    async def invalidate_codes(self, user_id: int, method: Optional[str] = None):
+    async def invalidate_codes(self, user_id: int, method: str | None = None):
         """
         Invalidate all 2FA codes for a user.
 

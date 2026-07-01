@@ -9,16 +9,11 @@ Provides:
 - Configurable SMTP settings
 """
 
-import asyncio
-import json
 import random
 import string
-from datetime import datetime, timezone
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
-from functools import wraps
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable, Coroutine, Optional
+from typing import Any
 
 import httpx
 from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -37,7 +32,7 @@ def _ensure_template_dir() -> Path:
 
 
 # Global template environment (lazy initialization)
-_jinja_env: Optional[Environment] = None
+_jinja_env: Environment | None = None
 
 
 def get_jinja_env() -> Environment:
@@ -99,7 +94,7 @@ async def send_email_code(
         "code": code,
         "purpose": purpose,
         "ttl_minutes": ttl_seconds // 60,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
     }
 
     # Select template based on purpose
@@ -176,7 +171,7 @@ async def verify_email_code(
     return is_valid
 
 
-async def invalidate_email_codes(user_id: int, purpose: Optional[str] = None):
+async def invalidate_email_codes(user_id: int, purpose: str | None = None):
     """
     Invalidate all email codes for a user.
 
@@ -225,7 +220,6 @@ async def check_email_rate_limit(email: str) -> tuple[bool, int]:
 
     current_count = int(current)
     if current_count >= settings.EMAIL_RATE_LIMIT_PER_MINUTE:
-        ttl = await redis.ttl(key)
         return False, 0
 
     await redis.incr(key)
@@ -249,14 +243,14 @@ class EmailSender:
 
     def __init__(
         self,
-        host: Optional[str] = None,
-        port: Optional[int] = None,
-        username: Optional[str] = None,
-        password: Optional[str] = None,
+        host: str | None = None,
+        port: int | None = None,
+        username: str | None = None,
+        password: str | None = None,
         use_tls: bool = False,
         use_ssl: bool = True,
-        from_email: Optional[str] = None,
-        from_name: Optional[str] = None,
+        from_email: str | None = None,
+        from_name: str | None = None,
     ):
         self.host = host or getattr(settings, "EMAIL_HOST", None) or "smtp.example.com"
         self.port = port or getattr(settings, "EMAIL_PORT", 465)
@@ -271,8 +265,8 @@ class EmailSender:
         self,
         to_email: str,
         subject: str,
-        html_content: Optional[str] = None,
-        text_content: Optional[str] = None,
+        html_content: str | None = None,
+        text_content: str | None = None,
     ) -> dict:
         """Build email message dict for API sending"""
         return {
@@ -287,8 +281,8 @@ class EmailSender:
         self,
         to_email: str,
         subject: str,
-        html_content: Optional[str] = None,
-        text_content: Optional[str] = None,
+        html_content: str | None = None,
+        text_content: str | None = None,
     ) -> bool:
         """
         Send an email.
@@ -440,8 +434,7 @@ async def render_template(
 def _fallback_template(data: dict[str, Any]) -> tuple[str, str]:
     """Fallback template when template file is not found"""
     code = data.get("code", "N/A")
-    purpose = data.get("purpose", "verification")
-    ttl = data.get("ttl_minutes", 10)
+    ttl_minutes = data.get("ttl_minutes", 10)
 
     html = f"""
     <html>
@@ -449,7 +442,7 @@ def _fallback_template(data: dict[str, Any]) -> tuple[str, str]:
         <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
             <h2 style="color: #2563eb;">Terminal Access Manager</h2>
             <p>您的验证码是: <strong style="font-size: 24px; color: #2563eb;">{code}</strong></p>
-            <p>验证码将在 {ttl} 分钟后过期。</p>
+            <p>验证码将在 {ttl_minutes} 分钟后过期。</p>
             <p>如果您没有请求此验证码，请忽略此邮件。</p>
         </div>
     </body>
@@ -460,7 +453,7 @@ def _fallback_template(data: dict[str, Any]) -> tuple[str, str]:
     Terminal Access Manager
 
     您的验证码是: {code}
-    验证码将在 {ttl} 分钟后过期。
+    验证码将在 {ttl_minutes} 分钟后过期。
     如果您没有请求此验证码，请忽略此邮件。
     """
 
@@ -488,10 +481,10 @@ def _html_to_text(html: str) -> str:
 async def send_email(
     to_email: str,
     subject: str,
-    template_name: Optional[str] = None,
-    template_data: Optional[dict[str, Any]] = None,
-    html_content: Optional[str] = None,
-    text_content: Optional[str] = None,
+    template_name: str | None = None,
+    template_data: dict[str, Any] | None = None,
+    html_content: str | None = None,
+    text_content: str | None = None,
 ) -> bool:
     """
     Send an email with optional template rendering.

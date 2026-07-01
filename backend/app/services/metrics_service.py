@@ -11,7 +11,7 @@ Provides:
 - Notification metrics
 """
 
-from prometheus_client import Counter, Gauge, Histogram, Info, CollectorRegistry, generate_latest
+from prometheus_client import CollectorRegistry, Counter, Gauge, Histogram, Info, generate_latest
 
 from app.core.config import settings
 

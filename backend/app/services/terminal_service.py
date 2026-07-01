@@ -241,6 +241,7 @@ class TerminalService:
     async def get_system_status(self) -> dict:
         """Get system status including Sangfor AF and data source connectivity"""
         import asyncio
+
         from app.core.config import settings
 
         # Check Sangfor AF connectivity via DataSource table (with timeout)
@@ -273,7 +274,7 @@ class TerminalService:
                                 break
                             else:
                                 sangfor_status["error"] = f"Connection test failed for '{source.tag}'"
-                        except asyncio.TimeoutError:
+                        except TimeoutError:
                             sangfor_status["error"] = f"Connection timeout for '{source.tag}'"
                             await svc.close()
                             continue
@@ -310,8 +311,9 @@ class TerminalService:
             pass
 
         import time
+
         from app.api.v1.endpoints.system import start_time
-        
+
         uptime_seconds = max(0, time.time() - start_time)
         days = int(uptime_seconds // (24 * 3600))
         hours = int((uptime_seconds % (24 * 3600)) // 3600)

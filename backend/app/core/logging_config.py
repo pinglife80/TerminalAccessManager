@@ -13,7 +13,7 @@ import json
 import logging
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from loguru import logger
 
@@ -71,7 +71,7 @@ def _json_format(record) -> str:
     like ELK, Loki, or cloud logging services.
     """
     log_data = {
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
         "level": record["level"].name,
         "message": record["message"],
         "module": record["name"],

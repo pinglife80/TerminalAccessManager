@@ -1,15 +1,16 @@
 """Unit tests for notification service"""
 import os
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 # Set test environment
 os.environ["ENVIRONMENT"] = "test"
 os.environ["SECRET_KEY"] = "test-secret-key-at-least-32-characters-long-for-testing"
 os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
 
+from app.services.notification_channels.event_types import ChannelType, EventType
 from app.services.notification_service import NotificationService
-from app.services.notification_channels.event_types import EventType, ChannelType
 
 
 class TestNotificationService:

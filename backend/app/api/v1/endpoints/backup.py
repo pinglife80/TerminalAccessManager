@@ -6,9 +6,8 @@ Provides REST API for managing backups.
 
 import os
 from datetime import datetime
-from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import FileResponse
 
 from app.core.security import get_current_user, require_permission
@@ -20,7 +19,7 @@ from app.schemas.backup import (
     BackupRestoreResponse,
     BackupTestResult,
 )
-from app.services.backup_service import BackupConfig, BackupService
+from app.services.backup_service import BackupService
 
 router = APIRouter(prefix="/backup", tags=["Backup"])
 
@@ -122,7 +121,7 @@ async def download_backup(
     """Download a backup file"""
     if '..' in filename or filename.startswith('/') or filename.startswith('\\'):
         raise HTTPException(status_code=400, detail="Invalid filename")
-    
+
     safe_filename = os.path.basename(filename)
     file_path = os.path.join(backup_service.backup_dir, safe_filename)
 
@@ -145,7 +144,7 @@ async def restore_backup(
     """Restore from a backup file"""
     if '..' in filename or filename.startswith('/') or filename.startswith('\\'):
         raise HTTPException(status_code=400, detail="Invalid filename")
-    
+
     safe_filename = os.path.basename(filename)
     file_path = os.path.join(backup_service.backup_dir, safe_filename)
 
@@ -170,7 +169,7 @@ async def delete_backup(
     """Delete a backup file"""
     if '..' in filename or filename.startswith('/') or filename.startswith('\\'):
         raise HTTPException(status_code=400, detail="Invalid filename")
-    
+
     safe_filename = os.path.basename(filename)
     file_path = os.path.join(backup_service.backup_dir, safe_filename)
 
@@ -189,6 +188,7 @@ async def test_backup_config(
     try:
         # Test database connection
         import psycopg2
+
         from app.core.config import settings
 
         conn = psycopg2.connect(
@@ -201,11 +201,9 @@ async def test_backup_config(
         conn.close()
 
         # Test remote storage if configured
-        if backup_service.config.storage_type != "local":
-            # Attempt to connect
-            if backup_service.config.storage_type == "sftp":
-                # This is a basic test - actual connection test would require more
-                pass
+        if backup_service.config.storage_type != "local" and backup_service.config.storage_type == "sftp":
+            # This is a basic test - actual connection test would require more
+            pass
 
         return BackupTestResult(
             success=True,

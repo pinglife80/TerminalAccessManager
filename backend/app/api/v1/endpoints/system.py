@@ -27,20 +27,20 @@ async def get_system_status(
 ):
     """Get system status and health information"""
     uptime_seconds = time.time() - start_time
-    
+
     days = int(uptime_seconds // (24 * 3600))
     hours = int((uptime_seconds % (24 * 3600)) // 3600)
     minutes = int((uptime_seconds % 3600) // 60)
     seconds = int(uptime_seconds % 60)
-    
+
     uptime_str = f"{days}d {hours}h {minutes}m {seconds}s"
-    
+
     try:
         await db.execute("SELECT 1")
         db_status = "healthy"
     except Exception:
         db_status = "unhealthy"
-    
+
     return {
         "uptime": uptime_str,
         "database": db_status,

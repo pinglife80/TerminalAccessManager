@@ -1,18 +1,19 @@
 """Unit tests for authentication providers"""
 import os
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 # Test imports must come after setting environment
 os.environ["ENVIRONMENT"] = "test"
 os.environ["SECRET_KEY"] = "test-secret-key-at-least-32-characters-long-for-testing"
 os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
-from app.services.auth_providers.base import AuthProviderBase, AuthResult
-from app.services.auth_providers.local_provider import LocalProvider
-from app.services.auth_providers.ldap_provider import LDAPProvider
-from app.services.auth_providers.two_factor_service import TwoFactorService
-from app.services.auth_providers.provider_factory import AuthProviderFactory
 from app.models.user import User
+from app.services.auth_providers.base import AuthResult
+from app.services.auth_providers.ldap_provider import LDAPProvider
+from app.services.auth_providers.local_provider import LocalProvider
+from app.services.auth_providers.provider_factory import AuthProviderFactory
+from app.services.auth_providers.two_factor_service import TwoFactorService
 
 
 class TestAuthProviderBase:

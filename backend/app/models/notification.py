@@ -5,7 +5,6 @@ Database models for notification channels and notification logs.
 """
 
 from datetime import datetime
-from typing import Optional
 
 from sqlalchemy import JSON, Boolean, DateTime, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
@@ -24,8 +23,8 @@ class NotificationChannel(Base):
     config: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)  # Encrypted storage
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     events: Mapped[list] = mapped_column(JSON, nullable=False, default=list)  # Subscribed event types
-    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    created_by: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String(100), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
@@ -45,9 +44,9 @@ class NotificationLog(Base):
     channel_name: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     event_type: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False)  # sent, failed, pending
-    recipient: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    details: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    recipient: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    details: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     sent_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 
     def __repr__(self) -> str:

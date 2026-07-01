@@ -4,10 +4,7 @@ Email Notification Channel for TerminalAccessManager.
 Sends notifications via email using SMTP.
 """
 
-import hashlib
-import hmac
-import time
-from typing import Any, Dict, Optional
+from typing import Any
 
 import httpx
 from loguru import logger
@@ -121,7 +118,7 @@ class EmailChannel(NotificationChannelBase):
     async def send(
         self,
         event: NotificationEvent,
-        template_data: Optional[Dict[str, Any]] = None,
+        template_data: dict[str, Any] | None = None,
     ) -> NotificationResult:
         """Send email notification"""
         recipients = self.get_recipients()

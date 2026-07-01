@@ -5,7 +5,7 @@ Pydantic models for authentication provider configuration.
 """
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -15,10 +15,10 @@ class AuthProviderBase(BaseModel):
 
     name: str = Field(..., min_length=1, max_length=100)
     provider_type: str = Field(..., description="Provider type: local, ldap")
-    config: Dict[str, Any] = Field(default_factory=dict)
+    config: dict[str, Any] = Field(default_factory=dict)
     enabled: bool = True
     priority: int = Field(100, ge=1, le=1000, description="Lower number = higher priority")
-    description: Optional[str] = None
+    description: str | None = None
 
 
 class AuthProviderCreate(AuthProviderBase):
@@ -30,18 +30,18 @@ class AuthProviderCreate(AuthProviderBase):
 class AuthProviderUpdate(BaseModel):
     """Schema for updating an authentication provider"""
 
-    name: Optional[str] = None
-    config: Optional[Dict[str, Any]] = None
-    enabled: Optional[bool] = None
-    priority: Optional[int] = None
-    description: Optional[str] = None
+    name: str | None = None
+    config: dict[str, Any] | None = None
+    enabled: bool | None = None
+    priority: int | None = None
+    description: str | None = None
 
 
 class AuthProviderResponse(AuthProviderBase):
     """Schema for authentication provider response"""
 
     id: int
-    created_by: Optional[str]
+    created_by: str | None
     created_at: datetime
     updated_at: datetime
 
@@ -52,7 +52,7 @@ class AuthProviderResponse(AuthProviderBase):
 class AuthProviderListResponse(BaseModel):
     """Schema for authentication provider list"""
 
-    providers: List[AuthProviderResponse]
+    providers: list[AuthProviderResponse]
 
 
 class AuthTestResult(BaseModel):
@@ -60,7 +60,7 @@ class AuthTestResult(BaseModel):
 
     success: bool
     message: str
-    details: Optional[Dict[str, Any]] = None
+    details: dict[str, Any] | None = None
 
 
 class LoginRequest(BaseModel):
@@ -68,7 +68,7 @@ class LoginRequest(BaseModel):
 
     username: str
     password: str
-    provider: Optional[str] = Field("local", description="Authentication provider type")
+    provider: str | None = Field("local", description="Authentication provider type")
     remember_me: bool = False
 
 
@@ -78,7 +78,7 @@ class LoginResponse(BaseModel):
     access_token: str
     refresh_token: str
     token_type: str = "bearer"
-    user: Dict[str, Any]
+    user: dict[str, Any]
     requires_2fa: bool = False
 
 
@@ -95,5 +95,5 @@ class TwoFactorResponse(BaseModel):
 
     success: bool
     message: str
-    access_token: Optional[str] = None
-    refresh_token: Optional[str] = None
+    access_token: str | None = None
+    refresh_token: str | None = None

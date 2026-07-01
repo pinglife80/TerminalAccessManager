@@ -9,7 +9,7 @@ import hashlib
 import hmac
 import time
 import urllib.parse
-from typing import Any, Dict, Optional
+from typing import Any
 
 import httpx
 from loguru import logger
@@ -37,7 +37,7 @@ class DingtalkChannel(NotificationChannelBase):
         if "webhook_url" not in self.config or not self.config["webhook_url"]:
             raise ValueError("DingTalk channel requires 'webhook_url' configuration")
 
-    def _generate_signature(self) -> Optional[str]:
+    def _generate_signature(self) -> str | None:
         """Generate timestamp + signature for secret-based webhook"""
         secret = self.config.get("secret", "")
         if not secret:
@@ -66,7 +66,7 @@ class DingtalkChannel(NotificationChannelBase):
 
         return webhook_url
 
-    def _build_message(self, event: NotificationEvent) -> Dict[str, Any]:
+    def _build_message(self, event: NotificationEvent) -> dict[str, Any]:
         """Build DingTalk markdown message"""
         from app.services.notification_channels.event_types import EVENT_METADATA
 
@@ -106,7 +106,7 @@ class DingtalkChannel(NotificationChannelBase):
     async def send(
         self,
         event: NotificationEvent,
-        template_data: Optional[Dict[str, Any]] = None,
+        template_data: dict[str, Any] | None = None,
     ) -> NotificationResult:
         """Send DingTalk notification"""
         webhook_url = self._get_webhook_url()
@@ -143,7 +143,7 @@ class DingtalkChannel(NotificationChannelBase):
                     )
 
         except httpx.TimeoutException:
-            logger.error(f"DingTalk timeout")
+            logger.error("DingTalk timeout")
             return NotificationResult(
                 success=False,
                 message="Request timeout",

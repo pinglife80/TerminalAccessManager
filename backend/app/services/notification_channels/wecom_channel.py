@@ -4,8 +4,7 @@ WeCom (企业微信) Notification Channel for TerminalAccessManager.
 Sends notifications via WeCom webhook robot.
 """
 
-import json
-from typing import Any, Dict, Optional
+from typing import Any
 
 import httpx
 from loguru import logger
@@ -33,7 +32,7 @@ class WecomChannel(NotificationChannelBase):
         if "webhook_url" not in self.config or not self.config["webhook_url"]:
             raise ValueError("WeCom channel requires 'webhook_url' configuration")
 
-    def _build_message(self, event: NotificationEvent) -> Dict[str, Any]:
+    def _build_message(self, event: NotificationEvent) -> dict[str, Any]:
         """Build WeCom markdown message"""
         from app.services.notification_channels.event_types import EVENT_METADATA
 
@@ -44,8 +43,8 @@ class WecomChannel(NotificationChannelBase):
         content = f"### {event_name}\n\n"
         content += f"{metadata.get('description', '')}\n\n"
         content += "> 时间: {}\n\n".format(event.timestamp.strftime('%Y-%m-%d %H:%M:%S'))
-        content += "> 严重级别: **{}**\n\n".format(event.severity.upper())
-        content += "> 来源: {}\n\n".format(event.source)
+        content += f"> 严重级别: **{event.severity.upper()}**\n\n"
+        content += f"> 来源: {event.source}\n\n"
 
         if event.data:
             content += "---\n\n"
@@ -62,7 +61,7 @@ class WecomChannel(NotificationChannelBase):
     async def send(
         self,
         event: NotificationEvent,
-        template_data: Optional[Dict[str, Any]] = None,
+        template_data: dict[str, Any] | None = None,
     ) -> NotificationResult:
         """Send WeCom notification"""
         webhook_url = self.config["webhook_url"]
@@ -99,7 +98,7 @@ class WecomChannel(NotificationChannelBase):
                     )
 
         except httpx.TimeoutException:
-            logger.error(f"WeCom timeout")
+            logger.error("WeCom timeout")
             return NotificationResult(
                 success=False,
                 message="Request timeout",

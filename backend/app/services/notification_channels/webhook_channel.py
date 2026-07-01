@@ -8,8 +8,7 @@ import hashlib
 import hmac
 import json
 import time
-from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any
 
 import httpx
 from loguru import logger
@@ -52,7 +51,7 @@ class WebhookChannel(NotificationChannelBase):
 
         return f"sha256={signature}"
 
-    def _prepare_headers(self, payload: str) -> Dict[str, str]:
+    def _prepare_headers(self, payload: str) -> dict[str, str]:
         """Prepare HTTP headers including signature"""
         headers = {
             "Content-Type": "application/json",
@@ -72,7 +71,7 @@ class WebhookChannel(NotificationChannelBase):
 
         return headers
 
-    def _build_payload(self, event: NotificationEvent) -> Dict[str, Any]:
+    def _build_payload(self, event: NotificationEvent) -> dict[str, Any]:
         """Build webhook payload"""
         return {
             "event_id": event.id,
@@ -87,7 +86,7 @@ class WebhookChannel(NotificationChannelBase):
     async def send(
         self,
         event: NotificationEvent,
-        template_data: Optional[Dict[str, Any]] = None,
+        template_data: dict[str, Any] | None = None,
     ) -> NotificationResult:
         """Send webhook notification"""
         url = self.config["url"]
@@ -166,16 +165,6 @@ class WebhookChannel(NotificationChannelBase):
     async def test(self) -> ChannelTestResult:
         """Test webhook connection with a test payload"""
         url = self.config["url"]
-
-        # Create a test event
-        test_event = NotificationEvent(
-            id="test",
-            type="system.test",
-            timestamp=event.timestamp,
-            data={"message": "This is a test notification"},
-            source="system",
-            severity="info",
-        )
 
         # We'll just test the connection, not send the full test
         try:

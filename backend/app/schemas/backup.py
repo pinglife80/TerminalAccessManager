@@ -5,7 +5,7 @@ Pydantic models for backup-related API requests/responses.
 """
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -17,7 +17,7 @@ class BackupConfigResponse(BaseModel):
     schedule: str = "0 2 * * *"
     retention_days: int = 7
     storage_type: str = "local"
-    storage_config: Dict[str, Any] = Field(default_factory=dict)
+    storage_config: dict[str, Any] = Field(default_factory=dict)
     backup_database: bool = True
     backup_config: bool = True
     backup_logs: bool = False
@@ -30,11 +30,11 @@ class BackupJobResponse(BaseModel):
     id: str
     status: str
     started_at: datetime
-    completed_at: Optional[datetime] = None
-    file_path: Optional[str] = None
-    file_size: Optional[int] = None
-    checksum: Optional[str] = None
-    error_message: Optional[str] = None
+    completed_at: datetime | None = None
+    file_path: str | None = None
+    file_size: int | None = None
+    checksum: str | None = None
+    error_message: str | None = None
 
 
 class BackupInfo(BaseModel):
@@ -49,7 +49,7 @@ class BackupInfo(BaseModel):
 class BackupListResponse(BaseModel):
     """Schema for backup list response"""
 
-    backups: List[BackupInfo]
+    backups: list[BackupInfo]
 
 
 class BackupRestoreResponse(BaseModel):
@@ -65,4 +65,4 @@ class BackupTestResult(BaseModel):
 
     success: bool
     message: str
-    details: Optional[Dict[str, Any]] = None
+    details: dict[str, Any] | None = None

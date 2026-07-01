@@ -4,11 +4,10 @@ Two-Factor Authentication Service for TerminalAccessManager.
 Provides email-based two-factor authentication.
 """
 
-from typing import Optional
 
 from loguru import logger
 
-from app.services.email_service import send_email_code, verify_email_code, invalidate_email_codes
+from app.services.email_service import invalidate_email_codes, send_email_code, verify_email_code
 
 
 class TwoFactorService:
@@ -97,7 +96,7 @@ class TwoFactorService:
     async def invalidate_codes(
         self,
         user_id: int,
-        method: Optional[str] = None,
+        method: str | None = None,
     ):
         """
         Invalidate all 2FA codes for a user.

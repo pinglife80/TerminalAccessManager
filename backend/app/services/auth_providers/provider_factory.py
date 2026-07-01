@@ -4,7 +4,7 @@ Authentication Provider Factory for TerminalAccessManager.
 Factory class to create and manage authentication providers.
 """
 
-from typing import Any, Dict, Optional, Type
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,13 +23,13 @@ class AuthProviderFactory:
     - LDAP authentication
     """
 
-    _providers: Dict[str, Type[AuthProviderBase]] = {
+    _providers: dict[str, type[AuthProviderBase]] = {
         AuthProviderType.LOCAL.value: LocalProvider,
         AuthProviderType.LDAP.value: LDAPProvider,
     }
 
     @classmethod
-    def register_provider(cls, provider_type: str, provider_class: Type[AuthProviderBase]) -> None:
+    def register_provider(cls, provider_type: str, provider_class: type[AuthProviderBase]) -> None:
         """
         Register a new authentication provider.
 
@@ -40,7 +40,7 @@ class AuthProviderFactory:
         cls._providers[provider_type] = provider_class
 
     @classmethod
-    def get_provider_class(cls, provider_type: str) -> Optional[Type[AuthProviderBase]]:
+    def get_provider_class(cls, provider_type: str) -> type[AuthProviderBase] | None:
         """
         Get provider class by type.
 
@@ -56,8 +56,8 @@ class AuthProviderFactory:
     async def create_provider(
         cls,
         provider_type: str,
-        config: Dict[str, Any],
-        db: Optional[AsyncSession] = None,
+        config: dict[str, Any],
+        db: AsyncSession | None = None,
     ) -> AuthProviderBase:
         """
         Create an authentication provider instance.
@@ -87,7 +87,7 @@ class AuthProviderFactory:
     async def get_enabled_providers(
         cls,
         db: AsyncSession,
-    ) -> Dict[str, AuthProviderBase]:
+    ) -> dict[str, AuthProviderBase]:
         """
         Get all enabled authentication providers from database.
 
@@ -127,9 +127,9 @@ class AuthProviderFactory:
     async def authenticate(
         cls,
         provider_type: str,
-        credentials: Dict[str, Any],
+        credentials: dict[str, Any],
         db: AsyncSession,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Authenticate using the specified provider.
 

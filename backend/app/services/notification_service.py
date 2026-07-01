@@ -6,7 +6,7 @@ Central service for managing notifications and event publishing.
 
 import uuid
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from loguru import logger
 from sqlalchemy import select
@@ -15,7 +15,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.crypto import decrypt_config
 from app.models.notification import NotificationChannel, NotificationLog
 from app.services.notification_channels import (
-    CHANNEL_REGISTRY,
     NotificationChannelBase,
     NotificationEvent,
     NotificationResult,
@@ -39,8 +38,8 @@ class NotificationService:
             db: Database session
         """
         self.db = db
-        self._channels: Dict[str, NotificationChannelBase] = {}
-        self._channel_configs: Dict[str, dict] = {}
+        self._channels: dict[str, NotificationChannelBase] = {}
+        self._channel_configs: dict[str, dict] = {}
 
     async def initialize_channels(self) -> None:
         """
@@ -73,13 +72,13 @@ class NotificationService:
             except Exception as e:
                 logger.error(f"Failed to load channel {channel_config.name}: {e}")
 
-    async def get_channels(self) -> List[NotificationChannel]:
+    async def get_channels(self) -> list[NotificationChannel]:
         """Get all notification channels from database"""
         stmt = select(NotificationChannel).order_by(NotificationChannel.id)
         result = await self.db.execute(stmt)
         return result.scalars().all()
 
-    async def get_channel_by_id(self, channel_id: int) -> Optional[NotificationChannel]:
+    async def get_channel_by_id(self, channel_id: int) -> NotificationChannel | None:
         """Get a notification channel by ID"""
         stmt = select(NotificationChannel).where(NotificationChannel.id == channel_id)
         result = await self.db.execute(stmt)
@@ -90,9 +89,9 @@ class NotificationService:
         name: str,
         channel_type: str,
         config: dict,
-        events: List[str],
-        description: Optional[str] = None,
-        created_by: Optional[str] = None,
+        events: list[str],
+        description: str | None = None,
+        created_by: str | None = None,
         enabled: bool = True,
     ) -> NotificationChannel:
         """Create a new notification channel"""
@@ -118,12 +117,12 @@ class NotificationService:
     async def update_channel(
         self,
         channel_id: int,
-        name: Optional[str] = None,
-        config: Optional[dict] = None,
-        events: Optional[List[str]] = None,
-        description: Optional[str] = None,
-        enabled: Optional[bool] = None,
-    ) -> Optional[NotificationChannel]:
+        name: str | None = None,
+        config: dict | None = None,
+        events: list[str] | None = None,
+        description: str | None = None,
+        enabled: bool | None = None,
+    ) -> NotificationChannel | None:
         """Update a notification channel"""
         channel = await self.get_channel_by_id(channel_id)
         if not channel:
@@ -194,7 +193,7 @@ class NotificationService:
             logger.error(f"Channel test failed: {e}")
             return {"success": False, "message": f"Test failed: {str(e)}"}
 
-    def _get_subscribed_channels(self, event_type: str) -> List[str]:
+    def _get_subscribed_channels(self, event_type: str) -> list[str]:
         """Get list of channel names that are subscribed to the given event type"""
         subscribed = []
         for channel_name, channel_info in self._channel_configs.items():
@@ -205,10 +204,10 @@ class NotificationService:
     async def emit(
         self,
         event_type: str,
-        data: Optional[Dict[str, Any]] = None,
+        data: dict[str, Any] | None = None,
         source: str = "system",
         severity: str = "info",
-    ) -> List[NotificationResult]:
+    ) -> list[NotificationResult]:
         """
         Emit an event and send notifications to subscribed channels.
 
@@ -290,12 +289,12 @@ class NotificationService:
 
     async def get_notification_logs(
         self,
-        channel_name: Optional[str] = None,
-        event_type: Optional[str] = None,
-        status: Optional[str] = None,
+        channel_name: str | None = None,
+        event_type: str | None = None,
+        status: str | None = None,
         limit: int = 100,
         offset: int = 0,
-    ) -> tuple[List[NotificationLog], int]:
+    ) -> tuple[list[NotificationLog], int]:
         """
         Get notification logs with filtering and pagination.
 
@@ -340,7 +339,7 @@ class NotificationService:
         mac_address: str,
         reason: str,
         blocked_by: str,
-    ) -> List[NotificationResult]:
+    ) -> list[NotificationResult]:
         """Emit terminal blocked event"""
         return await self.emit(
             event_type=EventType.TERMINAL_BLOCKED,
@@ -359,7 +358,7 @@ class NotificationService:
         ip_address: str,
         mac_address: str,
         unblocked_by: str,
-    ) -> List[NotificationResult]:
+    ) -> list[NotificationResult]:
         """Emit terminal unblocked event"""
         return await self.emit(
             event_type=EventType.TERMINAL_UNBLOCKED,
@@ -377,7 +376,7 @@ class NotificationService:
         username: str,
         ip_address: str,
         reason: str,
-    ) -> List[NotificationResult]:
+    ) -> list[NotificationResult]:
         """Emit login failed event"""
         return await self.emit(
             event_type=EventType.LOGIN_FAILED,
@@ -395,7 +394,7 @@ class NotificationService:
         username: str,
         ip_address: str,
         lock_duration: int,
-    ) -> List[NotificationResult]:
+    ) -> list[NotificationResult]:
         """Emit account locked event"""
         return await self.emit(
             event_type=EventType.LOGIN_LOCKED,
@@ -413,7 +412,7 @@ class NotificationService:
         source_name: str,
         source_tag: str,
         error: str,
-    ) -> List[NotificationResult]:
+    ) -> list[NotificationResult]:
         """Emit datasource sync failed event"""
         return await self.emit(
             event_type=EventType.DATASOURCE_SYNC_FAILED,
@@ -431,7 +430,7 @@ class NotificationService:
         compliance_rate: float,
         non_compliant_count: int,
         threshold: float,
-    ) -> List[NotificationResult]:
+    ) -> list[NotificationResult]:
         """Emit compliance rate alert event"""
         event_type = (
             EventType.COMPLIANCE_RATE_CRITICAL

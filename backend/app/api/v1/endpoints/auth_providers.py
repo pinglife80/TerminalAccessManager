@@ -4,9 +4,8 @@ Authentication Provider API Endpoints for TerminalAccessManager.
 Provides REST API for managing authentication providers.
 """
 
-from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db

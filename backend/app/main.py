@@ -476,8 +476,9 @@ try:
     Instrumentator().instrument(app).expose(app)
 
     # Expose custom business metrics at /metrics/custom
-    from app.services.metrics_service import get_metrics
     from fastapi.responses import Response
+
+    from app.services.metrics_service import get_metrics
 
     @app.get("/metrics/custom", include_in_schema=False)
     async def custom_metrics():

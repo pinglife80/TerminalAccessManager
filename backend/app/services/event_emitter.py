@@ -6,12 +6,12 @@ Provides a simple interface for emitting events from anywhere in the application
 
 import asyncio
 from contextvars import ContextVar
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from loguru import logger
 
 # Global notification service reference (set during app startup)
-_notification_service_ctx: ContextVar[Optional[Any]] = ContextVar(
+_notification_service_ctx: ContextVar[Any | None] = ContextVar(
     "notification_service", default=None
 )
 
@@ -21,17 +21,17 @@ def set_notification_service(service: Any) -> None:
     _notification_service_ctx.set(service)
 
 
-def get_notification_service() -> Optional[Any]:
+def get_notification_service() -> Any | None:
     """Get the global notification service instance"""
     return _notification_service_ctx.get()
 
 
 async def emit_event(
     event_type: str,
-    data: Optional[Dict[str, Any]] = None,
+    data: dict[str, Any] | None = None,
     source: str = "system",
     severity: str = "info",
-) -> List[Any]:
+) -> list[Any]:
     """
     Emit an event to all subscribed notification channels.
 
@@ -62,7 +62,7 @@ async def emit_event(
             )
             return results
         else:
-            logger.warning(f"Notification service has no emit method")
+            logger.warning("Notification service has no emit method")
             return []
     except Exception as e:
         logger.error(f"Failed to emit event {event_type}: {e}")
@@ -71,7 +71,7 @@ async def emit_event(
 
 def emit_event_sync(
     event_type: str,
-    data: Optional[Dict[str, Any]] = None,
+    data: dict[str, Any] | None = None,
     source: str = "system",
     severity: str = "info",
 ) -> None:
@@ -97,7 +97,7 @@ async def emit_terminal_blocked(
     mac_address: str,
     reason: str,
     blocked_by: str,
-) -> List[Any]:
+) -> list[Any]:
     """Emit terminal blocked event"""
     return await emit_event(
         event_type="terminal.blocked",
@@ -116,7 +116,7 @@ async def emit_terminal_unblocked(
     ip_address: str,
     mac_address: str,
     unblocked_by: str,
-) -> List[Any]:
+) -> list[Any]:
     """Emit terminal unblocked event"""
     return await emit_event(
         event_type="terminal.unblocked",
@@ -134,7 +134,7 @@ async def emit_login_failed(
     username: str,
     ip_address: str,
     reason: str,
-) -> List[Any]:
+) -> list[Any]:
     """Emit login failed event"""
     return await emit_event(
         event_type="security.login_failed",
@@ -151,7 +151,7 @@ async def emit_login_failed(
 async def emit_login_success(
     username: str,
     ip_address: str,
-) -> List[Any]:
+) -> list[Any]:
     """Emit login success event"""
     return await emit_event(
         event_type="security.login_success",
@@ -167,7 +167,7 @@ async def emit_login_success(
 async def emit_user_created(
     username: str,
     created_by: str,
-) -> List[Any]:
+) -> list[Any]:
     """Emit user created event"""
     return await emit_event(
         event_type="security.user_created",
@@ -184,7 +184,7 @@ async def emit_datasource_sync_failed(
     source_name: str,
     source_tag: str,
     error: str,
-) -> List[Any]:
+) -> list[Any]:
     """Emit datasource sync failed event"""
     return await emit_event(
         event_type="system.datasource_sync_failed",
@@ -202,7 +202,7 @@ async def emit_compliance_alert(
     compliance_rate: float,
     non_compliant_count: int,
     threshold: float,
-) -> List[Any]:
+) -> list[Any]:
     """Emit compliance alert event"""
     is_critical = compliance_rate < threshold * 0.5
     event_type = (
@@ -225,7 +225,7 @@ async def emit_compliance_alert(
 async def emit_backup_completed(
     backup_path: str,
     file_size: int,
-) -> List[Any]:
+) -> list[Any]:
     """Emit backup completed event"""
     return await emit_event(
         event_type="system.backup_completed",
@@ -240,7 +240,7 @@ async def emit_backup_completed(
 
 async def emit_backup_failed(
     error: str,
-) -> List[Any]:
+) -> list[Any]:
     """Emit backup failed event"""
     return await emit_event(
         event_type="system.backup_failed",

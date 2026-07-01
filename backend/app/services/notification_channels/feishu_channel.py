@@ -4,8 +4,7 @@ Feishu (飞书) Notification Channel for TerminalAccessManager.
 Sends notifications via Feishu webhook robot.
 """
 
-import json
-from typing import Any, Dict, Optional
+from typing import Any
 
 import httpx
 from loguru import logger
@@ -33,7 +32,7 @@ class FeishuChannel(NotificationChannelBase):
         if "webhook_url" not in self.config or not self.config["webhook_url"]:
             raise ValueError("Feishu channel requires 'webhook_url' configuration")
 
-    def _build_card(self, event: NotificationEvent) -> Dict[str, Any]:
+    def _build_card(self, event: NotificationEvent) -> dict[str, Any]:
         """Build Feishu interactive card payload"""
         from app.services.notification_channels.event_types import EVENT_METADATA
 
@@ -126,7 +125,7 @@ class FeishuChannel(NotificationChannelBase):
     async def send(
         self,
         event: NotificationEvent,
-        template_data: Optional[Dict[str, Any]] = None,
+        template_data: dict[str, Any] | None = None,
     ) -> NotificationResult:
         """Send Feishu notification"""
         webhook_url = self.config["webhook_url"]

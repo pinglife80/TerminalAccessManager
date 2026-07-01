@@ -4,7 +4,6 @@ Notification API Endpoints for TerminalAccessManager.
 Provides REST API for managing notification channels and viewing notification logs.
 """
 
-from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,8 +12,8 @@ from app.core.database import get_db
 from app.core.security import get_current_user, require_permission
 from app.models.user import User
 from app.schemas.notification import (
-    ChannelMetadataListResponse,
     ChannelMetadata,
+    ChannelMetadataListResponse,
     ChannelTestResultResponse,
     EventListResponse,
     EventMetadata,
@@ -24,8 +23,8 @@ from app.schemas.notification import (
     NotificationLogListResponse,
     NotificationLogResponse,
 )
-from app.services.notification_service import NotificationService
 from app.services.notification_channels.event_types import CHANNEL_METADATA, EVENT_METADATA
+from app.services.notification_service import NotificationService
 
 router = APIRouter(prefix="/notifications", tags=["Notifications"])
 
@@ -123,9 +122,9 @@ async def test_channel(
 
 @router.get("/logs", response_model=NotificationLogListResponse)
 async def list_notification_logs(
-    channel_name: Optional[str] = Query(None, description="Filter by channel name"),
-    event_type: Optional[str] = Query(None, description="Filter by event type"),
-    status: Optional[str] = Query(None, description="Filter by status (sent, failed)"),
+    channel_name: str | None = Query(None, description="Filter by channel name"),
+    event_type: str | None = Query(None, description="Filter by event type"),
+    status: str | None = Query(None, description="Filter by status (sent, failed)"),
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
     notification_service: NotificationService = Depends(get_notification_service),

@@ -5,7 +5,7 @@ Pydantic models for notification-related API requests/responses.
 """
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -15,9 +15,9 @@ class NotificationChannelBase(BaseModel):
 
     name: str = Field(..., min_length=1, max_length=100)
     type: str = Field(..., description="Channel type: email, webhook, feishu, dingtalk, wecom")
-    config: Dict[str, Any] = Field(default_factory=dict)
-    events: List[str] = Field(default_factory=list, description="Subscribed event types")
-    description: Optional[str] = None
+    config: dict[str, Any] = Field(default_factory=dict)
+    events: list[str] = Field(default_factory=list, description="Subscribed event types")
+    description: str | None = None
     enabled: bool = True
 
 
@@ -30,18 +30,18 @@ class NotificationChannelCreate(NotificationChannelBase):
 class NotificationChannelUpdate(BaseModel):
     """Schema for updating a notification channel"""
 
-    name: Optional[str] = None
-    config: Optional[Dict[str, Any]] = None
-    events: Optional[List[str]] = None
-    description: Optional[str] = None
-    enabled: Optional[bool] = None
+    name: str | None = None
+    config: dict[str, Any] | None = None
+    events: list[str] | None = None
+    description: str | None = None
+    enabled: bool | None = None
 
 
 class NotificationChannelResponse(NotificationChannelBase):
     """Schema for notification channel response"""
 
     id: int
-    created_by: Optional[str]
+    created_by: str | None
     created_at: datetime
     updated_at: datetime
 
@@ -57,9 +57,9 @@ class NotificationLogResponse(BaseModel):
     channel_name: str
     event_type: str
     status: str
-    recipient: Optional[str]
-    error_message: Optional[str]
-    details: Optional[Dict[str, Any]]
+    recipient: str | None
+    error_message: str | None
+    details: dict[str, Any] | None
     sent_at: datetime
 
     class Config:
@@ -69,7 +69,7 @@ class NotificationLogResponse(BaseModel):
 class NotificationLogListResponse(BaseModel):
     """Schema for paginated notification log list"""
 
-    items: List[NotificationLogResponse]
+    items: list[NotificationLogResponse]
     total: int
     limit: int
     offset: int
@@ -80,7 +80,7 @@ class ChannelTestResultResponse(BaseModel):
 
     success: bool
     message: str
-    details: Optional[Dict[str, Any]] = None
+    details: dict[str, Any] | None = None
 
 
 class EventMetadata(BaseModel):
@@ -96,7 +96,7 @@ class EventMetadata(BaseModel):
 class EventListResponse(BaseModel):
     """Schema for event metadata list"""
 
-    events: List[EventMetadata]
+    events: list[EventMetadata]
 
 
 class ChannelMetadata(BaseModel):
@@ -105,10 +105,10 @@ class ChannelMetadata(BaseModel):
     type: str
     name: str
     description: str
-    config_fields: List[str]
+    config_fields: list[str]
 
 
 class ChannelMetadataListResponse(BaseModel):
     """Schema for channel metadata list"""
 
-    channels: List[ChannelMetadata]
+    channels: list[ChannelMetadata]

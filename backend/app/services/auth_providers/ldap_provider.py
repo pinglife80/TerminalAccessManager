@@ -6,7 +6,7 @@ Supports Active Directory and OpenLDAP authentication.
 
 import re
 import ssl
-from typing import Any, Dict, Optional
+from typing import Any
 
 import ldap3
 from ldap3 import ALL_ATTRIBUTES, Connection, Server, Tls
@@ -160,7 +160,6 @@ class LDAPProvider(AuthProviderBase):
             raise ValueError("Invalid username format")
 
         user_search_base = self.config.get("user_search_base", "")
-        user_search_filter = self.config.get("user_search_filter", "(sAMAccountName={username})")
 
         # If user_search_base is provided, search for the user
         if user_search_base:
@@ -208,7 +207,7 @@ class LDAPProvider(AuthProviderBase):
         finally:
             conn.unbind()
 
-    def _get_user_info_from_ldap(self, conn: Connection, user_dn: str) -> Dict[str, Any]:
+    def _get_user_info_from_ldap(self, conn: Connection, user_dn: str) -> dict[str, Any]:
         """Get user information from LDAP"""
         conn.search(
             search_base=user_dn,
@@ -233,19 +232,16 @@ class LDAPProvider(AuthProviderBase):
             "raw": attributes,
         }
 
-    def _is_user_active(self, user_info: Dict[str, Any]) -> bool:
+    def _is_user_active(self, user_info: dict[str, Any]) -> bool:
         """Check if user account is active (AD-specific)"""
         # In Active Directory, account status is in userAccountControl
         # bit 2 is ACCOUNTDISABLE
         raw_info = user_info.get("raw", {})
         user_account_control = raw_info.get("userAccountControl", [0])[0]
 
-        if isinstance(user_account_control, int) and (user_account_control & 2):
-            return False
+        return not (isinstance(user_account_control, int) and (user_account_control & 2))
 
-        return True
-
-    async def get_user_info(self, user_id: str) -> Dict[str, Any]:
+    async def get_user_info(self, user_id: str) -> dict[str, Any]:
         """Get user information from LDAP"""
         try:
             server = self._build_server()
@@ -271,7 +267,7 @@ class LDAPProvider(AuthProviderBase):
             bind_dn = self.config.get("bind_dn")
             bind_password = self.config.get("bind_password")
 
-            conn = Connection(
+            Connection(
                 server,
                 user=bind_dn,
                 password=bind_password,

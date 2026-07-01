@@ -10,16 +10,16 @@ from app.services.notification_channels.base import (
     NotificationEvent,
     NotificationResult,
 )
+from app.services.notification_channels.dingtalk_channel import DingtalkChannel
+from app.services.notification_channels.email_channel import EmailChannel
 from app.services.notification_channels.event_types import (
-    ChannelType,
-    EventType,
     CHANNEL_METADATA,
     EVENT_METADATA,
+    ChannelType,
+    EventType,
 )
-from app.services.notification_channels.email_channel import EmailChannel
-from app.services.notification_channels.webhook_channel import WebhookChannel
 from app.services.notification_channels.feishu_channel import FeishuChannel
-from app.services.notification_channels.dingtalk_channel import DingtalkChannel
+from app.services.notification_channels.webhook_channel import WebhookChannel
 from app.services.notification_channels.wecom_channel import WecomChannel
 
 # Channel registry for factory pattern
