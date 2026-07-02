@@ -1,10 +1,52 @@
 # 版本跟踪记录
 
-> 文档版本：v3.5.0 | 更新日期：2026-07-01
+> 文档版本：v3.5.1 | 更新日期：2026-07-03
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
+
+---
+
+## [v3.5.1] - 2026-07-03
+
+### 热修复版本：用户体验优化与问题修复
+
+#### LDAP用户体验优化
+
+- **Profile页面信息精简**：LDAP用户的个人信息页面仅显示从LDAP同步的信息（用户名、邮箱、角色、状态），完全隐藏邮箱更新和密码修改功能，避免用户困惑
+- **邮箱显示位置调整**：将邮箱信息移至账户信息卡片中，与用户名、角色、状态统一展示，信息结构更清晰
+
+#### 模态框交互优化
+
+- **Modal点击外部不关闭**：Import LDAP Users等重要操作模态框，点击灰色遮罩层不再关闭，防止误操作导致数据丢失
+- **关闭方式**：仅通过右上角关闭按钮或ESC键关闭模态框
+
+#### LDAP认证编辑体验优化
+
+- **Bind Password可选**：编辑LDAP认证提供者时，Bind Password字段变为可选项，留空则保持原有密码
+- **提示信息**：编辑时显示"留空以保持当前密码"提示，用户明确知晓行为
+- **后端兼容**：更新API支持密码字段为空时保留原有密码
+
+#### 认证提供者管理精简
+
+- **移除Local类型选项**：认证提供者管理页面中移除Local类型选项（Local认证为系统内置功能，无需用户手动配置）
+- **默认选中LDAP**：新建认证提供者时默认选中LDAP类型，简化操作流程
+
+#### 翻译修复
+
+- **Profile页面邮箱标签**：修复LDAP用户Profile页面邮箱标签显示为`profile.email`的翻译键名错误，正确显示为"Email Address"
+
+### 变更文件
+
+- `frontend/src/pages/Profile.tsx` — LDAP用户信息展示优化
+- `frontend/src/pages/AuthProviders.tsx` — 移除Local类型、Bind Password可选
+- `frontend/src/components/Modal.tsx` — 点击外部不关闭
+- `frontend/src/i18n/locales/en.ts` — 新增leaveBlankToKeep翻译
+- `frontend/src/i18n/locales/zh.ts` — 新增leaveBlankToKeep翻译
+- `backend/app/api/v1/endpoints/auth.py` — /auth/me和/me/profile返回provider字段
+- `backend/app/api/v1/endpoints/auth_providers.py` — 更新时保留原有密码
+- `docs/changelog.md` — 追加 [3.5.1] 条目
 
 ---
 
