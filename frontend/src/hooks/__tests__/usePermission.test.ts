@@ -23,6 +23,7 @@ describe('usePermission', () => {
           is_superuser: true,
           roles: ['superadmin'],
           permissions: [],
+          provider: 'local',
         },
         isAuthenticated: true,
       })
@@ -42,6 +43,7 @@ describe('usePermission', () => {
           is_superuser: false,
           roles: ['operator'],
           permissions: ['terminal:read', 'terminal:write', 'whitelist:read'],
+          provider: 'local',
         },
         isAuthenticated: true,
       })
@@ -61,6 +63,7 @@ describe('usePermission', () => {
           is_superuser: false,
           roles: ['viewer'],
           permissions: ['terminal:read'],
+          provider: 'local',
         },
         isAuthenticated: true,
       })
@@ -89,6 +92,7 @@ describe('usePermission', () => {
           is_superuser: true,
           roles: ['superadmin'],
           permissions: [],
+          provider: 'local',
         },
         isAuthenticated: true,
       })
@@ -107,6 +111,7 @@ describe('usePermission', () => {
           is_superuser: false,
           roles: ['operator'],
           permissions: ['terminal:read'],
+          provider: 'local',
         },
         isAuthenticated: true,
       })
@@ -125,6 +130,7 @@ describe('usePermission', () => {
           is_superuser: false,
           roles: ['viewer'],
           permissions: ['terminal:read'],
+          provider: 'local',
         },
         isAuthenticated: true,
       })
@@ -145,6 +151,7 @@ describe('usePermission', () => {
           is_superuser: true,
           roles: ['superadmin'],
           permissions: [],
+          provider: 'local',
         },
         isAuthenticated: true,
       })
@@ -163,6 +170,7 @@ describe('usePermission', () => {
           is_superuser: false,
           roles: ['operator'],
           permissions: ['terminal:read', 'terminal:write', 'whitelist:read'],
+          provider: 'local',
         },
         isAuthenticated: true,
       })
@@ -181,6 +189,7 @@ describe('usePermission', () => {
           is_superuser: false,
           roles: ['viewer'],
           permissions: ['terminal:read'],
+          provider: 'local',
         },
         isAuthenticated: true,
       })
@@ -201,6 +210,7 @@ describe('usePermission', () => {
           is_superuser: true,
           roles: ['superadmin'],
           permissions: [],
+          provider: 'local',
         },
         isAuthenticated: true,
       })
@@ -219,6 +229,7 @@ describe('usePermission', () => {
           is_superuser: false,
           roles: ['operator'],
           permissions: ['terminal:read'],
+          provider: 'local',
         },
         isAuthenticated: true,
       })
@@ -237,6 +248,7 @@ describe('usePermission', () => {
           is_superuser: false,
           roles: ['viewer'],
           permissions: ['terminal:read'],
+          provider: 'local',
         },
         isAuthenticated: true,
       })

@@ -9,6 +9,7 @@ interface User {
   is_superuser: boolean;
   roles: string[];
   permissions: string[];
+  provider: string;
 }
 
 interface AuthState {

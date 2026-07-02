@@ -188,7 +188,10 @@ async def login(
     if not user.is_active:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Account is disabled"
+            detail={
+                "message": "Your account has been locked. Please contact your administrator.",
+                "locked": True,
+            }
         )
 
     await reset_login_attempts(username)
@@ -322,6 +325,8 @@ async def get_current_user_info(
         is_superuser=current_user.is_superuser,
         roles=role_names,
         permissions=perm_codes,
+        provider=current_user.provider,
+        provider_user_id=current_user.provider_user_id,
     )
 
 
@@ -449,6 +454,11 @@ async def update_profile(
     db: AsyncSession = Depends(get_db),
 ):
     """Update current user's profile (email)"""
+    if current_user.provider != "local":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Profile management is not supported for {current_user.provider} users. Please contact your {current_user.provider} administrator.",
+        )
     if profile.email is not None:
         # Check email uniqueness
         if profile.email != current_user.email:
@@ -473,6 +483,8 @@ async def update_profile(
         is_superuser=current_user.is_superuser,
         roles=role_names,
         permissions=[],
+        provider=current_user.provider,
+        provider_user_id=current_user.provider_user_id,
     )
 
 
@@ -547,6 +559,7 @@ async def list_users(
             id=u.id, username=u.username, email=u.email,
             is_active=u.is_active, is_superuser=u.is_superuser,
             roles=role_names, permissions=[],
+            provider=u.provider, provider_user_id=u.provider_user_id,
             created_at=u.created_at, updated_at=u.updated_at,
         ))
     return response
@@ -850,6 +863,36 @@ async def admin_unlock_user(
                         resource_name=user.username)
 
     return {"message": f"Account '{user.username}' unlocked successfully", "success": True}
+
+
+@router.post("/users/{user_id}/lock", response_model=ResponseMessage)
+async def admin_lock_user(
+    user_id: int,
+    request: Request,
+    current_user: User = Depends(require_permission("user:lock")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Lock a user account (requires user:lock permission)"""
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if not user.is_active:
+        raise HTTPException(status_code=400, detail="User is already locked")
+
+    user.is_active = False
+    await db.commit()
+
+    # Audit log
+    from app.services.terminal_service import TerminalService
+    ts = TerminalService(db)
+    await ts.log_action(current_user.username, "lock_user", "user", str(user.id),
+                        {"message": "Locked user account", "username": user.username},
+                        ip_address=get_client_ip(request),
+                        resource_name=user.username)
+
+    return {"message": f"Account '{user.username}' locked successfully", "success": True}
 
 
 # ==================== Password Reset with Verification Code ====================
