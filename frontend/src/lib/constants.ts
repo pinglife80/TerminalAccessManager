@@ -24,12 +24,12 @@ export const NAV_ITEMS: NavItem[] = [
     label: 'System Settings', 
     iconName: 'Settings', 
     adminOnly: true, 
-    requiredPermission: 'system:manage',
+    requiredPermission: 'settings:read',
     children: [
-      { path: '/system-settings', label: 'General', iconName: 'Settings', adminOnly: true, requiredPermission: 'system:manage' },
-      { path: '/auth-providers', label: 'Auth Providers', iconName: 'Key', adminOnly: true, requiredPermission: 'system:manage' },
-      { path: '/backup', label: 'Backup', iconName: 'HardDrive', adminOnly: true, requiredPermission: 'system:manage' },
-      { path: '/notifications', label: 'Notifications', iconName: 'Bell', adminOnly: true, requiredPermission: 'system:manage' },
+      { path: '/general-settings', label: 'General', iconName: 'Settings', adminOnly: true, requiredPermission: 'settings:read' },
+      { path: '/auth-providers', label: 'Auth Providers', iconName: 'Key', adminOnly: true, requiredPermission: 'settings:write' },
+      { path: '/backup', label: 'Backup', iconName: 'HardDrive', adminOnly: true, requiredPermission: 'backup:read' },
+      { path: '/notifications', label: 'Notifications', iconName: 'Bell', adminOnly: true, requiredPermission: 'notification:read' },
       { path: '/users', label: 'Users', iconName: 'Users', adminOnly: true, requiredPermission: 'user:read' },
       { path: '/roles', label: 'Roles', iconName: 'Shield', adminOnly: true, requiredPermission: 'role:read' },
     ]
@@ -83,8 +83,14 @@ export const API_ENDPOINTS = {
   BACKUP_TEST: '/backup/test',
   NOTIFICATION_CHANNELS: '/notifications/channels/',
   NOTIFICATION_CHANNELS_TEST: '/notifications/channels/{{id}}/test',
+  NOTIFICATION_CHANNEL_TYPES: '/notifications/channel-types',
   NOTIFICATION_LOGS: '/notifications/logs',
   NOTIFICATION_EVENTS: '/notifications/events',
+  SETTINGS_LIST: '/settings/list',
+  SETTINGS_UPDATE: '/settings/update',
+  SETTINGS_SEED: '/settings/seed',
+  SETTINGS_INVALIDATE_CACHE: '/settings/invalidate-cache',
+  SETTINGS_UPLOAD: '/settings/upload',
 };
 
 export const PAGE_SIZE_OPTIONS = [10, 20, 50, 100];
