@@ -7,6 +7,7 @@ Supports Active Directory and OpenLDAP authentication.
 import re
 import ssl
 from typing import Any
+from loguru import logger
 
 from app.services.auth_providers.base import AuthProviderBase, AuthProviderType, AuthResult
 
@@ -83,7 +84,10 @@ class LDAPProvider(AuthProviderBase):
 
     async def authenticate(self, username: str, password: str) -> AuthResult:
         """Authenticate user against LDAP server"""
+        logger.info(f"LDAP authentication attempt for username: {username}")
+
         if not LDAP_AVAILABLE:
+            logger.error("LDAP module not available - ldap3 package not installed")
             return self.build_auth_result(
                 success=False,
                 error_message="LDAP module not available",
@@ -91,6 +95,7 @@ class LDAPProvider(AuthProviderBase):
             )
 
         if not username or not password:
+            logger.warning("LDAP authentication failed: username or password empty")
             return self.build_auth_result(
                 success=False,
                 error_message="Username and password are required",
@@ -98,8 +103,11 @@ class LDAPProvider(AuthProviderBase):
 
         try:
             server = self._build_server()
+            use_ssl = self.config.get("use_ssl", False)
+            logger.debug(f"LDAP server built: {server.host}:{server.port}, use_ssl={use_ssl}")
 
-            user_dn = self._build_user_dn(username)
+            user_dn = self._search_user_dn(username)
+            logger.debug(f"Found user DN: {user_dn}")
 
             conn = Connection(
                 server,
@@ -108,15 +116,21 @@ class LDAPProvider(AuthProviderBase):
                 auto_bind=True,
                 raise_exceptions=True,
             )
+            logger.info(f"LDAP bind successful for user: {username} (DN: {user_dn})")
 
-            user_info = await self._get_user_info_from_ldap(conn, user_dn)
+            user_info = self._get_user_info_from_ldap(conn, user_dn)
+            logger.debug(f"Retrieved user info: email={user_info.get('email')}")
+
+            conn.unbind()
 
             if not self._is_user_active(user_info):
+                logger.warning(f"LDAP user account is disabled: {username}")
                 return self.build_auth_result(
                     success=False,
                     error_message="User account is disabled",
                 )
 
+            logger.info(f"LDAP authentication successful for user: {username}")
             return self.build_auth_result(
                 success=True,
                 username=username,
@@ -126,25 +140,35 @@ class LDAPProvider(AuthProviderBase):
             )
 
         except LDAPBindError:
+            logger.warning(f"LDAP bind failed for user: {username} - invalid credentials or DN")
             return self.build_auth_result(
                 success=False,
                 error_message="Invalid credentials",
                 message="Failed",
             )
         except LDAPException as e:
+            logger.error(f"LDAP exception for user {username}: {str(e)}")
             return self.build_auth_result(
                 success=False,
                 error_message=f"LDAP error: {str(e)}",
                 message="Failed",
             )
+        except ValueError as e:
+            logger.error(f"LDAP configuration error for user {username}: {str(e)}")
+            return self.build_auth_result(
+                success=False,
+                error_message=str(e),
+                message="Failed",
+            )
         except Exception as e:
+            logger.error(f"Unexpected error during LDAP authentication for user {username}: {str(e)}")
             return self.build_auth_result(
                 success=False,
                 error_message=f"Authentication failed: {str(e)}",
                 message="Failed",
             )
 
-    def _build_server(self) -> Server:
+    def _build_server(self, get_info: bool = True) -> Server:
         """Build LDAP server configuration"""
         server_host = self.config["server"]
         server_port = self.config.get("port", 389)
@@ -158,56 +182,88 @@ class LDAPProvider(AuthProviderBase):
                 version=ssl.PROTOCOL_TLS,
             )
 
+        server_info = ldap3.ALL if get_info else ldap3.NONE
+
         server = Server(
             server_host,
             port=server_port,
             use_ssl=use_ssl,
             tls=tls_config,
-            get_info=ldap3.ALL,
+            get_info=server_info,
         )
 
         return server
 
-    def _build_user_dn(self, username: str) -> str:
-        """Build user DN from username"""
-        if not validate_username(username):
-            raise ValueError("Invalid username format")
-
-        user_search_base = self.config.get("user_search_base", "")
-
-        # If user_search_base is provided, search for the user
-        if user_search_base:
-            return self._search_user_dn(username)
-
-        # Otherwise, use direct DN construction
-        escaped_username = escape_ldap_special_chars(username)
-        user_dn_pattern = self.config.get("user_dn_pattern", "cn={username},dc=example,dc=com")
-        return user_dn_pattern.format(username=escaped_username)
-
     def _search_user_dn(self, username: str) -> str:
         """Search for user DN in LDAP directory"""
         if not validate_username(username):
+            logger.warning(f"Invalid username format for search: {username}")
             raise ValueError("Invalid username format")
 
-        server = self._build_server()
-        user_search_base = self.config["user_search_base"]
+        user_search_base = self.config.get("user_search_base", "")
         user_search_filter = self.config.get("user_search_filter", "(sAMAccountName={username})")
 
-        # Use service account for search if configured
+        if not user_search_base:
+            escaped_username = escape_ldap_special_chars(username)
+            user_dn_pattern = self.config.get("user_dn_pattern", "cn={username},dc=example,dc=com")
+            logger.debug(f"Using direct DN pattern: {user_dn_pattern}")
+            return user_dn_pattern.format(username=escaped_username)
+
+        anonymous_search = self.config.get("anonymous_search", False)
+        server = self._build_server(get_info=not anonymous_search)
         bind_dn = self.config.get("bind_dn")
         bind_password = self.config.get("bind_password")
+        logger.debug(f"Searching user DN with anonymous_search={anonymous_search}, bind_dn: {bind_dn}, search_filter: {user_search_filter}")
 
-        conn = Connection(
-            server,
-            user=bind_dn,
-            password=bind_password,
-            auto_bind=True,
-            raise_exceptions=True,
-        )
+        if anonymous_search:
+            if bind_dn and bind_password:
+                logger.info("Using configured bind DN for user search")
+                conn = Connection(
+                    server,
+                    user=bind_dn,
+                    password=bind_password,
+                    auto_bind=True,
+                    raise_exceptions=True,
+                )
+            else:
+                logger.info("Using anonymous bind for user search as configured")
+                conn = Connection(
+                    server,
+                    user=None,
+                    password=None,
+                    auto_bind=True,
+                    raise_exceptions=True,
+                    authentication=ldap3.ANONYMOUS,
+                )
+        else:
+            if bind_dn and not bind_password:
+                logger.error("bind_dn is configured but bind_password is missing")
+                raise ValueError("LDAP configuration error: bind_dn is set but bind_password is missing")
+
+            if not bind_dn:
+                logger.warning("bind_dn not configured, attempting anonymous bind for user search")
+                conn = Connection(
+                    server,
+                    user=None,
+                    password=None,
+                    auto_bind=True,
+                    raise_exceptions=True,
+                    authentication=ldap3.ANONYMOUS,
+                )
+            else:
+                conn = Connection(
+                    server,
+                    user=bind_dn,
+                    password=bind_password,
+                    auto_bind=True,
+                    raise_exceptions=True,
+                )
 
         try:
             escaped_username = escape_ldap_special_chars(username)
             search_filter = user_search_filter.format(username=escaped_username)
+            logger.debug(f"Executing LDAP search: base={user_search_base}, filter={search_filter}")
+
             conn.search(
                 search_base=user_search_base,
                 search_filter=search_filter,
@@ -215,8 +271,11 @@ class LDAPProvider(AuthProviderBase):
             )
 
             if conn.entries:
-                return str(conn.entries[0].entry_dn)
+                user_dn = str(conn.entries[0].entry_dn)
+                logger.debug(f"Found user DN: {user_dn}")
+                return user_dn
 
+            logger.warning(f"User not found in LDAP: {username}")
             raise ValueError(f"User not found: {username}")
         finally:
             conn.unbind()
@@ -235,59 +294,101 @@ class LDAPProvider(AuthProviderBase):
         entry = conn.entries[0]
         attributes = entry.entry_attributes_as_dict
 
-        # Map LDAP attributes to common field names
         email_attr = self.config.get("email_attribute", "mail")
         username_attr = self.config.get("username_attribute", "sAMAccountName")
 
         return {
-            "username": attributes.get(username_attr, [None])[0],
-            "email": attributes.get(email_attr, [None])[0],
+            "username": attributes.get(username_attr, [None])[0] if attributes.get(username_attr) else None,
+            "email": attributes.get(email_attr, [None])[0] if attributes.get(email_attr) else None,
             "dn": user_dn,
             "raw": attributes,
         }
 
     def _is_user_active(self, user_info: dict[str, Any]) -> bool:
         """Check if user account is active (AD-specific)"""
-        # In Active Directory, account status is in userAccountControl
-        # bit 2 is ACCOUNTDISABLE
         raw_info = user_info.get("raw", {})
         user_account_control = raw_info.get("userAccountControl", [0])[0]
-
         return not (isinstance(user_account_control, int) and (user_account_control & 2))
 
     async def get_user_info(self, user_id: str) -> dict[str, Any]:
         """Get user information from LDAP"""
         try:
-            server = self._build_server()
+            anonymous_search = self.config.get("anonymous_search", False)
+            server = self._build_server(get_info=not anonymous_search)
             bind_dn = self.config.get("bind_dn")
             bind_password = self.config.get("bind_password")
 
-            conn = Connection(
-                server,
-                user=bind_dn,
-                password=bind_password,
-                auto_bind=True,
-                raise_exceptions=True,
-            )
+            if bind_dn and not bind_password:
+                return {"error": "bind_dn is set but bind_password is missing"}
 
-            return self._get_user_info_from_ldap(conn, user_id)
+            if not bind_dn:
+                conn = Connection(
+                    server,
+                    user=None,
+                    password=None,
+                    auto_bind=True,
+                    raise_exceptions=True,
+                    authentication=ldap3.ANONYMOUS,
+                )
+            else:
+                conn = Connection(
+                    server,
+                    user=bind_dn,
+                    password=bind_password,
+                    auto_bind=True,
+                    raise_exceptions=True,
+                )
+
+            try:
+                return self._get_user_info_from_ldap(conn, user_id)
+            finally:
+                conn.unbind()
         except Exception as e:
             return {"error": str(e)}
 
     async def test_connection(self) -> dict:
         """Test LDAP connection"""
         try:
-            server = self._build_server()
+            anonymous_search = self.config.get("anonymous_search", False)
+            server = self._build_server(get_info=not anonymous_search)
             bind_dn = self.config.get("bind_dn")
             bind_password = self.config.get("bind_password")
 
-            Connection(
-                server,
-                user=bind_dn,
-                password=bind_password,
-                auto_bind=True,
-                raise_exceptions=True,
-            )
+            if anonymous_search:
+                conn = Connection(
+                    server,
+                    user=None,
+                    password=None,
+                    auto_bind=True,
+                    raise_exceptions=True,
+                    authentication=ldap3.ANONYMOUS,
+                )
+            else:
+                if bind_dn and not bind_password:
+                    return {
+                        "success": False,
+                        "message": "bind_dn is configured but bind_password is missing",
+                    }
+
+                if not bind_dn:
+                    conn = Connection(
+                        server,
+                        user=None,
+                        password=None,
+                        auto_bind=True,
+                        raise_exceptions=True,
+                        authentication=ldap3.ANONYMOUS,
+                    )
+                else:
+                    conn = Connection(
+                    server,
+                    user=bind_dn,
+                    password=bind_password,
+                    auto_bind=True,
+                    raise_exceptions=True,
+                )
+
+            conn.unbind()
 
             return {
                 "success": True,
@@ -313,3 +414,205 @@ class LDAPProvider(AuthProviderBase):
                 "success": False,
                 "message": f"Connection test failed: {str(e)}",
             }
+
+    def search_users(self, search_base: str = None, search_filter: str = None, 
+                     username: str = None, page_size: int = 10, page_number: int = 1) -> dict:
+        """Search for users in LDAP directory"""
+        try:
+            anonymous_search = self.config.get("anonymous_search", False)
+            server = self._build_server(get_info=not anonymous_search)
+            bind_dn = self.config.get("bind_dn")
+            bind_password = self.config.get("bind_password")
+            user_search_base = search_base or self.config.get("user_search_base", "")
+            user_search_filter = search_filter or self.config.get("user_search_filter", "(sAMAccountName={username})")
+
+            if anonymous_search:
+                if bind_dn and bind_password:
+                    conn = Connection(
+                        server,
+                        user=bind_dn,
+                        password=bind_password,
+                        auto_bind=True,
+                        raise_exceptions=True,
+                    )
+                else:
+                    conn = Connection(
+                        server,
+                        user=None,
+                        password=None,
+                        auto_bind=True,
+                        raise_exceptions=True,
+                        authentication=ldap3.ANONYMOUS,
+                    )
+            else:
+                if bind_dn and not bind_password:
+                    return {"error": "bind_dn is set but bind_password is missing"}
+
+                if not bind_dn:
+                    conn = Connection(
+                        server,
+                        user=None,
+                        password=None,
+                        auto_bind=True,
+                        raise_exceptions=True,
+                        authentication=ldap3.ANONYMOUS,
+                    )
+                else:
+                    conn = Connection(
+                        server,
+                        user=bind_dn,
+                        password=bind_password,
+                        auto_bind=True,
+                        raise_exceptions=True,
+                    )
+
+            try:
+                if not user_search_base:
+                    return {"users": [], "total": 0}
+
+                base_filter = "(objectClass=user)"
+                filters_to_combine = [base_filter]
+                
+                if username:
+                    escaped_username = escape_ldap_special_chars(username)
+                    user_filter = user_search_filter.format(username=f"*{escaped_username}*")
+                    filters_to_combine.append(user_filter)
+                
+                if search_filter:
+                    filters_to_combine.append(search_filter)
+                
+                if len(filters_to_combine) > 1:
+                    final_filter = f"(&{' '.join(filters_to_combine)})"
+                else:
+                    final_filter = base_filter
+
+                logger.debug(f"LDAP search: base={user_search_base}, filter={final_filter}")
+
+                conn.search(
+                    search_base=user_search_base,
+                    search_filter=final_filter,
+                    attributes=["cn", "sAMAccountName", "mail", "uid", "givenName", "sn"],
+                    size_limit=page_size * page_number,
+                )
+
+                users = []
+                email_attr = self.config.get("email_attribute", "mail")
+                username_attr = self.config.get("username_attribute", "sAMAccountName")
+
+                for entry in conn.entries:
+                    attrs = entry.entry_attributes_as_dict
+                    user_entry = {
+                        "dn": str(entry.entry_dn),
+                        "cn": attrs.get("cn", [None])[0] if attrs.get("cn") else None,
+                        "username": attrs.get(username_attr, [None])[0] if attrs.get(username_attr) else None,
+                        "email": attrs.get(email_attr, [None])[0] if attrs.get(email_attr) else None,
+                        "givenName": attrs.get("givenName", [None])[0] if attrs.get("givenName") else None,
+                        "sn": attrs.get("sn", [None])[0] if attrs.get("sn") else None,
+                    }
+                    users.append(user_entry)
+
+                start_idx = (page_number - 1) * page_size
+                end_idx = start_idx + page_size
+
+                return {
+                    "users": users[start_idx:end_idx],
+                    "total": len(users),
+                }
+            finally:
+                conn.unbind()
+        except Exception as e:
+            logger.error(f"LDAP search failed: {str(e)}")
+            return {"error": str(e)}
+
+    def get_user_info_by_dn(self, user_dn: str) -> dict:
+        """Get user information by DN"""
+        try:
+            anonymous_search = self.config.get("anonymous_search", False)
+            server = self._build_server(get_info=not anonymous_search)
+            bind_dn = self.config.get("bind_dn")
+            bind_password = self.config.get("bind_password")
+
+            if bind_dn and not bind_password:
+                return {"error": "bind_dn is set but bind_password is missing"}
+
+            if not bind_dn:
+                conn = Connection(
+                    server,
+                    user=None,
+                    password=None,
+                    auto_bind=True,
+                    raise_exceptions=True,
+                    authentication=ldap3.ANONYMOUS,
+                )
+            else:
+                conn = Connection(
+                    server,
+                    user=bind_dn,
+                    password=bind_password,
+                    auto_bind=True,
+                    raise_exceptions=True,
+                )
+
+            try:
+                return self._get_user_info_from_ldap(conn, user_dn)
+            finally:
+                conn.unbind()
+        except Exception as e:
+            logger.error(f"Failed to get user info by DN {user_dn}: {str(e)}")
+            return {}
+
+    def get_ous(self) -> list:
+        """Get Organizational Units from LDAP"""
+        try:
+            anonymous_search = self.config.get("anonymous_search", False)
+            server = self._build_server(get_info=not anonymous_search)
+            bind_dn = self.config.get("bind_dn")
+            bind_password = self.config.get("bind_password")
+            user_search_base = self.config.get("user_search_base", "")
+
+            if bind_dn and not bind_password:
+                return []
+
+            if not bind_dn:
+                conn = Connection(
+                    server,
+                    user=None,
+                    password=None,
+                    auto_bind=True,
+                    raise_exceptions=True,
+                    authentication=ldap3.ANONYMOUS,
+                )
+            else:
+                conn = Connection(
+                    server,
+                    user=bind_dn,
+                    password=bind_password,
+                    auto_bind=True,
+                    raise_exceptions=True,
+                )
+
+            try:
+                if not user_search_base:
+                    return []
+
+                conn.search(
+                    search_base=user_search_base,
+                    search_filter="(objectClass=organizationalUnit)",
+                    attributes=["ou", "description"],
+                )
+
+                ous = []
+                for entry in conn.entries:
+                    attrs = entry.entry_attributes_as_dict
+                    ous.append({
+                        "dn": str(entry.entry_dn),
+                        "name": attrs.get("ou", [None])[0] if attrs.get("ou") else None,
+                        "description": attrs.get("description", [None])[0] if attrs.get("description") else None,
+                    })
+
+                return ous
+            finally:
+                conn.unbind()
+        except Exception as e:
+            logger.error(f"Failed to get OUs: {str(e)}")
+            return []

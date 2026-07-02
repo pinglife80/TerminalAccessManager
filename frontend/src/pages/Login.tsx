@@ -500,15 +500,17 @@ const Login: React.FC = () => {
                 )}
               </button>
 
-              <div className="mt-4 text-center">
-                <button
-                  type="button"
-                  onClick={() => navigate('/password-reset')}
-                  className="text-sm text-blue-600 hover:text-blue-700 transition-colors"
-                >
-                  {t('auth.forgotPassword')}
-                </button>
-              </div>
+              {selectedProvider === 'local' && (
+                <div className="mt-4 text-center">
+                  <button
+                    type="button"
+                    onClick={() => navigate('/password-reset')}
+                    className="text-sm text-blue-600 hover:text-blue-700 transition-colors"
+                  >
+                    {t('auth.forgotPassword')}
+                  </button>
+                </div>
+              )}
             </form>
 
             {/* Captcha/Lock status indicator */}

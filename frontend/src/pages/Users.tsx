@@ -8,13 +8,14 @@ import { usePermission } from '@/hooks/usePermission';
 import { apiClient } from '@/lib/api';
 import { API_ENDPOINTS } from '@/lib/constants';
 import { getErrorMessage, useDebounce } from '@/lib/utils';
-import { Search, Plus, Edit2, Trash2, Unlock, Shield, ShieldCheck, Eye, EyeOff, KeyRound, Users as UsersIcon, RefreshCw, ChevronDown } from 'lucide-react';
+import { Search, Plus, Edit2, Trash2, Unlock, Lock, Shield, ShieldCheck, Eye, EyeOff, KeyRound, Users as UsersIcon, RefreshCw, ChevronDown, Download } from 'lucide-react';
 import { toast } from 'sonner';
 import { PrimaryButton, IconButton, ButtonGroup } from '@/components/Button';
 import { Pagination } from '@/components/Pagination';
 import { EmptyState } from '@/components/StateDisplay';
 import { PageSkeleton } from '@/components/Skeleton';
 import { Modal } from '@/components/Modal';
+import LDAPImportModal from '@/components/LDAPImportModal';
 
 interface RoleOption {
   id: number;
@@ -41,6 +42,7 @@ const Users: React.FC = () => {
   const debouncedSearch = useDebounce(searchTerm, 500);
   const { data: users, isLoading } = useUsers(debouncedSearch || undefined);
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [showLDAPImportModal, setShowLDAPImportModal] = useState(false);
   const [editingUser, setEditingUser] = useState<UserItem | null>(null);
   const [resetPasswordUser, setResetPasswordUser] = useState<UserItem | null>(null);
   const [showPassword, setShowPassword] = useState(false);
@@ -153,6 +155,16 @@ const Users: React.FC = () => {
     }
   };
 
+  // Lock user
+  const handleLock = async (user: UserItem) => {
+    try {
+      await apiClient.post(`${API_ENDPOINTS.AUTH_USERS}${user.id}/lock`);
+      toast.success(t('users.accountLocked', { username: user.username }));
+    } catch (err: unknown) {
+      toast.error(getErrorMessage(err, t('users.failedToLock')));
+    }
+  };
+
   // Reset password
   const handleResetPassword = async (userId: number, newPassword: string) => {
     try {
@@ -180,12 +192,20 @@ const Users: React.FC = () => {
           <p className="text-muted-foreground mt-1">{t('users.manageAccounts')}</p>
         </div>
         {hasPermission('user:write') && (
-        <PrimaryButton
-          icon={Plus}
-          label={t('users.newUser')}
-          variant="primary"
-          onClick={() => { reset({ username: '', email: '', password: '', is_active: true, is_superuser: false, role_id: null }); setShowCreateModal(true); }}
-        />
+        <div className="flex gap-3">
+          <PrimaryButton
+            icon={Download}
+            label={t('users.importLDAPUsers')}
+            variant="secondary"
+            onClick={() => setShowLDAPImportModal(true)}
+          />
+          <PrimaryButton
+            icon={Plus}
+            label={t('users.newUser')}
+            variant="primary"
+            onClick={() => { reset({ username: '', email: '', password: '', is_active: true, is_superuser: false, role_id: null }); setShowCreateModal(true); }}
+          />
+        </div>
         )}
       </div>
 
@@ -367,13 +387,22 @@ const Users: React.FC = () => {
                     <td className="px-4 sm:px-6 py-4 whitespace-nowrap">
                       <div className="flex items-center justify-center">
                         <ButtonGroup>
-                          {hasPermission('user:unlock') && (
+                          {hasPermission('user:unlock') && !user.is_active && (
                           <IconButton
                             icon={Unlock}
                             variant="success"
                             size="md"
                             title={t('users.unlockAccount')}
                             onClick={() => handleUnlock(user)}
+                          />
+                          )}
+                          {hasPermission('user:lock') && user.is_active && !isSelf(user) && (
+                          <IconButton
+                            icon={Lock}
+                            variant="danger"
+                            size="md"
+                            title={t('users.lockAccount')}
+                            onClick={() => handleLock(user)}
                           />
                           )}
                           {hasPermission('user:password') && user.provider === 'local' && (
@@ -523,6 +552,13 @@ const Users: React.FC = () => {
           setShowPassword={setShowPassword}
         />
       )}
+
+      {/* LDAP Import Modal */}
+      <LDAPImportModal
+        isOpen={showLDAPImportModal}
+        onClose={() => setShowLDAPImportModal(false)}
+        onImportSuccess={() => queryClient.invalidateQueries({ queryKey: ['users'] })}
+      />
       </>
       )}
     </div>

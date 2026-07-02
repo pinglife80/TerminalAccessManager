@@ -1,9 +1,10 @@
-from datetime import UTC, datetime
+from datetime import datetime
 
 from sqlalchemy import Boolean, Column, DateTime, Integer, String
 from sqlalchemy.orm import relationship
 
 from app.core.database import Base
+from app.core.timezone import now
 
 
 class User(Base):
@@ -13,14 +14,14 @@ class User(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String(50), unique=True, nullable=False, index=True)
-    email = Column(String(120), unique=True, nullable=True, index=True)
-    hashed_password = Column(String(255), nullable=False)
+    email = Column(String(120), nullable=True, index=True)
+    hashed_password = Column(String(255), nullable=True)
     is_active = Column(Boolean, default=True)
     is_superuser = Column(Boolean, default=False)
     provider = Column(String(50), default="local")
     provider_user_id = Column(String(255), nullable=True)
-    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
-    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC))
+    created_at = Column(DateTime(timezone=True), default=now)
+    updated_at = Column(DateTime(timezone=True), default=now, onupdate=now)
 
     # Relationships
     audit_logs = relationship("AuditLog", back_populates="user_rel")

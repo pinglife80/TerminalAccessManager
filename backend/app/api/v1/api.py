@@ -7,6 +7,7 @@ from app.api.v1.endpoints import (
     blacklist,
     compliance_baselines,
     data_sources,
+    ldap,
     logs,
     notifications,
     roles,
@@ -22,6 +23,7 @@ api_router = APIRouter()
 # Include all endpoint routers
 api_router.include_router(auth.router)
 api_router.include_router(auth_providers.router)
+api_router.include_router(ldap.router)
 api_router.include_router(backup.router)
 api_router.include_router(terminals.router)
 api_router.include_router(whitelist.router)
