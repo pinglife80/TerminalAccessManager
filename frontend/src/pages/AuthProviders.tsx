@@ -31,6 +31,7 @@ interface ProviderFormData {
   port: number;
   use_ssl: boolean;
   use_starttls: boolean;
+  anonymous_search: boolean;
   bind_dn: string;
   bind_password: string;
   user_search_base: string;
@@ -40,7 +41,6 @@ interface ProviderFormData {
 }
 
 const PROVIDER_TYPES = [
-  { value: 'local', label: 'Local' },
   { value: 'ldap', label: 'LDAP/Active Directory' },
 ];
 
@@ -57,7 +57,7 @@ const AuthProviders: React.FC = () => {
   const { register, handleSubmit, reset, watch, formState: { errors } } = useForm<ProviderFormData>({
     defaultValues: {
       name: '',
-      provider_type: 'local',
+      provider_type: 'ldap',
       description: '',
       enabled: true,
       priority: 100,
@@ -65,6 +65,7 @@ const AuthProviders: React.FC = () => {
       port: 389,
       use_ssl: false,
       use_starttls: false,
+      anonymous_search: false,
       bind_dn: '',
       bind_password: '',
       user_search_base: '',
@@ -100,8 +101,11 @@ const AuthProviders: React.FC = () => {
         config.port = data.port;
         config.use_ssl = data.use_ssl;
         config.use_starttls = data.use_starttls;
+        config.anonymous_search = data.anonymous_search;
         config.bind_dn = data.bind_dn;
-        config.bind_password = data.bind_password;
+        if (!editingProvider || data.bind_password) {
+          config.bind_password = data.bind_password;
+        }
         config.user_search_base = data.user_search_base;
         config.user_search_filter = data.user_search_filter;
         config.email_attribute = data.email_attribute;
@@ -149,13 +153,23 @@ const AuthProviders: React.FC = () => {
     setTestLoading(id);
     try {
       const response = await apiClient.post(`${API_ENDPOINTS.AUTH_PROVIDERS}${id}/test`);
-      setTestResult({ id, success: response.data.success, message: response.data.message });
+      const result = { id, success: response.data.success, message: response.data.message };
+      setTestResult(result);
+      if (result.success) {
+        toast.success(result.message);
+      } else {
+        toast.error(result.message);
+      }
     } catch (err: unknown) {
-      setTestResult({ id, success: false, message: getErrorMessage(err, t('authProviders.testFailed')) });
+      const message = getErrorMessage(err, t('authProviders.testFailed'));
+      setTestResult({ id, success: false, message });
+      toast.error(message);
     } finally {
       setTestLoading(null);
     }
   };
+
+
 
   const handleOpenModal = (provider?: AuthProvider) => {
     if (provider) {
@@ -170,6 +184,7 @@ const AuthProviders: React.FC = () => {
         port: ((provider.config as Record<string, unknown>).port as number) || 389,
         use_ssl: (provider.config as Record<string, unknown>).use_ssl as boolean || false,
         use_starttls: (provider.config as Record<string, unknown>).use_starttls as boolean || false,
+        anonymous_search: (provider.config as Record<string, unknown>).anonymous_search as boolean || false,
         bind_dn: (provider.config as Record<string, unknown>).bind_dn as string || '',
         bind_password: '',
         user_search_base: (provider.config as Record<string, unknown>).user_search_base as string || '',
@@ -254,6 +269,7 @@ const AuthProviders: React.FC = () => {
                           <TestTube className="h-4 w-4" />
                         )}
                       </button>
+
                       <button
                         onClick={(e) => { e.stopPropagation(); handleOpenModal(provider); }}
                         className="p-2 text-muted-foreground hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
@@ -318,6 +334,7 @@ const AuthProviders: React.FC = () => {
                           <span className="text-sm">{testResult.message}</span>
                         </div>
                       )}
+
                     </div>
                   )}
                 </div>
@@ -442,25 +459,41 @@ const AuthProviders: React.FC = () => {
                       </label>
                     </div>
                     <div>
+                      <label className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+                        <input {...register('anonymous_search')} type="checkbox" className="rounded border-border" />
+                        {t('authProviders.anonymousSearch')}
+                      </label>
+                    </div>
+                    <div>
                       <label className="block text-sm font-medium text-muted-foreground mb-1">
                         {t('authProviders.bindDn')}
+                        {!watch('anonymous_search') && <span className="text-red-500">*</span>}
+                        {watch('anonymous_search') && <span className="text-xs text-gray-400 ml-2">({t('authProviders.optional')})</span>}
                       </label>
                       <input
-                        {...register('bind_dn')}
+                        {...register('bind_dn', { 
+                          required: !watch('anonymous_search') && t('authProviders.bindDnRequired') 
+                        })}
                         className="w-full px-4 py-2.5 border border-border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
                         placeholder="cn=admin,dc=example,dc=com"
                       />
+                      {errors.bind_dn && <p className="text-xs text-red-600 mt-1">{errors.bind_dn.message}</p>}
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-muted-foreground mb-1">
                         {t('authProviders.bindPassword')}
+                        {!editingProvider && !watch('anonymous_search') && <span className="text-red-500">*</span>}
+                        {editingProvider && <span className="text-xs text-gray-400 ml-2">({t('authProviders.leaveBlankToKeep')})</span>}
                       </label>
                       <input
-                        {...register('bind_password')}
+                        {...register('bind_password', { 
+                          required: !editingProvider && !watch('anonymous_search') && t('authProviders.bindPasswordRequired') 
+                        })}
                         type="password"
                         className="w-full px-4 py-2.5 border border-border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
-                        placeholder="********"
+                        placeholder={editingProvider ? '••••••••' : '********'}
                       />
+                      {errors.bind_password && <p className="text-xs text-red-600 mt-1">{errors.bind_password.message}</p>}
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-muted-foreground mb-1">

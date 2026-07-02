@@ -11,8 +11,12 @@ import {
   XCircle,
   Pencil,
   Shield,
+  ShieldCheck,
+  Ban,
+  Unlock,
 } from 'lucide-react';
-import { useComplianceBaselines, ComplianceBaselineItem } from '@/hooks/useTerminalData';
+import { useComplianceBaselines, ComplianceBaselineItem, useDataSources } from '@/hooks/useTerminalData';
+import { useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '@/lib/api';
 import { toast } from 'sonner';
 import { API_ENDPOINTS } from '@/lib/constants';
@@ -288,8 +292,121 @@ const ComplianceBaselinesTab = forwardRef<{ openAddModal: () => void }, Complian
     );
   };
 
+  // E1: Compliance operations state
+  const queryClient = useQueryClient();
+  const { data: dataSources } = useDataSources();
+  const arpSources = useMemo(
+    () => (dataSources || []).filter((ds) => ds.type === 'arp_ssh' || ds.type === 'arp_api'),
+    [dataSources],
+  );
+  const [selectedTag, setSelectedTag] = useState('');
+  const [complianceLoading, setComplianceLoading] = useState(false);
+  const [autoBlockLoading, setAutoBlockLoading] = useState(false);
+  const [autoUnblockLoading, setAutoUnblockLoading] = useState(false);
+
+  const handleComplianceCheck = async () => {
+    setComplianceLoading(true);
+    try {
+      const response = await apiClient.post(API_ENDPOINTS.COMPLIANCE_CHECK, {
+        arp_source_tag: selectedTag || undefined,
+        force: false,
+      });
+      const r = response.data;
+      toast.success(t('compliance.checkComplete', {
+        total: r.total_checked, compliant: r.compliant,
+        bypass: r.bypass, nonCompliant: r.non_compliant,
+      }));
+      queryClient.invalidateQueries({ queryKey: ['terminals'] });
+    } catch (err) {
+      toast.error(getErrorMessage(err, t('compliance.checkFailed')));
+    } finally {
+      setComplianceLoading(false);
+    }
+  };
+
+  const handleAutoBlock = async () => {
+    if (!selectedTag) { toast.warning(t('compliance.selectSourceTag')); return; }
+    if (!window.confirm(t('compliance.confirmAutoBlock'))) return;
+    setAutoBlockLoading(true);
+    try {
+      const response = await apiClient.post(API_ENDPOINTS.COMPLIANCE_AUTO_BLOCK, {
+        arp_source_tag: selectedTag,
+        block_time: '30d',
+        dry_run: false,
+      });
+      const r = response.data;
+      toast.success(t('compliance.autoBlockComplete', {
+        total: r.total_non_compliant, blocked: r.blocked, skipped: r.skipped,
+      }));
+      if (r.errors?.length) toast.warning(t('compliance.partialErrors', { count: r.errors.length }));
+      queryClient.invalidateQueries({ queryKey: ['terminals'] });
+      queryClient.invalidateQueries({ queryKey: ['blacklist'] });
+    } catch (err) {
+      toast.error(getErrorMessage(err, t('compliance.autoBlockFailed')));
+    } finally {
+      setAutoBlockLoading(false);
+    }
+  };
+
+  const handleAutoUnblock = async () => {
+    setAutoUnblockLoading(true);
+    try {
+      const response = await apiClient.post(API_ENDPOINTS.COMPLIANCE_AUTO_UNBLOCK);
+      const r = response.data;
+      toast.success(t('compliance.autoUnblockComplete', {
+        total: r.total_auto_blocked, unblocked: r.unblocked, skipped: r.skipped,
+      }));
+      if (r.errors?.length) toast.warning(t('compliance.partialErrors', { count: r.errors.length }));
+      queryClient.invalidateQueries({ queryKey: ['terminals'] });
+      queryClient.invalidateQueries({ queryKey: ['blacklist'] });
+    } catch (err) {
+      toast.error(getErrorMessage(err, t('compliance.autoUnblockFailed')));
+    } finally {
+      setAutoUnblockLoading(false);
+    }
+  };
+
   return (
     <>
+      {/* E1: Compliance operations */}
+      <div className="mb-4 bg-card rounded-2xl border border-border p-4">
+        <div className="flex flex-wrap items-end gap-3">
+          <div className="flex-1 min-w-[200px]">
+            <label className="block text-sm font-medium text-muted-foreground mb-1">{t('compliance.sourceTagLabel')}</label>
+            <select
+              value={selectedTag}
+              onChange={(e) => setSelectedTag(e.target.value)}
+              className="w-full px-3 py-2 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+            >
+              <option value="">{t('common.all')}</option>
+              {arpSources.map((ds) => (
+                <option key={ds.id} value={ds.tag}>{ds.tag} ({ds.name})</option>
+              ))}
+            </select>
+          </div>
+          <PrimaryButton
+            icon={ShieldCheck}
+            label={t('compliance.runCheck')}
+            onClick={handleComplianceCheck}
+            loading={complianceLoading}
+            variant="primary"
+          />
+          <PrimaryButton
+            icon={Ban}
+            label={t('compliance.autoBlock')}
+            onClick={handleAutoBlock}
+            loading={autoBlockLoading}
+            variant="danger"
+          />
+          <PrimaryButton
+            icon={Unlock}
+            label={t('compliance.autoUnblock')}
+            onClick={handleAutoUnblock}
+            loading={autoUnblockLoading}
+            variant="success"
+          />
+        </div>
+      </div>
       {/* Table */}
       <div className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden">
         <div className="overflow-x-auto">

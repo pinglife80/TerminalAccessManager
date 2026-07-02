@@ -1,8 +1,8 @@
 # RBAC 角色管理与用户访问控制
 
-**版本**: v3.3.0
-**更新日期**: 2026-06-17  
-**变更说明**: 审计日志 action 命名统一为 verb_resource 格式；部署模式统一为 dev/prod
+**版本**: v3.5.1
+**更新日期**: 2026-07-03  
+**变更说明**: 新增认证提供者系统章节，支持LDAP/本地多认证方式；v3.5.0版本新增通知、备份、认证提供者等权限码
 
 ---
 
@@ -11,15 +11,16 @@
 1. [概述](#1-概述)
 2. [角色体系](#2-角色体系)
 3. [认证机制](#3-认证机制)
-4. [权限控制架构](#4-权限控制架构)
-5. [API端点权限矩阵](#5-api端点权限矩阵)
-6. [前端权限控制](#6-前端权限控制)
-7. [安全防护机制](#7-安全防护机制)
-8. [角色管理操作指南](#8-角色管理操作指南)
-9. [审计与追踪](#9-审计与追踪)
-10. [安全配置参考](#10-安全配置参考)
-11. [RBAC改造实施记录](#11-rbac改造实施记录)
-12. [后期优化建议](#12-后期优化建议)
+4. [认证提供者系统](#4-认证提供者系统)
+5. [权限控制架构](#5-权限控制架构)
+6. [API端点权限矩阵](#6-API端点权限矩阵)
+7. [前端权限控制](#7-前端权限控制)
+8. [安全防护机制](#8-安全防护机制)
+9. [角色管理操作指南](#9-角色管理操作指南)
+10. [审计与追踪](#10-审计与追踪)
+11. [安全配置参考](#11-安全配置参考)
+12. [RBAC改造实施记录](#12-rbac改造实施记录)
+13. [后期优化建议](#13-后期优化建议)
 
 ---
 
@@ -311,7 +312,152 @@ sequenceDiagram
 
 ---
 
-## 4. 权限控制架构
+## 4. 认证提供者系统
+
+### 4.1 概述
+
+自 v3.5.0 起，系统引入**插件化认证提供者架构**，支持多种认证方式并存。用户可通过不同认证源登录，统一使用系统的角色权限体系进行授权管理。
+
+### 4.2 认证提供者类型
+
+| 类型 | provider 值 | 说明 | 配置方式 |
+|------|-------------|------|----------|
+| 本地认证 | `local` | 系统内置，用户名+密码认证 | 系统内置，无需配置 |
+| LDAP认证 | `ldap` | LDAP/Active Directory 目录服务认证 | 系统设置 → 认证提供者 |
+| OAuth认证 | `oauth` | OAuth 2.0 / OIDC 认证（预留接口） | 暂未开放 |
+
+**设计原则**:
+- **本地认证始终可用**: 作为系统兜底认证方式，确保管理员始终能够登录
+- **多认证源并存**: 支持同时启用多个认证提供者，用户可选择认证方式登录
+- **统一授权模型**: 无论通过哪种方式认证，用户统一使用系统角色权限体系
+- **用户自动创建**: LDAP用户首次登录时自动创建本地用户记录，关联LDAP提供者
+
+### 4.3 用户 provider 字段
+
+用户表新增 `provider` 和 `provider_user_id` 字段，标识用户的认证来源：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `provider` | varchar | 认证提供者类型：local / ldap / oauth |
+| `provider_user_id` | varchar | 认证提供者中的用户唯一标识（如LDAP的DN、OAuth的sub） |
+
+**LDAP用户特性**:
+- 邮箱、用户名等信息从LDAP同步，本地不可修改
+- 密码由LDAP管理，系统不存储LDAP用户密码
+- Profile页面仅显示只读信息（用户名、邮箱、角色、状态），不显示密码修改和邮箱更新功能
+- 支持通过管理员重置密码（仅本地用户可用）
+
+### 4.4 认证提供者管理
+
+#### 4.4.1 权限要求
+
+| 操作 | 所需权限码 |
+|------|-----------|
+| 查看认证提供者列表 | `settings:read` |
+| 创建/编辑/删除认证提供者 | `settings:write` |
+| 测试连接 | `settings:write` |
+
+#### 4.4.2 管理操作
+
+1. **添加认证提供者**: 系统设置 → 认证提供者 → 添加提供者
+   - 目前仅支持 LDAP 类型
+   - Local 认证为系统内置，不可手动创建
+
+2. **编辑认证提供者**: 点击编辑按钮修改配置
+   - Bind Password 留空表示保持原密码不变（v3.5.1+）
+   - 可随时启用/禁用认证提供者
+
+3. **测试连接**: 测试LDAP服务器连通性和Bind DN权限
+
+4. **删除认证提供者**: 删除后该认证方式不可用
+   - 已通过该认证创建的用户不受影响，但无法再通过该方式登录
+   - 删除后用户只能通过本地认证登录（需设置本地密码）
+
+### 4.5 LDAP 认证配置
+
+#### 4.5.1 核心配置项
+
+| 配置项 | 说明 | 默认值 |
+|--------|------|--------|
+| Server | LDAP服务器地址 | - |
+| Port | LDAP端口 | 389 |
+| Use SSL | 是否使用LDAPS（加密连接） | 否 |
+| Use StartTLS | 是否使用StartTLS升级连接 | 否 |
+| Anonymous Search | 是否使用匿名搜索 | 否 |
+| Bind DN | 用于搜索用户的绑定DN | - |
+| Bind Password | 绑定DN密码 | - |
+| User Search Base | 用户搜索基准DN | - |
+| User Search Filter | 用户搜索过滤器 | `(sAMAccountName={username})` |
+| Email Attribute | 邮箱属性名 | `mail` |
+| Skip Certificate Verify | 是否跳过证书验证 | 否 |
+
+#### 4.5.2 Active Directory 配置示例
+
+```
+Server: ad.example.com
+Port: 389
+Use SSL: 否
+Bind DN: CN=LDAP Reader,OU=Service Accounts,DC=example,DC=com
+Bind Password: ********
+User Search Base: OU=Users,DC=example,DC=com
+User Search Filter: (sAMAccountName={username})
+Email Attribute: mail
+```
+
+#### 4.5.3 OpenLDAP 配置示例
+
+```
+Server: ldap.example.com
+Port: 389
+Use SSL: 否
+Bind DN: cn=admin,dc=example,dc=com
+Bind Password: ********
+User Search Base: ou=users,dc=example,dc=com
+User Search Filter: (uid={username})
+Email Attribute: mail
+```
+
+### 4.6 登录流程
+
+```mermaid
+sequenceDiagram
+    participant User as 用户
+    participant FE as 前端登录页
+    participant API as 后端API
+    participant Factory as ProviderFactory
+    participant LDAP as LDAP服务器
+    participant DB as PostgreSQL
+
+    User->>FE: 1. 选择认证方式 + 输入凭据
+    FE->>API: 2. POST /auth/login (provider_id, username, password)
+    API->>Factory: 3. 创建认证提供者实例
+    alt 本地认证 (local)
+        API->>DB: 4. 查询用户 + 验证密码哈希
+        DB-->>API: 5. 返回用户信息
+    else LDAP认证 (ldap)
+        Factory->>LDAP: 4. Bind + 搜索用户DN
+        LDAP-->>Factory: 5. 返回用户DN
+        Factory->>LDAP: 6. 使用用户DN验证密码
+        LDAP-->>Factory: 7. 认证成功
+        Factory->>DB: 8. 检查/创建本地用户
+        DB-->>Factory: 9. 返回用户记录
+    end
+    API->>API: 10. 生成JWT Token + 加载权限
+    API-->>FE: 11. 返回 Token + 用户信息(含provider)
+    FE->>User: 12. 登录成功，进入系统
+```
+
+### 4.7 安全机制
+
+- **LDAP DN注入防护**: 用户名进行特殊字符转义，防止LDAP注入攻击
+- **Bind密码加密存储**: 认证提供者配置中的敏感信息加密存储
+- **证书验证**: LDAPS/StartTLS支持证书验证，可配置跳过（不推荐）
+- **登录失败锁定**: 无论哪种认证方式，均受登录失败锁定策略保护
+- **审计记录**: 所有登录尝试均记录审计日志，包含认证提供者信息
+
+---
+
+## 5. 权限控制架构
 
 ### 4.1 后端权限检查机制
 

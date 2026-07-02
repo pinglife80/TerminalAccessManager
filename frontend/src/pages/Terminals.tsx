@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { useTerminals, useBlacklist, Terminal } from '@/hooks/useTerminalData';
+import { useTerminals, useBlacklistCheck, Terminal } from '@/hooks/useTerminalData';
 import { useTranslation } from 'react-i18next';
 import { Search, Filter, RefreshCw, Clock, Server, Shield, ShieldOff, Plus, Download, Eye, Info, ChevronDown, Trash2 } from 'lucide-react';
 import { apiClient } from '@/lib/api';
@@ -151,40 +151,44 @@ const Terminals: React.FC = () => {
     limit: pageSize,
     refetchInterval: autoRefresh || undefined,
   });
-  const { data: blackListData, refetch: refetchBlacklist } = useBlacklist({
-    skip: 0,
-    limit: 9999,
-  });
-
   // Extract items and total from paginated response
   const macAddresses = terminalsData?.items ?? [];
   const totalFromServer = terminalsData?.total ?? 0;
-  const blackListItems = blackListData?.items ?? [];
+
+  // Batch-check blacklist status for current page terminals
+  const checkMacAddresses = useMemo(
+    () => macAddresses.map(t => t.mac_address).filter(Boolean),
+    [macAddresses]
+  );
+  const checkIpAddresses = useMemo(
+    () => macAddresses.map(t => t.ip_address).filter(Boolean),
+    [macAddresses]
+  );
+  const { data: blackListCheckData, refetch: refetchBlacklist } = useBlacklistCheck({
+    mac_addresses: checkMacAddresses,
+    ip_addresses: checkIpAddresses,
+  });
+
+  const blackListItems = blackListCheckData ?? [];
 
   // Build blacklist lookup sets for MAC and IP matching
   const { blackMacSet, blackIpSet, blackEntryMap } = useMemo(() => {
     const macSet = new Set<string>();
     const ipSet = new Set<string>();
-    const entryMap = new Map<string, { firewall_tag: string | null; match_type: string }>();
+    const entryMap = new Map<string, string | null>();  // key -> firewall_tag
 
     (blackListItems || []).forEach((item) => {
       if (item.mac_address) {
-        macSet.add(item.mac_address.toLowerCase());
-        entryMap.set(item.mac_address.toLowerCase(), {
-          firewall_tag: item.firewall_tag,
-          match_type: 'mac',
-        });
+        const key = item.mac_address.toLowerCase();
+        macSet.add(key);
+        entryMap.set(key, item.firewall_tag);
       }
       if (item.ip_address) {
         ipSet.add(item.ip_address);
-        const existing = entryMap.get(item.ip_address);
-        if (existing) {
-          existing.match_type = 'both';
-        } else {
-          entryMap.set(item.ip_address, {
-            firewall_tag: item.firewall_tag,
-            match_type: 'ip',
-          });
+        // MAC 优先：如果 IP 对应的 key 已存在（同一个条目同时有 MAC 和 IP），
+        // 不覆盖；否则用 IP 作为 key
+        if (!entryMap.has(item.ip_address)) {
+          entryMap.set(item.ip_address, item.firewall_tag);
         }
       }
     });
@@ -204,16 +208,15 @@ const Terminals: React.FC = () => {
 
       if (macInBlacklist && ipInBlacklist) {
         blackMatchType = 'both';
-        const info = blackEntryMap.get(mac.mac_address?.toLowerCase()) || blackEntryMap.get(mac.ip_address);
-        firewallTag = info?.firewall_tag || null;
+        firewallTag = blackEntryMap.get(mac.mac_address?.toLowerCase())
+          ?? blackEntryMap.get(mac.ip_address)
+          ?? null;
       } else if (macInBlacklist) {
         blackMatchType = 'mac';
-        const info = blackEntryMap.get(mac.mac_address?.toLowerCase());
-        firewallTag = info?.firewall_tag || null;
+        firewallTag = blackEntryMap.get(mac.mac_address?.toLowerCase()) ?? null;
       } else if (ipInBlacklist) {
         blackMatchType = 'ip';
-        const info = blackEntryMap.get(mac.ip_address);
-        firewallTag = info?.firewall_tag || null;
+        firewallTag = blackEntryMap.get(mac.ip_address) ?? null;
       }
 
       // Use backend compliance_status as the source of truth.

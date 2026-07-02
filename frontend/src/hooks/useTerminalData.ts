@@ -1,5 +1,6 @@
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import { apiClient } from '@/lib/api';
+import { API_ENDPOINTS } from '@/lib/constants';
 
 export interface Terminal {
   id: number;
@@ -187,6 +188,35 @@ export const useBlacklist = (params?: BlacklistSearchParams) => {
 };
 
 // -------------------------------------------------------------------
+// Blacklist batch check - for Terminals page efficient lookup
+// -------------------------------------------------------------------
+export interface BlacklistCheckItem {
+  mac_address: string | null;
+  ip_address: string | null;
+  firewall_tag: string | null;
+}
+
+export interface BlacklistCheckParams {
+  mac_addresses: string[];
+  ip_addresses: string[];
+}
+
+export const useBlacklistCheck = (params: BlacklistCheckParams) => {
+  return useQuery({
+    queryKey: ['blacklist-check', params.mac_addresses, params.ip_addresses],
+    queryFn: async () => {
+      const response = await apiClient.post('/blacklist/check', {
+        mac_addresses: params.mac_addresses,
+        ip_addresses: params.ip_addresses,
+      });
+      return response.data as BlacklistCheckItem[];
+    },
+    enabled: params.mac_addresses.length > 0 || params.ip_addresses.length > 0,
+    placeholderData: keepPreviousData,
+  });
+};
+
+// -------------------------------------------------------------------
 // Audit Logs hooks - server-side filtering with cursor pagination
 // -------------------------------------------------------------------
 export interface AuditLogSearchParams {
@@ -254,6 +284,14 @@ export interface NetworkConfig {
   ipguard_host: string;
 }
 
+export interface SchedulerConfig {
+  scheduler_arp_collection_interval: number;
+  scheduler_ipguard_sync_interval: number;
+  scheduler_firewall_query_interval: number;
+  scheduler_compliance_check_interval: number;
+  scheduler_auto_unblock_interval: number;
+}
+
 export interface GeneralConfig {
   environment: string;
   debug: boolean;
@@ -278,6 +316,7 @@ export interface AllConfigs {
   security: SecurityConfig;
   rate_limit: RateLimitConfig;
   network: NetworkConfig;
+  scheduler: SchedulerConfig;
   general: GeneralConfig;
   branding: BrandingConfig;
 }
@@ -326,6 +365,8 @@ export interface UserItem {
   is_superuser: boolean;
   roles: string[];
   permissions: string[];
+  provider: string;
+  provider_user_id: string | null;
   created_at: string | null;
   updated_at: string | null;
 }
@@ -416,3 +457,61 @@ export function useComplianceBaselines() {
     placeholderData: keepPreviousData,
   });
 }
+
+
+// ==================== Notification Logs (D8) ====================
+export interface NotificationLogItem {
+  id: number;
+  event_id: string;
+  channel_name: string;
+  event_type: string;
+  status: 'sent' | 'failed' | 'pending';
+  recipient: string | null;
+  error_message: string | null;
+  details: Record<string, unknown> | null;
+  sent_at: string;
+}
+
+export interface NotificationLogsResponse {
+  items: NotificationLogItem[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface NotificationLogsParams {
+  channel_name?: string;
+  event_type?: string;
+  status?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export const useNotificationLogs = (params?: NotificationLogsParams) => {
+  return useQuery({
+    queryKey: ['notification-logs', params],
+    queryFn: async () => {
+      const response = await apiClient.get(API_ENDPOINTS.NOTIFICATION_LOGS, { params });
+      return response.data as NotificationLogsResponse;
+    },
+    placeholderData: keepPreviousData,
+  });
+};
+
+// ==================== Notification Channel Types (D1) ====================
+export interface ChannelTypeInfo {
+  type: string;
+  name: string;
+  description: string;
+  config_fields: string[];
+}
+
+export const useNotificationChannelTypes = () => {
+  return useQuery({
+    queryKey: ['notification-channel-types'],
+    queryFn: async () => {
+      const response = await apiClient.get(API_ENDPOINTS.NOTIFICATION_CHANNEL_TYPES);
+      return response.data.channels as ChannelTypeInfo[];
+    },
+  });
+};

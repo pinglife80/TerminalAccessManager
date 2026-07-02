@@ -10,6 +10,7 @@ import { logger } from './lib/logger';
 
 // Lazy-loaded pages for code splitting
 const Login = lazy(() => import('./pages/Login'));
+const PasswordReset = lazy(() => import('./pages/PasswordReset'));
 const Dashboard = lazy(() => import('./pages/Dashboard'));
 const Terminals = lazy(() => import('./pages/Terminals'));
 const Whitelist = lazy(() => import('./pages/Whitelist'));
@@ -23,6 +24,7 @@ const AuthProviders = lazy(() => import('./pages/AuthProviders'));
 const Backup = lazy(() => import('./pages/Backup'));
 const Notifications = lazy(() => import('./pages/Notifications'));
 const SystemSettings = lazy(() => import('./pages/SystemSettings'));
+const GeneralSettings = lazy(() => import('./pages/GeneralSettings'));
 const Forbidden = lazy(() => import('./pages/Forbidden'));
 
 // Preload page components on hover to eliminate lazy-load flash
@@ -40,6 +42,7 @@ export const pagePreloadMap: Record<string, () => Promise<unknown>> = {
   '/backup': () => import('./pages/Backup'),
   '/notifications': () => import('./pages/Notifications'),
   '/system-settings': () => import('./pages/SystemSettings'),
+  '/general-settings': () => import('./pages/GeneralSettings'),
 };
 import { apiClient } from './lib/api';
 import { useAuthStore } from './store/auth';
@@ -144,6 +147,15 @@ const App: React.FC = () => {
                 <Login />
               </Suspense>
             } />
+            <Route path="/password-reset" element={
+              <Suspense fallback={
+                <div className="h-screen w-screen flex items-center justify-center bg-background">
+                  <div className="h-8 w-8 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
+                </div>
+              }>
+                <PasswordReset />
+              </Suspense>
+            } />
             <Route path="/403" element={
               <Suspense fallback={
                 <div className="h-screen w-screen flex items-center justify-center bg-background">
@@ -169,6 +181,7 @@ const App: React.FC = () => {
               <Route path="data-sources" element={<ProtectedRoute requiredPermission="datasource:read"><DataSources /></ProtectedRoute>} />
               <Route path="audit-logs" element={<ProtectedRoute requiredPermission="audit:read"><AuditLogs /></ProtectedRoute>} />
               <Route path="system-settings" element={<ProtectedRoute requiredPermission="system:manage"><SystemSettings /></ProtectedRoute>} />
+              <Route path="general-settings" element={<ProtectedRoute requiredPermission="system:manage"><GeneralSettings /></ProtectedRoute>} />
               <Route path="auth-providers" element={<ProtectedRoute requiredPermission="system:manage"><AuthProviders /></ProtectedRoute>} />
               <Route path="backup" element={<ProtectedRoute requiredPermission="system:manage"><Backup /></ProtectedRoute>} />
               <Route path="notifications" element={<ProtectedRoute requiredPermission="system:manage"><Notifications /></ProtectedRoute>} />

@@ -533,3 +533,138 @@ class NotificationService:
             source="scheduler",
             severity=severity,
         )
+
+    # ==================== Verification Code Methods ====================
+
+    async def send_password_reset_code(
+        self,
+        user_id: int,
+        email: str,
+    ) -> str:
+        """
+        Send password reset verification code via email.
+        
+        Args:
+            user_id: User ID
+            email: User's email address
+            
+        Returns:
+            The generated verification code
+        """
+        from app.services.email_service import send_password_reset_email
+
+        code = await send_password_reset_email(email=email, user_id=user_id)
+        
+        await self.emit(
+            event_type=EventType.PASSWORD_RESET_REQUESTED,
+            data={
+                "user_id": user_id,
+                "email": email,
+            },
+            source="user",
+            severity="info",
+        )
+        
+        await self.emit(
+            event_type=EventType.VERIFICATION_CODE_SENT,
+            data={
+                "user_id": user_id,
+                "email": email,
+                "purpose": "password_reset",
+            },
+            source="system",
+            severity="info",
+        )
+
+        return code
+
+    async def verify_password_reset_code(
+        self,
+        user_id: int,
+        code: str,
+    ) -> bool:
+        """
+        Verify a password reset verification code.
+        
+        Args:
+            user_id: User ID
+            code: Verification code to verify
+            
+        Returns:
+            True if code is valid, False otherwise
+        """
+        from app.services.email_service import verify_email_code
+
+        return await verify_email_code(
+            user_id=user_id,
+            code=code,
+            purpose="password_reset",
+            delete_on_success=True,
+        )
+
+    async def send_verification_code(
+        self,
+        user_id: int,
+        email: str,
+        purpose: str = "verification",
+    ) -> str:
+        """
+        Send verification code for various purposes.
+        
+        Args:
+            user_id: User ID
+            email: User's email address
+            purpose: Purpose of the code (verification, password_reset, 2fa)
+            
+        Returns:
+            The generated verification code
+        """
+        from app.services.email_service import send_email_code
+        from app.core.config import settings
+
+        ttl = getattr(settings, "EMAIL_CODE_EXPIRE_MINUTES", 10) * 60
+        code = await send_email_code(
+            user_id=user_id,
+            email=email,
+            purpose=purpose,
+            ttl_seconds=ttl,
+        )
+
+        await self.emit(
+            event_type=EventType.VERIFICATION_CODE_SENT,
+            data={
+                "user_id": user_id,
+                "email": email,
+                "purpose": purpose,
+            },
+            source="system",
+            severity="info",
+        )
+
+        return code
+
+    async def verify_verification_code(
+        self,
+        user_id: int,
+        code: str,
+        purpose: str = "verification",
+    ) -> bool:
+        """
+        Verify a verification code.
+        
+        Args:
+            user_id: User ID
+            code: Verification code to verify
+            purpose: Purpose of the code
+            
+        Returns:
+            True if code is valid, False otherwise
+        """
+        from app.services.email_service import verify_email_code
+
+        return await verify_email_code(
+            user_id=user_id,
+            code=code,
+            purpose=purpose,
+            delete_on_success=True,
+        )

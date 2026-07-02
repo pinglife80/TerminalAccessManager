@@ -984,6 +984,70 @@ class TerminalService:
         result = await self.db.execute(stmt)
         return result.scalar() or 0
 
+    async def check_blacklist(
+        self,
+        mac_addresses: list[str] | None = None,
+        ip_addresses: list[str] | None = None,
+    ) -> list[dict]:
+        """Batch-check which MAC/IP addresses are currently active in the blacklist.
+
+        Returns only matching entries with mac_address, ip_address, firewall_tag.
+        Active = auto_unblocked == False AND (expires_at >= now OR expires_at IS NULL).
+        Uses indexed IN() queries for O(1) DB round-trip regardless of input size.
+        """
+        now = datetime.now(UTC)
+
+        # Normalize and deduplicate MACs (12-char uppercase for mac_address_normalized column)
+        normalized_macs: set[str] = set()
+        if mac_addresses:
+            for mac in mac_addresses:
+                if mac:
+                    normalized = _normalize_mac(mac)
+                    if normalized:
+                        normalized_macs.add(normalized)
+
+        # Deduplicate IPs
+        unique_ips: set[str] = set()
+        if ip_addresses:
+            unique_ips = {ip for ip in ip_addresses if ip}
+
+        # Build match conditions: mac IN (...) OR ip IN (...)
+        match_conditions = []
+        if normalized_macs:
+            match_conditions.append(Blacklist.mac_address_normalized.in_(normalized_macs))
+        if unique_ips:
+            match_conditions.append(Blacklist.ip_address.in_(unique_ips))
+
+        if not match_conditions:
+            return []
+
+        stmt = select(
+            Blacklist.mac_address,
+            Blacklist.ip_address,
+            Blacklist.firewall_tag,
+        ).where(
+            and_(
+                Blacklist.auto_unblocked == False,  # noqa: E712
+                or_(
+                    Blacklist.expires_at >= now,
+                    Blacklist.expires_at.is_(None),
+                ),
+                or_(*match_conditions),
+            )
+        )
+
+        result = await self.db.execute(stmt)
+        rows = result.all()
+
+        return [
+            {
+                "mac_address": row[0],
+                "ip_address": row[1],
+                "firewall_tag": row[2],
+            }
+            for row in rows
+        ]
+
     async def add_to_blacklist(self, ip_address: str = "", mac_address: str = None,
                                 reason: str = "", username: str = "",
                                 block_time: str = "30d",

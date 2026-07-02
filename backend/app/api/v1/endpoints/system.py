@@ -8,10 +8,11 @@ import platform
 import time
 
 from fastapi import APIRouter, Depends
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.database import get_db
+from app.core.database import engine, get_db
 from app.core.security import get_current_user
 from app.models.user import User
 
@@ -64,3 +65,41 @@ async def get_system_config(
         "email_enabled": settings.EMAIL_HOST is not None,
         "metrics_enabled": settings.PROMETHEUS_ENABLED,
     }
+
+
+@router.get("/health", response_model=dict)
+async def health_check():
+    """Health check endpoint with dependency verification"""
+    import redis.asyncio as aioredis
+
+    health_status = {
+        "status": "healthy",
+        "version": settings.VERSION,
+        "environment": settings.ENVIRONMENT,
+        "db": "ok",
+        "redis": "ok"
+    }
+
+    try:
+        async with engine.connect() as conn:
+            await conn.execute(text("SELECT 1"))
+    except Exception as e:
+        if settings.ENVIRONMENT == "production":
+            health_status["db"] = "error"
+        else:
+            health_status["db"] = f"error: {str(e)}"
+
+    try:
+        redis_client = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
+        await redis_client.ping()
+        await redis_client.close()
+    except Exception as e:
+        if settings.ENVIRONMENT == "production":
+            health_status["redis"] = "error"
+        else:
+            health_status["redis"] = f"error: {str(e)}"
+
+    if health_status["db"] != "ok" or health_status["redis"] != "ok":
+        health_status["status"] = "unhealthy"
+
+    return health_status

@@ -67,11 +67,9 @@ export const Modal: React.FC<ModalProps> = ({
     };
   }, [isOpen]);
 
-  // Close on overlay click
-  const handleOverlayClick = (e: React.MouseEvent) => {
-    if (e.target === overlayRef.current) {
-      onClose();
-    }
+  // Close on overlay click - disabled, only close button works
+  const handleOverlayClick = (_e: React.MouseEvent) => {
+    // Do nothing - don't close on overlay click
   };
 
   if (!isOpen) return null;
@@ -84,13 +82,14 @@ export const Modal: React.FC<ModalProps> = ({
       role="presentation"
     >
       <div
-        ref={contentRef}
-        className={`${SIZE_CLASSES[size]} w-full mx-4 bg-card rounded-lg shadow-xl border border-border`}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="modal-title"
-        tabIndex={-1}
-      >
+          ref={contentRef}
+          className={`${SIZE_CLASSES[size]} w-full mx-4 bg-card rounded-lg shadow-xl border border-border`}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="modal-title"
+          tabIndex={-1}
+          onClick={(e) => e.stopPropagation()}
+        >
         <div className="flex items-center justify-between px-6 py-4 border-b border-border">
           <h2 id="modal-title" className="text-lg font-semibold text-foreground">
             {title}

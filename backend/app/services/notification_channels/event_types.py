@@ -24,6 +24,8 @@ class EventType(StrEnum):
     LOGIN_LOCKED = "security.login_locked"
     PASSWORD_CHANGED = "security.password_changed"
     PASSWORD_RESET = "security.password_reset"
+    PASSWORD_RESET_REQUESTED = "security.password_reset_requested"
+    VERIFICATION_CODE_SENT = "security.verification_code_sent"
     USER_CREATED = "security.user_created"
     USER_DELETED = "security.user_deleted"
     USER_UPDATED = "security.user_updated"
@@ -88,6 +90,18 @@ EVENT_METADATA = {
         "severity": "info",
         "category": "terminal",
     },
+    EventType.TERMINAL_ONLINE: {
+        "name": "终端上线",
+        "description": "终端网络连接已恢复",
+        "severity": "info",
+        "category": "terminal",
+    },
+    EventType.TERMINAL_OFFLINE: {
+        "name": "终端离线",
+        "description": "终端网络连接已断开",
+        "severity": "warning",
+        "category": "terminal",
+    },
     EventType.LOGIN_SUCCESS: {
         "name": "登录成功",
         "description": "用户登录成功",
@@ -112,6 +126,30 @@ EVENT_METADATA = {
         "severity": "info",
         "category": "security",
     },
+    EventType.PASSWORD_RESET: {
+        "name": "密码重置",
+        "description": "用户密码已被重置",
+        "severity": "info",
+        "category": "security",
+    },
+    EventType.PASSWORD_RESET_REQUESTED: {
+        "name": "密码重置请求",
+        "description": "用户请求重置密码",
+        "severity": "info",
+        "category": "security",
+    },
+    EventType.VERIFICATION_CODE_SENT: {
+        "name": "验证码发送",
+        "description": "验证码已发送给用户",
+        "severity": "info",
+        "category": "security",
+    },
+    EventType.EMAIL_VERIFIED: {
+        "name": "邮箱验证",
+        "description": "用户邮箱已验证",
+        "severity": "info",
+        "category": "security",
+    },
     EventType.USER_CREATED: {
         "name": "用户创建",
         "description": "新用户已创建",
@@ -122,6 +160,12 @@ EVENT_METADATA = {
         "name": "用户删除",
         "description": "用户已被删除",
         "severity": "warning",
+        "category": "admin",
+    },
+    EventType.USER_UPDATED: {
+        "name": "用户更新",
+        "description": "用户信息已更新",
+        "severity": "info",
         "category": "admin",
     },
     EventType.DATASOURCE_SYNC_FAILED: {
@@ -160,6 +204,18 @@ EVENT_METADATA = {
         "severity": "error",
         "category": "system",
     },
+    EventType.SYSTEM_ERROR: {
+        "name": "系统错误",
+        "description": "系统发生错误",
+        "severity": "error",
+        "category": "system",
+    },
+    EventType.SYSTEM_WARNING: {
+        "name": "系统警告",
+        "description": "系统发出警告",
+        "severity": "warning",
+        "category": "system",
+    },
     EventType.COMPLIANCE_RATE_LOW: {
         "name": "合规率低",
         "description": "终端合规率低于阈值",
@@ -183,6 +239,30 @@ EVENT_METADATA = {
         "description": "系统自动解封了合规终端",
         "severity": "info",
         "category": "alert",
+    },
+    EventType.BLOCK_THRESHOLD_EXCEEDED: {
+        "name": "封禁阈值超限",
+        "description": "封禁数量超过预设阈值",
+        "severity": "warning",
+        "category": "alert",
+    },
+    EventType.CONFIG_CHANGED: {
+        "name": "配置变更",
+        "description": "系统配置已修改",
+        "severity": "info",
+        "category": "admin",
+    },
+    EventType.ROLE_CHANGED: {
+        "name": "角色变更",
+        "description": "用户角色已更改",
+        "severity": "warning",
+        "category": "admin",
+    },
+    EventType.PERMISSION_CHANGED: {
+        "name": "权限变更",
+        "description": "用户权限已变更",
+        "severity": "warning",
+        "category": "admin",
     },
 }
 

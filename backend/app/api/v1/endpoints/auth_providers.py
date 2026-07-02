@@ -23,6 +23,38 @@ from app.services.auth_providers.provider_factory import AuthProviderFactory
 router = APIRouter(prefix="/auth/providers", tags=["Authentication Providers"])
 
 
+@router.get("/available")
+async def get_available_providers(db: AsyncSession = Depends(get_db)):
+    """Get all enabled authentication providers for login selection"""
+    from sqlalchemy import select
+    from app.services.auth_providers.base import AuthProviderType
+
+    providers = []
+
+    providers.append({
+        "id": "local",
+        "name": "Local",
+        "provider_type": AuthProviderType.LOCAL.value,
+        "description": "Local account authentication",
+        "enabled": True,
+    })
+
+    stmt = select(AuthConfig).where(AuthConfig.enabled == True).order_by(AuthConfig.priority)
+    result = await db.execute(stmt)
+    configs = result.scalars().all()
+
+    for config in configs:
+        providers.append({
+            "id": str(config.id),
+            "name": config.name,
+            "provider_type": config.provider_type,
+            "description": config.description or "",
+            "enabled": config.enabled,
+        })
+
+    return providers
+
+
 @router.get("", response_model=list[AuthProviderResponse])
 async def list_providers(
     db: AsyncSession = Depends(get_db),
@@ -95,7 +127,11 @@ async def update_provider(
     if provider_data.name is not None:
         provider.name = provider_data.name
     if provider_data.config is not None:
-        provider.config = provider_data.config
+        new_config = dict(provider_data.config)
+        if provider.provider_type == "ldap" and new_config.get("bind_password") is None:
+            existing_config = provider.config or {}
+            new_config["bind_password"] = existing_config.get("bind_password", "")
+        provider.config = new_config
     if provider_data.enabled is not None:
         provider.enabled = provider_data.enabled
     if provider_data.priority is not None:

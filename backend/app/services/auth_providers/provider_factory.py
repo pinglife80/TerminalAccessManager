@@ -149,18 +149,77 @@ class AuthProviderFactory:
         Returns:
             Authentication result dictionary
         """
-        provider = await cls.create_provider(provider_type, {}, db)
+        from app.models.auth_config import AuthConfig
+        from app.models.user import User
+        from app.models.role import Role, UserRole
+
+        config = {}
+        if provider_type != AuthProviderType.LOCAL.value:
+            stmt = select(AuthConfig).where(
+                AuthConfig.provider_type == provider_type,
+                AuthConfig.enabled == True
+            )
+            result = await db.execute(stmt)
+            auth_config = result.scalar_one_or_none()
+            if auth_config:
+                config = auth_config.config
+
+        provider = await cls.create_provider(provider_type, config, db)
         auth_result = await provider.authenticate(
             credentials.get("username", ""),
             credentials.get("password", ""),
         )
 
+        if not auth_result.success:
+            return {
+                "success": False,
+                "error_message": auth_result.error_message,
+            }
+
+        user = None
+        if auth_result.user:
+            user = auth_result.user
+        elif provider_type == AuthProviderType.LOCAL.value:
+            stmt = select(User).where(User.username == auth_result.username)
+            result = await db.execute(stmt)
+            user = result.scalar_one_or_none()
+        else:
+            provider_user_id = auth_result.provider_user_id
+            stmt = select(User).where(
+                (User.provider == provider_type) &
+                (User.provider_user_id == provider_user_id)
+            )
+            result = await db.execute(stmt)
+            user = result.scalar_one_or_none()
+
+            if not user:
+                user = User(
+                    username=auth_result.username,
+                    email=auth_result.email,
+                    hashed_password="",
+                    is_active=True,
+                    is_superuser=False,
+                    provider=provider_type,
+                    provider_user_id=provider_user_id,
+                )
+                db.add(user)
+                await db.commit()
+                await db.refresh(user)
+
+                stmt = select(Role).where(Role.is_default == True)
+                result = await db.execute(stmt)
+                default_role = result.scalar_one_or_none()
+                if default_role:
+                    db.add(UserRole(user_id=user.id, role_id=default_role.id))
+                    await db.commit()
+
         return {
-            "success": auth_result.success,
-            "user_id": auth_result.user_id,
-            "username": auth_result.username,
-            "email": auth_result.email,
-            "provider": auth_result.provider,
+            "success": True,
+            "user_id": user.id if user else None,
+            "username": user.username if user else auth_result.username,
+            "email": user.email if user else auth_result.email,
+            "provider": provider_type,
+            "provider_user_id": auth_result.provider_user_id,
             "requires_2fa": auth_result.requires_2fa,
-            "error_message": auth_result.error_message,
+            "user": user,
         }

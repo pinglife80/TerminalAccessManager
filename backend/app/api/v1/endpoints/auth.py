@@ -1,6 +1,7 @@
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request, status
+from pydantic import BaseModel
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import JWTError, jwt
 from sqlalchemy import select
@@ -81,6 +82,7 @@ async def login(
     form_data: OAuth2PasswordRequestForm = Depends(),
     captcha_id: str | None = None,
     captcha: str | None = None,
+    provider: str = "local",
     db: AsyncSession = Depends(get_db)
 ):
     """Login and get access token"""
@@ -88,7 +90,6 @@ async def login(
 
     # Check if account is locked
     if await check_login_attempts(username):
-        # Get remaining lock time
         from app.core.security import get_redis_client
         redis_client = await get_redis_client()
         lock_key = f"login_lock:{username}"
@@ -107,7 +108,6 @@ async def login(
     # Check if captcha is required
     captcha_required = await check_captcha_required(username)
 
-    # If captcha is required, validate captcha_id + captcha answer via server-side verification
     if captcha_required:
         if not captcha_id or not captcha:
             raise HTTPException(
@@ -126,46 +126,26 @@ async def login(
                 },
             )
 
-    # Step 1: Check if user exists
-    from sqlalchemy import select
+    # Authenticate via AuthProviderFactory
+    from app.services.auth_providers.provider_factory import AuthProviderFactory
 
-    from app.models.user import User as UserModel
-    result = await db.execute(select(UserModel).where(UserModel.username == username))
-    user = result.scalar_one_or_none()
+    auth_result = await AuthProviderFactory.authenticate(
+        provider_type=provider,
+        credentials={"username": username, "password": form_data.password},
+        db=db,
+    )
 
-    if not user:
-        # User does not exist - record failed attempt for anti-enumeration
-        await record_failed_login(username)
-        captcha_now = await check_captcha_required(username)
-        # Audit log for failed login
-        from app.services.terminal_service import TerminalService
-        ts = TerminalService(db)
-        await ts.log_action(username, "login_failed", "auth", None,
-                            {"message": "Login failed: user not found"},
-                            ip_address=get_client_ip(request),
-                            resource_name=username)
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={
-                "message": "Invalid credentials",
-                "captcha_required": captcha_now,
-            },
-        )
-
-    # Step 2: Verify password
-    if not verify_password(form_data.password, user.hashed_password):
-        # Password incorrect - record failed attempt
+    if not auth_result["success"]:
         await record_failed_login(username)
         captcha_now = await check_captcha_required(username)
         locked_now = await check_login_attempts(username)
 
-        # Audit log for failed login (wrong password)
         from app.services.terminal_service import TerminalService
         ts = TerminalService(db)
-        await ts.log_action(username, "login_failed", "auth", str(user.id),
-                            {"message": "Login failed: incorrect password"},
+        await ts.log_action(username, "login_failed", "auth", None,
+                            {"message": "Login failed: invalid credentials", "provider": provider},
                             ip_address=get_client_ip(request),
-                            resource_name=user.username)
+                            resource_name=username)
 
         error_detail = {
             "message": "Invalid credentials",
@@ -185,24 +165,44 @@ async def login(
             detail=error_detail,
         )
 
+    user = auth_result["user"]
+    if not user:
+        await record_failed_login(username)
+        captcha_now = await check_captcha_required(username)
+
+        from app.services.terminal_service import TerminalService
+        ts = TerminalService(db)
+        await ts.log_action(username, "login_failed", "auth", None,
+                            {"message": "Login failed: user not found", "provider": provider},
+                            ip_address=get_client_ip(request),
+                            resource_name=username)
+
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={
+                "message": "Invalid credentials",
+                "captcha_required": captcha_now,
+            },
+        )
+
     if not user.is_active:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Account is disabled"
+            detail={
+                "message": "Your account has been locked. Please contact your administrator.",
+                "locked": True,
+            }
         )
 
-    # Reset failed login attempts on successful login
     await reset_login_attempts(username)
 
-    # Audit log for login
     from app.services.terminal_service import TerminalService
     ts = TerminalService(db)
     await ts.log_action(user.username, "login", "auth", str(user.id),
-                        {"message": "User logged in successfully", "ip": get_client_ip(request)},
+                        {"message": "User logged in successfully", "ip": get_client_ip(request), "provider": provider},
                         ip_address=get_client_ip(request),
                         resource_name=user.username)
 
-    # Create tokens (uses hot-reloadable config for expiration)
     access_token = await create_access_token_async(data={"sub": user.username}, user_id=user.id)
     refresh_token = await create_refresh_token_async(data={"sub": user.username}, user_id=user.id)
 
@@ -325,6 +325,8 @@ async def get_current_user_info(
         is_superuser=current_user.is_superuser,
         roles=role_names,
         permissions=perm_codes,
+        provider=current_user.provider,
+        provider_user_id=current_user.provider_user_id,
     )
 
 
@@ -452,6 +454,11 @@ async def update_profile(
     db: AsyncSession = Depends(get_db),
 ):
     """Update current user's profile (email)"""
+    if current_user.provider != "local":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Profile management is not supported for {current_user.provider} users. Please contact your {current_user.provider} administrator.",
+        )
     if profile.email is not None:
         # Check email uniqueness
         if profile.email != current_user.email:
@@ -476,6 +483,8 @@ async def update_profile(
         is_superuser=current_user.is_superuser,
         roles=role_names,
         permissions=[],
+        provider=current_user.provider,
+        provider_user_id=current_user.provider_user_id,
     )
 
 
@@ -487,6 +496,11 @@ async def change_password(
     db: AsyncSession = Depends(get_db),
 ):
     """Change current user's password (requires current password verification)"""
+    if current_user.provider != "local":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Password management is not supported for {current_user.provider} users. Please contact your {current_user.provider} administrator.",
+        )
     from app.core.security import verify_password
     if not verify_password(data.current_password, current_user.hashed_password):
         raise HTTPException(
@@ -545,6 +559,7 @@ async def list_users(
             id=u.id, username=u.username, email=u.email,
             is_active=u.is_active, is_superuser=u.is_superuser,
             roles=role_names, permissions=[],
+            provider=u.provider, provider_user_id=u.provider_user_id,
             created_at=u.created_at, updated_at=u.updated_at,
         ))
     return response
@@ -799,6 +814,12 @@ async def admin_reset_password(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
+    if user.provider != "local":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Password reset is not supported for {user.provider} users. Please contact your {user.provider} administrator.",
+        )
+
     user.hashed_password = hash_password(data.new_password)
     await db.commit()
 
@@ -842,3 +863,138 @@ async def admin_unlock_user(
                         resource_name=user.username)
 
     return {"message": f"Account '{user.username}' unlocked successfully", "success": True}
+
+
+@router.post("/users/{user_id}/lock", response_model=ResponseMessage)
+async def admin_lock_user(
+    user_id: int,
+    request: Request,
+    current_user: User = Depends(require_permission("user:lock")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Lock a user account (requires user:lock permission)"""
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if not user.is_active:
+        raise HTTPException(status_code=400, detail="User is already locked")
+
+    user.is_active = False
+    await db.commit()
+
+    # Audit log
+    from app.services.terminal_service import TerminalService
+    ts = TerminalService(db)
+    await ts.log_action(current_user.username, "lock_user", "user", str(user.id),
+                        {"message": "Locked user account", "username": user.username},
+                        ip_address=get_client_ip(request),
+                        resource_name=user.username)
+
+    return {"message": f"Account '{user.username}' locked successfully", "success": True}
+
+
+# ==================== Password Reset with Verification Code ====================
+
+class PasswordResetRequest(BaseModel):
+    """Request body for password reset initiation"""
+    email: str
+
+
+class PasswordResetVerify(BaseModel):
+    """Request body for password reset verification and completion"""
+    email: str
+    code: str
+    new_password: str
+
+
+@router.post("/password-reset/request", response_model=ResponseMessage)
+async def request_password_reset(
+    data: PasswordResetRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Request password reset - sends verification code to user's email"""
+    result = await db.execute(select(User).where(User.email == data.email))
+    user = result.scalar_one_or_none()
+
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Email not found. Please check your email address.",
+        )
+
+    if user.provider != "local":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Password reset is not supported for {user.provider} users. Please contact your {user.provider} administrator.",
+        )
+
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Account is disabled. Please contact your administrator.",
+        )
+
+    from app.services.notification_service import NotificationService
+
+    notification_service = NotificationService(db)
+    await notification_service.send_password_reset_code(user_id=user.id, email=data.email)
+
+    return {
+        "message": "Verification code sent successfully. Please check your email.",
+        "success": True,
+    }
+
+
+@router.post("/password-reset/verify", response_model=ResponseMessage)
+async def verify_and_reset_password(
+    data: PasswordResetVerify,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Verify verification code and reset password"""
+    result = await db.execute(select(User).where(User.email == data.email))
+    user = result.scalar_one_or_none()
+
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Email not found.",
+        )
+
+    if user.provider != "local":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Password reset is not supported for {user.provider} users.",
+        )
+
+    from app.services.notification_service import NotificationService
+
+    notification_service = NotificationService(db)
+    is_valid = await notification_service.verify_password_reset_code(user_id=user.id, code=data.code)
+
+    if not is_valid:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired verification code.",
+        )
+
+    user.hashed_password = hash_password(data.new_password)
+    await db.commit()
+
+    from app.core.security import increment_token_version
+    await increment_token_version(user.id)
+
+    from app.services.terminal_service import TerminalService
+    ts = TerminalService(db)
+    await ts.log_action(user.username, "password_reset", "auth", str(user.id),
+                        {"message": "User reset password via verification code",
+                         "ip": get_client_ip(request)},
+                        ip_address=get_client_ip(request),
+                        resource_name=user.username)
+
+    return {
+        "message": "Password reset successfully. Please log in with your new password.",
+        "success": True,
+    }

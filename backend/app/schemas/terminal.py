@@ -126,6 +126,19 @@ class BlacklistQuery(BaseModel):
     limit: int = Field(50, ge=1, le=200)
 
 
+class BlacklistCheckRequest(BaseModel):
+    """Request body for batch blacklist check"""
+    mac_addresses: list[str] = Field(default_factory=list, description="MAC addresses to check")
+    ip_addresses: list[str] = Field(default_factory=list, description="IP addresses to check")
+
+
+class BlacklistCheckItem(BaseModel):
+    """A single blacklist match result for batch check"""
+    mac_address: str | None = None
+    ip_address: str | None = None
+    firewall_tag: str | None = None
+
+
 # Audit Log schemas
 class AuditLogBase(BaseModel):
     """Base audit log schema"""

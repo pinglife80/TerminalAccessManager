@@ -560,6 +560,12 @@ async def _ensure_rbac_seed(db):
         {"id": 27, "code": "role:read", "name": "查看角色", "module": "role", "description": "查看角色列表和权限"},
         {"id": 28, "code": "role:write", "name": "管理角色", "module": "role", "description": "创建/编辑角色和分配权限"},
         {"id": 29, "code": "role:delete", "name": "删除角色", "module": "role", "description": "删除角色"},
+        {"id": 30, "code": "user:lock", "name": "锁定用户", "module": "user", "description": "锁定用户账户"},
+        {"id": 31, "code": "system:manage", "name": "系统管理", "module": "system", "description": "管理系统设置、认证提供者、备份和通知"},
+        {"id": 32, "code": "backup:read", "name": "查看备份", "module": "backup", "description": "查看备份列表"},
+        {"id": 33, "code": "backup:write", "name": "管理备份", "module": "backup", "description": "创建/恢复备份"},
+        {"id": 34, "code": "notification:read", "name": "查看通知", "module": "notification", "description": "查看通知设置"},
+        {"id": 35, "code": "notification:write", "name": "管理通知", "module": "notification", "description": "修改通知设置"},
     ]
     for pd in permissions_data:
         existing = await db.execute(select(Permission).where(Permission.code == pd["code"]))
@@ -569,7 +575,7 @@ async def _ensure_rbac_seed(db):
     await db.flush()
 
     # Seed role_permissions
-    admin_perms = [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29]
+    admin_perms = [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35]
     operator_perms = [1, 2, 3, 4, 5, 6, 7, 12, 21, 26]
     auditor_perms = [1, 3, 5, 7, 12, 21, 22, 26]
     viewer_perms = [1, 3, 5, 7, 12, 16, 21, 23, 26, 27]

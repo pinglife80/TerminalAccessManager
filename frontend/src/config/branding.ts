@@ -52,7 +52,8 @@ const branding: BrandingConfig = {
   appSubtitle: 'Manager',
 
   /** Version number displayed in footer */
-  version: 'v3.4.0',
+  /** Note: Actual version is dynamically fetched from backend /health API at runtime */
+  version: 'v3.5.0',
 
   /** Browser tab title (used in index.html and dynamic title updates) */
   title: 'Terminal Access Manager',

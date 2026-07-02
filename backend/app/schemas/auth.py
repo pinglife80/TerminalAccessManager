@@ -55,6 +55,8 @@ class UserResponse(BaseModel):
     is_superuser: bool = False
     roles: list[str] = []  # role names
     permissions: list[str] = []  # permission codes
+    provider: str = "local"
+    provider_user_id: str | None = None
 
     class Config:
         from_attributes = True

@@ -28,6 +28,7 @@ describe('AuthStore', () => {
       is_superuser: false,
       roles: ['operator'],
       permissions: ['terminal:read'],
+      provider: 'local',
     }
     const { login } = useAuthStore.getState()
     login(mockUser, 'access-token-123', 'refresh-token-456')
@@ -46,6 +47,7 @@ describe('AuthStore', () => {
       is_superuser: false,
       roles: [] as string[],
       permissions: [] as string[],
+      provider: 'local',
     }
     const { login } = useAuthStore.getState()
     login(mockUser, 'access-token-123', 'refresh-token-456')
@@ -63,6 +65,7 @@ describe('AuthStore', () => {
       is_superuser: false,
       roles: [] as string[],
       permissions: [] as string[],
+      provider: 'local',
     }
     const { login } = useAuthStore.getState()
     login(mockUser, 'access-token-123', 'refresh-token-456')
@@ -86,6 +89,7 @@ describe('AuthStore', () => {
       is_superuser: false,
       roles: [] as string[],
       permissions: [] as string[],
+      provider: 'local',
     }
     useAuthStore.setState({ user: mockUser, isAuthenticated: true })
 
@@ -116,6 +120,7 @@ describe('AuthStore', () => {
         is_superuser: false,
         roles: [] as string[],
         permissions: [] as string[],
+        provider: 'local',
       }
 
       // Mock axios

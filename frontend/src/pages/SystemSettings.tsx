@@ -11,7 +11,7 @@ const SystemSettings: React.FC = () => {
       title: t('systemSettings.general'),
       description: t('systemSettings.generalDesc'),
       icon: Settings,
-      path: '/system-settings',
+      path: '/general-settings',
       color: 'bg-blue-500',
       lightColor: 'bg-blue-50',
       textColor: 'text-blue-600',
