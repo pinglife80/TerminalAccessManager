@@ -69,6 +69,9 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
     TZ: str = "Asia/Shanghai"
 
+    # Metrics
+    PROMETHEUS_ENABLED: bool = False
+
     # Upload
     UPLOAD_DIR: str = "./uploads"
 
