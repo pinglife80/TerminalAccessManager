@@ -127,7 +127,11 @@ async def update_provider(
     if provider_data.name is not None:
         provider.name = provider_data.name
     if provider_data.config is not None:
-        provider.config = provider_data.config
+        new_config = dict(provider_data.config)
+        if provider.provider_type == "ldap" and new_config.get("bind_password") is None:
+            existing_config = provider.config or {}
+            new_config["bind_password"] = existing_config.get("bind_password", "")
+        provider.config = new_config
     if provider_data.enabled is not None:
         provider.enabled = provider_data.enabled
     if provider_data.priority is not None:
