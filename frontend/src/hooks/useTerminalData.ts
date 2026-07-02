@@ -1,5 +1,6 @@
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import { apiClient } from '@/lib/api';
+import { API_ENDPOINTS } from '@/lib/constants';
 
 export interface Terminal {
   id: number;
@@ -283,6 +284,14 @@ export interface NetworkConfig {
   ipguard_host: string;
 }
 
+export interface SchedulerConfig {
+  scheduler_arp_collection_interval: number;
+  scheduler_ipguard_sync_interval: number;
+  scheduler_firewall_query_interval: number;
+  scheduler_compliance_check_interval: number;
+  scheduler_auto_unblock_interval: number;
+}
+
 export interface GeneralConfig {
   environment: string;
   debug: boolean;
@@ -307,6 +316,7 @@ export interface AllConfigs {
   security: SecurityConfig;
   rate_limit: RateLimitConfig;
   network: NetworkConfig;
+  scheduler: SchedulerConfig;
   general: GeneralConfig;
   branding: BrandingConfig;
 }
@@ -447,3 +457,61 @@ export function useComplianceBaselines() {
     placeholderData: keepPreviousData,
   });
 }
+
+
+// ==================== Notification Logs (D8) ====================
+export interface NotificationLogItem {
+  id: number;
+  event_id: string;
+  channel_name: string;
+  event_type: string;
+  status: 'sent' | 'failed' | 'pending';
+  recipient: string | null;
+  error_message: string | null;
+  details: Record<string, unknown> | null;
+  sent_at: string;
+}
+
+export interface NotificationLogsResponse {
+  items: NotificationLogItem[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface NotificationLogsParams {
+  channel_name?: string;
+  event_type?: string;
+  status?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export const useNotificationLogs = (params?: NotificationLogsParams) => {
+  return useQuery({
+    queryKey: ['notification-logs', params],
+    queryFn: async () => {
+      const response = await apiClient.get(API_ENDPOINTS.NOTIFICATION_LOGS, { params });
+      return response.data as NotificationLogsResponse;
+    },
+    placeholderData: keepPreviousData,
+  });
+};
+
+// ==================== Notification Channel Types (D1) ====================
+export interface ChannelTypeInfo {
+  type: string;
+  name: string;
+  description: string;
+  config_fields: string[];
+}
+
+export const useNotificationChannelTypes = () => {
+  return useQuery({
+    queryKey: ['notification-channel-types'],
+    queryFn: async () => {
+      const response = await apiClient.get(API_ENDPOINTS.NOTIFICATION_CHANNEL_TYPES);
+      return response.data.channels as ChannelTypeInfo[];
+    },
+  });
+};
