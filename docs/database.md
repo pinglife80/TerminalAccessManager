@@ -1,6 +1,6 @@
 # TerminalAccessManager 数据库设计文档
 
-> 文档版本：v3.5.0  更新日期：2026-07-01
+> 文档版本：v3.6.0  更新日期：2026-07-03
 
 ## 1. 概述
 
@@ -637,7 +637,74 @@ docker-compose.yml 中 PostgreSQL 的 `command` 参数列表如下：
 
 ---
 
-### 3.13 auth_providers — 认证提供者表
+### 3.13 notification_templates — 消息模板表
+
+存储基于 Jinja2 的通知消息模板，按 (event_type, channel_type) 组合唯一索引。当存在匹配模板时，使用模板渲染消息内容；否则使用各渠道的默认格式化逻辑。
+
+| 字段 | 类型 | 约束 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| id | INTEGER | PK, INDEX | 自增 | 主键 |
+| name | VARCHAR(100) | UNIQUE, NOT NULL | — | 模板名称 |
+| event_type | VARCHAR(100) | NOT NULL, INDEX | — | 事件类型（如 login、block、compliance_change） |
+| channel_type | VARCHAR(50) | NOT NULL, INDEX | — | 渠道类型（email、webhook、feishu、dingtalk、wecom） |
+| subject_template | TEXT | NULLABLE | NULL | 标题模板（仅邮件等有标题的渠道使用） |
+| body_template | TEXT | NOT NULL | — | 正文模板（Jinja2 语法） |
+| is_default | BOOLEAN | | FALSE | 是否为该事件-渠道组合的默认模板 |
+| created_by | VARCHAR(100) | NULLABLE | NULL | 创建人 |
+| created_at | TIMESTAMP | default=now() | — | 创建时间 |
+| updated_at | TIMESTAMP | default=now(), onupdate=now() | — | 更新时间 |
+
+**唯一约束**：
+
+| 约束名 | 字段 | 说明 |
+|--------|------|------|
+| uq_template_event_channel | (event_type, channel_type) | 同一事件-渠道组合仅一个模板 |
+
+**索引**：
+
+| 索引名 | 类型 | 字段 |
+|------|------|------|
+| ix_notification_templates_event | SINGLE | event_type |
+| ix_notification_templates_channel | SINGLE | channel_type |
+| ix_notification_templates_name | UNIQUE | name |
+
+---
+
+### 3.14 notification_rules — 通知规则表
+
+存储通知抑制、聚合和升级规则，用于减少通知骚扰并确保重要告警不被遗漏。规则按 event_type 匹配，channel_name 为 NULL 时表示适用于所有渠道。
+
+| 字段 | 类型 | 约束 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| id | INTEGER | PK, INDEX | 自增 | 主键 |
+| name | VARCHAR(100) | UNIQUE, NOT NULL | — | 规则名称 |
+| event_type | VARCHAR(100) | NOT NULL, INDEX | — | 事件类型 |
+| channel_name | VARCHAR(100) | NULLABLE, INDEX | NULL | 渠道名称（NULL 表示所有渠道） |
+| enabled | BOOLEAN | | TRUE | 是否启用 |
+| description | TEXT | NULLABLE | NULL | 规则描述 |
+| suppress_enabled | BOOLEAN | | FALSE | 是否启用消息抑制 |
+| suppress_window | INTEGER | | 300 | 抑制窗口（秒），窗口内同类事件仅发送一次 |
+| escalate_enabled | BOOLEAN | | FALSE | 是否启用消息升级 |
+| escalate_threshold | INTEGER | | 5 | 升级阈值（窗口内事件数） |
+| escalate_window | INTEGER | | 3600 | 升级统计窗口（秒） |
+| escalate_severity | VARCHAR(20) | | `error` | 升级后的严重等级（info/warning/error/critical） |
+| created_by | VARCHAR(100) | NULLABLE | NULL | 创建人 |
+| created_at | TIMESTAMP | default=now() | — | 创建时间 |
+| updated_at | TIMESTAMP | default=now(), onupdate=now() | — | 更新时间 |
+
+> **注意**：由于 PostgreSQL 中 NULL 在 UNIQUE 约束中被视为互不相同，(event_type, channel_name) 的唯一性通过迁移脚本中的部分索引实现，确保每个 event_type 仅有一条 NULL channel_name 的 catch-all 规则。
+
+**索引**：
+
+| 索引名 | 类型 | 字段 |
+|------|------|------|
+| ix_notification_rules_name | UNIQUE | name |
+| ix_notification_rules_event | SINGLE | event_type |
+| ix_notification_rules_channel | SINGLE | channel_name |
+
+---
+
+### 3.15 auth_providers — 认证提供者表
 
 存储认证提供者配置，支持本地认证、LDAP认证、OAuth认证等多种认证方式。
 

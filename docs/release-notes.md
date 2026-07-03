@@ -1,10 +1,141 @@
 # 版本跟踪记录
 
-> 文档版本：v3.5.1 | 更新日期：2026-07-03
+> 文档版本：v3.6.0 | 更新日期：2026-07-03
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
+
+---
+
+## [v3.6.0] - 2026-07-03
+
+### 功能增强版本：消息模板、通知规则、异步队列与监控
+
+#### 消息模板系统（P1）
+
+- **Jinja2 模板引擎**：集成 Jinja2 模板渲染引擎，支持每个事件-渠道组合配置独立的消息模板
+- **模板 CRUD**：支持模板创建、编辑、删除、列表、筛选（按事件类型/渠道类型）
+- **模板预览**：提供模板预览端点，管理员可在保存前查看渲染效果
+- **Jinja2 变量参考**：前端侧栏展示可用变量列表（event_type、event_name、severity、timestamp、data 等）
+- **默认模板标记**：支持 is_default 标记，未配置自定义模板时使用系统默认渲染
+
+#### 国内 IM 应用模式（P1）
+
+- **飞书应用模式**：支持飞书自建应用模式，通过 tenant_access_token 发送消息，token 缓存 Redis（7000s TTL）
+- **钉钉应用模式**：支持钉钉企业内部应用模式，通过 access_token 发送消息，token 缓存 Redis
+- **企业微信应用模式**：支持企业微信应用模式，通过 access_token 发送消息，token 缓存 Redis
+- **双模式切换**：每个渠道可在 Webhook 模式和应用模式之间切换，配置字段动态调整
+- **邮件配置页面**：独立的 SMTP 邮件系统配置页面，支持配置测试与加密存储
+
+#### 通知规则系统（P2）
+
+- **消息抑制（Suppression）**：同一事件在抑制窗口内仅发送一次，后续事件被静默，使用 Redis TTL key 实现
+- **消息聚合（Aggregation）**：窗口内事件计数，用于统计和升级判定
+- **消息升级（Escalation）**：达到阈值后自动提升 severity（如 warning → critical），确保重要告警被关注
+- **升级绕过抑制**：escalated 事件自动设置 bypass_suppression 标志，确保升级后的消息总能送达
+- **PostgreSQL 部分唯一索引**：使用 `uq_rule_event_null_channel` 和 `uq_rule_event_specific_channel` 解决 NULL channel_name 唯一性约束
+
+#### 异步队列与重试机制（P3）
+
+- **Redis List 异步队列**：`notify:queue:main` 作为主队列，事件发布采用 fire-and-forget 模式，不阻塞请求
+- **Redis ZSet 重试队列**：`notify:queue:retry` 管理待重试任务，按 next_retry_at 时间排序
+- **指数退避重试**：默认最大 3 次重试，首重试延迟 10s，后续指数增长（10s → 20s → 40s）
+- **通知日志增强**：notification_logs 表新增 retry_count、next_retry_at、completed_at 字段
+- **手动重试 API**：支持单条失败通知重发（`/logs/{id}/retry`）和批量重发（`/logs/retry-all`）
+- **双 Worker 架构**：main_worker 处理主队列，retry_worker 扫描到期重试任务
+
+#### 监控统计面板（P3）
+
+- **8 个核心统计卡片**：总发送量、成功数、失败数、成功率、待重试、平均延迟、渠道数、规则数
+- **各渠道成功率**：按渠道维度展示成功率进度条
+- **30 秒自动刷新**：监控页面默认每 30 秒自动刷新统计数据
+- **统计聚合**：基于 PostgreSQL `func.cast` 条件聚合，一次查询返回全部统计指标
+
+#### 权限一致性修复
+
+- **通知模块**：9 处 `notification:manage` → `notification:write`，与数据库权限定义一致
+- **备份模块**：6 处 `system.manage` → `backup:write`，修正点号格式并细化到备份模块
+- **认证提供者模块**：4 处 `auth.manage` → `settings:write`，使用系统已有权限码
+
+#### 基础设施优化
+
+- **Nginx 缓存头修复**：移除 `expires -1`，消除与 `add_header Cache-Control` 的重复冲突，确保 index.html 正确禁用缓存
+- **前端邮件入口**：新增侧边栏邮件设置导航项，完善图标映射与国际化
+
+### 数据库迁移
+
+- **017_notification_templates**：创建 notification_templates 表（id、name、event_type、channel_type、subject_template、body_template、is_default、created_by、created_at、updated_at）
+- **018_notification_rules**：创建 notification_rules 表（id、name、event_type、channel_name、enabled、suppress_window、aggregate_window、escalate_threshold、escalate_severity、created_by、created_at、updated_at），含 2 个部分唯一索引
+- **019_notification_async_retry**：notification_logs 表新增 retry_count（int, default 0）、next_retry_at（timestamp, nullable）、completed_at（timestamp, nullable）字段
+
+### 变更文件
+
+**后端（18 个修改 + 3 个新增）：**
+
+- `backend/app/core/config.py` — VERSION 升级至 3.6.0
+- `backend/app/main.py` — lifespan 中启动/停止通知 worker
+- `backend/app/models/notification.py` — NotificationTemplate、NotificationRule、NotificationLog 新字段
+- `backend/app/schemas/notification.py` — Templates/Rules/Stats/Preview 的 Pydantic schemas
+- `backend/app/schemas/system_config.py` — EmailConfigResponse schema
+- `backend/app/api/v1/endpoints/notifications.py` — 新增 templates/rules/stats/retry 端点，权限码修正
+- `backend/app/api/v1/endpoints/settings.py` — 邮件配置 API 端点
+- `backend/app/api/v1/endpoints/auth_providers.py` — 权限码修正（auth.manage → settings:write）
+- `backend/app/api/v1/endpoints/backup.py` — 权限码修正（system.manage → backup:write）
+- `backend/app/api/v1/endpoints/auth.py` — /auth/me 返回 provider 字段
+- `backend/app/services/notification_service.py` — Jinja2 模板、Redis 队列、重试、统计聚合
+- `backend/app/services/config_service.py` — 邮件默认配置 seed
+- `backend/app/services/email_service.py` — 邮件发送增强
+- `backend/app/services/event_emitter.py` — 事件发射器对接通知服务
+- `backend/app/services/compliance_service.py` — 合规事件触发通知
+- `backend/app/services/notification_channels/feishu_channel.py` — 应用模式 + Redis token 缓存
+- `backend/app/services/notification_channels/dingtalk_channel.py` — 应用模式 + Redis token 缓存
+- `backend/app/services/notification_channels/wecom_channel.py` — 应用模式 + Redis token 缓存
+- `backend/app/services/notification_channels/email_channel.py` — 模板渲染集成
+- `backend/alembic/versions/017_notification_templates.py` — 新迁移（新增）
+- `backend/alembic/versions/018_notification_rules.py` — 新迁移（新增）
+- `backend/alembic/versions/019_notification_async_retry.py` — 新迁移（新增）
+
+**前端（9 个修改 + 4 个新增）：**
+
+- `frontend/src/App.tsx` — /email-settings 路由
+- `frontend/src/lib/constants.ts` — 新增 email 侧栏入口、P2/P3 API 端点常量
+- `frontend/src/components/Sidebar.tsx` — Mail 图标 + nav.email 标签映射
+- `frontend/src/pages/Notifications.tsx` — 新增 templates/rules/monitor 三个 Tab
+- `frontend/src/pages/SystemSettings.tsx` — 增加邮件设置卡片入口
+- `frontend/src/hooks/useTerminalData.ts` — AllConfigs 增加 EmailConfig 接口
+- `frontend/src/components/notifications/shared.ts` — 飞书/钉钉/企微 webhook+app 模式切换字段
+- `frontend/src/i18n/locales/zh.ts` — 4 个命名空间翻译
+- `frontend/src/i18n/locales/en.ts` — 4 个命名空间翻译
+- `frontend/src/pages/EmailSettings.tsx` — SMTP 邮件配置页面（新增）
+- `frontend/src/components/notifications/NotificationTemplates.tsx` — 模板 CRUD + 预览（新增）
+- `frontend/src/components/notifications/NotificationRules.tsx` — 规则 CRUD + 帮助侧栏（新增）
+- `frontend/src/components/notifications/NotificationMonitor.tsx` — 监控统计面板（新增）
+
+**基础设施（2 个修改）：**
+
+- `nginx/etc/conf.d/tam.conf` — 移除 `expires -1`
+- `nginx/etc/conf.d/tam.dev.conf` — 移除 `expires -1`
+
+**文档（待更新）：**
+
+- `docs/changelog.md` — 已更新 [3.6.0] 条目
+- `docs/release-notes.md` — 本文档
+
+### 验证结果
+
+- ✅ Docker Compose 构建成功（backend + frontend + nginx）
+- ✅ Alembic 迁移 017 → 018 → 019 顺序执行成功
+- ✅ 通知模板 CRUD 全流程通过
+- ✅ 通知规则 CRUD 全流程通过
+- ✅ 抑制行为验证通过（3 次事件仅 2 条日志）
+- ✅ 升级行为验证通过（threshold=3 后 severity 升级到 critical）
+- ✅ 升级绕过抑制验证通过
+- ✅ 删除规则后抑制不再生效验证通过
+- ✅ 监控统计 API 正常返回（200）
+- ✅ 飞书/钉钉/企微应用模式 token 缓存正常
+- ✅ 权限码一致性验证通过（operator 角色可访问通知管理）
+- ✅ Nginx Cache-Control 头验证通过（单条，无重复）
 
 ---
 

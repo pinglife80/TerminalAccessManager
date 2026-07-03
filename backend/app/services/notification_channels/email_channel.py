@@ -134,7 +134,14 @@ class EmailChannel(NotificationChannelBase):
         subject: str | None = None,
         message: str | None = None,
     ) -> dict | NotificationResult:
-        """Send email notification"""
+        """Send email notification.
+
+        Uses the global email configuration (database-backed, with .env
+        fallback) via email_service.send_email so that verification-code
+        emails and notification emails share the same SMTP settings.
+        The legacy per-channel ``smtp_url`` config key is still honored
+        when present, for backward compatibility with existing channels.
+        """
         if recipients:
             self.config["recipients"] = recipients
 
@@ -157,9 +164,12 @@ class EmailChannel(NotificationChannelBase):
 
         email_subject, body = self.format_email_content(event)
 
-        try:
-            smtp_url = self.config.get("smtp_url")
-            if smtp_url:
+        # Legacy path: per-channel HTTP SMTP relay URL (backward compat).
+        # When present, send directly via httpx; otherwise route through
+        # the global email_service which reads DB-backed SMTP config.
+        smtp_url = self.config.get("smtp_url")
+        if smtp_url:
+            try:
                 async with httpx.AsyncClient(timeout=30.0) as client:
                     response = await client.post(
                         smtp_url,
@@ -173,28 +183,70 @@ class EmailChannel(NotificationChannelBase):
                     )
                     response.raise_for_status()
 
-            logger.info(f"Email notification sent to {len(email_recipients)} recipients: {email_subject}")
+                logger.info(f"Email notification sent to {len(email_recipients)} recipients (legacy relay): {email_subject}")
+                return NotificationResult(
+                    success=True,
+                    message=f"Email sent to {len(email_recipients)} recipients",
+                    channel=self.channel_type,
+                    event_id=event.id,
+                    recipient=", ".join(email_recipients),
+                )
+            except httpx.HTTPStatusError as e:
+                logger.error(f"Email send failed (HTTP {e.response.status_code}): {e}")
+                return NotificationResult(
+                    success=False,
+                    message=f"HTTP error: {e.response.status_code}",
+                    channel=self.channel_type,
+                    event_id=event.id,
+                    error_code="HTTP_ERROR",
+                )
+            except Exception as e:
+                logger.error(f"Email send failed: {type(e).__name__}: {e}")
+                return NotificationResult(
+                    success=False,
+                    message=f"Send failed: {str(e)}",
+                    channel=self.channel_type,
+                    event_id=event.id,
+                    error_code="SEND_ERROR",
+                )
 
-            return NotificationResult(
-                success=True,
-                message=f"Email sent to {len(email_recipients)} recipients",
-                channel=self.channel_type,
-                event_id=event.id,
-                recipient=", ".join(email_recipients),
-            )
+        # Global config path: use email_service.send_email (DB-backed SMTP).
+        try:
+            from app.services.email_service import send_email
 
-        except httpx.HTTPStatusError as e:
-            logger.error(f"Email send failed (HTTP {e.response.status_code}): {e}")
+            sent_count = 0
+            last_error: str | None = None
+            for recipient in email_recipients:
+                try:
+                    await send_email(
+                        to_email=recipient,
+                        subject=email_subject,
+                        html_content=body,
+                    )
+                    sent_count += 1
+                except Exception as single_err:
+                    last_error = str(single_err)
+                    logger.error(f"Failed to send email to {recipient}: {single_err}")
+
+            if sent_count > 0:
+                logger.info(f"Email notification sent to {sent_count}/{len(email_recipients)} recipients: {email_subject}")
+                return NotificationResult(
+                    success=True,
+                    message=f"Email sent to {sent_count}/{len(email_recipients)} recipients",
+                    channel=self.channel_type,
+                    event_id=event.id,
+                    recipient=", ".join(email_recipients[:sent_count]),
+                )
             return NotificationResult(
                 success=False,
-                message=f"HTTP error: {e.response.status_code}",
+                message=f"Send failed: {last_error or 'unknown error'}",
                 channel=self.channel_type,
                 event_id=event.id,
-                error_code="HTTP_ERROR",
+                error_code="SEND_ERROR",
             )
+
         except Exception as e:
             logger.error(f"Email send failed: {type(e).__name__}: {e}")
-            logger.info(f"[EMAIL FALLBACK] To: {email_recipients}, Subject: {email_subject}")
             return NotificationResult(
                 success=False,
                 message=f"Send failed: {str(e)}",
@@ -204,29 +256,52 @@ class EmailChannel(NotificationChannelBase):
             )
 
     async def test(self) -> ChannelTestResult:
-        """Test email channel configuration"""
+        """Test email channel configuration.
+
+        When a per-channel smtp_url is configured, test that relay directly.
+        Otherwise, validate the global email configuration by reading it and
+        checking that SMTP host is set.
+        """
         smtp_url = self.config.get("smtp_url")
-
-        if not smtp_url:
-            return ChannelTestResult(
-                success=False,
-                message="SMTP relay URL not configured",
-            )
-
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.get(smtp_url)
-                if response.status_code < 400:
+        if smtp_url:
+            try:
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    response = await client.get(smtp_url)
+                    if response.status_code < 400:
+                        return ChannelTestResult(
+                            success=True,
+                            message="Email channel connection successful (legacy relay)",
+                        )
                     return ChannelTestResult(
-                        success=True,
-                        message="Email channel connection successful",
+                        success=False,
+                        message=f"SMTP server returned {response.status_code}",
                     )
+            except Exception as e:
                 return ChannelTestResult(
                     success=False,
-                    message=f"SMTP server returned {response.status_code}",
+                    message=f"Connection failed: {str(e)}",
                 )
+
+        # Global config validation
+        try:
+            from app.services.email_service import get_email_config
+            config = await get_email_config()
+            if not config["enabled"]:
+                return ChannelTestResult(
+                    success=False,
+                    message="Email service is disabled. Configure SMTP settings in Email Settings first.",
+                )
+            if not config["host"]:
+                return ChannelTestResult(
+                    success=False,
+                    message="SMTP host not configured. Set it in Email Settings.",
+                )
+            return ChannelTestResult(
+                success=True,
+                message=f"Global SMTP config valid: {config['host']}:{config['port']}",
+            )
         except Exception as e:
             return ChannelTestResult(
                 success=False,
-                message=f"Connection failed: {str(e)}",
+                message=f"Failed to read email config: {str(e)}",
             )

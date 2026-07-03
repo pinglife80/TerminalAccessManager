@@ -145,6 +145,66 @@ async def invalidate_config_cache(
     return {"message": "Config cache invalidated"}
 
 
+@router.post("/email/test", response_model=dict)
+async def test_email_configuration(
+    email: str = Query(..., description="Recipient email address for the test email"),
+    current_user: User = Depends(require_permission("settings:write")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Send a test email using the current global SMTP configuration.
+
+    Reads SMTP settings from the database (system_config table) with .env
+    fallback. Useful for validating the configuration after changing it
+    on the Email Settings page.
+    """
+    from app.services.email_service import EmailSendError, EmailRateLimitError, send_email
+
+    test_subject = "[TAM] Email Configuration Test"
+    test_html = """
+    <html>
+    <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+        <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
+            <h2 style="color: #2563eb;">Terminal Access Manager</h2>
+            <p>This is a test email from Terminal Access Manager.</p>
+            <p>If you received this email, your SMTP configuration is working correctly.</p>
+            <div style="margin-top: 30px; padding: 15px; background-color: #f9fafb; border-radius: 4px;">
+                <p style="color: #666; font-size: 12px; margin: 0;">
+                    Sent at: {timestamp}<br>
+                    Triggered by: {username}
+                </p>
+            </div>
+        </div>
+    </body>
+    </html>
+    """.format(
+        timestamp=__import__("datetime").datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        username=current_user.username,
+    )
+
+    try:
+        result = await send_email(
+            to_email=email,
+            subject=test_subject,
+            html_content=test_html,
+        )
+        if result:
+            # Audit log
+            from app.services.terminal_service import TerminalService
+            ts = TerminalService(db)
+            await ts.log_action(current_user.username, "test_email", "system", "email_config",
+                                {"message": "Sent test email", "recipient": email},
+                                ip_address="",
+                                resource_name="email_config")
+            return {"success": True, "message": f"Test email sent to {email}"}
+        return {"success": False, "message": "Email send returned False"}
+    except EmailRateLimitError:
+        return {"success": False, "message": "Rate limit exceeded. Please wait and try again."}
+    except EmailSendError as e:
+        return {"success": False, "message": f"Send failed: {str(e)}"}
+    except Exception as e:
+        return {"success": False, "message": f"Unexpected error: {type(e).__name__}: {str(e)}"}
+
+
 @router.post("/upload", response_model=dict)
 async def upload_branding_asset(
     request: Request,

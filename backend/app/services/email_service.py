@@ -200,30 +200,89 @@ async def invalidate_email_codes(user_id: int, purpose: str | None = None):
 # ==================== Rate Limiting ====================
 
 
-async def check_email_rate_limit(email: str) -> tuple[bool, int]:
+async def get_email_config() -> dict[str, Any]:
+    """Read email configuration from database (with .env fallback).
+
+    Centralizes SMTP settings so that both verification-code emails and
+    notification channel emails share the same source of truth. The
+    frontend EmailSettings page writes into the system_config table;
+    this function reads them back, falling back to .env values when the
+    database entry is empty.
+
+    Returns a dict with keys: enabled, host, port, use_tls, use_ssl,
+    username, password, from_email, from_name, rate_limit.
+    """
+    from app.services.config_service import get_config_value
+
+    db_host = await get_config_value("email_host", "")
+    db_port = await get_config_value("email_port", 0)
+    db_use_tls = await get_config_value("email_use_tls", False)
+    db_use_ssl = await get_config_value("email_use_ssl", True)
+    db_username = await get_config_value("email_username", "")
+    db_password = await get_config_value("email_password", "")
+    db_from = await get_config_value("email_from", "")
+    db_from_name = await get_config_value("email_from_name", "")
+    db_rate_limit = await get_config_value("email_rate_limit", 0)
+    db_enabled = await get_config_value("email_enabled", False)
+
+    host = db_host or getattr(settings, "EMAIL_HOST", "") or ""
+    port = int(db_port) if db_port else getattr(settings, "EMAIL_PORT", 465)
+    use_tls = db_use_tls if db_use_tls is not None else getattr(settings, "EMAIL_USE_TLS", False)
+    use_ssl = db_use_ssl if db_use_ssl is not None else getattr(settings, "EMAIL_USE_SSL", True)
+    username = db_username or getattr(settings, "EMAIL_USERNAME", "") or ""
+    password = db_password or getattr(settings, "EMAIL_PASSWORD", "") or ""
+    from_email = db_from or getattr(settings, "EMAIL_FROM", "") or ""
+    from_name = db_from_name or getattr(settings, "EMAIL_FROM_NAME", "") or "TAM System"
+    rate_limit = int(db_rate_limit) if db_rate_limit else getattr(settings, "EMAIL_RATE_LIMIT_PER_MINUTE", 10)
+    enabled = bool(db_enabled) if db_enabled is not None else bool(host)
+    if host and host != "smtp.example.com":
+        enabled = True
+
+    return {
+        "enabled": enabled,
+        "host": host,
+        "port": port,
+        "use_tls": use_tls,
+        "use_ssl": use_ssl,
+        "username": username,
+        "password": password,
+        "from_email": from_email,
+        "from_name": from_name,
+        "rate_limit": rate_limit,
+    }
+
+
+async def check_email_rate_limit(email: str, rate_limit: int | None = None) -> tuple[bool, int]:
     """
     Check if email rate limit is exceeded.
 
     Args:
         email: Email address
+        rate_limit: Optional rate limit override (per minute). When omitted,
+            falls back to settings.EMAIL_RATE_LIMIT_PER_MINUTE for backward
+            compatibility with callers that have not been migrated to the
+            database-backed config.
 
     Returns:
         Tuple of (is_allowed, remaining_requests)
     """
+    if rate_limit is None:
+        rate_limit = getattr(settings, "EMAIL_RATE_LIMIT_PER_MINUTE", 10)
+
     redis = await get_redis_client()
     key = f"email_rate:{email}"
 
     current = await redis.get(key)
     if current is None:
         await redis.setex(key, 60, 1)
-        return True, settings.EMAIL_RATE_LIMIT_PER_MINUTE - 1
+        return True, rate_limit - 1
 
     current_count = int(current)
-    if current_count >= settings.EMAIL_RATE_LIMIT_PER_MINUTE:
+    if current_count >= rate_limit:
         return False, 0
 
     await redis.incr(key)
-    return True, settings.EMAIL_RATE_LIMIT_PER_MINUTE - current_count - 1
+    return True, rate_limit - current_count - 1
 
 
 # ==================== Email Sending ====================
@@ -252,14 +311,14 @@ class EmailSender:
         from_email: str | None = None,
         from_name: str | None = None,
     ):
-        self.host = host or getattr(settings, "EMAIL_HOST", None) or "smtp.example.com"
+        self.host = host or getattr(settings, "EMAIL_HOST", "") or "smtp.example.com"
         self.port = port or getattr(settings, "EMAIL_PORT", 465)
-        self.username = username or getattr(settings, "EMAIL_USERNAME", None)
-        self.password = password or getattr(settings, "EMAIL_PASSWORD", None)
-        self.use_tls = use_tls or getattr(settings, "EMAIL_USE_TLS", False)
-        self.use_ssl = use_ssl if use_ssl is not None else getattr(settings, "EMAIL_USE_SSL", True)
-        self.from_email = from_email or getattr(settings, "EMAIL_FROM", "noreply@example.com")
-        self.from_name = from_name or getattr(settings, "EMAIL_FROM_NAME", "TAM System")
+        self.username = username or getattr(settings, "EMAIL_USERNAME", "") or ""
+        self.password = password or getattr(settings, "EMAIL_PASSWORD", "") or ""
+        self.use_tls = bool(use_tls) if use_tls is not None else getattr(settings, "EMAIL_USE_TLS", False)
+        self.use_ssl = bool(use_ssl) if use_ssl is not None else getattr(settings, "EMAIL_USE_SSL", True)
+        self.from_email = from_email or getattr(settings, "EMAIL_FROM", "") or "noreply@example.com"
+        self.from_name = from_name or getattr(settings, "EMAIL_FROM_NAME", "") or "TAM System"
 
     def _build_message(
         self,
@@ -283,6 +342,7 @@ class EmailSender:
         subject: str,
         html_content: str | None = None,
         text_content: str | None = None,
+        rate_limit: int | None = None,
     ) -> bool:
         """
         Send an email.
@@ -292,6 +352,8 @@ class EmailSender:
             subject: Email subject
             html_content: HTML body content
             text_content: Plain text body content
+            rate_limit: Optional per-minute rate limit override. When omitted,
+                uses settings.EMAIL_RATE_LIMIT_PER_MINUTE (legacy behavior).
 
         Returns:
             True if email sent successfully
@@ -300,7 +362,7 @@ class EmailSender:
             Exception if email sending fails
         """
         # Check rate limit
-        is_allowed, remaining = await check_email_rate_limit(to_email)
+        is_allowed, remaining = await check_email_rate_limit(to_email, rate_limit=rate_limit)
         if not is_allowed:
             raise EmailRateLimitError(
                 f"Rate limit exceeded for {to_email}. Please try again later."
@@ -309,29 +371,22 @@ class EmailSender:
         # Build message
         message = self._build_message(to_email, subject, html_content, text_content)
 
-        # Send via SMTP API endpoint (simulated) or direct SMTP
+        # Send via SMTP API endpoint or direct SMTP
         try:
-            # Try direct SMTP first using httpx
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                # For SMTP, we use a simple HTTP POST to a local SMTP relay
-                # In production, this would be a real SMTP server or email service API
-                smtp_url = getattr(settings, "EMAIL_SMTP_URL", None)
+            smtp_url = getattr(settings, "EMAIL_SMTP_URL", None)
 
-                if smtp_url:
-                    # Send via HTTP SMTP relay
+            if smtp_url:
+                # Send via HTTP SMTP relay
+                async with httpx.AsyncClient(timeout=30.0) as client:
                     response = await client.post(
                         smtp_url,
                         json=message,
                         headers={"Content-Type": "application/json"},
                     )
                     response.raise_for_status()
-                else:
-                    # Fallback: Log the email (for development without SMTP)
-                    logger.info(
-                        f"[EMAIL] To: {to_email}, Subject: {subject}, "
-                        f"Remaining quota: {remaining}"
-                    )
-                    logger.debug(f"[EMAIL] HTML content: {html_content[:200] if html_content else 'N/A'}...")
+            else:
+                # Send via direct SMTP connection
+                await self._send_via_smtp(to_email, subject, html_content, text_content)
 
             logger.info(f"Email sent successfully to {to_email}: {subject}")
             return True
@@ -342,6 +397,53 @@ class EmailSender:
         except Exception as e:
             logger.error(f"Email sending failed: {type(e).__name__}: {e}")
             raise EmailSendError(f"Failed to send email: {str(e)}")
+
+    async def _send_via_smtp(
+        self,
+        to_email: str,
+        subject: str,
+        html_content: str | None = None,
+        text_content: str | None = None,
+    ) -> None:
+        """Send email via direct SMTP connection"""
+        import asyncio
+        import smtplib
+        from email.mime.multipart import MIMEMultipart
+        from email.mime.text import MIMEText
+        from email.utils import formataddr
+
+        msg = MIMEMultipart()
+        msg["From"] = formataddr((self.from_name, self.from_email))
+        msg["To"] = to_email
+        msg["Subject"] = subject
+
+        if html_content:
+            msg.attach(MIMEText(html_content, "html", "utf-8"))
+        if text_content:
+            msg.attach(MIMEText(text_content, "plain", "utf-8"))
+        elif not html_content:
+            msg.attach(MIMEText(subject, "plain", "utf-8"))
+
+        def _send():
+            if self.use_ssl:
+                with smtplib.SMTP_SSL(self.host, self.port, timeout=30) as server:
+                    server.set_debuglevel(0)
+                    if self.username and self.password:
+                        server.login(self.username, self.password)
+                    elif self.username:
+                        server.login(self.username, "")
+                    server.send_message(msg)
+            else:
+                with smtplib.SMTP(self.host, self.port, timeout=30) as server:
+                    server.set_debuglevel(0)
+                    server.starttls()
+                    if self.username and self.password:
+                        server.login(self.username, self.password)
+                    elif self.username:
+                        server.login(self.username, "")
+                    server.send_message(msg)
+
+        await asyncio.to_thread(_send)
 
     async def test_connection(self) -> dict:
         """
@@ -489,6 +591,11 @@ async def send_email(
     """
     Send an email with optional template rendering.
 
+    Reads SMTP configuration from the database (system_config table),
+    falling back to .env values when database entries are empty. This
+    unifies the configuration source for both verification-code emails
+    and notification-channel emails.
+
     Args:
         to_email: Recipient email address
         subject: Email subject
@@ -500,7 +607,18 @@ async def send_email(
     Returns:
         True if email sent successfully
     """
-    sender = EmailSender()
+    config = await get_email_config()
+
+    sender = EmailSender(
+        host=config["host"],
+        port=config["port"],
+        username=config["username"],
+        password=config["password"],
+        use_tls=config["use_tls"],
+        use_ssl=config["use_ssl"],
+        from_email=config["from_email"],
+        from_name=config["from_name"],
+    )
 
     # Render template if specified
     if template_name:
@@ -514,6 +632,7 @@ async def send_email(
         subject=subject,
         html_content=html_content,
         text_content=text_content,
+        rate_limit=config["rate_limit"],
     )
 
 

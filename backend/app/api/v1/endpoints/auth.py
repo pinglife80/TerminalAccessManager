@@ -147,6 +147,15 @@ async def login(
                             ip_address=get_client_ip(request),
                             resource_name=username)
 
+        # Emit security.login_failed event for notification dispatch.
+        # fire-and-forget: emit_event logs errors internally and never raises.
+        from app.services.event_emitter import emit_login_failed
+        await emit_login_failed(
+            username=username,
+            ip_address=get_client_ip(request),
+            reason="invalid credentials",
+        )
+
         error_detail = {
             "message": "Invalid credentials",
             "captcha_required": captcha_now,
@@ -176,6 +185,14 @@ async def login(
                             {"message": "Login failed: user not found", "provider": provider},
                             ip_address=get_client_ip(request),
                             resource_name=username)
+
+        # Emit security.login_failed event for notification dispatch.
+        from app.services.event_emitter import emit_login_failed
+        await emit_login_failed(
+            username=username,
+            ip_address=get_client_ip(request),
+            reason="user not found",
+        )
 
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

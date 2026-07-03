@@ -2,25 +2,40 @@
 Notification Service for TerminalAccessManager.
 
 Central service for managing notifications and event publishing.
+
+Architecture (P3 async/retry):
+    emit() → enqueues to Redis List (notify:queue:main) → fire-and-forget
+    main_worker_task → pops from queue, applies rules, attempts delivery
+        → success: log as sent
+        → failure: schedule retry in Redis ZSet (notify:queue:retry) with
+                   exponential backoff; log as retrying
+    retry_worker_task → scans ZSet for due items, re-attempts delivery
+        → success: log as sent, clear retry
+        → failure + retries left: reschedule with longer backoff
+        → failure + retries exhausted: log as failed (terminal)
 """
 
-import uuid
+import json
+from contextlib import asynccontextmanager
 from datetime import datetime
-from typing import Any
+from typing import Any, AsyncIterator
 
 from loguru import logger
-from sqlalchemy import select
+from sqlalchemy import Integer, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.crypto import decrypt_config
-from app.models.notification import NotificationChannel, NotificationLog
+from app.core.crypto import decrypt_config, has_encrypted_config
+from app.models.notification import (
+    NotificationChannel,
+    NotificationLog,
+)
 from app.services.notification_channels import (
     NotificationChannelBase,
     NotificationEvent,
     NotificationResult,
     get_channel,
 )
-from app.services.notification_channels.event_types import EventType
+from app.services.notification_channels.event_types import CHANNEL_METADATA, EVENT_METADATA, EventType
 
 
 class NotificationService:
@@ -28,49 +43,95 @@ class NotificationService:
     Central notification service.
 
     Manages notification channels, event publishing, and notification logs.
+
+    Two usage modes:
+    1. Request-scoped: pass an AsyncSession (API endpoints). All operations
+       share the request's session and transaction.
+    2. Global singleton: omit the session (lifespan initialization). Each
+       DB-touching operation opens a short-lived session via
+       async_session_factory. Channel instances and config cache are kept
+       in-memory across operations.
     """
 
-    def __init__(self, db: AsyncSession):
+    def __init__(self, db: AsyncSession | None = None):
         """
         Initialize notification service.
 
         Args:
-            db: Database session
+            db: Optional database session. When provided, all DB operations
+                reuse this session (request-scoped usage). When omitted,
+                each DB operation opens its own short-lived session
+                (global singleton usage).
         """
         self.db = db
         self._channels: dict[str, NotificationChannelBase] = {}
         self._channel_configs: dict[str, dict] = {}
+        self._workers = None
+
+    @asynccontextmanager
+    async def _session_scope(self) -> AsyncIterator[AsyncSession]:
+        """Yield a DB session.
+
+        Uses the injected session when available (request-scoped mode),
+        otherwise opens a fresh short-lived session from the factory
+        (singleton mode) and closes it when the block exits.
+        """
+        if self.db is not None:
+            yield self.db
+        else:
+            from app.core.database import async_session_factory
+
+            async with async_session_factory() as session:
+                yield session
+
+    def _get_workers(self):
+        if self._workers is None:
+            from app.services.notification_workers import NotificationWorkers
+            self._workers = NotificationWorkers(self._channels, self._channel_configs)
+        return self._workers
+
+    def _get_logger(self):
+        from app.services.notification_logging import NotificationLogger
+        return NotificationLogger(self.db)
 
     async def initialize_channels(self) -> None:
         """
         Load and initialize all enabled notification channels from database.
+
+        Clears the in-memory cache before reloading so that deleted or
+        disabled channels are removed. Without the clear, a channel that
+        was deleted from the database would still be present in the cache
+        and continue to receive events until the process restarts.
         """
-        stmt = select(NotificationChannel).where(NotificationChannel.enabled == True)
-        result = await self.db.execute(stmt)
-        channels = result.scalars().all()
+        async with self._session_scope() as db:
+            self._channels.clear()
+            self._channel_configs.clear()
 
-        for channel_config in channels:
-            try:
-                # Decrypt config if needed
-                config = channel_config.config
-                if isinstance(config, dict) and any(
-                    v.startswith("ENC:") if isinstance(v, str) else False
-                    for v in config.values()
-                ):
-                    config = decrypt_config(config)
+            stmt = select(NotificationChannel).where(NotificationChannel.enabled == True)
+            result = await db.execute(stmt)
+            channels = result.scalars().all()
 
-                # Create channel instance
-                channel = get_channel(channel_config.type, config)
-                self._channels[channel_config.name] = channel
-                self._channel_configs[channel_config.name] = {
-                    "id": channel_config.id,
-                    "type": channel_config.type,
-                    "events": channel_config.events,
-                }
+            for channel_config in channels:
+                try:
+                    config = channel_config.config
+                    if isinstance(config, dict) and has_encrypted_config(config):
+                        config = decrypt_config(config)
 
-                logger.info(f"Loaded notification channel: {channel_config.name} ({channel_config.type})")
-            except Exception as e:
-                logger.error(f"Failed to load channel {channel_config.name}: {e}")
+                    channel = get_channel(channel_config.type, config)
+                    self._channels[channel_config.name] = channel
+                    self._channel_configs[channel_config.name] = {
+                        "id": channel_config.id,
+                        "type": channel_config.type,
+                        "events": channel_config.events,
+                    }
+
+                    logger.info(f"Loaded notification channel: {channel_config.name} ({channel_config.type})")
+                except Exception as e:
+                    logger.error(f"Failed to load channel {channel_config.name}: {e}")
+
+            if self._workers is not None:
+                self._workers._channels = self._channels
+                self._workers._channel_configs = self._channel_configs
 
     async def get_channels(self) -> list[NotificationChannel]:
         """Get all notification channels from database"""
@@ -108,8 +169,8 @@ class NotificationService:
         await self.db.commit()
         await self.db.refresh(channel)
 
-        # Initialize the channel
         await self.initialize_channels()
+        await self._refresh_global_channels()
 
         logger.info(f"Created notification channel: {name}")
         return channel
@@ -142,8 +203,8 @@ class NotificationService:
         await self.db.commit()
         await self.db.refresh(channel)
 
-        # Reload channels
         await self.initialize_channels()
+        await self._refresh_global_channels()
 
         logger.info(f"Updated notification channel: {channel.name}")
         return channel
@@ -157,11 +218,23 @@ class NotificationService:
         await self.db.delete(channel)
         await self.db.commit()
 
-        # Reload channels
         await self.initialize_channels()
+        await self._refresh_global_channels()
 
         logger.info(f"Deleted notification channel: {channel.name}")
         return True
+
+    async def _refresh_global_channels(self) -> None:
+        """Refresh the global notification service singleton's channel cache."""
+        from app.services.event_emitter import get_notification_service
+
+        global_service = get_notification_service()
+        if global_service is not None and global_service is not self:
+            try:
+                await global_service.initialize_channels()
+                logger.info("Global notification service channels refreshed")
+            except Exception as e:
+                logger.error(f"Failed to refresh global notification service: {e}")
 
     async def test_channel(self, channel_id: int) -> dict:
         """Test a notification channel connection"""
@@ -170,18 +243,12 @@ class NotificationService:
             return {"success": False, "message": "Channel not found"}
 
         try:
-            # Decrypt config if needed
             config = channel_config.config
-            if isinstance(config, dict) and any(
-                v.startswith("ENC:") if isinstance(v, str) else False
-                for v in config.values()
-            ):
+            if isinstance(config, dict) and has_encrypted_config(config):
                 config = decrypt_config(config)
 
-            # Create channel instance
             channel = get_channel(channel_config.type, config)
 
-            # Test connection
             test_result = await channel.test()
 
             return {
@@ -193,13 +260,15 @@ class NotificationService:
             logger.error(f"Channel test failed: {e}")
             return {"success": False, "message": f"Test failed: {str(e)}"}
 
-    def _get_subscribed_channels(self, event_type: str) -> list[str]:
-        """Get list of channel names that are subscribed to the given event type"""
-        subscribed = []
-        for channel_name, channel_info in self._channel_configs.items():
-            if event_type in channel_info.get("events", []):
-                subscribed.append(channel_name)
-        return subscribed
+    async def start_workers(self) -> None:
+        """Start the background worker coroutines."""
+        workers = self._get_workers()
+        await workers.start_workers()
+
+    async def stop_workers(self) -> None:
+        """Stop the background worker coroutines gracefully."""
+        workers = self._get_workers()
+        await workers.stop_workers()
 
     async def emit(
         self,
@@ -209,61 +278,43 @@ class NotificationService:
         severity: str = "info",
     ) -> list[NotificationResult]:
         """
-        Emit an event and send notifications to subscribed channels.
-
-        Args:
-            event_type: Type of event to emit
-            data: Event data payload
-            source: Source of the event (system, user, scheduler)
-            severity: Severity level (info, warning, error)
-
-        Returns:
-            List of notification results for each channel
+        Emit an event — enqueues for async delivery.
         """
-        # Create event
-        event = NotificationEvent(
-            id=str(uuid.uuid4()),
-            type=event_type,
-            timestamp=datetime.utcnow(),
-            data=data or {},
-            source=source,
-            severity=severity,
-        )
+        workers = self._get_workers()
+        return await workers.emit(event_type, data, source, severity)
 
-        # Get subscribed channels
-        subscribed_channels = self._get_subscribed_channels(event_type)
+    async def _log_suppressed(self, event: NotificationEvent, channel_name: str, window: int) -> None:
+        """Log a suppressed notification"""
+        logger_inst = self._get_logger()
+        await logger_inst.log_suppressed(event, channel_name, window)
 
-        if not subscribed_channels:
-            logger.debug(f"No channels subscribed to event: {event_type}")
-            return []
+    async def _log_sent(self, event: NotificationEvent, channel_name: str, result: NotificationResult) -> None:
+        """Log a successfully sent notification"""
+        logger_inst = self._get_logger()
+        await logger_inst.log_sent(event, channel_name, result)
 
-        # Send to all subscribed channels
-        results = []
-        for channel_name in subscribed_channels:
-            channel = self._channels.get(channel_name)
-            if not channel:
-                continue
+    async def _log_retrying(
+        self,
+        event: NotificationEvent,
+        channel_name: str,
+        result: NotificationResult,
+        retry_count: int,
+        next_retry_at: datetime,
+    ) -> None:
+        """Log a notification that will be retried"""
+        logger_inst = self._get_logger()
+        await logger_inst.log_retrying(event, channel_name, result, retry_count, next_retry_at)
 
-            try:
-                result = await channel.send(event)
-                results.append(result)
-
-                # Log the notification
-                await self._log_notification(event, channel_name, result)
-
-            except Exception as e:
-                logger.error(f"Failed to send notification to {channel_name}: {e}")
-                results.append(
-                    NotificationResult(
-                        success=False,
-                        message=f"Send failed: {str(e)}",
-                        channel=channel.channel_type,
-                        event_id=event.id,
-                        error_code="SEND_ERROR",
-                    )
-                )
-
-        return results
+    async def _log_failed(
+        self,
+        event: NotificationEvent,
+        channel_name: str,
+        result: NotificationResult,
+        retry_count: int,
+    ) -> None:
+        """Log a permanently failed notification"""
+        logger_inst = self._get_logger()
+        await logger_inst.log_failed(event, channel_name, result, retry_count)
 
     async def _log_notification(
         self,
@@ -271,21 +322,18 @@ class NotificationService:
         channel_name: str,
         result: NotificationResult,
     ) -> None:
-        """Log a notification to the database"""
-        try:
-            log = NotificationLog(
-                event_id=event.id,
-                channel_name=channel_name,
-                event_type=event.type,
-                status="sent" if result.success else "failed",
-                recipient=result.recipient,
-                error_message=result.message if not result.success else None,
-                details=result.details,
-            )
-            self.db.add(log)
-            await self.db.commit()
-        except Exception as e:
-            logger.error(f"Failed to log notification: {e}")
+        """Backward-compatible log wrapper."""
+        logger_inst = self._get_logger()
+        await logger_inst.log_notification(event, channel_name, result)
+
+    async def _render_template(
+        self,
+        event: NotificationEvent,
+        channel_type: str,
+    ) -> dict[str, str] | None:
+        """Look up and render a message template for the given event+channel."""
+        logger_inst = self._get_logger()
+        return await logger_inst.render_template(event, channel_type)
 
     async def get_notification_logs(
         self,
@@ -295,43 +343,9 @@ class NotificationService:
         limit: int = 100,
         offset: int = 0,
     ) -> tuple[list[NotificationLog], int]:
-        """
-        Get notification logs with filtering and pagination.
-
-        Returns:
-            Tuple of (logs, total_count)
-        """
-        stmt = select(NotificationLog).order_by(NotificationLog.sent_at.desc())
-
-        if channel_name:
-            stmt = stmt.where(NotificationLog.channel_name == channel_name)
-        if event_type:
-            stmt = stmt.where(NotificationLog.event_type == event_type)
-        if status:
-            stmt = stmt.where(NotificationLog.status == status)
-
-        # Get total count
-        from sqlalchemy import func
-
-        count_stmt = select(func.count()).select_from(NotificationLog)
-        if channel_name:
-            count_stmt = count_stmt.where(NotificationLog.channel_name == channel_name)
-        if event_type:
-            count_stmt = count_stmt.where(NotificationLog.event_type == event_type)
-        if status:
-            count_stmt = count_stmt.where(NotificationLog.status == status)
-
-        count_result = await self.db.execute(count_stmt)
-        total = count_result.scalar()
-
-        # Get paginated results
-        stmt = stmt.limit(limit).offset(offset)
-        result = await self.db.execute(stmt)
-        logs = result.scalars().all()
-
-        return list(logs), total
-
-    # ==================== Public API Methods (for test compatibility) ====================
+        """Get notification logs with filtering and pagination."""
+        logger_inst = self._get_logger()
+        return await logger_inst.get_notification_logs(self.db, channel_name, event_type, status, limit, offset)
 
     async def publish_event(
         self,
@@ -362,7 +376,7 @@ class NotificationService:
             return {"success": False, "message": f"Channel {channel_type} not found"}
 
         event = NotificationEvent(
-            id=str(uuid.uuid4()),
+            id=str(__import__('uuid').uuid4()),
             type="custom",
             timestamp=datetime.utcnow(),
             data={"subject": subject, "message": message},
@@ -403,7 +417,6 @@ class NotificationService:
 
     def get_channel_metadata(self) -> dict:
         """Get channel metadata"""
-        from app.services.notification_channels.event_types import CHANNEL_METADATA
         return {
             "channels": list(self._channels.keys()),
             "configs": self._channel_configs,
@@ -412,10 +425,164 @@ class NotificationService:
 
     def get_event_types(self) -> list[str]:
         """Get all event types"""
-        from app.services.notification_channels.event_types import EVENT_METADATA
         return list(EVENT_METADATA.keys())
 
-    # ==================== Convenience Methods ====================
+    async def get_statistics(self) -> dict[str, Any]:
+        """Get notification statistics overview with breakdowns."""
+        async with self._session_scope() as db:
+            stmt = select(
+                NotificationLog.status,
+                func.count(NotificationLog.id).label("cnt"),
+            ).group_by(NotificationLog.status)
+            result = await db.execute(stmt)
+            rows = result.all()
+            status_counts = {row[0]: row[1] for row in rows}
+
+            total = sum(status_counts.values())
+            sent = status_counts.get("sent", 0)
+            failed = status_counts.get("failed", 0)
+            pending = status_counts.get("pending", 0)
+            retrying = status_counts.get("retrying", 0)
+            suppressed = status_counts.get("suppressed", 0)
+            deliverable = sent + failed
+            success_rate = (sent / deliverable * 100) if deliverable > 0 else 100.0
+
+            avg_latency_ms = None
+            try:
+                from sqlalchemy import extract
+
+                latency_stmt = select(
+                    func.avg(
+                        (func.extract("epoch", NotificationLog.completed_at) -
+                         func.extract("epoch", NotificationLog.sent_at)) * 1000
+                    )
+                ).where(
+                    NotificationLog.status == "sent",
+                    NotificationLog.completed_at.isnot(None),
+                )
+                lat_result = await db.execute(latency_stmt)
+                avg_latency_ms = lat_result.scalar()
+            except Exception:
+                pass
+
+            ch_stmt = select(
+                NotificationLog.channel_name,
+                func.count().label("total"),
+                func.sum(func.cast(NotificationLog.status == "sent", Integer)).label("sent"),
+                func.sum(func.cast(NotificationLog.status == "failed", Integer)).label("failed"),
+            ).group_by(NotificationLog.channel_name).order_by(func.count().desc())
+            ch_result = await db.execute(ch_stmt)
+            by_channel = []
+            for row in ch_result.all():
+                ch_total = row[2]
+                ch_sent = row[3] or 0
+                ch_failed = row[4] or 0
+                ch_deliverable = ch_sent + ch_failed
+                ch_rate = (ch_sent / ch_deliverable * 100) if ch_deliverable > 0 else 100.0
+                by_channel.append({
+                    "channel_name": row[1],
+                    "total": ch_total,
+                    "sent": ch_sent,
+                    "failed": ch_failed,
+                    "success_rate": round(ch_rate, 2),
+                })
+
+            ev_stmt = select(
+                NotificationLog.event_type,
+                func.count().label("total"),
+                func.sum(func.cast(NotificationLog.status == "sent", Integer)).label("sent"),
+                func.sum(func.cast(NotificationLog.status == "failed", Integer)).label("failed"),
+            ).group_by(NotificationLog.event_type).order_by(func.count().desc())
+            ev_result = await db.execute(ev_stmt)
+            by_event = []
+            for row in ev_result.all():
+                ev_total = row[2]
+                ev_sent = row[3] or 0
+                ev_failed = row[4] or 0
+                ev_deliverable = ev_sent + ev_failed
+                ev_rate = (ev_sent / ev_deliverable * 100) if ev_deliverable > 0 else 100.0
+                by_event.append({
+                    "event_type": row[1],
+                    "total": ev_total,
+                    "sent": ev_sent,
+                    "failed": ev_failed,
+                    "success_rate": round(ev_rate, 2),
+                })
+
+        queue_size = 0
+        retry_queue_size = 0
+        try:
+            from app.core.security import get_redis_client
+            redis = await get_redis_client()
+            queue_size = await redis.llen("notify:queue:main")
+            retry_queue_size = await redis.zcard("notify:queue:retry")
+        except Exception as e:
+            logger.warning(f"Failed to get queue sizes: {e}")
+
+        return {
+            "overview": {
+                "total": total,
+                "sent": sent,
+                "failed": failed,
+                "pending": pending,
+                "retrying": retrying,
+                "suppressed": suppressed,
+                "success_rate": round(success_rate, 2),
+                "avg_latency_ms": round(avg_latency_ms, 2) if avg_latency_ms is not None else None,
+                "queue_size": queue_size,
+                "retry_queue_size": retry_queue_size,
+            },
+            "by_channel": by_channel,
+            "by_event": by_event,
+        }
+
+    async def retry_failed_notification(self, log_id: int) -> bool:
+        """Manually retry a failed notification by log ID."""
+        async with self._session_scope() as db:
+            log = await db.get(NotificationLog, log_id)
+            if not log:
+                return False
+            if log.status not in ("failed", "retrying"):
+                return False
+
+            try:
+                from app.core.security import get_redis_client
+                redis = await get_redis_client()
+                payload = json.dumps({
+                    "event_id": log.event_id,
+                    "event_type": log.event_type,
+                    "data": (log.details or {}).get("event_data", {}),
+                    "source": "manual_retry",
+                    "severity": "warning",
+                    "timestamp": log.sent_at.isoformat(),
+                    "retry_count": 0,
+                    "queued_at": datetime.utcnow().isoformat(),
+                    "_manual_retry": True,
+                    "_log_id": log_id,
+                })
+                await redis.lpush("notify:queue:main", payload)
+                log.status = "pending"
+                log.error_message = None
+                log.next_retry_at = None
+                log.retry_count = 0
+                await db.commit()
+                logger.info(f"Manual retry queued for log {log_id}")
+                return True
+            except Exception as e:
+                logger.error(f"Failed to queue manual retry for log {log_id}: {e}")
+                return False
+
+    async def retry_all_failed(self) -> int:
+        """Retry all currently failed notifications. Returns count retried."""
+        async with self._session_scope() as db:
+            stmt = select(NotificationLog).where(NotificationLog.status == "failed")
+            result = await db.execute(stmt)
+            logs = result.scalars().all()
+            count = 0
+            for log in logs:
+                if await self.retry_failed_notification(log.id):
+                    count += 1
+            return count
 
     async def emit_terminal_blocked(
         self,
@@ -473,198 +640,54 @@ class NotificationService:
             severity="warning",
         )
 
-    async def emit_login_locked(
+    async def emit_login_succeeded(
         self,
         username: str,
         ip_address: str,
-        lock_duration: int,
     ) -> list[NotificationResult]:
-        """Emit account locked event"""
+        """Emit login succeeded event"""
         return await self.emit(
-            event_type=EventType.LOGIN_LOCKED,
+            event_type=EventType.LOGIN_SUCCESS,
             data={
                 "username": username,
                 "ip_address": ip_address,
-                "lock_duration_minutes": lock_duration,
+            },
+            source="system",
+            severity="info",
+        )
+
+    async def emit_policy_violation(
+        self,
+        policy_name: str,
+        terminal_ip: str,
+        details: dict,
+    ) -> list[NotificationResult]:
+        """Emit policy violation event"""
+        return await self.emit(
+            event_type=EventType.POLICY_VIOLATION,
+            data={
+                "policy_name": policy_name,
+                "terminal_ip": terminal_ip,
+                **details,
             },
             source="system",
             severity="error",
         )
 
-    async def emit_datasource_sync_failed(
+    async def emit_system_alert(
         self,
-        source_name: str,
-        source_tag: str,
-        error: str,
+        alert_type: str,
+        message: str,
+        details: dict | None = None,
     ) -> list[NotificationResult]:
-        """Emit datasource sync failed event"""
+        """Emit system alert event"""
         return await self.emit(
-            event_type=EventType.DATASOURCE_SYNC_FAILED,
+            event_type=EventType.SYSTEM_ALERT,
             data={
-                "source_name": source_name,
-                "source_tag": source_tag,
-                "error": error,
+                "alert_type": alert_type,
+                "message": message,
+                **(details or {}),
             },
-            source="scheduler",
+            source="system",
             severity="error",
-        )
-
-    async def emit_compliance_alert(
-        self,
-        compliance_rate: float,
-        non_compliant_count: int,
-        threshold: float,
-    ) -> list[NotificationResult]:
-        """Emit compliance rate alert event"""
-        event_type = (
-            EventType.COMPLIANCE_RATE_CRITICAL
-            if compliance_rate < threshold * 0.5
-            else EventType.COMPLIANCE_RATE_LOW
-        )
-        severity = "error" if compliance_rate < threshold * 0.5 else "warning"
-
-        return await self.emit(
-            event_type=event_type,
-            data={
-                "compliance_rate": f"{compliance_rate:.1f}%",
-                "non_compliant_count": non_compliant_count,
-                "threshold": f"{threshold * 100:.0f}%",
-            },
-            source="scheduler",
-            severity=severity,
-        )
-
-    # ==================== Verification Code Methods ====================
-
-    async def send_password_reset_code(
-        self,
-        user_id: int,
-        email: str,
-    ) -> str:
-        """
-        Send password reset verification code via email.
-        
-        Args:
-            user_id: User ID
-            email: User's email address
-            
-        Returns:
-            The generated verification code
-        """
-        from app.services.email_service import send_password_reset_email
-
-        code = await send_password_reset_email(email=email, user_id=user_id)
-        
-        await self.emit(
-            event_type=EventType.PASSWORD_RESET_REQUESTED,
-            data={
-                "user_id": user_id,
-                "email": email,
-            },
-            source="user",
-            severity="info",
-        )
-        
-        await self.emit(
-            event_type=EventType.VERIFICATION_CODE_SENT,
-            data={
-                "user_id": user_id,
-                "email": email,
-                "purpose": "password_reset",
-            },
-            source="system",
-            severity="info",
-        )
-
-        return code
-
-    async def verify_password_reset_code(
-        self,
-        user_id: int,
-        code: str,
-    ) -> bool:
-        """
-        Verify a password reset verification code.
-        
-        Args:
-            user_id: User ID
-            code: Verification code to verify
-            
-        Returns:
-            True if code is valid, False otherwise
-        """
-        from app.services.email_service import verify_email_code
-
-        return await verify_email_code(
-            user_id=user_id,
-            code=code,
-            purpose="password_reset",
-            delete_on_success=True,
-        )
-
-    async def send_verification_code(
-        self,
-        user_id: int,
-        email: str,
-        purpose: str = "verification",
-    ) -> str:
-        """
-        Send verification code for various purposes.
-        
-        Args:
-            user_id: User ID
-            email: User's email address
-            purpose: Purpose of the code (verification, password_reset, 2fa)
-            
-        Returns:
-            The generated verification code
-        """
-        from app.services.email_service import send_email_code
-        from app.core.config import settings
-
-        ttl = getattr(settings, "EMAIL_CODE_EXPIRE_MINUTES", 10) * 60
-        code = await send_email_code(
-            user_id=user_id,
-            email=email,
-            purpose=purpose,
-            ttl_seconds=ttl,
-        )
-
-        await self.emit(
-            event_type=EventType.VERIFICATION_CODE_SENT,
-            data={
-                "user_id": user_id,
-                "email": email,
-                "purpose": purpose,
-            },
-            source="system",
-            severity="info",
-        )
-
-        return code
-
-    async def verify_verification_code(
-        self,
-        user_id: int,
-        code: str,
-        purpose: str = "verification",
-    ) -> bool:
-        """
-        Verify a verification code.
-        
-        Args:
-            user_id: User ID
-            code: Verification code to verify
-            purpose: Purpose of the code
-            
-        Returns:
-            True if code is valid, False otherwise
-        """
-        from app.services.email_service import verify_email_code
-
-        return await verify_email_code(
-            user_id=user_id,
-            code=code,
-            purpose=purpose,
-            delete_on_success=True,
         )

@@ -73,7 +73,7 @@ async def list_providers(
 async def create_provider(
     provider_data: AuthProviderCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_permission("auth.manage")),
+    current_user: User = Depends(require_permission("settings:write")),
 ):
     """Create a new authentication provider"""
     # Check if provider type is supported
@@ -117,7 +117,7 @@ async def update_provider(
     provider_id: int,
     provider_data: AuthProviderUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_permission("auth.manage")),
+    current_user: User = Depends(require_permission("settings:write")),
 ):
     """Update an authentication provider"""
     provider = await db.get(AuthConfig, provider_id)
@@ -148,7 +148,7 @@ async def update_provider(
 async def delete_provider(
     provider_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_permission("auth.manage")),
+    current_user: User = Depends(require_permission("settings:write")),
 ):
     """Delete an authentication provider"""
     provider = await db.get(AuthConfig, provider_id)
@@ -163,7 +163,7 @@ async def delete_provider(
 async def test_provider(
     provider_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_permission("auth.manage")),
+    current_user: User = Depends(require_permission("settings:write")),
 ):
     """Test an authentication provider connection"""
     provider_config = await db.get(AuthConfig, provider_id)

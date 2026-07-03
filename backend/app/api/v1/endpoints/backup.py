@@ -53,7 +53,7 @@ async def get_backup_config(
 async def update_backup_config(
     config_data: BackupConfigResponse,
     backup_service: BackupService = Depends(get_backup_service),
-    current_user: User = Depends(require_permission("system.manage")),
+    current_user: User = Depends(require_permission("backup:write")),
 ):
     """Update backup configuration"""
     backup_service.config.enabled = config_data.enabled
@@ -72,7 +72,7 @@ async def update_backup_config(
 @router.post("/run", response_model=BackupJobResponse)
 async def run_backup(
     backup_service: BackupService = Depends(get_backup_service),
-    current_user: User = Depends(require_permission("system.manage")),
+    current_user: User = Depends(require_permission("backup:write")),
 ):
     """Run a manual backup"""
     job = await backup_service.run_backup()
@@ -116,7 +116,7 @@ async def list_backups(
 async def download_backup(
     filename: str,
     backup_service: BackupService = Depends(get_backup_service),
-    current_user: User = Depends(require_permission("system.manage")),
+    current_user: User = Depends(require_permission("backup:write")),
 ):
     """Download a backup file"""
     if '..' in filename or filename.startswith('/') or filename.startswith('\\'):
@@ -139,7 +139,7 @@ async def download_backup(
 async def restore_backup(
     filename: str,
     backup_service: BackupService = Depends(get_backup_service),
-    current_user: User = Depends(require_permission("system.manage")),
+    current_user: User = Depends(require_permission("backup:write")),
 ):
     """Restore from a backup file"""
     if '..' in filename or filename.startswith('/') or filename.startswith('\\'):
@@ -164,7 +164,7 @@ async def restore_backup(
 async def delete_backup(
     filename: str,
     backup_service: BackupService = Depends(get_backup_service),
-    current_user: User = Depends(require_permission("system.manage")),
+    current_user: User = Depends(require_permission("backup:write")),
 ):
     """Delete a backup file"""
     if '..' in filename or filename.startswith('/') or filename.startswith('\\'):
@@ -182,7 +182,7 @@ async def delete_backup(
 @router.post("/test", response_model=BackupTestResult)
 async def test_backup_config(
     backup_service: BackupService = Depends(get_backup_service),
-    current_user: User = Depends(require_permission("system.manage")),
+    current_user: User = Depends(require_permission("backup:write")),
 ):
     """Test backup configuration"""
     try:

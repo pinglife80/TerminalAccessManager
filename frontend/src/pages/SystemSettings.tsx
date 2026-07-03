@@ -1,7 +1,7 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
-import { Settings, Key, HardDrive, Bell, Shield } from 'lucide-react';
+import { Settings, Key, HardDrive, Bell, Shield, Mail } from 'lucide-react';
 
 const SystemSettings: React.FC = () => {
   const { t } = useTranslation();
@@ -42,6 +42,15 @@ const SystemSettings: React.FC = () => {
       color: 'bg-orange-500',
       lightColor: 'bg-orange-50',
       textColor: 'text-orange-600',
+    },
+    {
+      title: t('systemSettings.email'),
+      description: t('systemSettings.emailDesc'),
+      icon: Mail,
+      path: '/email-settings',
+      color: 'bg-indigo-500',
+      lightColor: 'bg-indigo-50',
+      textColor: 'text-indigo-600',
     },
     {
       title: t('systemSettings.users'),

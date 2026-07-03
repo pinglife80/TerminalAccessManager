@@ -25,6 +25,7 @@ const Backup = lazy(() => import('./pages/Backup'));
 const Notifications = lazy(() => import('./pages/Notifications'));
 const SystemSettings = lazy(() => import('./pages/SystemSettings'));
 const GeneralSettings = lazy(() => import('./pages/GeneralSettings'));
+const EmailSettings = lazy(() => import('./pages/EmailSettings'));
 const Forbidden = lazy(() => import('./pages/Forbidden'));
 
 // Preload page components on hover to eliminate lazy-load flash
@@ -43,6 +44,7 @@ export const pagePreloadMap: Record<string, () => Promise<unknown>> = {
   '/notifications': () => import('./pages/Notifications'),
   '/system-settings': () => import('./pages/SystemSettings'),
   '/general-settings': () => import('./pages/GeneralSettings'),
+  '/email-settings': () => import('./pages/EmailSettings'),
 };
 import { apiClient } from './lib/api';
 import { useAuthStore } from './store/auth';
@@ -180,11 +182,12 @@ const App: React.FC = () => {
               <Route path="blacklist" element={<ProtectedRoute requiredPermission="blacklist:read"><Blacklist /></ProtectedRoute>} />
               <Route path="data-sources" element={<ProtectedRoute requiredPermission="datasource:read"><DataSources /></ProtectedRoute>} />
               <Route path="audit-logs" element={<ProtectedRoute requiredPermission="audit:read"><AuditLogs /></ProtectedRoute>} />
-              <Route path="system-settings" element={<ProtectedRoute requiredPermission="system:manage"><SystemSettings /></ProtectedRoute>} />
-              <Route path="general-settings" element={<ProtectedRoute requiredPermission="system:manage"><GeneralSettings /></ProtectedRoute>} />
-              <Route path="auth-providers" element={<ProtectedRoute requiredPermission="system:manage"><AuthProviders /></ProtectedRoute>} />
-              <Route path="backup" element={<ProtectedRoute requiredPermission="system:manage"><Backup /></ProtectedRoute>} />
-              <Route path="notifications" element={<ProtectedRoute requiredPermission="system:manage"><Notifications /></ProtectedRoute>} />
+              <Route path="system-settings" element={<ProtectedRoute requiredPermission="settings:read"><SystemSettings /></ProtectedRoute>} />
+              <Route path="general-settings" element={<ProtectedRoute requiredPermission="settings:read"><GeneralSettings /></ProtectedRoute>} />
+              <Route path="email-settings" element={<ProtectedRoute requiredPermission="settings:read"><EmailSettings /></ProtectedRoute>} />
+              <Route path="auth-providers" element={<ProtectedRoute requiredPermission="settings:write"><AuthProviders /></ProtectedRoute>} />
+              <Route path="backup" element={<ProtectedRoute requiredPermission="backup:write"><Backup /></ProtectedRoute>} />
+              <Route path="notifications" element={<ProtectedRoute requiredPermission="notification:read"><Notifications /></ProtectedRoute>} />
               <Route path="profile" element={<Profile />} />
               <Route path="users" element={<ProtectedRoute requiredPermission="user:read"><Users /></ProtectedRoute>} />
               <Route path="roles" element={<ProtectedRoute requiredPermission="role:read"><Roles /></ProtectedRoute>} />

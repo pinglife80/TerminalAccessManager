@@ -23,6 +23,7 @@ from app.schemas.system_config import (
     BrandingConfigResponse,
     ConfigUpdateResult,
     ConfigValueType,
+    EmailConfigResponse,
     GeneralConfigResponse,
     NetworkConfigResponse,
     RateLimitConfigResponse,
@@ -167,6 +168,37 @@ class ConfigService:
         {"key": "favicon_url", "value": "", "category": "branding",
          "value_type": "string", "description": "Custom favicon URL (leave empty for default)",
          "is_readonly": False},
+        # Email Configuration
+        {"key": "email_enabled", "value": "false", "category": "email",
+         "value_type": "bool", "description": "Enable email service for notifications and verification codes",
+         "is_readonly": False},
+        {"key": "email_host", "value": "", "category": "email",
+         "value_type": "string", "description": "SMTP server host (e.g. smtp.gmail.com)",
+         "is_readonly": False},
+        {"key": "email_port", "value": "465", "category": "email",
+         "value_type": "int", "description": "SMTP server port (465 for SSL, 587 for TLS)",
+         "is_readonly": False},
+        {"key": "email_use_tls", "value": "false", "category": "email",
+         "value_type": "bool", "description": "Use STARTTLS encryption",
+         "is_readonly": False},
+        {"key": "email_use_ssl", "value": "true", "category": "email",
+         "value_type": "bool", "description": "Use SSL encryption (mutually exclusive with TLS)",
+         "is_readonly": False},
+        {"key": "email_username", "value": "", "category": "email",
+         "value_type": "string", "description": "SMTP authentication username",
+         "is_readonly": False},
+        {"key": "email_password", "value": "", "category": "email",
+         "value_type": "string", "description": "SMTP authentication password (stored encrypted in DB)",
+         "is_readonly": False},
+        {"key": "email_from", "value": "", "category": "email",
+         "value_type": "string", "description": "Sender email address",
+         "is_readonly": False},
+        {"key": "email_from_name", "value": "TAM System", "category": "email",
+         "value_type": "string", "description": "Sender display name",
+         "is_readonly": False},
+        {"key": "email_rate_limit", "value": "10", "category": "email",
+         "value_type": "int", "description": "Maximum emails sent per minute",
+         "is_readonly": False},
     ]
 
     def __init__(self, db: AsyncSession):
@@ -216,6 +248,16 @@ class ConfigService:
             "environment": settings.ENVIRONMENT,
             "debug": settings.DEBUG,
             "log_level": settings.LOG_LEVEL,
+            "email_enabled": bool(settings.EMAIL_HOST),
+            "email_host": settings.EMAIL_HOST or "",
+            "email_port": settings.EMAIL_PORT,
+            "email_use_tls": settings.EMAIL_USE_TLS,
+            "email_use_ssl": settings.EMAIL_USE_SSL,
+            "email_username": settings.EMAIL_USERNAME or "",
+            "email_password": settings.EMAIL_PASSWORD or "",
+            "email_from": settings.EMAIL_FROM or "",
+            "email_from_name": settings.EMAIL_FROM_NAME,
+            "email_rate_limit": settings.EMAIL_RATE_LIMIT_PER_MINUTE,
         }
         return env_mapping.get(key)
 
@@ -441,6 +483,18 @@ class ConfigService:
                 footer_icp_number=_val("footer_icp_number", ""),
                 footer_icp_url=_val("footer_icp_url", "https://beian.miit.gov.cn/"),
             ),
+            email=EmailConfigResponse(
+                email_enabled=_val("email_enabled", False),
+                email_host=_val("email_host", ""),
+                email_port=_val("email_port", 465),
+                email_use_tls=_val("email_use_tls", False),
+                email_use_ssl=_val("email_use_ssl", True),
+                email_username=_val("email_username", ""),
+                email_password=_val("email_password", ""),
+                email_from=_val("email_from", ""),
+                email_from_name=_val("email_from_name", "TAM System"),
+                email_rate_limit=_val("email_rate_limit", 10),
+            ),
         )
 
 
@@ -449,7 +503,7 @@ class ConfigService:
 
 async def get_config_value(key: str, default: Any = None) -> Any:
     """Get a typed config value without needing a DB session.
-    Uses Redis cache first, falls back to .env settings."""
+    Uses Redis cache first, falls back to DB, then .env settings."""
     # Try Redis cache first
     try:
         redis = await _get_redis()
@@ -462,6 +516,30 @@ async def get_config_value(key: str, default: Any = None) -> Any:
             elif isinstance(default, int):
                 return int(raw)
             return raw
+    except Exception:
+        pass
+
+    # Try database
+    from app.core.database import get_db
+    try:
+        async for db in get_db():
+            stmt = select(SystemConfig).where(SystemConfig.key == key)
+            result = await db.execute(stmt)
+            config = result.scalar_one_or_none()
+            if config:
+                # Cache it
+                try:
+                    redis = await _get_redis()
+                    await redis.setex(_cache_key(key), CONFIG_CACHE_TTL, config.value)
+                except Exception:
+                    pass
+                # Parse type
+                raw = config.value
+                if isinstance(default, bool):
+                    return raw.lower() in ("true", "1", "yes")
+                elif isinstance(default, int):
+                    return int(raw)
+                return raw
     except Exception:
         pass
 
@@ -484,5 +562,15 @@ async def get_config_value(key: str, default: Any = None) -> Any:
         "environment": settings.ENVIRONMENT,
         "debug": settings.DEBUG,
         "log_level": settings.LOG_LEVEL,
+        "email_enabled": bool(settings.EMAIL_HOST),
+        "email_host": settings.EMAIL_HOST or "",
+        "email_port": settings.EMAIL_PORT,
+        "email_use_tls": settings.EMAIL_USE_TLS,
+        "email_use_ssl": settings.EMAIL_USE_SSL,
+        "email_username": settings.EMAIL_USERNAME or "",
+        "email_password": settings.EMAIL_PASSWORD or "",
+        "email_from": settings.EMAIL_FROM or "",
+        "email_from_name": settings.EMAIL_FROM_NAME,
+        "email_rate_limit": settings.EMAIL_RATE_LIMIT_PER_MINUTE,
     }
     return env_mapping.get(key, default)
