@@ -72,7 +72,17 @@ def decrypt_config(config: dict[str, Any]) -> dict[str, Any]:
         if isinstance(value, str) and value.startswith("ENC:"):
             decrypted[key] = decrypt_value(value)
         elif isinstance(value, dict):
-            decrypted[key] = decrypt_config(value)  # Recurse for nested dicts
+            decrypted[key] = decrypt_config(value)
         else:
             decrypted[key] = value
     return decrypted
+
+
+def has_encrypted_config(config: dict[str, Any]) -> bool:
+    """Check if any value in config dict is encrypted (starts with ENC:)"""
+    for value in config.values():
+        if isinstance(value, str) and value.startswith("ENC:"):
+            return True
+        elif isinstance(value, dict) and has_encrypted_config(value):
+            return True
+    return False
