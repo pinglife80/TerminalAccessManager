@@ -157,6 +157,14 @@ async def scheduled_ipguard_sync():
                                 logger.error(f"Error re-evaluating compliance after IPGuard sync: {type(re).__name__}: {re} [source=scheduler]")
                         except Exception as e:
                             logger.error(f"Error syncing IPGuard data for {baseline.tag}: {type(e).__name__}: {e} [source=scheduler]")
+                            # Emit datasource sync failed event for notification dispatch.
+                            # fire-and-forget: emit_event logs errors internally and never raises.
+                            from app.services.event_emitter import emit_datasource_sync_failed
+                            await emit_datasource_sync_failed(
+                                source_name=baseline.tag,
+                                source_tag=baseline.tag,
+                                error=f"{type(e).__name__}: {e}",
+                            )
             finally:
                 await _release_task_lock("ipguard_sync")
         except Exception as e:
@@ -231,6 +239,17 @@ async def scheduled_compliance_check():
                                                 logger.info(f"Auto-blocked {block_result.blocked} non-compliant terminals from {source.tag} [source=scheduler]")
                                         except Exception as be:
                                             logger.error(f"Error auto-blocking for {source.tag}: {type(be).__name__}: {be} [source=scheduler]")
+
+                                        # Emit compliance rate alert when non-compliant terminals are found.
+                                        # fire-and-forget: emit_event logs errors internally and never raises.
+                                        from app.services.event_emitter import emit_compliance_alert
+                                        total_checked = result.compliant + result.bypass + result.non_compliant
+                                        rate = (result.compliant / total_checked * 100) if total_checked > 0 else 100.0
+                                        await emit_compliance_alert(
+                                            compliance_rate=rate,
+                                            non_compliant_count=result.non_compliant,
+                                            threshold=0.8,
+                                        )
                         except Exception as e:
                             logger.error(f"Error in compliance check for {source.tag}: {type(e).__name__}: {e} [source=scheduler]")
             finally:
@@ -311,6 +330,23 @@ async def lifespan(app: FastAPI):
             if result.rowcount > 0:
                 logger.info(f"Migrated {result.rowcount} audit log action(s): '{old_action}' → '{new_action}'")
         await db.commit()
+
+    # Initialize global notification service (singleton).
+    # Module-level singleton instead of ContextVar: scheduler tasks spawned here
+    # run in the same event loop but separate task contexts, and ContextVar
+    # values do not propagate into them — which previously caused
+    # emit_event() to silently no-op with "Notification service not initialized".
+    from app.services.event_emitter import set_notification_service
+    from app.services.notification_service import NotificationService
+
+    notification_service = NotificationService(db=None)
+    await notification_service.initialize_channels()
+    await notification_service.start_workers()
+    set_notification_service(notification_service)
+    logger.info(
+        f"Notification service initialized with {len(notification_service._channels)} channel(s)"
+    )
+
     cleanup_task = asyncio.create_task(cleanup_expired_blacklist())
     arp_collection_task = asyncio.create_task(scheduled_arp_collection())
     ipguard_sync_task = asyncio.create_task(scheduled_ipguard_sync())
@@ -322,6 +358,10 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     logger.info("Shutting down Terminal Network Access Manager...")
+
+    # Stop notification workers
+    await notification_service.stop_workers()
+    logger.info("Notification workers stopped")
 
     # Cancel background tasks and wait for them to finish
     for task in [cleanup_task, arp_collection_task, ipguard_sync_task, compliance_check_task, auto_unblock_task]:

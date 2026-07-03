@@ -20,6 +20,7 @@ class ConfigCategory(StrEnum):
     GENERAL = "general"
     LOGGING = "logging"
     BRANDING = "branding"
+    EMAIL = "email"
 
 
 class SystemConfigBase(BaseModel):
@@ -119,6 +120,24 @@ class SchedulerConfigResponse(BaseModel):
     scheduler_auto_unblock_interval: int
 
 
+class EmailConfigResponse(BaseModel):
+    """Email SMTP server configuration values.
+
+    Used by both the password-reset/verification-code flow and the
+    notification email channel. Password is returned masked to avoid
+    leaking credentials to the frontend."""
+    email_enabled: bool
+    email_host: str
+    email_port: int
+    email_use_tls: bool
+    email_use_ssl: bool
+    email_username: str
+    email_password: str
+    email_from: str
+    email_from_name: str
+    email_rate_limit: int
+
+
 class AllConfigsResponse(BaseModel):
     """All config categories combined"""
     security: SecurityConfigResponse
@@ -127,6 +146,7 @@ class AllConfigsResponse(BaseModel):
     scheduler: SchedulerConfigResponse
     general: GeneralConfigResponse
     branding: BrandingConfigResponse
+    email: EmailConfigResponse
 
 
 class ConfigUpdateRequest(BaseModel):

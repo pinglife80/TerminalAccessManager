@@ -5,25 +5,28 @@ Provides a simple interface for emitting events from anywhere in the application
 """
 
 import asyncio
-from contextvars import ContextVar
 from typing import Any
 
 from loguru import logger
 
-# Global notification service reference (set during app startup)
-_notification_service_ctx: ContextVar[Any | None] = ContextVar(
-    "notification_service", default=None
-)
+# Global notification service reference (set during app startup).
+# Module-level singleton instead of ContextVar: ContextVar does not propagate
+# across uvicorn request tasks nor asyncio scheduler tasks spawned in lifespan,
+# which would silently drop events. A module-level singleton is shared by all
+# coroutines in the same process and is safe because NotificationService uses
+# short-lived AsyncSession scopes per operation.
+_notification_service_instance: Any | None = None
 
 
 def set_notification_service(service: Any) -> None:
     """Set the global notification service instance"""
-    _notification_service_ctx.set(service)
+    global _notification_service_instance
+    _notification_service_instance = service
 
 
 def get_notification_service() -> Any | None:
     """Get the global notification service instance"""
-    return _notification_service_ctx.get()
+    return _notification_service_instance
 
 
 async def emit_event(
