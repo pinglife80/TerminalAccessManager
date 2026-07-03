@@ -1,6 +1,6 @@
 # TerminalAccessManager API 文档
 
-> 文档版本：v3.5.1 | 更新日期：2026-07-03
+> 文档版本：v3.6.0 | 更新日期：2026-07-03
 
 > 基于 MAC 地址和 IP 地址的网络终端准入管理平台
 
@@ -2793,6 +2793,138 @@ curl -X POST "https://<HOST_IP>:8443/api/v1/settings/upload?purpose=favicon" \
 
 ---
 
+### 12.9 GET /settings/email-config
+
+获取邮件服务配置。
+
+- **所需权限**：`settings:read`
+
+**成功响应** `200`
+
+```json
+{
+  "smtp_host": "smtp.example.com",
+  "smtp_port": 587,
+  "smtp_user": "notifications@example.com",
+  "smtp_password": "ENC:encrypted_value",
+  "smtp_from_email": "notifications@example.com",
+  "smtp_from_name": "Terminal Access Manager",
+  "smtp_use_tls": true,
+  "smtp_use_ssl": false,
+  "smtp_timeout": 30
+}
+```
+
+> **注意**：密码字段以 `ENC:` 前缀返回加密后的密文，不会明文暴露。
+
+**用例**
+
+```bash
+curl https://<HOST_IP>:8443/api/v1/settings/email-config \
+  -H "Authorization: Bearer <access_token>"
+```
+
+---
+
+### 12.10 PUT /settings/email-config
+
+更新邮件服务配置。
+
+- **所需权限**：`settings:write`
+
+> **审计日志**：配置更新成功时记录 `update_email_config` 操作。
+
+**请求体**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| smtp_host | string | 是 | SMTP 服务器地址 |
+| smtp_port | int | 是 | SMTP 端口（常用 25/465/587） |
+| smtp_user | string | 否 | SMTP 用户名 |
+| smtp_password | string | 否 | SMTP 密码（留空则保持现有密码） |
+| smtp_from_email | string | 是 | 发件人邮箱 |
+| smtp_from_name | string | 否 | 发件人名称 |
+| smtp_use_tls | boolean | 否 | 是否使用 STARTTLS |
+| smtp_use_ssl | boolean | 否 | 是否使用 SSL/TLS |
+| smtp_timeout | int | 否 | 超时时间（秒），默认 30 |
+
+**请求示例**
+
+```json
+{
+  "smtp_host": "smtp.example.com",
+  "smtp_port": 587,
+  "smtp_user": "notifications@example.com",
+  "smtp_password": "new_password",
+  "smtp_from_email": "notifications@example.com",
+  "smtp_from_name": "Terminal Access Manager",
+  "smtp_use_tls": true,
+  "smtp_use_ssl": false,
+  "smtp_timeout": 30
+}
+```
+
+**成功响应** `200`
+
+同获取配置的响应格式。
+
+**错误响应**
+
+| 状态码 | 说明 |
+|--------|------|
+| 400 | 配置验证失败（如端口超出范围） |
+
+---
+
+### 12.11 POST /settings/email-test
+
+测试邮件配置，发送一封测试邮件到指定地址。
+
+- **所需权限**：`settings:write`
+
+**请求体**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| to_email | string | 是 | 收件人邮箱 |
+
+**请求示例**
+
+```json
+{
+  "to_email": "admin@example.com"
+}
+```
+
+**成功响应** `200`
+
+```json
+{
+  "success": true,
+  "message": "测试邮件发送成功"
+}
+```
+
+**错误响应**
+
+```json
+{
+  "success": false,
+  "message": "SMTP 连接失败：Connection refused"
+}
+```
+
+**用例**
+
+```bash
+curl -X POST https://<HOST_IP>:8443/api/v1/settings/email-test \
+  -H "Authorization: Bearer <access_token>" \
+  -H "Content-Type: application/json" \
+  -d '{"to_email": "admin@example.com"}'
+```
+
+---
+
 ## 15. 健康检查 /health
 
 ### 15.1 GET /health
@@ -3080,7 +3212,7 @@ GET /api/v1/notifications/channels
 POST /api/v1/notifications/channels
 ```
 
-**所需权限**: `notification:manage`
+**所需权限**: `notification:write`
 
 **请求体**:
 
@@ -3124,7 +3256,7 @@ GET /api/v1/notifications/channels/{channel_id}
 PUT /api/v1/notifications/channels/{channel_id}
 ```
 
-**所需权限**: `notification:manage`
+**所需权限**: `notification:write`
 
 **请求体**: 同创建请求体（所有字段可选）
 
@@ -3134,7 +3266,7 @@ PUT /api/v1/notifications/channels/{channel_id}
 DELETE /api/v1/notifications/channels/{channel_id}
 ```
 
-**所需权限**: `notification:manage`
+**所需权限**: `notification:write`
 
 **响应**: `204 No Content`
 
@@ -3144,7 +3276,7 @@ DELETE /api/v1/notifications/channels/{channel_id}
 POST /api/v1/notifications/channels/{channel_id}/test
 ```
 
-**所需权限**: `notification:manage`
+**所需权限**: `notification:write`
 
 **响应**:
 
@@ -3244,6 +3376,428 @@ GET /api/v1/notifications/channel-types
   ]
 }
 ```
+
+---
+
+### 14.10 获取通知模板列表
+
+```
+GET /api/v1/notifications/templates
+```
+
+**所需权限**: `notification:read`
+
+**请求参数**:
+
+| 参数 | 位置 | 类型 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| event_type | Query | string | - | 按事件类型过滤 |
+| channel_type | Query | string | - | 按渠道类型过滤 |
+
+**响应**:
+
+```json
+[
+  {
+    "id": 1,
+    "name": "登录通知-邮件模板",
+    "event_type": "login",
+    "channel_type": "email",
+    "subject_template": "[{{ event_name }}] 用户 {{ data.username }} 登录系统",
+    "body_template": "用户 {{ data.username }} 于 {{ timestamp }} 登录系统。\nIP地址：{{ data.ip_address }}\n事件等级：{{ severity }}",
+    "is_default": false,
+    "created_by": "admin",
+    "created_at": "2026-07-03T00:00:00",
+    "updated_at": "2026-07-03T00:00:00"
+  }
+]
+```
+
+**业务规则**:
+- 支持按 event_type 和 channel_type 组合过滤
+- 列表按创建时间倒序排列
+
+---
+
+### 14.11 创建通知模板
+
+```
+POST /api/v1/notifications/templates
+```
+
+**所需权限**: `notification:write`
+
+**请求体**:
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| name | string | 是 | 模板名称（唯一） |
+| event_type | string | 是 | 事件类型 |
+| channel_type | string | 是 | 渠道类型 |
+| subject_template | string | 否 | 标题模板（Jinja2 语法） |
+| body_template | string | 是 | 正文模板（Jinja2 语法） |
+| is_default | boolean | 否 | 是否为默认模板 |
+
+**请求示例**:
+
+```json
+{
+  "name": "登录通知-钉钉模板",
+  "event_type": "login",
+  "channel_type": "dingtalk",
+  "subject_template": "",
+  "body_template": "### 用户登录提醒\n\n**用户名**：{{ data.username }}\n**登录时间**：{{ timestamp }}\n**事件等级**：{{ severity }}",
+  "is_default": false
+}
+```
+
+**响应**: `201 Created`，同模板详情格式
+
+**错误响应**:
+- `400 Bad Request` - 无效的 event_type 或 channel_type
+- `409 Conflict` - 模板名称或 event+channel 组合已存在
+
+**业务规则**:
+- 同一 event_type + channel_type 组合只能有一个 is_default=true 的模板
+- Jinja2 模板语法需合法，保存前不做渲染验证（预览接口单独验证）
+
+---
+
+### 14.12 获取通知模板详情
+
+```
+GET /api/v1/notifications/templates/{template_id}
+```
+
+**所需权限**: `notification:read`
+
+**响应**: 同模板列表返回格式（单条）
+
+**错误响应**:
+- `404 Not Found` - 模板不存在
+
+---
+
+### 14.13 更新通知模板
+
+```
+PUT /api/v1/notifications/templates/{template_id}
+```
+
+**所需权限**: `notification:write`
+
+**请求体**: 同创建请求体（所有字段可选）
+
+**错误响应**:
+- `404 Not Found` - 模板不存在
+- `409 Conflict` - 名称或 event+channel 组合冲突
+
+---
+
+### 14.14 删除通知模板
+
+```
+DELETE /api/v1/notifications/templates/{template_id}
+```
+
+**所需权限**: `notification:write`
+
+**响应**: `204 No Content`
+
+**错误响应**:
+- `404 Not Found` - 模板不存在
+
+---
+
+### 14.15 预览模板渲染
+
+```
+POST /api/v1/notifications/templates/preview
+```
+
+**所需权限**: `notification:read`
+
+**请求体**:
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| event_type | string | 是 | 事件类型 |
+| subject_template | string | 否 | 标题模板 |
+| body_template | string | 是 | 正文模板 |
+| sample_data | object | 否 | 示例数据（用于渲染） |
+
+**请求示例**:
+
+```json
+{
+  "event_type": "login",
+  "subject_template": "[{{ event_name }}] 用户登录",
+  "body_template": "用户 {{ data.username }} 于 {{ timestamp }} 登录",
+  "sample_data": {
+    "username": "testuser",
+    "ip_address": "192.168.1.100"
+  }
+}
+```
+
+**响应**:
+
+```json
+{
+  "subject": "[用户登录] 用户登录",
+  "body": "用户 testuser 于 2026-07-03 12:00:00 登录"
+}
+```
+
+**错误响应**:
+- `400 Bad Request` - 模板语法错误或渲染错误
+
+**业务规则**:
+- 预览使用模拟事件数据，不会实际发送消息
+- 可用 Jinja2 变量：event_type, event_name, description, severity, source, timestamp, data
+
+---
+
+### 14.16 获取通知规则列表
+
+```
+GET /api/v1/notifications/rules
+```
+
+**所需权限**: `notification:read`
+
+**请求参数**:
+
+| 参数 | 位置 | 类型 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| event_type | Query | string | - | 按事件类型过滤 |
+| enabled | Query | boolean | - | 按启用状态过滤 |
+
+**响应**:
+
+```json
+[
+  {
+    "id": 1,
+    "name": "登录事件抑制",
+    "event_type": "login",
+    "channel_name": null,
+    "enabled": true,
+    "suppress_window": 300,
+    "aggregate_window": 0,
+    "escalate_threshold": 0,
+    "escalate_severity": "warning",
+    "created_by": "admin",
+    "created_at": "2026-07-03T00:00:00",
+    "updated_at": "2026-07-03T00:00:00"
+  }
+]
+```
+
+**业务规则**:
+- channel_name 为 null 表示适用于所有渠道
+- suppress_window 为 0 表示禁用抑制
+- escalate_threshold 为 0 表示禁用升级
+
+---
+
+### 14.17 创建通知规则
+
+```
+POST /api/v1/notifications/rules
+```
+
+**所需权限**: `notification:write`
+
+**请求体**:
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| name | string | 是 | 规则名称（唯一） |
+| event_type | string | 是 | 事件类型 |
+| channel_name | string | 否 | 渠道名称（null 表示所有渠道） |
+| enabled | boolean | 否 | 是否启用，默认 true |
+| suppress_window | int | 否 | 抑制窗口（秒），1-86400，0 表示禁用 |
+| aggregate_window | int | 否 | 聚合窗口（秒），预留 |
+| escalate_threshold | int | 否 | 升级阈值，1-1000，0 表示禁用 |
+| escalate_severity | string | 否 | 升级后的 severity（info/warning/critical） |
+
+**请求示例**:
+
+```json
+{
+  "name": "登录失败升级",
+  "event_type": "login_failed",
+  "channel_name": "邮件通知",
+  "enabled": true,
+  "suppress_window": 60,
+  "aggregate_window": 300,
+  "escalate_threshold": 5,
+  "escalate_severity": "critical"
+}
+```
+
+**响应**: `201 Created`，同规则详情格式
+
+**错误响应**:
+- `400 Bad Request` - 参数验证失败
+- `409 Conflict` - 规则名称或 event+channel 组合已存在
+
+**业务规则**:
+- 同一 event_type + channel_name（含 NULL）组合唯一
+- 使用 PostgreSQL 部分唯一索引约束 NULL channel_name 的唯一性
+- 升级后的通知自动绕过抑制规则（bypass_suppression）
+
+---
+
+### 14.18 获取通知规则详情
+
+```
+GET /api/v1/notifications/rules/{rule_id}
+```
+
+**所需权限**: `notification:read`
+
+**响应**: 同规则列表返回格式（单条）
+
+**错误响应**:
+- `404 Not Found` - 规则不存在
+
+---
+
+### 14.19 更新通知规则
+
+```
+PUT /api/v1/notifications/rules/{rule_id}
+```
+
+**所需权限**: `notification:write`
+
+**请求体**: 同创建请求体（所有字段可选）
+
+**错误响应**:
+- `404 Not Found` - 规则不存在
+- `409 Conflict` - 名称或 event+channel 组合冲突
+
+---
+
+### 14.20 删除通知规则
+
+```
+DELETE /api/v1/notifications/rules/{rule_id}
+```
+
+**所需权限**: `notification:write`
+
+**响应**: `204 No Content`
+
+**错误响应**:
+- `404 Not Found` - 规则不存在
+
+**业务规则**:
+- 删除规则后，相关的 Redis 抑制/聚合/升级计数键会随 TTL 自然过期
+
+---
+
+### 14.21 获取通知统计概览
+
+```
+GET /api/v1/notifications/stats
+```
+
+**所需权限**: `notification:read`
+
+**响应**:
+
+```json
+{
+  "overview": {
+    "total": 1000,
+    "success": 950,
+    "failed": 30,
+    "pending_retry": 20,
+    "success_rate": 95.0,
+    "avg_latency_ms": 150,
+    "channel_count": 5,
+    "rule_count": 8
+  },
+  "channel_stats": [
+    {
+      "channel_name": "邮件通知",
+      "total": 500,
+      "success": 480,
+      "failed": 15,
+      "pending_retry": 5,
+      "success_rate": 96.0,
+      "avg_latency_ms": 200
+    }
+  ],
+  "event_stats": [
+    {
+      "event_type": "login",
+      "total": 200,
+      "success": 198,
+      "failed": 2,
+      "success_rate": 99.0
+    }
+  ]
+}
+```
+
+**业务规则**:
+- 统计数据基于 notification_logs 表实时聚合查询
+- avg_latency_ms 为成功发送的平均耗时
+- pending_retry 为 status=pending_retry 的记录数
+
+---
+
+### 14.22 重试单条失败通知
+
+```
+POST /api/v1/notifications/logs/{log_id}/retry
+```
+
+**所需权限**: `notification:write`
+
+**响应**:
+
+```json
+{
+  "success": true,
+  "message": "已加入重试队列"
+}
+```
+
+**错误响应**:
+- `404 Not Found` - 日志不存在
+
+**业务规则**:
+- 将指定日志重新加入异步发送队列
+- 重置 retry_count 为 0，立即发送
+
+---
+
+### 14.23 批量重试所有失败通知
+
+```
+POST /api/v1/notifications/logs/retry-all
+```
+
+**所需权限**: `notification:write`
+
+**响应**:
+
+```json
+{
+  "success": true,
+  "message": "已将 12 条失败通知加入重试队列",
+  "retried_count": 12
+}
+```
+
+**业务规则**:
+- 将所有 status=failed 的通知加入重试队列
+- 每条通知独立重置重试计数
 
 ---
 
@@ -3509,7 +4063,7 @@ POST /api/v1/backup/test
 
 ## 17. 权限码参考
 
-系统共定义34个权限码，按12个功能模块分组：
+系统共定义35个权限码，按12个功能模块分组：
 
 | 模块 | 权限码 | 名称 |
 |------|--------|------|
@@ -3543,6 +4097,7 @@ POST /api/v1/backup/test
 | role | `role:write` | 管理角色 |
 | role | `role:delete` | 删除角色 |
 | notification | `notification:read` | 查看通知 |
-| notification | `notification:manage` | 管理通知 |
-| auth | `auth.manage` | 管理认证提供者 |
-| system | `system.manage` | 系统管理（备份/恢复） |
+| notification | `notification:write` | 管理通知 |
+| backup | `backup:write` | 管理备份 |
+| auth | `settings:write` | 管理认证提供者（使用 settings:write） |
+| system | `system:manage` | 系统管理（超管） |

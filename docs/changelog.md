@@ -1,6 +1,6 @@
 # 更新日志
 
-> 文档版本：v3.5.1  更新日期：2026-07-03
+> 文档版本：v3.6.0  更新日期：2026-07-03
 
 本文件记录 TerminalAccessManager 的所有重要变更。
 
@@ -10,6 +10,40 @@
 ---
 
 ## [Unreleased]
+
+---
+
+## [3.6.0] - 2026-07-03
+
+### 新增
+
+- **消息模板系统（P1）**：支持基于 Jinja2 模板引擎的消息自定义，每个事件-渠道组合可配置独立模板，提供模板预览功能
+- **国内 IM 应用模式（P1）**：飞书、钉钉、企业微信支持 Webhook 模式和应用模式双模式切换，应用模式接入 token 缓存（7000s TTL）到 Redis
+- **系统邮件配置页面（P1）**：独立的 SMTP 邮件配置页面，支持配置测试与保存，邮件配置加密存储
+- **通知规则系统（P2）**：支持消息抑制（同一事件窗口内去重）、消息聚合（计数统计）、消息升级（达到阈值后 severity 升级），升级通知自动绕过抑制规则
+- **通知规则管理页面（P2）**：规则列表/过滤/创建/编辑/删除，含规则配置帮助侧栏
+- **通知模板管理页面（P1）**：模板列表/过滤/创建/编辑/删除/预览，含 Jinja2 变量参考侧栏
+- **异步通知队列（P3）**：基于 Redis List 的异步任务队列，事件发布采用 fire-and-forget 模式，不阻塞请求
+- **重试机制（P3）**：失败通知自动指数退避重试（默认 3 次，首重试 10s），使用 Redis ZSet 管理重试调度
+- **监控统计面板（P3）**：8 个核心统计卡片（总发送、成功数、失败数、成功率、待重试、平均延迟、渠道数、规则数），各渠道成功率进度条，30 秒自动刷新
+- **手动重试功能（P3）**：支持单条失败通知重发和批量重发所有失败通知
+- **3 个新数据库迁移**：017_notification_templates、018_notification_rules、019_notification_async_retry
+
+### 修复
+
+- **通知统计接口 500 错误**：修复 `notification_service.py` 中 `Integer` 未导入导致的 `NameError`
+- **通知模块权限码不一致**：将 `notification:manage`（9 处）修正为 `notification:write`，与数据库权限定义一致
+- **备份模块权限码格式错误**：将 `system.manage`（6 处，点号格式）修正为 `backup:write`，使用正确的冒号格式并细化到备份模块
+- **认证提供者模块权限码缺失**：将 `auth.manage`（4 处）修正为 `settings:write`，使用系统已有权限码
+- **Nginx 重复 Cache-Control 头**：移除 `expires -1` 指令，消除与 `add_header Cache-Control` 的冲突，确保 index.html 正确禁用缓存
+- **前端邮件设置入口缺失**：在侧边栏导航中添加邮件设置入口，完善图标映射和国际化标签
+
+### 优化
+
+- **通知服务架构优化**：采用 request-scoped + singleton 双模式设计，API 端点与后台 worker 复用同一服务类
+- **PostgreSQL 部分唯一索引**：notification_rules 表使用部分唯一索引解决 NULL channel_name 唯一性约束问题
+- **升级通知绕过抑制**：escalated 事件自动设置 `bypass_suppression` 标志，确保升级后的 severity 总能送达
+- **前端国际化完善**：补全 emailSettings、notificationTemplates、notificationRules、notificationMonitor 四个命名空间的中/英翻译（各 45+ 键）
 
 ---
 
