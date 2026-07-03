@@ -19,6 +19,7 @@ import {
   Key,
   HardDrive,
   Bell,
+  Mail,
   X,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -41,6 +42,7 @@ const iconMap: Record<string, React.ComponentType<{ className?: string }>> = {
   Key,
   HardDrive,
   Bell,
+  Mail,
 };
 
 // Map NAV_ITEMS label to i18n key
@@ -56,6 +58,7 @@ const navLabelKeyMap: Record<string, string> = {
   'Auth Providers': 'nav.authProviders',
   'Backup': 'nav.backup',
   'Notifications': 'nav.notifications',
+  'Email': 'nav.email',
   'Users': 'nav.users',
   'Roles': 'nav.roles',
 };

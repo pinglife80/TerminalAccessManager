@@ -7,6 +7,7 @@ import { getErrorMessage, formatDateTime } from '@/lib/utils';
 import {
   Bell, Plus, Edit2, Trash2, CheckCircle, AlertCircle, TestTube, Save, X,
   Mail, Link2, MessageCircle, FileText, ChevronDown, Send, XCircle,
+  LayoutTemplate, Shield, BarChart3,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { PrimaryButton } from '@/components/Button';
@@ -20,6 +21,9 @@ import {
 import {
   CHANNEL_CONFIG_FIELDS,
 } from '@/components/notifications/shared';
+import NotificationTemplates from '@/components/notifications/NotificationTemplates';
+import NotificationRules from '@/components/notifications/NotificationRules';
+import NotificationMonitor from '@/components/notifications/NotificationMonitor';
 import {
   buildConfigPayload,
   populateConfigFromItem,
@@ -95,7 +99,7 @@ const Notifications: React.FC = () => {
   const [testResult, setTestResult] = useState<{ id: number; success: boolean; message: string } | null>(null);
   const [testLoading, setTestLoading] = useState<number | null>(null);
   const [eventTypes, setEventTypes] = useState<EventMeta[]>([]);
-  const [activeTab, setActiveTab] = useState<'channels' | 'logs'>('channels');
+  const [activeTab, setActiveTab] = useState<'channels' | 'logs' | 'templates' | 'rules' | 'monitor'>('channels');
   const [expandedCats, setExpandedCats] = useState<Record<string, boolean>>({});
   const [configValues, setConfigValues] = useState<Record<string, string>>({});
   const [savingChannel, setSavingChannel] = useState(false);
@@ -197,6 +201,14 @@ const Notifications: React.FC = () => {
     setSavingChannel(true);
     try {
       const config = buildConfigPayload(currentConfigFields, configValues);
+      // 'mode' is a UI-only field used to toggle between webhook/app form
+      // sections; the backend infers the mode from which credentials are
+      // present, so strip it before sending.
+      delete config.mode;
+      // For DingTalk, convert to_all_user string to boolean
+      if ('to_all_user' in config) {
+        config.to_all_user = config.to_all_user === 'true';
+      }
       const payload = {
         name: data.name,
         type: data.channel_type,
@@ -270,7 +282,24 @@ const Notifications: React.FC = () => {
         events: channel.events || [],
       });
       const fields = CHANNEL_CONFIG_FIELDS[channel.type] || [];
-      setConfigValues(populateConfigFromItem(fields, channel.config as Record<string, string | number | boolean | object | null>));
+      const rawConfig = channel.config as Record<string, string | number | boolean | object | null>;
+      const vals = populateConfigFromItem(fields, rawConfig);
+      // Detect mode from existing config so the correct fields render when
+      // editing an IM channel. The backend stores either webhook_url or
+      // app credentials, so we infer which mode was configured.
+      const cfg = rawConfig as Record<string, unknown>;
+      if (fields.length > 0 && fields[0].key === 'mode') {
+        if (cfg.app_id || cfg.app_key || cfg.corp_id) {
+          vals.mode = 'app';
+        } else {
+          vals.mode = 'webhook';
+        }
+      }
+      // Convert boolean to_all_user back to string for the select input
+      if (typeof cfg.to_all_user === 'boolean') {
+        vals.to_all_user = cfg.to_all_user ? 'true' : 'false';
+      }
+      setConfigValues(vals);
     } else {
       setEditingChannel(null);
       reset();
@@ -394,6 +423,39 @@ const Notifications: React.FC = () => {
             >
               <FileText className="h-4 w-4" />
               {t('notifications.sendLogs')}
+            </button>
+            <button
+              onClick={() => setActiveTab('templates')}
+              className={`flex items-center gap-2 py-3 px-1 border-b-2 text-sm font-medium transition-colors ${
+                activeTab === 'templates'
+                  ? 'border-primary-500 text-primary-600'
+                  : 'border-transparent text-muted-foreground hover:text-foreground hover:border-border'
+              }`}
+            >
+              <LayoutTemplate className="h-4 w-4" />
+              {t('notificationTemplates.title')}
+            </button>
+            <button
+              onClick={() => setActiveTab('rules')}
+              className={`flex items-center gap-2 py-3 px-1 border-b-2 text-sm font-medium transition-colors ${
+                activeTab === 'rules'
+                  ? 'border-primary-500 text-primary-600'
+                  : 'border-transparent text-muted-foreground hover:text-foreground hover:border-border'
+              }`}
+            >
+              <Shield className="h-4 w-4" />
+              {t('notificationRules.title')}
+            </button>
+            <button
+              onClick={() => setActiveTab('monitor')}
+              className={`flex items-center gap-2 py-3 px-1 border-b-2 text-sm font-medium transition-colors ${
+                activeTab === 'monitor'
+                  ? 'border-primary-500 text-primary-600'
+                  : 'border-transparent text-muted-foreground hover:text-foreground hover:border-border'
+              }`}
+            >
+              <BarChart3 className="h-4 w-4" />
+              {t('notificationMonitor.title')}
             </button>
           </nav>
         </div>
@@ -667,6 +729,21 @@ const Notifications: React.FC = () => {
           </div>
         )}
 
+        {/* === Templates Tab === */}
+        {activeTab === 'templates' && (
+          <NotificationTemplates eventTypes={eventTypes} channelTypes={channelTypes} />
+        )}
+
+        {/* === Rules Tab === */}
+        {activeTab === 'rules' && (
+          <NotificationRules eventTypes={eventTypes} channels={channels} />
+        )}
+
+        {/* === Monitor Tab === */}
+        {activeTab === 'monitor' && (
+          <NotificationMonitor />
+        )}
+
         {/* Modal */}
         {showModal && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
@@ -791,8 +868,15 @@ const Notifications: React.FC = () => {
                       {channelTypes.find((c) => c.type === channelType)?.name || channelType} {t('notifications.botSettings')}
                     </h3>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      {currentConfigFields.map((field) => (
-                        <div key={field.key}>
+                      {currentConfigFields
+                        .filter((field) => {
+                          if (!field.showWhen) return true;
+                          return Object.entries(field.showWhen).every(
+                            ([key, val]) => (configValues[key] ?? '') === val,
+                          );
+                        })
+                        .map((field) => (
+                        <div key={field.key} className={field.key === 'mode' ? 'md:col-span-2' : ''}>
                           <label className="block text-sm font-medium text-muted-foreground mb-1">{field.label}</label>
                           {field.type === 'select' ? (
                             <select
