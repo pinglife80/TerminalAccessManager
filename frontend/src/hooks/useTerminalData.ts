@@ -312,6 +312,19 @@ export interface BrandingConfig {
   footer_icp_url: string;
 }
 
+export interface EmailConfig {
+  email_enabled: boolean;
+  email_host: string;
+  email_port: number;
+  email_use_tls: boolean;
+  email_use_ssl: boolean;
+  email_username: string;
+  email_password: string;
+  email_from: string;
+  email_from_name: string;
+  email_rate_limit: number;
+}
+
 export interface AllConfigs {
   security: SecurityConfig;
   rate_limit: RateLimitConfig;
@@ -319,6 +332,7 @@ export interface AllConfigs {
   scheduler: SchedulerConfig;
   general: GeneralConfig;
   branding: BrandingConfig;
+  email: EmailConfig;
 }
 
 export interface ConfigEntry {
