@@ -6,22 +6,37 @@ Provides REST API for managing notification channels and viewing notification lo
 
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.security import get_current_user, require_permission
+from app.models.notification import NotificationRule, NotificationTemplate
 from app.models.user import User
 from app.schemas.notification import (
     ChannelMetadata,
     ChannelMetadataListResponse,
+    ChannelStat,
     ChannelTestResultResponse,
     EventListResponse,
     EventMetadata,
+    EventStat,
     NotificationChannelCreate,
     NotificationChannelResponse,
     NotificationChannelUpdate,
     NotificationLogListResponse,
     NotificationLogResponse,
+    NotificationRuleCreate,
+    NotificationRuleResponse,
+    NotificationRuleUpdate,
+    NotificationStatsOverview,
+    NotificationStatsResponse,
+    NotificationTemplateCreate,
+    NotificationTemplatePreviewRequest,
+    NotificationTemplatePreviewResponse,
+    NotificationTemplateResponse,
+    NotificationTemplateUpdate,
 )
 from app.services.notification_channels.event_types import CHANNEL_METADATA, EVENT_METADATA
 from app.services.notification_service import NotificationService
@@ -48,7 +63,7 @@ async def list_channels(
 async def create_channel(
     channel_data: NotificationChannelCreate,
     notification_service: NotificationService = Depends(get_notification_service),
-    current_user: User = Depends(require_permission("notification:manage")),
+    current_user: User = Depends(require_permission("notification:write")),
 ):
     """Create a new notification channel"""
     channel = await notification_service.create_channel(
@@ -81,7 +96,7 @@ async def update_channel(
     channel_id: int,
     channel_data: NotificationChannelUpdate,
     notification_service: NotificationService = Depends(get_notification_service),
-    current_user: User = Depends(require_permission("notification:manage")),
+    current_user: User = Depends(require_permission("notification:write")),
 ):
     """Update a notification channel"""
     channel = await notification_service.update_channel(
@@ -101,7 +116,7 @@ async def update_channel(
 async def delete_channel(
     channel_id: int,
     notification_service: NotificationService = Depends(get_notification_service),
-    current_user: User = Depends(require_permission("notification:manage")),
+    current_user: User = Depends(require_permission("notification:write")),
 ):
     """Delete a notification channel"""
     deleted = await notification_service.delete_channel(channel_id)
@@ -113,7 +128,7 @@ async def delete_channel(
 async def test_channel(
     channel_id: int,
     notification_service: NotificationService = Depends(get_notification_service),
-    current_user: User = Depends(require_permission("notification:manage")),
+    current_user: User = Depends(require_permission("notification:write")),
 ):
     """Test a notification channel connection"""
     result = await notification_service.test_channel(channel_id)
@@ -179,3 +194,348 @@ async def list_channel_types(
         for channel_type, metadata in CHANNEL_METADATA.items()
     ]
     return ChannelMetadataListResponse(channels=channels)
+
+
+# ==================== Notification Templates ====================
+
+
+@router.get("/templates", response_model=list[NotificationTemplateResponse])
+async def list_templates(
+    event_type: str | None = Query(None, description="Filter by event type"),
+    channel_type: str | None = Query(None, description="Filter by channel type"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permission("notification:read")),
+):
+    """List all notification templates with optional filtering"""
+    stmt = select(NotificationTemplate).order_by(NotificationTemplate.created_at.desc())
+    if event_type:
+        stmt = stmt.where(NotificationTemplate.event_type == event_type)
+    if channel_type:
+        stmt = stmt.where(NotificationTemplate.channel_type == channel_type)
+    result = await db.execute(stmt)
+    templates = result.scalars().all()
+    return [NotificationTemplateResponse.model_validate(t) for t in templates]
+
+
+@router.post("/templates", response_model=NotificationTemplateResponse, status_code=status.HTTP_201_CREATED)
+async def create_template(
+    template_data: NotificationTemplateCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permission("notification:write")),
+):
+    """Create a new notification template"""
+    # Validate event_type
+    if template_data.event_type not in EVENT_METADATA:
+        raise HTTPException(status_code=400, detail=f"Invalid event_type: {template_data.event_type}")
+    # Validate channel_type
+    valid_channels = {ct.value for ct in CHANNEL_METADATA}
+    if template_data.channel_type not in valid_channels:
+        raise HTTPException(status_code=400, detail=f"Invalid channel_type: {template_data.channel_type}")
+
+    template = NotificationTemplate(
+        name=template_data.name,
+        event_type=template_data.event_type,
+        channel_type=template_data.channel_type,
+        subject_template=template_data.subject_template,
+        body_template=template_data.body_template,
+        is_default=template_data.is_default,
+        created_by=current_user.username,
+    )
+    db.add(template)
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail="Template name or event+channel combination already exists")
+    await db.refresh(template)
+    return NotificationTemplateResponse.model_validate(template)
+
+
+@router.get("/templates/{template_id}", response_model=NotificationTemplateResponse)
+async def get_template(
+    template_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permission("notification:read")),
+):
+    """Get a specific notification template by ID"""
+    result = await db.execute(
+        select(NotificationTemplate).where(NotificationTemplate.id == template_id)
+    )
+    template = result.scalar_one_or_none()
+    if not template:
+        raise HTTPException(status_code=404, detail="Template not found")
+    return NotificationTemplateResponse.model_validate(template)
+
+
+@router.put("/templates/{template_id}", response_model=NotificationTemplateResponse)
+async def update_template(
+    template_id: int,
+    template_data: NotificationTemplateUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permission("notification:write")),
+):
+    """Update a notification template"""
+    result = await db.execute(
+        select(NotificationTemplate).where(NotificationTemplate.id == template_id)
+    )
+    template = result.scalar_one_or_none()
+    if not template:
+        raise HTTPException(status_code=404, detail="Template not found")
+
+    update_fields = template_data.model_dump(exclude_unset=True)
+    for key, value in update_fields.items():
+        setattr(template, key, value)
+
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail="Template name or event+channel combination already exists")
+    await db.refresh(template)
+    return NotificationTemplateResponse.model_validate(template)
+
+
+@router.delete("/templates/{template_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_template(
+    template_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permission("notification:write")),
+):
+    """Delete a notification template"""
+    result = await db.execute(
+        select(NotificationTemplate).where(NotificationTemplate.id == template_id)
+    )
+    template = result.scalar_one_or_none()
+    if not template:
+        raise HTTPException(status_code=404, detail="Template not found")
+    await db.delete(template)
+    await db.commit()
+
+
+@router.post("/templates/preview", response_model=NotificationTemplatePreviewResponse)
+async def preview_template(
+    preview_data: NotificationTemplatePreviewRequest,
+    current_user: User = Depends(require_permission("notification:read")),
+):
+    """Preview a template rendering with sample data.
+
+    Renders the provided Jinja2 templates with sample event data so the
+    admin can see what the final message will look like before saving.
+    """
+    import jinja2
+
+    # Validate event_type
+    if preview_data.event_type not in EVENT_METADATA:
+        raise HTTPException(status_code=400, detail=f"Invalid event_type: {preview_data.event_type}")
+
+    metadata = EVENT_METADATA[preview_data.event_type]
+    from datetime import datetime
+
+    context = {
+        "event_type": preview_data.event_type,
+        "event_name": metadata.get("name", preview_data.event_type),
+        "description": metadata.get("description", ""),
+        "severity": metadata.get("severity", "info"),
+        "source": "preview",
+        "timestamp": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+        "data": preview_data.sample_data,
+    }
+
+    env = jinja2.Environment(autoescape=False, trim_blocks=True, lstrip_blocks=True)
+
+    try:
+        subject = ""
+        if preview_data.subject_template:
+            subject = env.from_string(preview_data.subject_template).render(**context)
+        body = env.from_string(preview_data.body_template).render(**context)
+    except jinja2.TemplateSyntaxError as e:
+        raise HTTPException(status_code=400, detail=f"Template syntax error: {e}")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Template render error: {e}")
+
+    return NotificationTemplatePreviewResponse(subject=subject, body=body)
+
+
+# ==================== Notification Rules ====================
+
+
+@router.get("/rules", response_model=list[NotificationRuleResponse])
+async def list_rules(
+    event_type: str | None = Query(None, description="Filter by event type"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permission("notification:read")),
+):
+    """List all notification rules with optional filtering"""
+    stmt = select(NotificationRule).order_by(NotificationRule.created_at.desc())
+    if event_type:
+        stmt = stmt.where(NotificationRule.event_type == event_type)
+    result = await db.execute(stmt)
+    rules = result.scalars().all()
+    return [NotificationRuleResponse.model_validate(r) for r in rules]
+
+
+@router.post("/rules", response_model=NotificationRuleResponse, status_code=status.HTTP_201_CREATED)
+async def create_rule(
+    rule_data: NotificationRuleCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permission("notification:write")),
+):
+    """Create a new notification rule"""
+    # Validate event_type
+    if rule_data.event_type not in EVENT_METADATA:
+        raise HTTPException(status_code=400, detail=f"Invalid event_type: {rule_data.event_type}")
+
+    # Validate escalate_severity
+    valid_severities = {"info", "warning", "error", "critical"}
+    if rule_data.escalate_severity not in valid_severities:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid escalate_severity: {rule_data.escalate_severity}. Must be one of: {', '.join(sorted(valid_severities))}",
+        )
+
+    rule = NotificationRule(
+        name=rule_data.name,
+        event_type=rule_data.event_type,
+        channel_name=rule_data.channel_name,
+        enabled=rule_data.enabled,
+        description=rule_data.description,
+        suppress_enabled=rule_data.suppress_enabled,
+        suppress_window=rule_data.suppress_window,
+        escalate_enabled=rule_data.escalate_enabled,
+        escalate_threshold=rule_data.escalate_threshold,
+        escalate_window=rule_data.escalate_window,
+        escalate_severity=rule_data.escalate_severity,
+        created_by=current_user.username,
+    )
+    db.add(rule)
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="Rule name already exists, or a rule for this event+channel combination already exists",
+        )
+    await db.refresh(rule)
+    return NotificationRuleResponse.model_validate(rule)
+
+
+@router.get("/rules/{rule_id}", response_model=NotificationRuleResponse)
+async def get_rule(
+    rule_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permission("notification:read")),
+):
+    """Get a specific notification rule by ID"""
+    result = await db.execute(
+        select(NotificationRule).where(NotificationRule.id == rule_id)
+    )
+    rule = result.scalar_one_or_none()
+    if not rule:
+        raise HTTPException(status_code=404, detail="Rule not found")
+    return NotificationRuleResponse.model_validate(rule)
+
+
+@router.put("/rules/{rule_id}", response_model=NotificationRuleResponse)
+async def update_rule(
+    rule_id: int,
+    rule_data: NotificationRuleUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permission("notification:write")),
+):
+    """Update a notification rule"""
+    result = await db.execute(
+        select(NotificationRule).where(NotificationRule.id == rule_id)
+    )
+    rule = result.scalar_one_or_none()
+    if not rule:
+        raise HTTPException(status_code=404, detail="Rule not found")
+
+    # Validate event_type if being updated
+    new_event_type = rule_data.event_type or rule.event_type
+    if new_event_type not in EVENT_METADATA:
+        raise HTTPException(status_code=400, detail=f"Invalid event_type: {new_event_type}")
+
+    # Validate escalate_severity if being updated
+    new_severity = rule_data.escalate_severity or rule.escalate_severity
+    valid_severities = {"info", "warning", "error", "critical"}
+    if new_severity not in valid_severities:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid escalate_severity: {new_severity}. Must be one of: {', '.join(sorted(valid_severities))}",
+        )
+
+    update_fields = rule_data.model_dump(exclude_unset=True)
+    for key, value in update_fields.items():
+        setattr(rule, key, value)
+
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="Rule name already exists, or a rule for this event+channel combination already exists",
+        )
+    await db.refresh(rule)
+    return NotificationRuleResponse.model_validate(rule)
+
+
+@router.delete("/rules/{rule_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_rule(
+    rule_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permission("notification:write")),
+):
+    """Delete a notification rule"""
+    result = await db.execute(
+        select(NotificationRule).where(NotificationRule.id == rule_id)
+    )
+    rule = result.scalar_one_or_none()
+    if not rule:
+        raise HTTPException(status_code=404, detail="Rule not found")
+    await db.delete(rule)
+    await db.commit()
+
+
+# ==================== Statistics & Monitoring ====================
+
+
+@router.get("/stats", response_model=NotificationStatsResponse)
+async def get_notification_stats(
+    notification_service: NotificationService = Depends(get_notification_service),
+    current_user: User = Depends(require_permission("notification:read")),
+):
+    """Get notification statistics overview with breakdowns"""
+    stats = await notification_service.get_statistics()
+    return NotificationStatsResponse(
+        overview=NotificationStatsOverview(**stats["overview"]),
+        by_channel=[ChannelStat(**c) for c in stats["by_channel"]],
+        by_event=[EventStat(**e) for e in stats["by_event"]],
+    )
+
+
+@router.post("/logs/{log_id}/retry", status_code=status.HTTP_202_ACCEPTED)
+async def retry_notification(
+    log_id: int,
+    notification_service: NotificationService = Depends(get_notification_service),
+    current_user: User = Depends(require_permission("notification:write")),
+):
+    """Manually retry a failed notification by log ID"""
+    success = await notification_service.retry_failed_notification(log_id)
+    if not success:
+        raise HTTPException(
+            status_code=404,
+            detail="Notification log not found or not in retryable state (failed/retrying)",
+        )
+    return {"message": "Notification queued for retry", "log_id": log_id}
+
+
+@router.post("/logs/retry-all", status_code=status.HTTP_202_ACCEPTED)
+async def retry_all_failed_notifications(
+    notification_service: NotificationService = Depends(get_notification_service),
+    current_user: User = Depends(require_permission("notification:write")),
+):
+    """Retry all currently failed notifications"""
+    count = await notification_service.retry_all_failed()
+    return {"message": f"Queued {count} notification(s) for retry", "count": count}
