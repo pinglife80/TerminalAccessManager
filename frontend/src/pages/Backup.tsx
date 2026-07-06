@@ -41,7 +41,24 @@ interface BackupJob {
 const STORAGE_TYPES = [
   { value: 'local', label: 'local' },
   { value: 'sftp', label: 'sftp' },
+  { value: 'ftp', label: 'ftp' },
 ];
+
+const SCHEDULE_PRESETS = [
+  { label: '每天凌晨2点', value: '0 2 * * *' },
+  { label: '每天凌晨3点', value: '0 3 * * *' },
+  { label: '每天凌晨4点', value: '0 4 * * *' },
+  { label: '每周日凌晨2点', value: '0 2 * * 0' },
+  { label: '每周六凌晨2点', value: '0 2 * * 6' },
+  { label: '每月1号凌晨2点', value: '0 2 1 * *' },
+  { label: '自定义', value: 'custom' },
+];
+
+const CRON_REGEX = /^(\*|[0-5]?\d)\s+(\*|[01]?\d|2[0-3])\s+(\*|[1-9]|[12]\d|3[01])\s+(\*|[1-9]|1[0-2])\s+(\*|[0-6])$/;
+
+const validateCron = (value: string): boolean => {
+  return CRON_REGEX.test(value.trim());
+};
 
 const Backup: React.FC = () => {
   const { t } = useTranslation();
@@ -51,8 +68,10 @@ const Backup: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [testLoading, setTestLoading] = useState(false);
+  const [selectedPreset, setSelectedPreset] = useState<string>('0 2 * * *');
+  const [customCronError, setCustomCronError] = useState<string>('');
 
-  const { register, handleSubmit, reset, watch } = useForm<BackupConfig>({
+  const { register, handleSubmit, reset, watch, setValue } = useForm<BackupConfig>({
     defaultValues: {
       enabled: false,
       schedule: '0 2 * * *',
@@ -78,6 +97,9 @@ const Backup: React.FC = () => {
       const response = await apiClient.get(API_ENDPOINTS.BACKUP_CONFIG);
       setConfig(response.data);
       reset(response.data);
+      const schedule = response.data.schedule || '0 2 * * *';
+      const preset = SCHEDULE_PRESETS.find(p => p.value === schedule);
+      setSelectedPreset(preset ? schedule : 'custom');
     } catch (err: unknown) {
       toast.error(getErrorMessage(err, t('backup.failedToLoadConfig')));
     }
@@ -236,12 +258,46 @@ const Backup: React.FC = () => {
                   <label className="block text-sm font-medium text-muted-foreground mb-1">
                     {t('backup.schedule')}
                   </label>
-                  <input
-                    {...register('schedule')}
+                  <select
+                    value={selectedPreset}
                     className="w-full px-4 py-2.5 border border-border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
-                    placeholder="0 2 * * *"
-                  />
-                  <p className="text-xs text-muted-foreground mt-1">{t('backup.cronHint')}</p>
+                    onChange={(e) => {
+                      setSelectedPreset(e.target.value);
+                      if (e.target.value !== 'custom') {
+                        setValue('schedule', e.target.value);
+                        setCustomCronError('');
+                      }
+                    }}
+                  >
+                    {SCHEDULE_PRESETS.map((preset) => (
+                      <option key={preset.value} value={preset.value}>{preset.label}</option>
+                    ))}
+                  </select>
+                  {selectedPreset === 'custom' && (
+                    <>
+                      <input
+                        {...register('schedule')}
+                        className={`w-full px-4 py-2.5 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none mt-2 ${
+                          customCronError ? 'border-red-500 focus:border-red-500' : 'border-border focus:border-blue-500'
+                        }`}
+                        placeholder="0 2 * * *"
+                        onBlur={(e) => {
+                          const value = e.target.value.trim();
+                          if (!value) {
+                            setCustomCronError(t('backup.cronRequired'));
+                          } else if (!validateCron(value)) {
+                            setCustomCronError(t('backup.cronInvalid'));
+                          } else {
+                            setCustomCronError('');
+                          }
+                        }}
+                      />
+                      {customCronError && (
+                        <p className="text-xs text-red-500 mt-1">{customCronError}</p>
+                      )}
+                      <p className="text-xs text-muted-foreground mt-1">{t('backup.cronHint')}</p>
+                    </>
+                  )}
                 </div>
 
                 <div>
@@ -270,7 +326,7 @@ const Backup: React.FC = () => {
                 </div>
 
                 {/* Remote Storage Config */}
-                {storageType === 'sftp' && (
+                {(storageType === 'sftp' || storageType === 'ftp') && (
                   <div className="border border-border rounded-lg p-4 space-y-3">
                     <h3 className="font-medium text-foreground text-sm">{t('backup.remoteSettings')}</h3>
                     <div>
@@ -288,7 +344,7 @@ const Backup: React.FC = () => {
                           {...register('storage_config.port' as any, { valueAsNumber: true })}
                           type="number"
                           className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
-                          placeholder="22"
+                          placeholder={storageType === 'sftp' ? '22' : '21'}
                         />
                       </div>
                       <div>
@@ -317,6 +373,12 @@ const Backup: React.FC = () => {
                         placeholder="/backups/tam"
                       />
                     </div>
+                    {storageType === 'ftp' && (
+                      <label className="flex items-center gap-2 text-sm text-muted-foreground">
+                        <input {...register('storage_config.use_ssl' as any)} type="checkbox" className="rounded border-border" />
+                        {t('backup.useSsl')}
+                      </label>
+                    )}
                   </div>
                 )}
 
