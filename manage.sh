@@ -71,7 +71,7 @@ readonly BACKUP_DIR="${SCRIPT_DIR}/backups"
 readonly LOCK_FILE="/tmp/tam_manage.lock"
 readonly STATE_DIR="${SCRIPT_DIR}/.manage"
 readonly STATE_FILE="${STATE_DIR}/state.env"
-readonly VERSION="3.6.2"
+VERSION=$(cat "${SCRIPT_DIR}/VERSION" 2>/dev/null || echo "3.6.3")
 
 # Docker Compose project name (derived from directory name)
 readonly COMPOSE_PROJECT_NAME="tam"
@@ -262,7 +262,7 @@ release_lock() {
     rm -f "${LOCK_FILE}"
 }
 
-# Run docker compose with .env loaded
+# Run docker compose with .env loaded and VERSION injected from VERSION file
 dc() {
     local compose_files="-f ${SCRIPT_DIR}/docker-compose.yml"
     if [ "${ENVIRONMENT}" = "production" ] || [ "${ENVIRONMENT}" = "prod" ]; then
@@ -274,7 +274,7 @@ dc() {
             compose_files="${compose_files} -f ${SCRIPT_DIR}/docker-compose.dev.yml"
         fi
     fi
-    docker compose -p "${COMPOSE_PROJECT_NAME}" --env-file "${ENV_FILE}" ${compose_files} "$@"
+    (export VERSION="${VERSION}" && docker compose -p "${COMPOSE_PROJECT_NAME}" --env-file "${ENV_FILE}" ${compose_files} "$@")
 }
 
 # Ensure .env file exists and load environment variables (idempotent — never overwrites existing)

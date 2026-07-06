@@ -1,6 +1,15 @@
+import os
 import sys
 
 from pydantic_settings import BaseSettings
+
+
+def _load_version() -> str:
+    version_file = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "VERSION")
+    if os.path.exists(version_file):
+        with open(version_file, "r") as f:
+            return f.read().strip()
+    return "3.6.3"
 
 
 class Settings(BaseSettings):
@@ -8,7 +17,7 @@ class Settings(BaseSettings):
 
     # Application
     PROJECT_NAME: str = "Terminal Access Manager"
-    VERSION: str = "3.6.2"
+    VERSION: str = _load_version()
     API_V1_STR: str = "/api/v1"
     DEBUG: bool = False
     ENVIRONMENT: str = "development"
