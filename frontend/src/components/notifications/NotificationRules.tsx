@@ -37,6 +37,7 @@ interface NotificationRule {
   escalate_threshold: number;
   escalate_window: number;
   escalate_severity: string;
+  priority: number;
   created_by: string | null;
   created_at: string;
   updated_at: string;
@@ -54,6 +55,7 @@ interface RuleFormData {
   escalate_threshold: number;
   escalate_window: number;
   escalate_severity: string;
+  priority: number;
 }
 
 const SEVERITY_COLORS: Record<string, string> = {
@@ -88,6 +90,7 @@ const NotificationRules: React.FC<{
     escalate_threshold: 5,
     escalate_window: 3600,
     escalate_severity: 'error',
+    priority: 100,
   });
 
   const fetchRules = useCallback(async () => {
@@ -123,12 +126,13 @@ const NotificationRules: React.FC<{
         escalate_threshold: rule.escalate_threshold,
         escalate_window: rule.escalate_window,
         escalate_severity: rule.escalate_severity,
+        priority: rule.priority ?? 100,
       });
     } else {
       setEditingRule(null);
       setFormData({
         name: '',
-        event_type: eventTypes[0]?.type || '',
+        event_type: '',
         channel_name: '',
         enabled: true,
         description: '',
@@ -138,6 +142,7 @@ const NotificationRules: React.FC<{
         escalate_threshold: 5,
         escalate_window: 3600,
         escalate_severity: 'error',
+        priority: 100,
       });
     }
     setShowModal(true);
@@ -172,6 +177,7 @@ const NotificationRules: React.FC<{
         escalate_threshold: formData.escalate_threshold,
         escalate_window: formData.escalate_window,
         escalate_severity: formData.escalate_severity,
+        priority: formData.priority,
       };
 
       if (editingRule) {
@@ -262,9 +268,14 @@ const NotificationRules: React.FC<{
                             {t('common.disabled')}
                           </span>
                         )}
+                        {rule.event_type === '*' && (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-200">
+                            {t('notificationRules.wildcard')}
+                          </span>
+                        )}
                       </div>
                       <p className="text-sm text-muted-foreground mt-1">
-                        {eventName(rule.event_type)}
+                        {rule.event_type === '*' ? t('notificationRules.wildcard') : eventName(rule.event_type)}
                         {rule.channel_name ? ` → ${rule.channel_name}` : ` → ${t('notificationRules.allChannels')}`}
                       </p>
                       {/* Feature badges */}
@@ -291,7 +302,7 @@ const NotificationRules: React.FC<{
                         )}
                       </div>
                       <p className="text-xs text-muted-foreground mt-1">
-                        {t('notificationRules.updatedAt')}: {formatDateTime(rule.updated_at)}
+                        {t('notificationRules.priority')}: {rule.priority} | {t('notificationRules.updatedAt')}: {formatDateTime(rule.updated_at)}
                       </p>
                     </div>
                     <div className="flex items-center gap-2 ml-2">
@@ -396,6 +407,7 @@ const NotificationRules: React.FC<{
                     className="w-full px-4 py-2.5 border border-border rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none bg-background"
                   >
                     <option value="">{t('common.select')}</option>
+                    <option value="*">{t('notificationRules.wildcard')}</option>
                     {eventTypes.map((e) => (
                       <option key={e.type} value={e.type}>{e.name}</option>
                     ))}
@@ -443,6 +455,25 @@ const NotificationRules: React.FC<{
                   />
                   {t('notificationRules.enabled')}
                 </label>
+              </div>
+
+              {/* Priority */}
+              <div>
+                <label className="block text-sm font-medium text-muted-foreground mb-1">
+                  {t('notificationRules.priority')}
+                  <span className="text-xs text-muted-foreground ml-2">
+                    ({t('notificationRules.priorityHint')})
+                  </span>
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  max="999"
+                  value={formData.priority}
+                  onChange={(e) => setFormData((p) => ({ ...p, priority: parseInt(e.target.value) || 100 }))}
+                  className="w-full px-4 py-2.5 border border-border rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none bg-background"
+                  placeholder="100"
+                />
               </div>
 
               {/* Suppression Section */}

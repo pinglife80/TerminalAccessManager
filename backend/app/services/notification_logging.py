@@ -47,9 +47,13 @@ class NotificationLogger:
         try:
             session = db if db is not None else await self._session_scope()
             stmt = select(NotificationTemplate).where(
-                NotificationTemplate.event_type == event.type,
                 NotificationTemplate.channel_type == channel_type,
-            )
+                (NotificationTemplate.event_type == event.type) | 
+                (NotificationTemplate.event_type == "*"),
+            ).order_by(
+                (NotificationTemplate.event_type == event.type).desc(),
+                NotificationTemplate.priority.asc(),
+            ).limit(1)
             result = await session.execute(stmt)
             template = result.scalar_one_or_none()
 
@@ -221,6 +225,7 @@ class NotificationLogger:
         channel_name: str | None = None,
         event_type: str | None = None,
         status: str | None = None,
+        archived: bool | None = False,
         limit: int = 100,
         offset: int = 0,
     ) -> tuple[list[NotificationLog], int]:
@@ -232,6 +237,8 @@ class NotificationLogger:
             stmt = stmt.where(NotificationLog.event_type == event_type)
         if status:
             stmt = stmt.where(NotificationLog.status == status)
+        if archived is not None:
+            stmt = stmt.where(NotificationLog.archived == archived)
 
         count_stmt = select(func.count()).select_from(NotificationLog)
         if channel_name:
@@ -240,6 +247,8 @@ class NotificationLogger:
             count_stmt = count_stmt.where(NotificationLog.event_type == event_type)
         if status:
             count_stmt = count_stmt.where(NotificationLog.status == status)
+        if archived is not None:
+            count_stmt = count_stmt.where(NotificationLog.archived == archived)
 
         count_result = await db.execute(count_stmt)
         total = count_result.scalar()

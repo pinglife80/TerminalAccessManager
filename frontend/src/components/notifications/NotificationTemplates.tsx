@@ -32,6 +32,7 @@ interface NotificationTemplate {
   subject_template: string | null;
   body_template: string;
   is_default: boolean;
+  priority: number;
   created_by: string | null;
   created_at: string;
   updated_at: string;
@@ -44,6 +45,7 @@ interface TemplateFormData {
   subject_template: string;
   body_template: string;
   is_default: boolean;
+  priority: number;
 }
 
 const SEVERITY_BADGE_COLORS: Record<string, string> = {
@@ -87,6 +89,7 @@ const NotificationTemplates: React.FC<{
     subject_template: '',
     body_template: DEFAULT_BODY_TEMPLATE,
     is_default: false,
+    priority: 100,
   });
 
   const fetchTemplates = useCallback(async () => {
@@ -118,16 +121,18 @@ const NotificationTemplates: React.FC<{
         subject_template: template.subject_template || '',
         body_template: template.body_template,
         is_default: template.is_default,
+        priority: template.priority ?? 100,
       });
     } else {
       setEditingTemplate(null);
       setFormData({
         name: '',
-        event_type: eventTypes[0]?.type || '',
-        channel_type: channelTypes[0]?.type || '',
+        event_type: '',
+        channel_type: '',
         subject_template: '',
         body_template: DEFAULT_BODY_TEMPLATE,
         is_default: false,
+        priority: 100,
       });
     }
     setPreviewResult(null);
@@ -169,6 +174,7 @@ const NotificationTemplates: React.FC<{
         subject_template: formData.subject_template.trim() || null,
         body_template: formData.body_template,
         is_default: formData.is_default,
+        priority: formData.priority,
       };
 
       if (editingTemplate) {
@@ -304,15 +310,20 @@ const NotificationTemplates: React.FC<{
                               {t('notificationTemplates.default')}
                             </span>
                           )}
+                          {tpl.event_type === '*' && (
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-200">
+                              {t('notificationTemplates.wildcard')}
+                            </span>
+                          )}
                           <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${SEVERITY_BADGE_COLORS[sev] || SEVERITY_BADGE_COLORS.info}`}>
                             {sev}
                           </span>
                         </div>
                         <p className="text-sm text-muted-foreground mt-1">
-                          {eventName(tpl.event_type)} → {channelName(tpl.channel_type)}
+                          {tpl.event_type === '*' ? t('notificationTemplates.wildcard') : eventName(tpl.event_type)} → {channelName(tpl.channel_type)}
                         </p>
                         <p className="text-xs text-muted-foreground mt-1">
-                          {t('notificationTemplates.updatedAt')}: {formatDateTime(tpl.updated_at)}
+                          {t('notificationTemplates.priority')}: {tpl.priority} | {t('notificationTemplates.updatedAt')}: {formatDateTime(tpl.updated_at)}
                         </p>
                       </div>
                       <div className="flex items-center gap-2 ml-2">
@@ -436,6 +447,7 @@ const NotificationTemplates: React.FC<{
                     className="w-full px-4 py-2.5 border border-border rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none bg-background"
                   >
                     <option value="">{t('common.select')}</option>
+                    <option value="*">{t('notificationTemplates.wildcard')}</option>
                     {eventTypes.map((e) => (
                       <option key={e.type} value={e.type}>{e.name}</option>
                     ))}
@@ -502,6 +514,25 @@ const NotificationTemplates: React.FC<{
                   />
                   {t('notificationTemplates.isDefault')}
                 </label>
+              </div>
+
+              {/* Priority */}
+              <div>
+                <label className="block text-sm font-medium text-muted-foreground mb-1">
+                  {t('notificationTemplates.priority')}
+                  <span className="text-xs text-muted-foreground ml-2">
+                    ({t('notificationTemplates.priorityHint')})
+                  </span>
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  max="999"
+                  value={formData.priority}
+                  onChange={(e) => setFormData((p) => ({ ...p, priority: parseInt(e.target.value) || 100 }))}
+                  className="w-full px-4 py-2.5 border border-border rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none bg-background"
+                  placeholder="100"
+                />
               </div>
 
               {/* Preview Result */}
