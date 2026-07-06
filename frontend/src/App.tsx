@@ -49,6 +49,7 @@ export const pagePreloadMap: Record<string, () => Promise<unknown>> = {
 import { apiClient } from './lib/api';
 import { useAuthStore } from './store/auth';
 import { useThemeStore } from './store/theme';
+import { useTokenExpiration } from './hooks/useTokenExpiration';
 import branding from './config/branding';
 
 const queryClient = new QueryClient({
@@ -69,6 +70,7 @@ const queryClient = new QueryClient({
 const App: React.FC = () => {
   const { initializeAuth, isAuthenticated, isInitializing } = useAuthStore();
   const { initTheme } = useThemeStore();
+  useTokenExpiration();
 
   useEffect(() => {
     document.title = branding.title;

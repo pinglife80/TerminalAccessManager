@@ -78,6 +78,10 @@ class TwoFactorService:
                 ttl_seconds=self.code_ttl,
             )
             logger.info(f"2FA code sent to user {user_id} via email")
+
+            from app.services.event_emitter import emit_verification_code_sent
+            await emit_verification_code_sent(email, "2fa")
+
             return code
         except Exception as e:
             logger.error(f"Failed to send 2FA code: {e}")
@@ -99,6 +103,10 @@ class TwoFactorService:
             code = ''.join(random.choices('0123456789', k=6))
         self._codes[user.email] = code
         logger.info(f"2FA code generated for {user.email}")
+
+        from app.services.event_emitter import emit_verification_code_sent
+        await emit_verification_code_sent(user.email, "2fa")
+
         return code
 
     async def verify_code(

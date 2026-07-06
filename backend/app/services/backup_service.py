@@ -136,10 +136,16 @@ class BackupService:
 
             logger.info(f"Backup completed: {job.file_path}")
 
+            from app.services.event_emitter import emit_backup_completed
+            await emit_backup_completed(job.file_path or "", job.file_size or 0)
+
         except Exception as e:
             job.status = "failed"
             job.error_message = str(e)
             logger.error(f"Backup failed: {e}")
+
+            from app.services.event_emitter import emit_backup_failed
+            await emit_backup_failed(str(e))
 
         return job
 
