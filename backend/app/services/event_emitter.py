@@ -183,6 +183,74 @@ async def emit_user_created(
     )
 
 
+async def emit_user_deleted(
+    username: str,
+    deleted_by: str,
+) -> list[Any]:
+    """Emit user deleted event"""
+    return await emit_event(
+        event_type="security.user_deleted",
+        data={
+            "username": username,
+            "deleted_by": deleted_by,
+        },
+        source="system",
+        severity="warning",
+    )
+
+
+async def emit_user_updated(
+    username: str,
+    updated_by: str,
+    changes: dict,
+) -> list[Any]:
+    """Emit user updated event"""
+    return await emit_event(
+        event_type="security.user_updated",
+        data={
+            "username": username,
+            "updated_by": updated_by,
+            "changes": changes,
+        },
+        source="system",
+        severity="info",
+    )
+
+
+async def emit_password_changed(
+    username: str,
+) -> list[Any]:
+    """Emit password changed event"""
+    return await emit_event(
+        event_type="security.password_changed",
+        data={
+            "username": username,
+        },
+        source="system",
+        severity="info",
+    )
+
+
+async def emit_role_changed(
+    username: str,
+    changed_by: str,
+    old_role: str,
+    new_role: str,
+) -> list[Any]:
+    """Emit role changed event"""
+    return await emit_event(
+        event_type="admin.role_changed",
+        data={
+            "username": username,
+            "changed_by": changed_by,
+            "old_role": old_role,
+            "new_role": new_role,
+        },
+        source="system",
+        severity="warning",
+    )
+
+
 async def emit_datasource_sync_failed(
     source_name: str,
     source_tag: str,
@@ -252,4 +320,324 @@ async def emit_backup_failed(
         },
         source="scheduler",
         severity="error",
+    )
+
+
+async def emit_login_locked(
+    username: str,
+    ip_address: str,
+) -> list[Any]:
+    """Emit login locked event"""
+    return await emit_event(
+        event_type="security.login_locked",
+        data={
+            "username": username,
+            "ip_address": ip_address,
+        },
+        source="system",
+        severity="error",
+    )
+
+
+async def emit_password_reset_requested(
+    username: str,
+    email: str,
+) -> list[Any]:
+    """Emit password reset requested event"""
+    return await emit_event(
+        event_type="security.password_reset_requested",
+        data={
+            "username": username,
+            "email": email,
+        },
+        source="system",
+        severity="info",
+    )
+
+
+async def emit_verification_code_sent(
+    email: str,
+    code_type: str,
+) -> list[Any]:
+    """Emit verification code sent event"""
+    return await emit_event(
+        event_type="security.verification_code_sent",
+        data={
+            "email": email,
+            "code_type": code_type,
+        },
+        source="system",
+        severity="info",
+    )
+
+
+async def emit_email_verified(
+    username: str,
+    email: str,
+) -> list[Any]:
+    """Emit email verified event"""
+    return await emit_event(
+        event_type="security.email_verified",
+        data={
+            "username": username,
+            "email": email,
+        },
+        source="system",
+        severity="info",
+    )
+
+
+async def emit_datasource_sync_success(
+    source_name: str,
+    source_tag: str,
+    record_count: int,
+) -> list[Any]:
+    """Emit datasource sync success event"""
+    return await emit_event(
+        event_type="system.datasource_sync_success",
+        data={
+            "source_name": source_name,
+            "source_tag": source_tag,
+            "record_count": record_count,
+        },
+        source="scheduler",
+        severity="info",
+    )
+
+
+async def emit_firewall_connection_lost(
+    firewall_tag: str,
+    error: str,
+) -> list[Any]:
+    """Emit firewall connection lost event"""
+    return await emit_event(
+        event_type="system.firewall_connection_lost",
+        data={
+            "firewall_tag": firewall_tag,
+            "error": error,
+        },
+        source="system",
+        severity="error",
+    )
+
+
+async def emit_firewall_connection_restored(
+    firewall_tag: str,
+) -> list[Any]:
+    """Emit firewall connection restored event"""
+    return await emit_event(
+        event_type="system.firewall_connection_restored",
+        data={
+            "firewall_tag": firewall_tag,
+        },
+        source="system",
+        severity="info",
+    )
+
+
+async def emit_system_error(
+    error_type: str,
+    message: str,
+    details: dict | None = None,
+) -> list[Any]:
+    """Emit system error event"""
+    return await emit_event(
+        event_type="system.system_error",
+        data={
+            "error_type": error_type,
+            "message": message,
+            **(details or {}),
+        },
+        source="system",
+        severity="error",
+    )
+
+
+async def emit_system_warning(
+    warning_type: str,
+    message: str,
+) -> list[Any]:
+    """Emit system warning event"""
+    return await emit_event(
+        event_type="system.system_warning",
+        data={
+            "warning_type": warning_type,
+            "message": message,
+        },
+        source="system",
+        severity="warning",
+    )
+
+
+async def emit_config_changed(
+    config_key: str,
+    changed_by: str,
+    old_value: str | None = None,
+    new_value: str | None = None,
+) -> list[Any]:
+    """Emit config changed event"""
+    return await emit_event(
+        event_type="admin.config_changed",
+        data={
+            "config_key": config_key,
+            "changed_by": changed_by,
+            "old_value": old_value,
+            "new_value": new_value,
+        },
+        source="system",
+        severity="info",
+    )
+
+
+async def emit_permission_changed(
+    username: str,
+    changed_by: str,
+    permission: str,
+    action: str,
+) -> list[Any]:
+    """Emit permission changed event"""
+    return await emit_event(
+        event_type="admin.permission_changed",
+        data={
+            "username": username,
+            "changed_by": changed_by,
+            "permission": permission,
+            "action": action,
+        },
+        source="system",
+        severity="warning",
+    )
+
+
+async def emit_auto_block_triggered(
+    ip_address: str,
+    mac_address: str,
+    reason: str,
+) -> list[Any]:
+    """Emit auto block triggered event"""
+    return await emit_event(
+        event_type="alert.auto_block_triggered",
+        data={
+            "ip_address": ip_address,
+            "mac_address": mac_address,
+            "reason": reason,
+        },
+        source="system",
+        severity="warning",
+    )
+
+
+async def emit_auto_unblock_triggered(
+    ip_address: str,
+    mac_address: str,
+) -> list[Any]:
+    """Emit auto unblock triggered event"""
+    return await emit_event(
+        event_type="alert.auto_unblock_triggered",
+        data={
+            "ip_address": ip_address,
+            "mac_address": mac_address,
+        },
+        source="system",
+        severity="info",
+    )
+
+
+async def emit_block_threshold_exceeded(
+    threshold: int,
+    current_count: int,
+) -> list[Any]:
+    """Emit block threshold exceeded event"""
+    return await emit_event(
+        event_type="alert.block_threshold",
+        data={
+            "threshold": threshold,
+            "current_count": current_count,
+        },
+        source="system",
+        severity="warning",
+    )
+
+
+async def emit_policy_violation(
+    policy_name: str,
+    terminal_ip: str,
+    details: dict,
+) -> list[Any]:
+    """Emit policy violation event"""
+    return await emit_event(
+        event_type="alert.policy_violation",
+        data={
+            "policy_name": policy_name,
+            "terminal_ip": terminal_ip,
+            **details,
+        },
+        source="system",
+        severity="error",
+    )
+
+
+async def emit_terminal_compliant(
+    ip_address: str,
+    mac_address: str,
+) -> list[Any]:
+    """Emit terminal compliant event"""
+    return await emit_event(
+        event_type="terminal.compliant",
+        data={
+            "ip_address": ip_address,
+            "mac_address": mac_address,
+        },
+        source="system",
+        severity="info",
+    )
+
+
+async def emit_terminal_non_compliant(
+    ip_address: str,
+    mac_address: str,
+    reasons: list[str],
+) -> list[Any]:
+    """Emit terminal non-compliant event"""
+    return await emit_event(
+        event_type="terminal.non_compliant",
+        data={
+            "ip_address": ip_address,
+            "mac_address": mac_address,
+            "reasons": reasons,
+        },
+        source="system",
+        severity="warning",
+    )
+
+
+async def emit_terminal_online(
+    ip_address: str,
+    mac_address: str,
+) -> list[Any]:
+    """Emit terminal online event"""
+    return await emit_event(
+        event_type="terminal.online",
+        data={
+            "ip_address": ip_address,
+            "mac_address": mac_address,
+        },
+        source="system",
+        severity="info",
+    )
+
+
+async def emit_terminal_offline(
+    ip_address: str,
+    mac_address: str,
+) -> list[Any]:
+    """Emit terminal offline event"""
+    return await emit_event(
+        event_type="terminal.offline",
+        data={
+            "ip_address": ip_address,
+            "mac_address": mac_address,
+        },
+        source="system",
+        severity="warning",
     )
