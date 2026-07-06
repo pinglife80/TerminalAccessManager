@@ -46,6 +46,8 @@ const Users: React.FC = () => {
   const [editingUser, setEditingUser] = useState<UserItem | null>(null);
   const [resetPasswordUser, setResetPasswordUser] = useState<UserItem | null>(null);
   const [showPassword, setShowPassword] = useState(false);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [deleteUser, setDeleteUser] = useState<UserItem | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [filterCollapsed, setFilterCollapsed] = useState(false);
@@ -154,11 +156,19 @@ const Users: React.FC = () => {
 
   // Delete user
   const handleDeleteUser = async (user: UserItem) => {
-    if (!confirm(t('users.areYouSureDeleteUser'))) return;
+    setDeleteUser(user);
+    setShowDeleteModal(true);
+  };
+
+  // Confirm delete user
+  const confirmDeleteUser = async () => {
+    if (!deleteUser) return;
     try {
-      await apiClient.delete(`${API_ENDPOINTS.AUTH_USERS}${user.id}`);
-      toast.success(t('users.userDeleted', { username: user.username }));
+      await apiClient.delete(`${API_ENDPOINTS.AUTH_USERS}${deleteUser.id}`);
+      toast.success(t('users.userDeleted', { username: deleteUser.username }));
       queryClient.invalidateQueries({ queryKey: ['users'] });
+      setShowDeleteModal(false);
+      setDeleteUser(null);
     } catch (err: unknown) {
       toast.error(getErrorMessage(err, t('users.failedToDeleteUser')));
     }
@@ -608,6 +618,15 @@ const Users: React.FC = () => {
         />
       )}
 
+      {/* Delete Confirmation Modal */}
+      {showDeleteModal && deleteUser && (
+        <DeleteUserModal
+          user={deleteUser}
+          onConfirm={confirmDeleteUser}
+          onClose={() => { setShowDeleteModal(false); setDeleteUser(null); }}
+        />
+      )}
+
       {/* LDAP Import Modal */}
       <LDAPImportModal
         isOpen={showLDAPImportModal}
@@ -811,6 +830,64 @@ const ResetPasswordModal: React.FC<{
             className="flex-1"
           />
         </div>
+      </div>
+    </Modal>
+  );
+};
+
+// Delete Confirmation Modal
+const DeleteUserModal: React.FC<{
+  user: UserItem;
+  onConfirm: () => void;
+  onClose: () => void;
+}> = ({ user, onConfirm, onClose }) => {
+  const { t } = useTranslation();
+
+  return (
+    <Modal isOpen={true} onClose={onClose} title={t('users.deleteUser')} size="sm">
+      <div className="flex items-center gap-4 mb-4">
+        <div className="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center">
+          <Trash2 className="h-6 w-6 text-red-600" />
+        </div>
+        <div>
+          <p className="text-sm text-muted-foreground">{t('users.areYouSureDeleteUser', { username: user.username })}</p>
+        </div>
+      </div>
+
+      <div className="bg-background rounded-lg p-4 mb-6">
+        <div className="space-y-2 text-sm">
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">{t('users.username')}:</span>
+            <span className="font-mono text-foreground">{user.username}</span>
+          </div>
+          {user.email && (
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">{t('users.email')}:</span>
+              <span className="text-foreground">{user.email}</span>
+            </div>
+          )}
+          {user.roles && user.roles.length > 0 && (
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">{t('users.role')}:</span>
+              <span className="text-foreground">{user.roles.map((r) => t(`roles.${r}`, r)).join(', ')}</span>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="flex gap-3">
+        <PrimaryButton
+          label={t('common.cancel')}
+          variant="secondary"
+          onClick={onClose}
+          className="flex-1"
+        />
+        <PrimaryButton
+          label={t('common.delete')}
+          variant="danger"
+          onClick={onConfirm}
+          className="flex-1"
+        />
       </div>
     </Modal>
   );

@@ -633,7 +633,7 @@ const en = {
     unlockAccount: 'Unlock Account',
     resetPassword: 'Reset Password',
     deleteUser: 'Delete User',
-    areYouSureDeleteUser: 'Are you sure you want to delete this user? This action cannot be undone.',
+    areYouSureDeleteUser: 'Are you sure you want to delete user "{{ username }}" ? This action cannot be undone.',
     userCreated: 'User created successfully',
     failedToCreateUser: 'Failed to create user',
     userUpdated: 'User updated successfully',

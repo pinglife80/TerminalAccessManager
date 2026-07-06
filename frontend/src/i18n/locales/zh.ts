@@ -633,7 +633,7 @@ const zh = {
     unlockAccount: '解锁账户',
     resetPassword: '重置密码',
     deleteUser: '删除用户',
-    areYouSureDeleteUser: '确定要删除用户吗？此操作不可撤销。',
+    areYouSureDeleteUser: '确定要删除用户 "{{ username }}" 吗？此操作不可撤销。',
     userCreated: '用户创建成功',
     failedToCreateUser: '创建用户失败',
     userUpdated: '用户更新成功',

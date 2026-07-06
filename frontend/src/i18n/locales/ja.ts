@@ -626,7 +626,7 @@ const ja = {
     unlockAccount: 'アカウントのロック解除',
     resetPassword: 'パスワードのリセット',
     deleteUser: 'ユーザーを削除',
-    areYouSureDeleteUser: 'ユーザー「{username}」を削除してもよろしいですか？この操作は取り消せません。',
+    areYouSureDeleteUser: 'ユーザー「{{ username }}」を削除してもよろしいですか？この操作は取り消せません。',
     userCreated: 'ユーザー「{username}」が正常に作成されました',
     failedToCreateUser: 'ユーザーの作成に失敗しました',
     userUpdated: 'ユーザーが正常に更新されました',
