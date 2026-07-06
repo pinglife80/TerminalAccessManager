@@ -11,8 +11,8 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision = '021'
-down_revision = '020'
+revision = '021_notification_template_priority'
+down_revision = '020_notification_log_archived'
 branch_labels = None
 depends_on = None
 

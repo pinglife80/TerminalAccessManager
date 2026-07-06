@@ -615,6 +615,7 @@ docker-compose.yml 中 PostgreSQL 的 `command` 参数列表如下：
 | status | VARCHAR(20) | NOT NULL | 'pending' | 发送状态 |
 | error_message | TEXT | | NULL | 错误信息 |
 | retries | INTEGER | | 0 | 重试次数 |
+| archived | BOOLEAN | NOT NULL | FALSE | 是否已归档 |
 | created_at | TIMESTAMP WITH TZ | server_default=now() | — | 创建时间 |
 | updated_at | TIMESTAMP WITH TZ | server_default=now(), onupdate=now() | — | 更新时间 |
 
@@ -634,6 +635,7 @@ docker-compose.yml 中 PostgreSQL 的 `command` 参数列表如下：
 | ix_notification_logs_channel | COMPOSITE | (channel_id, created_at DESC) |
 | ix_notification_logs_status | SINGLE | status |
 | ix_notification_logs_event | SINGLE | event_type |
+| ix_notification_logs_archived | SINGLE | archived |
 
 ---
 
@@ -645,11 +647,12 @@ docker-compose.yml 中 PostgreSQL 的 `command` 参数列表如下：
 |------|------|------|--------|------|
 | id | INTEGER | PK, INDEX | 自增 | 主键 |
 | name | VARCHAR(100) | UNIQUE, NOT NULL | — | 模板名称 |
-| event_type | VARCHAR(100) | NOT NULL, INDEX | — | 事件类型（如 login、block、compliance_change） |
+| event_type | VARCHAR(100) | NOT NULL, INDEX | — | 事件类型（支持 `*` 通配符匹配所有事件） |
 | channel_type | VARCHAR(50) | NOT NULL, INDEX | — | 渠道类型（email、webhook、feishu、dingtalk、wecom） |
 | subject_template | TEXT | NULLABLE | NULL | 标题模板（仅邮件等有标题的渠道使用） |
 | body_template | TEXT | NOT NULL | — | 正文模板（Jinja2 语法） |
 | is_default | BOOLEAN | | FALSE | 是否为该事件-渠道组合的默认模板 |
+| priority | INTEGER | NOT NULL | 100 | 优先级，数值越小优先级越高 |
 | created_by | VARCHAR(100) | NULLABLE | NULL | 创建人 |
 | created_at | TIMESTAMP | default=now() | — | 创建时间 |
 | updated_at | TIMESTAMP | default=now(), onupdate=now() | — | 更新时间 |
@@ -678,7 +681,7 @@ docker-compose.yml 中 PostgreSQL 的 `command` 参数列表如下：
 |------|------|------|--------|------|
 | id | INTEGER | PK, INDEX | 自增 | 主键 |
 | name | VARCHAR(100) | UNIQUE, NOT NULL | — | 规则名称 |
-| event_type | VARCHAR(100) | NOT NULL, INDEX | — | 事件类型 |
+| event_type | VARCHAR(100) | NOT NULL, INDEX | — | 事件类型（支持 `*` 通配符匹配所有事件） |
 | channel_name | VARCHAR(100) | NULLABLE, INDEX | NULL | 渠道名称（NULL 表示所有渠道） |
 | enabled | BOOLEAN | | TRUE | 是否启用 |
 | description | TEXT | NULLABLE | NULL | 规则描述 |
@@ -688,6 +691,7 @@ docker-compose.yml 中 PostgreSQL 的 `command` 参数列表如下：
 | escalate_threshold | INTEGER | | 5 | 升级阈值（窗口内事件数） |
 | escalate_window | INTEGER | | 3600 | 升级统计窗口（秒） |
 | escalate_severity | VARCHAR(20) | | `error` | 升级后的严重等级（info/warning/error/critical） |
+| priority | INTEGER | NOT NULL | 100 | 优先级，数值越小优先级越高 |
 | created_by | VARCHAR(100) | NULLABLE | NULL | 创建人 |
 | created_at | TIMESTAMP | default=now() | — | 创建时间 |
 | updated_at | TIMESTAMP | default=now(), onupdate=now() | — | 更新时间 |

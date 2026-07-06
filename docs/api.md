@@ -3406,6 +3406,7 @@ GET /api/v1/notifications/templates
     "subject_template": "[{{ event_name }}] 用户 {{ data.username }} 登录系统",
     "body_template": "用户 {{ data.username }} 于 {{ timestamp }} 登录系统。\nIP地址：{{ data.ip_address }}\n事件等级：{{ severity }}",
     "is_default": false,
+    "priority": 100,
     "created_by": "admin",
     "created_at": "2026-07-03T00:00:00",
     "updated_at": "2026-07-03T00:00:00"
@@ -3416,6 +3417,8 @@ GET /api/v1/notifications/templates
 **业务规则**:
 - 支持按 event_type 和 channel_type 组合过滤
 - 列表按创建时间倒序排列
+- event_type 支持 `*` 通配符，匹配所有事件类型
+- priority 数值越小优先级越高
 
 ---
 
@@ -3432,11 +3435,12 @@ POST /api/v1/notifications/templates
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | name | string | 是 | 模板名称（唯一） |
-| event_type | string | 是 | 事件类型 |
+| event_type | string | 是 | 事件类型（支持 `*` 通配符） |
 | channel_type | string | 是 | 渠道类型 |
 | subject_template | string | 否 | 标题模板（Jinja2 语法） |
 | body_template | string | 是 | 正文模板（Jinja2 语法） |
 | is_default | boolean | 否 | 是否为默认模板 |
+| priority | integer | 否 | 优先级，数值越小优先级越高，默认100 |
 
 **请求示例**:
 
@@ -3447,7 +3451,8 @@ POST /api/v1/notifications/templates
   "channel_type": "dingtalk",
   "subject_template": "",
   "body_template": "### 用户登录提醒\n\n**用户名**：{{ data.username }}\n**登录时间**：{{ timestamp }}\n**事件等级**：{{ severity }}",
-  "is_default": false
+  "is_default": false,
+  "priority": 100
 }
 ```
 
@@ -3587,6 +3592,7 @@ GET /api/v1/notifications/rules
     "aggregate_window": 0,
     "escalate_threshold": 0,
     "escalate_severity": "warning",
+    "priority": 100,
     "created_by": "admin",
     "created_at": "2026-07-03T00:00:00",
     "updated_at": "2026-07-03T00:00:00"
@@ -3598,6 +3604,8 @@ GET /api/v1/notifications/rules
 - channel_name 为 null 表示适用于所有渠道
 - suppress_window 为 0 表示禁用抑制
 - escalate_threshold 为 0 表示禁用升级
+- event_type 支持 `*` 通配符，匹配所有事件类型
+- priority 数值越小优先级越高
 
 ---
 
@@ -3614,13 +3622,14 @@ POST /api/v1/notifications/rules
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | name | string | 是 | 规则名称（唯一） |
-| event_type | string | 是 | 事件类型 |
+| event_type | string | 是 | 事件类型（支持 `*` 通配符） |
 | channel_name | string | 否 | 渠道名称（null 表示所有渠道） |
 | enabled | boolean | 否 | 是否启用，默认 true |
 | suppress_window | int | 否 | 抑制窗口（秒），1-86400，0 表示禁用 |
 | aggregate_window | int | 否 | 聚合窗口（秒），预留 |
 | escalate_threshold | int | 否 | 升级阈值，1-1000，0 表示禁用 |
 | escalate_severity | string | 否 | 升级后的 severity（info/warning/critical） |
+| priority | integer | 否 | 优先级，数值越小优先级越高，默认100 |
 
 **请求示例**:
 
@@ -3633,7 +3642,8 @@ POST /api/v1/notifications/rules
   "suppress_window": 60,
   "aggregate_window": 300,
   "escalate_threshold": 5,
-  "escalate_severity": "critical"
+  "escalate_severity": "critical",
+  "priority": 100
 }
 ```
 
@@ -3798,6 +3808,96 @@ POST /api/v1/notifications/logs/retry-all
 **业务规则**:
 - 将所有 status=failed 的通知加入重试队列
 - 每条通知独立重置重试计数
+
+---
+
+### 14.24 归档通知日志
+
+```
+POST /api/v1/notifications/logs/{log_id}/archive
+```
+
+**所需权限**: `notification:write`
+
+**响应**:
+```json
+{
+  "success": true,
+  "message": "日志归档成功"
+}
+```
+
+**错误响应**:
+- `404 Not Found` - 日志不存在
+
+**业务规则**:
+- 将指定日志标记为已归档（archived=true）
+- 归档后的日志默认不在列表中显示
+
+---
+
+### 14.25 批量归档通知日志
+
+```
+POST /api/v1/notifications/logs/archive-all
+```
+
+**所需权限**: `notification:write`
+
+**响应**:
+```json
+{
+  "success": true,
+  "message": "已归档 156 条日志",
+  "archived_count": 156
+}
+```
+
+**业务规则**:
+- 自动归档30天前的所有未归档日志
+- archived_count 返回实际归档的日志数量
+
+---
+
+### 14.26 清理归档日志
+
+```
+POST /api/v1/notifications/logs/cleanup
+```
+
+**所需权限**: `notification:write`
+
+**响应**:
+```json
+{
+  "success": true,
+  "message": "已清理 89 条归档日志",
+  "cleaned_count": 89
+}
+```
+
+**业务规则**:
+- 永久删除90天前的已归档日志
+- 此操作不可撤销
+
+---
+
+### 14.27 删除通知日志
+
+```
+DELETE /api/v1/notifications/logs/{log_id}
+```
+
+**所需权限**: `notification:write`
+
+**响应**: `204 No Content`
+
+**错误响应**:
+- `404 Not Found` - 日志不存在
+
+**业务规则**:
+- 永久删除指定日志
+- 此操作不可撤销
 
 ---
 
