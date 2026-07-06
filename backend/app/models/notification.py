@@ -59,6 +59,7 @@ class NotificationLog(Base):
     next_retry_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
     sent_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    archived: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
 
     def __repr__(self) -> str:
         return f"<NotificationLog(id={self.id}, event_type='{self.event_type}', status='{self.status}')>"
@@ -85,6 +86,7 @@ class NotificationTemplate(Base):
     subject_template: Mapped[str | None] = mapped_column(Text, nullable=True)
     body_template: Mapped[str] = mapped_column(Text, nullable=False)
     is_default: Mapped[bool] = mapped_column(Boolean, default=False)
+    priority: Mapped[int] = mapped_column(Integer, default=100)
     created_by: Mapped[str | None] = mapped_column(String(100), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
@@ -126,6 +128,7 @@ class NotificationRule(Base):
     # NULL means "all channels"; a specific name scopes the rule to that channel
     channel_name: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    priority: Mapped[int] = mapped_column(Integer, default=100)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Suppression / Aggregation
