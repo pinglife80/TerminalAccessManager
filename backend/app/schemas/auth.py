@@ -66,6 +66,8 @@ class UserDetailResponse(UserResponse):
     """Extended user response with timestamps"""
     created_at: datetime | None = None
     updated_at: datetime | None = None
+    is_locked: bool = False
+    lock_remaining_seconds: int | None = None
 
     class Config:
         from_attributes = True
@@ -77,6 +79,7 @@ class UserUpdate(BaseModel):
     is_active: bool | None = Field(None, description="Active status")
     is_superuser: bool | None = Field(None, description="Superuser status")
     role_id: int | None = Field(None, description="Role ID to assign")
+    force_email: bool = Field(False, description="Force use of duplicate email")
 
 
 class AdminUserCreate(BaseModel):
@@ -87,6 +90,7 @@ class AdminUserCreate(BaseModel):
     is_active: bool = Field(True, description="Active status")
     is_superuser: bool = Field(False, description="Superuser status")
     role_id: int | None = Field(None, description="Role ID to assign")
+    force_email: bool = Field(False, description="Force use of duplicate email")
 
     @field_validator('password')
     @classmethod
@@ -149,6 +153,7 @@ class AdminPasswordReset(BaseModel):
 class ProfileUpdate(BaseModel):
     """Schema for updating own profile"""
     email: str | None = Field(None, description="Email address")
+    force_email: bool = Field(False, description="Force use of duplicate email")
 
 
 class LoginResponse(BaseModel):

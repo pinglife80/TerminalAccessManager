@@ -50,6 +50,8 @@ const Users: React.FC = () => {
   const [pageSize, setPageSize] = useState(10);
   const [filterCollapsed, setFilterCollapsed] = useState(false);
   const [roles, setRoles] = useState<RoleOption[]>([]);
+  const [emailAvailable, setEmailAvailable] = useState<{ available: boolean; usedBy?: string } | null>(null);
+  const [createForceEmail, setCreateForceEmail] = useState(false);
 
   // Fetch roles for the form
   useEffect(() => {
@@ -91,6 +93,24 @@ const Users: React.FC = () => {
     setCurrentPage(1);
   };
 
+  // Check email availability for create
+  const checkEmailAvailability = async (email: string) => {
+    if (!email) {
+      setEmailAvailable(null);
+      return;
+    }
+    try {
+      const params = new URLSearchParams({ email });
+      const response = await apiClient.get(`${API_ENDPOINTS.AUTH_USERS}email-available?${params}`);
+      setEmailAvailable({
+        available: response.data.available,
+        usedBy: response.data.used_by?.username,
+      });
+    } catch {
+      setEmailAvailable(null);
+    }
+  };
+
   // Create user
   const onCreateSubmit = async (data: UserFormData) => {
     try {
@@ -101,10 +121,13 @@ const Users: React.FC = () => {
         is_active: data.is_active,
         is_superuser: data.is_superuser,
         role_id: data.role_id || undefined,
+        force_email: createForceEmail,
       };
       await apiClient.post(API_ENDPOINTS.AUTH_USERS, payload);
       toast.success(t('users.userCreated', { username: data.username }));
       setShowCreateModal(false);
+      setCreateForceEmail(false);
+      setEmailAvailable(null);
       reset();
       queryClient.invalidateQueries({ queryKey: ['users'] });
     } catch (err: unknown) {
@@ -113,12 +136,13 @@ const Users: React.FC = () => {
   };
 
   // Update user
-  const handleUpdateUser = async (userId: number, updates: Partial<UserItem> & { role_id?: number | null }) => {
+  const handleUpdateUser = async (userId: number, updates: Partial<UserItem> & { role_id?: number | null; force_email?: boolean }) => {
     try {
       const payload: Record<string, unknown> = {};
       if (updates.email !== undefined) payload.email = updates.email;
       if (updates.is_active !== undefined) payload.is_active = updates.is_active;
       if (updates.role_id !== undefined) payload.role_id = updates.role_id;
+      if (updates.force_email !== undefined) payload.force_email = updates.force_email;
       await apiClient.put(`${API_ENDPOINTS.AUTH_USERS}${userId}`, payload);
       toast.success(t('users.userUpdated'));
       setEditingUser(null);
@@ -371,15 +395,22 @@ const Users: React.FC = () => {
                       </span>
                     </td>
                     <td className="px-4 sm:px-6 py-4 whitespace-nowrap text-center">
-                      <button
-                        onClick={() => !isSelf(user) && hasPermission('user:write') && handleToggleActive(user)}
-                        disabled={isSelf(user) || !hasPermission('user:write')}
-                        className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium cursor-pointer disabled:cursor-not-allowed ${
-                          user.is_active ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
-                        }`}
-                      >
-                        {user.is_active ? t('common.active') : t('common.inactive')}
-                      </button>
+                      {user.is_locked ? (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-orange-100 text-orange-800">
+                          <Lock className="h-3 w-3" />
+                          {t('common.locked')}
+                        </span>
+                      ) : (
+                        <button
+                          onClick={() => !isSelf(user) && hasPermission('user:write') && handleToggleActive(user)}
+                          disabled={isSelf(user) || !hasPermission('user:write')}
+                          className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium cursor-pointer disabled:cursor-not-allowed ${
+                            user.is_active ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+                          }`}
+                        >
+                          {user.is_active ? t('common.active') : t('common.inactive')}
+                        </button>
+                      )}
                     </td>
                     <td className="px-4 sm:px-6 py-4 whitespace-nowrap text-sm text-muted-foreground">
                       {user.created_at ? new Date(user.created_at).toLocaleDateString() : '—'}
@@ -387,7 +418,7 @@ const Users: React.FC = () => {
                     <td className="px-4 sm:px-6 py-4 whitespace-nowrap">
                       <div className="flex items-center justify-center">
                         <ButtonGroup>
-                          {hasPermission('user:unlock') && !user.is_active && (
+                          {hasPermission('user:unlock') && (user.is_locked || !user.is_active) && (
                           <IconButton
                             icon={Unlock}
                             variant="success"
@@ -396,7 +427,7 @@ const Users: React.FC = () => {
                             onClick={() => handleUnlock(user)}
                           />
                           )}
-                          {hasPermission('user:lock') && user.is_active && !isSelf(user) && (
+                          {hasPermission('user:lock') && user.is_active && !user.is_locked && !isSelf(user) && (
                           <IconButton
                             icon={Lock}
                             variant="danger"
@@ -477,8 +508,32 @@ const Users: React.FC = () => {
               type="email"
               className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
               placeholder="john@example.com"
+              onChange={(e) => {
+                const email = e.target.value;
+                if (email) {
+                  checkEmailAvailability(email);
+                } else {
+                  setEmailAvailable(null);
+                }
+              }}
             />
             {errors.email && <p className="text-xs text-red-600 mt-1">{errors.email.message}</p>}
+            {emailAvailable !== null && !emailAvailable.available && (
+              <div className="mt-2 p-2 bg-amber-50 border border-amber-200 rounded-lg">
+                <p className="text-xs text-amber-800">
+                  {t('users.emailAlreadyInUse', { username: emailAvailable.usedBy })}
+                </p>
+                <label className="flex items-center gap-2 mt-2 text-xs">
+                  <input
+                    type="checkbox"
+                    checked={createForceEmail}
+                    onChange={(e) => setCreateForceEmail(e.target.checked)}
+                    className="rounded"
+                  />
+                  {t('users.forceUseEmail')}
+                </label>
+              </div>
+            )}
           </div>
           <div>
             <label className="block text-sm font-medium text-muted-foreground mb-1">{t('users.passwordLabel')}</label>
@@ -569,7 +624,7 @@ const Users: React.FC = () => {
 const EditUserModal: React.FC<{
   user: UserItem;
   isSelf: boolean;
-  onSave: (userId: number, updates: Partial<UserItem>) => Promise<void>;
+  onSave: (userId: number, updates: Partial<UserItem> & { force_email?: boolean }) => Promise<void>;
   onClose: () => void;
   roles: RoleOption[];
 }> = ({ user, isSelf, onSave, onClose, roles }) => {
@@ -577,15 +632,34 @@ const EditUserModal: React.FC<{
   const [email, setEmail] = useState(user.email || '');
   const [isActive, setIsActive] = useState(user.is_active);
   const [selectedRoleId, setSelectedRoleId] = useState<number | null>(() => {
-    // Map user's role name to role ID
     const matched = roles.find((r) => user.roles?.includes(r.name));
     return matched ? matched.id : null;
   });
   const [saving, setSaving] = useState(false);
+  const [emailAvailable, setEmailAvailable] = useState<{ available: boolean; usedBy?: string } | null>(null);
+  const [forceEmail, setForceEmail] = useState(false);
+
+  const checkEmailAvailability = async (emailValue: string) => {
+    if (!emailValue) {
+      setEmailAvailable(null);
+      return;
+    }
+    try {
+      const params = new URLSearchParams({ email: emailValue });
+      params.set('exclude_user_id', user.id.toString());
+      const response = await apiClient.get(`/api/v1/auth/users/email-available?${params}`);
+      setEmailAvailable({
+        available: response.data.available,
+        usedBy: response.data.used_by?.username,
+      });
+    } catch {
+      setEmailAvailable(null);
+    }
+  };
 
   const handleSave = async () => {
     setSaving(true);
-    await onSave(user.id, { email, is_active: isActive, role_id: selectedRoleId } as unknown as Partial<UserItem>);
+    await onSave(user.id, { email, is_active: isActive, role_id: selectedRoleId, force_email: forceEmail } as unknown as Partial<UserItem> & { force_email?: boolean });
     setSaving(false);
   };
 
@@ -597,9 +671,32 @@ const EditUserModal: React.FC<{
           <input
             type="email"
             value={email}
-            onChange={(e) => setEmail(e.target.value)}
+            onChange={(e) => {
+              setEmail(e.target.value);
+              if (e.target.value) {
+                checkEmailAvailability(e.target.value);
+              } else {
+                setEmailAvailable(null);
+              }
+            }}
             className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
           />
+          {emailAvailable !== null && !emailAvailable.available && (
+            <div className="mt-2 p-2 bg-amber-50 border border-amber-200 rounded-lg">
+              <p className="text-xs text-amber-800">
+                {t('users.emailAlreadyInUse', { username: emailAvailable.usedBy })}
+              </p>
+              <label className="flex items-center gap-2 mt-2 text-xs">
+                <input
+                  type="checkbox"
+                  checked={forceEmail}
+                  onChange={(e) => setForceEmail(e.target.checked)}
+                  className="rounded"
+                />
+                {t('users.forceUseEmail')}
+              </label>
+            </div>
+          )}
         </div>
         {!(isSelf || user.is_superuser) && (
         <div>

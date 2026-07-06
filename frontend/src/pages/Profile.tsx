@@ -11,6 +11,7 @@ import { PrimaryButton } from '@/components/Button';
 
 interface ProfileFormData {
   email: string;
+  force_email?: boolean;
 }
 
 interface PasswordFormData {
@@ -26,6 +27,8 @@ const Profile: React.FC = () => {
   const [showNewPassword, setShowNewPassword] = useState(false);
   const [savingProfile, setSavingProfile] = useState(false);
   const [savingPassword, setSavingPassword] = useState(false);
+  const [emailAvailable, setEmailAvailable] = useState<{ available: boolean; usedBy?: string } | null>(null);
+  const [forceEmail, setForceEmail] = useState(false);
 
   const isLDAPUser = user?.provider === 'ldap';
 
@@ -37,12 +40,34 @@ const Profile: React.FC = () => {
 
   const newPassword = watch('new_password');
 
+  const checkEmailAvailability = async (emailValue: string) => {
+    if (!emailValue || emailValue === user?.email) {
+      setEmailAvailable(null);
+      return;
+    }
+    try {
+      const params = new URLSearchParams({ email: emailValue });
+      if (user?.id) {
+        params.set('exclude_user_id', user.id.toString());
+      }
+      const response = await apiClient.get(`/api/v1/auth/users/email-available?${params}`);
+      setEmailAvailable({
+        available: response.data.available,
+        usedBy: response.data.used_by?.username,
+      });
+    } catch {
+      setEmailAvailable(null);
+    }
+  };
+
   const onProfileSubmit = async (data: ProfileFormData) => {
     setSavingProfile(true);
     try {
-      const response = await apiClient.put(API_ENDPOINTS.AUTH_ME_PROFILE, { email: data.email });
+      const response = await apiClient.put(API_ENDPOINTS.AUTH_ME_PROFILE, { email: data.email, force_email: forceEmail });
       setUser(response.data);
       toast.success(t('profile.profileUpdated'));
+      setEmailAvailable(null);
+      setForceEmail(false);
     } catch (err: unknown) {
       toast.error(getErrorMessage(err, t('profile.failedToUpdateProfile')));
     } finally {
@@ -159,9 +184,33 @@ const Profile: React.FC = () => {
                       type="email"
                       className="w-full px-4 py-2.5 border border-border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none bg-background focus:bg-card transition-all"
                       placeholder={t('profile.enterEmail')}
+                      onChange={(e) => {
+                        const email = e.target.value;
+                        if (email) {
+                          checkEmailAvailability(email);
+                        } else {
+                          setEmailAvailable(null);
+                        }
+                      }}
                     />
                     {profileErrors.email && (
                       <p className="text-xs text-red-600 mt-1">{profileErrors.email.message}</p>
+                    )}
+                    {emailAvailable !== null && !emailAvailable.available && (
+                      <div className="mt-2 p-2 bg-amber-50 border border-amber-200 rounded-lg">
+                        <p className="text-xs text-amber-800">
+                          {t('users.emailAlreadyInUse', { username: emailAvailable.usedBy })}
+                        </p>
+                        <label className="flex items-center gap-2 mt-2 text-xs">
+                          <input
+                            type="checkbox"
+                            checked={forceEmail}
+                            onChange={(e) => setForceEmail(e.target.checked)}
+                            className="rounded"
+                          />
+                          {t('users.forceUseEmail')}
+                        </label>
+                      </div>
                     )}
                   </div>
                   <PrimaryButton

@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import JWTError, jwt
@@ -169,6 +169,9 @@ async def login(
             error_detail["locked"] = True
             error_detail["lock_remaining"] = remaining_minutes * 60
 
+            from app.services.event_emitter import emit_login_locked
+            await emit_login_locked(username, get_client_ip(request))
+
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=error_detail,
@@ -178,6 +181,7 @@ async def login(
     if not user:
         await record_failed_login(username)
         captcha_now = await check_captcha_required(username)
+        locked_now = await check_login_attempts(username)
 
         from app.services.terminal_service import TerminalService
         ts = TerminalService(db)
@@ -194,12 +198,25 @@ async def login(
             reason="user not found",
         )
 
+        error_detail = {
+            "message": "Invalid credentials",
+            "captcha_required": captcha_now,
+        }
+        if locked_now:
+            from app.core.security import get_redis_client
+            redis_client = await get_redis_client()
+            lock_key = f"login_lock:{username}"
+            ttl = await redis_client.ttl(lock_key)
+            remaining_minutes = max(0, (ttl + 59) // 60) if ttl > 0 else settings.LOCKOUT_DURATION_MINUTES
+            error_detail["locked"] = True
+            error_detail["lock_remaining"] = remaining_minutes * 60
+
+            from app.services.event_emitter import emit_login_locked
+            await emit_login_locked(username, get_client_ip(request))
+
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={
-                "message": "Invalid credentials",
-                "captcha_required": captcha_now,
-            },
+            detail=error_detail,
         )
 
     if not user.is_active:
@@ -212,6 +229,10 @@ async def login(
         )
 
     await reset_login_attempts(username)
+
+    # Emit login success event for notification
+    from app.services.event_emitter import emit_login_success
+    await emit_login_success(user.username, get_client_ip(request))
 
     from app.services.terminal_service import TerminalService
     ts = TerminalService(db)
@@ -477,11 +498,11 @@ async def update_profile(
             detail=f"Profile management is not supported for {current_user.provider} users. Please contact your {current_user.provider} administrator.",
         )
     if profile.email is not None:
-        # Check email uniqueness
         if profile.email != current_user.email:
-            result = await db.execute(select(User).where(User.email == profile.email))
-            if result.scalar_one_or_none():
-                raise HTTPException(status_code=400, detail="Email already in use")
+            if current_user.provider == "local" and not profile.force_email:
+                result = await db.execute(select(User).where(User.email == profile.email, User.provider == "local"))
+                if result.scalar_one_or_none():
+                    raise HTTPException(status_code=400, detail="Email already in use by another local user")
         current_user.email = profile.email
         await db.commit()
         await db.refresh(current_user)
@@ -531,6 +552,10 @@ async def change_password(
     from app.core.security import increment_token_version
     await increment_token_version(current_user.id)
 
+    # Emit password changed event for notification
+    from app.services.event_emitter import emit_password_changed
+    await emit_password_changed(current_user.username)
+
     # Audit log for password change
     from app.services.terminal_service import TerminalService
     ts = TerminalService(db)
@@ -543,6 +568,34 @@ async def change_password(
 
 
 # ==================== Admin User Management APIs ====================
+
+
+@router.get("/users/email-available", response_model=dict)
+async def check_email_available(
+    email: str = Query(..., description="Email address to check"),
+    exclude_user_id: int | None = Query(None, description="User ID to exclude (for update)"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Check if an email is available for use by a local user"""
+    if not email:
+        return {"available": True, "used_by": None}
+
+    query = select(User).where(User.email == email, User.provider == "local")
+    if exclude_user_id:
+        query = query.where(User.id != exclude_user_id)
+
+    result = await db.execute(query)
+    existing_user = result.scalar_one_or_none()
+
+    if existing_user:
+        return {
+            "available": False,
+            "used_by": {
+                "id": existing_user.id,
+                "username": existing_user.username,
+            },
+        }
+    return {"available": True, "used_by": None}
 
 
 @router.get("/users", response_model=list[UserDetailResponse])
@@ -568,16 +621,35 @@ async def list_users(
         stmt = stmt.where(User.is_active == is_active)
     result = await db.execute(stmt)
     users = result.scalars().all()
-    # Build response with role names
+
+    from app.core.security import get_redis_client
+    try:
+        redis_client = await get_redis_client()
+        lock_info = {}
+        for u in users:
+            lock_key = f"login_lock:{u.username}"
+            ttl = await redis_client.ttl(lock_key)
+            lock_info[u.username] = {
+                "is_locked": ttl > 0,
+                "lock_remaining_seconds": ttl if ttl > 0 else None,
+            }
+    except Exception as e:
+        from loguru import logger
+        logger.warning(f"Redis unavailable, skipping lock status check: {e}")
+        lock_info = {}
+
     response = []
     for u in users:
         role_names = [r.name for r in u.roles] if u.roles else []
+        lock_data = lock_info.get(u.username, {"is_locked": False, "lock_remaining_seconds": None})
         response.append(UserDetailResponse(
             id=u.id, username=u.username, email=u.email,
             is_active=u.is_active, is_superuser=u.is_superuser,
             roles=role_names, permissions=[],
             provider=u.provider, provider_user_id=u.provider_user_id,
             created_at=u.created_at, updated_at=u.updated_at,
+            is_locked=lock_data["is_locked"],
+            lock_remaining_seconds=lock_data["lock_remaining_seconds"],
         ))
     return response
 
@@ -595,11 +667,11 @@ async def admin_create_user(
     if result.scalar_one_or_none():
         raise HTTPException(status_code=400, detail="Username already exists")
 
-    # Check email uniqueness
-    if user_data.email:
-        result = await db.execute(select(User).where(User.email == user_data.email))
+    # Check email uniqueness for local users (unless force_email is true)
+    if user_data.email and not user_data.force_email:
+        result = await db.execute(select(User).where(User.email == user_data.email, User.provider == "local"))
         if result.scalar_one_or_none():
-            raise HTTPException(status_code=400, detail="Email already in use")
+            raise HTTPException(status_code=400, detail="Email already in use by another local user")
 
     new_user = User(
         username=user_data.username,
@@ -634,6 +706,10 @@ async def admin_create_user(
     new_user.is_superuser = False
 
     await db.commit()
+
+    # Emit user created event for notification
+    from app.services.event_emitter import emit_user_created
+    await emit_user_created(new_user.username, current_user.username)
 
     # Audit log
     from app.services.terminal_service import TerminalService
@@ -698,9 +774,10 @@ async def admin_update_user(
 
     if user_data.email is not None:
         if user_data.email != user.email:
-            email_check = await db.execute(select(User).where(User.email == user_data.email))
-            if email_check.scalar_one_or_none():
-                raise HTTPException(status_code=400, detail="Email already in use")
+            if not user_data.force_email:
+                email_check = await db.execute(select(User).where(User.email == user_data.email, User.provider == "local"))
+                if email_check.scalar_one_or_none():
+                    raise HTTPException(status_code=400, detail="Email already in use by another local user")
         user.email = user_data.email
 
     if user_data.is_active is not None:
@@ -731,6 +808,10 @@ async def admin_update_user(
 
         # Invalidate permission cache
         await invalidate_user_permissions(user.id)
+
+        # Emit role changed event for notification
+        from app.services.event_emitter import emit_role_changed
+        await emit_role_changed(user.username, current_user.username, old_role, new_role)
 
         # Dedicated audit log for role change
         from app.services.terminal_service import TerminalService
@@ -764,10 +845,14 @@ async def admin_update_user(
         await db.refresh(user)
         await invalidate_user_permissions(user.id)
 
+    # Emit user updated event for notification
+    from app.services.event_emitter import emit_user_updated
+    changes = list(user_data.model_dump(exclude_unset=True).keys())
+    await emit_user_updated(user.username, current_user.username, changes)
+
     # Audit log
     from app.services.terminal_service import TerminalService
     ts = TerminalService(db)
-    changes = list(user_data.model_dump(exclude_unset=True).keys())
     await ts.log_action(current_user.username, "update_user", "user", str(user.id),
                         {"message": "Updated user", "username": user.username,
                          "changes": changes},
@@ -806,6 +891,10 @@ async def admin_delete_user(
     await db.delete(user)
     await db.commit()
 
+    # Emit user deleted event for notification
+    from app.services.event_emitter import emit_user_deleted
+    await emit_user_deleted(deleted_username, current_user.username)
+
     # Audit log
     from app.services.terminal_service import TerminalService
     ts = TerminalService(db)
@@ -843,6 +932,10 @@ async def admin_reset_password(
     # Invalidate all existing tokens for this user
     from app.core.security import increment_token_version
     await increment_token_version(user.id)
+
+    # Emit password changed event for notification
+    from app.services.event_emitter import emit_password_changed
+    await emit_password_changed(user.username)
 
     # Audit log
     from app.services.terminal_service import TerminalService
@@ -916,12 +1009,14 @@ async def admin_lock_user(
 
 class PasswordResetRequest(BaseModel):
     """Request body for password reset initiation"""
-    email: str
+    username: str | None = None
+    email: str | None = None
 
 
 class PasswordResetVerify(BaseModel):
     """Request body for password reset verification and completion"""
-    email: str
+    email: str | None = None
+    username: str | None = None
     code: str
     new_password: str
 
@@ -932,13 +1027,18 @@ async def request_password_reset(
     db: AsyncSession = Depends(get_db),
 ):
     """Request password reset - sends verification code to user's email"""
-    result = await db.execute(select(User).where(User.email == data.email))
-    user = result.scalar_one_or_none()
+    user = None
+    if data.username:
+        result = await db.execute(select(User).where(User.username == data.username))
+        user = result.scalar_one_or_none()
+    elif data.email:
+        result = await db.execute(select(User).where(User.email == data.email))
+        user = result.scalar_one_or_none()
 
     if not user:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Email not found. Please check your email address.",
+            detail="User not found. Please check your username.",
         )
 
     if user.provider != "local":
@@ -953,14 +1053,22 @@ async def request_password_reset(
             detail="Account is disabled. Please contact your administrator.",
         )
 
-    from app.services.notification_service import NotificationService
+    if not user.email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Your account does not have an email address configured. Please contact your administrator.",
+        )
 
-    notification_service = NotificationService(db)
-    await notification_service.send_password_reset_code(user_id=user.id, email=data.email)
+    from app.services.email_service import send_password_reset_email
+    await send_password_reset_email(email=user.email, user_id=user.id)
+
+    from app.services.event_emitter import emit_password_reset_requested
+    await emit_password_reset_requested(user.username, user.email)
 
     return {
         "message": "Verification code sent successfully. Please check your email.",
         "success": True,
+        "email": user.email,
     }
 
 
@@ -971,13 +1079,18 @@ async def verify_and_reset_password(
     db: AsyncSession = Depends(get_db),
 ):
     """Verify verification code and reset password"""
-    result = await db.execute(select(User).where(User.email == data.email))
-    user = result.scalar_one_or_none()
+    user = None
+    if data.username:
+        result = await db.execute(select(User).where(User.username == data.username))
+        user = result.scalar_one_or_none()
+    elif data.email:
+        result = await db.execute(select(User).where(User.email == data.email))
+        user = result.scalar_one_or_none()
 
     if not user:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Email not found.",
+            detail="User not found.",
         )
 
     if user.provider != "local":
@@ -986,10 +1099,8 @@ async def verify_and_reset_password(
             detail=f"Password reset is not supported for {user.provider} users.",
         )
 
-    from app.services.notification_service import NotificationService
-
-    notification_service = NotificationService(db)
-    is_valid = await notification_service.verify_password_reset_code(user_id=user.id, code=data.code)
+    from app.services.email_service import verify_email_code
+    is_valid = await verify_email_code(user_id=user.id, code=data.code, purpose="password_reset")
 
     if not is_valid:
         raise HTTPException(

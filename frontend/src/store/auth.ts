@@ -24,6 +24,16 @@ interface AuthState {
 
 const AUTH_TIMEOUT = 10000; // 10 seconds
 
+const decodeJwt = (token: string): { exp?: number } | null => {
+  try {
+    const payload = token.split('.')[1];
+    const decoded = atob(payload.replace(/-/g, '+').replace(/_/g, '/'));
+    return JSON.parse(decoded);
+  } catch {
+    return null;
+  }
+};
+
 export const useAuthStore = create<AuthState>()((set) => ({
   user: null,
   isAuthenticated: false,
@@ -31,11 +41,16 @@ export const useAuthStore = create<AuthState>()((set) => ({
   login: (user, accessToken, refreshToken) => {
     sessionStorage.setItem('access_token', accessToken);
     sessionStorage.setItem('refresh_token', refreshToken);
+    const decoded = decodeJwt(accessToken);
+    if (decoded?.exp) {
+      sessionStorage.setItem('token_expires_at', decoded.exp.toString());
+    }
     set({ user, isAuthenticated: true });
   },
   logout: () => {
     sessionStorage.removeItem('access_token');
     sessionStorage.removeItem('refresh_token');
+    sessionStorage.removeItem('token_expires_at');
     set({ user: null, isAuthenticated: false });
   },
   setUser: (user) => set({ user }),
@@ -65,6 +80,10 @@ export const useAuthStore = create<AuthState>()((set) => ({
           const { access_token, refresh_token: new_refresh } = response.data;
           sessionStorage.setItem('access_token', access_token);
           sessionStorage.setItem('refresh_token', new_refresh);
+          const decoded = decodeJwt(access_token);
+          if (decoded?.exp) {
+            sessionStorage.setItem('token_expires_at', decoded.exp.toString());
+          }
 
           // Fetch user info with new token
           const meResponse = await apiClient.get('/auth/me', {
