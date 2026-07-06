@@ -51,6 +51,11 @@ const Login: React.FC = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [loginBgUrl, setLoginBgUrl] = useState('');
   const [appVersion, setAppVersion] = useState(branding.version);
+  const [loginHeading, setLoginHeading] = useState(branding.login.heading);
+  const [loginFooterText, setLoginFooterText] = useState(branding.login.footerText);
+  const [footerCopyright, setFooterCopyright] = useState(branding.footer.copyright);
+  const [footerIcpNumber, setFooterIcpNumber] = useState(branding.footer.icpNumber);
+  const [footerIcpUrl, setFooterIcpUrl] = useState(branding.footer.icpUrl);
   const [authProviders, setAuthProviders] = useState<AuthProvider[]>([]);
   const [selectedProvider, setSelectedProvider] = useState('local');
   const errorTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -72,7 +77,7 @@ const Login: React.FC = () => {
     }
   };
 
-  // Load branding config (background image, favicon) and version on mount
+  // Load branding config (background image, favicon, footer text, ICP info) and version on mount
   useEffect(() => {
     const loadBranding = async () => {
       try {
@@ -89,6 +94,21 @@ const Login: React.FC = () => {
             document.head.appendChild(link);
           }
           link.href = cfg.favicon_url;
+        }
+        if (cfg.login_heading !== undefined) {
+          setLoginHeading(cfg.login_heading || branding.login.heading);
+        }
+        if (cfg.login_footer_text !== undefined) {
+          setLoginFooterText(cfg.login_footer_text || branding.login.footerText);
+        }
+        if (cfg.footer_copyright !== undefined) {
+          setFooterCopyright(cfg.footer_copyright || branding.footer.copyright);
+        }
+        if (cfg.footer_icp_number !== undefined) {
+          setFooterIcpNumber(cfg.footer_icp_number ?? branding.footer.icpNumber);
+        }
+        if (cfg.footer_icp_url !== undefined) {
+          setFooterIcpUrl(cfg.footer_icp_url || branding.footer.icpUrl);
         }
       } catch {
         // Silently use defaults
@@ -296,7 +316,7 @@ const Login: React.FC = () => {
                 })()
               )}
             </div>
-            <h2 className="text-2xl font-bold text-white">{branding.login.heading}</h2>
+            <h2 className="text-2xl font-bold text-white">{loginHeading}</h2>
             <p className="text-blue-100 mt-2">{t('auth.signInToAccount')}</p>
           </div>
 
@@ -500,11 +520,15 @@ const Login: React.FC = () => {
                 )}
               </button>
 
-              {selectedProvider === 'local' && (
+              {selectedProvider === 'local' && (isLocked || captchaRequired) && (
                 <div className="mt-4 text-center">
                   <button
                     type="button"
-                    onClick={() => navigate('/password-reset')}
+                    onClick={() => {
+                      const usernameInput = document.querySelector('input[name="username"]') as HTMLInputElement | null;
+                      const username = usernameInput?.value || '';
+                      navigate(username ? `/password-reset?username=${encodeURIComponent(username)}` : '/password-reset');
+                    }}
                     className="text-sm text-blue-600 hover:text-blue-700 transition-colors"
                   >
                     {t('auth.forgotPassword')}
@@ -527,23 +551,23 @@ const Login: React.FC = () => {
 
         {/* Footer text */}
         <p className="text-center text-xs text-muted-foreground mt-6">
-          {t('auth.secureAuthFooter')}
+          {loginFooterText || t('auth.secureAuthFooter')}
         </p>
         {/* Footer info */}
         <div className="flex flex-col sm:flex-row items-center justify-center gap-2 text-xs text-muted-foreground mt-3">
-          <span>{branding.footer.copyright.replace('{year}', String(new Date().getFullYear()))}</span>
+          <span>{footerCopyright.replace('{year}', String(new Date().getFullYear()))}</span>
           <span className="hidden sm:inline">|</span>
           <span>{appVersion}</span>
-          {branding.footer.icpNumber && (
+          {footerIcpNumber && (
             <>
               <span className="hidden sm:inline">|</span>
               <a
-                href={branding.footer.icpUrl}
+                href={footerIcpUrl}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="hover:text-foreground transition-colors"
               >
-                {branding.footer.icpNumber}
+                {footerIcpNumber}
               </a>
             </>
           )}

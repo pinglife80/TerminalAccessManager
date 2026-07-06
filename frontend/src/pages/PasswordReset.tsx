@@ -1,63 +1,101 @@
 import React, { useState } from 'react';
 import { useForm } from 'react-hook-form';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { useMutation } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { apiClient } from '@/lib/api';
-import { Shield, Mail, Lock, AlertCircle, ArrowLeft, Eye, EyeOff } from 'lucide-react';
+import { Shield, Mail, Lock, AlertCircle, ArrowLeft, Eye, EyeOff, User } from 'lucide-react';
+import { toast } from 'sonner';
 import branding from '@/config/branding';
 import HeaderControls from '@/components/HeaderControls';
 
 type ResetStep = 'request' | 'verify';
 
 interface RequestFormData {
-  email: string;
+  username: string;
 }
 
 interface VerifyFormData {
+  username: string;
   email: string;
   code: string;
   new_password: string;
 }
 
+const maskEmail = (email: string): string => {
+  const parts = email.split('@');
+  if (parts.length !== 2) return email;
+  const local = parts[0];
+  const domain = parts[1];
+  if (local.length <= 2) return email;
+  return `${local.slice(0, 2)}***@${domain}`;
+};
+
 const PasswordReset: React.FC = () => {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const location = useLocation();
   const [step, setStep] = useState<ResetStep>('request');
   const [showPassword, setShowPassword] = useState(false);
+  const [requestUsername, setRequestUsername] = useState('');
   const [requestEmail, setRequestEmail] = useState('');
   const [countdown, setCountdown] = useState(0);
 
-  const requestForm = useForm<RequestFormData>();
+  const usernameFromUrl = new URLSearchParams(location.search).get('username') || '';
+
+  const requestForm = useForm<RequestFormData>({
+    defaultValues: {
+      username: usernameFromUrl,
+    },
+  });
+
   const verifyForm = useForm<VerifyFormData>({
     defaultValues: {
-      email: requestEmail,
+      username: '',
+      email: '',
     },
   });
 
   const requestMutation = useMutation({
     mutationFn: async (data: RequestFormData) => {
-      await apiClient.post('/auth/password-reset/request', data);
-      return data.email;
+      const response = await apiClient.post('/auth/password-reset/request', data);
+      return response.data;
     },
-    onSuccess: (email) => {
+    onSuccess: (response) => {
+      const username = requestForm.getValues('username');
+      const email = response.email || '';
+      setRequestUsername(username);
       setRequestEmail(email);
+      verifyForm.reset({
+        username,
+        email,
+        code: '',
+        new_password: '',
+      });
       setStep('verify');
       setCountdown(60);
     },
     onError: (error: unknown) => {
       const axiosError = error as { response?: { data?: { detail?: string } } };
       const message = axiosError.response?.data?.detail || t('auth.passwordResetFailed');
-      requestForm.setError('email', { message });
+      requestForm.setError('username', { message });
     },
   });
 
   const verifyMutation = useMutation({
     mutationFn: async (data: VerifyFormData) => {
-      await apiClient.post('/auth/password-reset/verify', data);
+      await apiClient.post('/auth/password-reset/verify', {
+        username: data.username,
+        email: data.email,
+        code: data.code,
+        new_password: data.new_password,
+      });
     },
     onSuccess: () => {
-      navigate('/login');
+      toast.success(t('auth.passwordResetSuccess'));
+      setTimeout(() => {
+        navigate('/login');
+      }, 2000);
     },
     onError: (error: unknown) => {
       const axiosError = error as { response?: { data?: { detail?: string } } };
@@ -88,7 +126,7 @@ const PasswordReset: React.FC = () => {
   };
 
   const handleResendCode = () => {
-    requestMutation.mutate({ email: requestEmail });
+    requestMutation.mutate({ username: requestUsername });
   };
 
   return (
@@ -113,38 +151,51 @@ const PasswordReset: React.FC = () => {
                 {step === 'request' ? t('auth.forgotPassword') : t('auth.resetPassword')}
               </h2>
               <p className="text-blue-100 mt-2">
-                {step === 'request' ? t('auth.enterEmailToReset') : t('auth.enterCodeAndNewPassword')}
+                {step === 'request' ? t('auth.enterUsernameToReset') : t('auth.enterCodeAndNewPassword')}
               </p>
             </div>
 
             <div className="px-8 py-8 -mt-6">
+              {step === 'verify' && requestEmail && (
+                <div className="mb-6 p-4 bg-green-50 border border-green-200 rounded-xl flex items-start gap-3">
+                  <Mail className="h-5 w-5 text-green-600 flex-shrink-0 mt-0.5" />
+                  <div>
+                    <p className="text-sm font-semibold text-green-800">
+                      {t('auth.verificationCodeSent')}
+                    </p>
+                    <p className="text-xs text-green-600 mt-1">
+                      {t('auth.checkEmail', { email: maskEmail(requestEmail) })}
+                    </p>
+                  </div>
+                </div>
+              )}
+
               {step === 'request' && (
                 <form onSubmit={requestForm.handleSubmit(handleRequestSubmit)} className="space-y-5">
                   <div>
                     <label className="block text-sm font-semibold text-muted-foreground mb-2">
-                      {t('auth.email')}
+                      {t('auth.username')}
                     </label>
                     <div className="relative">
                       <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                        <Mail className="h-5 w-5 text-muted-foreground" />
+                        <User className="h-5 w-5 text-muted-foreground" />
                       </div>
                       <input
-                        {...requestForm.register('email', {
-                          required: t('auth.emailRequired'),
-                          pattern: { value: /^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$/i, message: t('auth.invalidEmail') },
+                        {...requestForm.register('username', {
+                          required: t('auth.usernameRequired'),
                         })}
-                        type="email"
+                        type="text"
                         className={`w-full pl-10 pr-4 py-3 border-2 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all text-foreground bg-background placeholder-muted-foreground ${
-                          requestForm.formState.errors.email ? 'border-red-400 bg-red-50' : 'border-border focus:bg-card'
+                          requestForm.formState.errors.username ? 'border-red-400 bg-red-50' : 'border-border focus:bg-card'
                         }`}
-                        placeholder={t('auth.enterEmail')}
+                        placeholder={t('auth.enterUsername')}
                         autoFocus
                       />
                     </div>
-                    {requestForm.formState.errors.email && (
+                    {requestForm.formState.errors.username && (
                       <div className="flex items-center gap-1.5 mt-2">
                         <AlertCircle className="h-3.5 w-3.5 text-red-500" />
-                        <p className="text-xs text-red-600">{requestForm.formState.errors.email.message}</p>
+                        <p className="text-xs text-red-600">{requestForm.formState.errors.username.message}</p>
                       </div>
                     )}
                   </div>
@@ -189,13 +240,11 @@ const PasswordReset: React.FC = () => {
                         <Mail className="h-5 w-5 text-muted-foreground" />
                       </div>
                       <input
-                        {...verifyForm.register('email', {
-                          required: t('auth.emailRequired'),
-                        })}
+                        {...verifyForm.register('email')}
                         type="email"
-                        className="w-full pl-10 pr-4 py-3 border-2 border-border rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all text-foreground bg-background placeholder-muted-foreground"
+                        readOnly
+                        className="w-full pl-10 pr-4 py-3 border-2 border-border rounded-xl text-foreground bg-muted/30 placeholder-muted-foreground cursor-not-allowed"
                         placeholder={t('auth.enterEmail')}
-                        autoFocus
                       />
                     </div>
                   </div>
@@ -220,6 +269,7 @@ const PasswordReset: React.FC = () => {
                           verifyForm.formState.errors.code ? 'border-red-400 bg-red-50' : 'border-border focus:bg-card'
                         }`}
                         placeholder="000000"
+                        autoFocus
                       />
                     </div>
                     {verifyForm.formState.errors.code && (
@@ -232,14 +282,14 @@ const PasswordReset: React.FC = () => {
                       type="button"
                       onClick={handleResendCode}
                       disabled={countdown > 0 || requestMutation.isPending}
-                      className="mt-2 text-sm text-blue-600 hover:text-blue-700 disabled:text-muted-foreground disabled:cursor-not-allowed transition-colors"
+                      className="mt-3 text-sm text-blue-600 hover:text-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       {countdown > 0 ? (
-                        `${t('auth.resendCode')} (${countdown}s)`
+                        <span>{t('auth.resendCodeIn', { seconds: countdown })}</span>
                       ) : requestMutation.isPending ? (
-                        t('auth.sending')
+                        <span>{t('auth.sending')}</span>
                       ) : (
-                        t('auth.resendCode')
+                        <span>{t('auth.resendCode')}</span>
                       )}
                     </button>
                   </div>
@@ -256,7 +306,10 @@ const PasswordReset: React.FC = () => {
                         {...verifyForm.register('new_password', {
                           required: t('auth.passwordRequired'),
                           minLength: { value: 8, message: t('auth.passwordMinLength') },
-                          pattern: { value: /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$/, message: t('auth.passwordRequirements') },
+                          pattern: {
+                            value: /^(?=.*[A-Z])(?=.*[a-z])(?=.*\d)[^\s]{8,}$/,
+                            message: t('auth.passwordComplexity'),
+                          },
                         })}
                         type={showPassword ? 'text' : 'password'}
                         className={`w-full pl-10 pr-12 py-3 border-2 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all text-foreground bg-background placeholder-muted-foreground ${
@@ -267,10 +320,13 @@ const PasswordReset: React.FC = () => {
                       <button
                         type="button"
                         onClick={() => setShowPassword(!showPassword)}
-                        className="absolute inset-y-0 right-0 pr-3 flex items-center text-muted-foreground hover:text-foreground transition-colors"
-                        tabIndex={-1}
+                        className="absolute inset-y-0 right-0 pr-3 flex items-center"
                       >
-                        {showPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
+                        {showPassword ? (
+                          <EyeOff className="h-5 w-5 text-muted-foreground hover:text-foreground" />
+                        ) : (
+                          <Eye className="h-5 w-5 text-muted-foreground hover:text-foreground" />
+                        )}
                       </button>
                     </div>
                     {verifyForm.formState.errors.new_password && (
@@ -303,21 +359,17 @@ const PasswordReset: React.FC = () => {
                     type="button"
                     onClick={() => {
                       setStep('request');
-                      requestForm.reset();
+                      setCountdown(0);
                     }}
                     className="w-full flex items-center justify-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
                   >
                     <ArrowLeft className="h-4 w-4" />
-                    {t('auth.backToEnterEmail')}
+                    {t('auth.backToUsername')}
                   </button>
                 </form>
               )}
             </div>
           </div>
-
-          <p className="text-center text-xs text-muted-foreground mt-6">
-            {t('auth.secureAuthFooter')}
-          </p>
         </div>
       </div>
     </div>

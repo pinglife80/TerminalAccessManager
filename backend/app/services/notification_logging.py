@@ -13,6 +13,7 @@ from loguru import logger
 from sqlalchemy import Integer, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.timezone import now
 from app.models.notification import NotificationLog, NotificationTemplate
 from app.services.notification_channels import NotificationEvent, NotificationResult
 
@@ -94,7 +95,7 @@ class NotificationLogger:
                 event_type=event.type,
                 status="suppressed",
                 details={"suppression_window": window},
-                completed_at=datetime.utcnow(),
+                completed_at=now().replace(tzinfo=None),
             )
             session.add(log)
             await session.commit()
@@ -117,7 +118,7 @@ class NotificationLogger:
                 status="sent",
                 recipient=result.recipient,
                 details=result.details,
-                completed_at=datetime.utcnow(),
+                completed_at=now().replace(tzinfo=None),
             )
             session.add(log)
             await session.commit()
@@ -188,7 +189,7 @@ class NotificationLogger:
                     error_message=result.message,
                     details=result.details,
                     retry_count=retry_count,
-                    completed_at=datetime.utcnow(),
+                    completed_at=now().replace(tzinfo=None),
                 )
                 session.add(log)
             else:
