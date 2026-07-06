@@ -58,7 +58,9 @@ const NotificationMonitor: React.FC = () => {
       const response = await apiClient.get<StatsResponse>(API_ENDPOINTS.NOTIFICATION_STATS);
       setStats(response.data);
     } catch (err) {
-      toast.error(getErrorMessage(err));
+      const errorMsg = getErrorMessage(err);
+      toast.error(errorMsg);
+      console.error('Notification stats fetch error:', err);
     } finally {
       if (showLoading) setLoading(false);
     }
