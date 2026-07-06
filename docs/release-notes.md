@@ -1,10 +1,84 @@
 # 版本跟踪记录
 
-> 文档版本：v3.6.0 | 更新日期：2026-07-03
+> 文档版本：v3.6.1 | 更新日期：2026-07-06
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
+
+---
+
+## [v3.6.1] - 2026-07-06
+
+### 稳定性修复版本：品牌配置同步、密码校验、时区处理
+
+#### 品牌配置同步修复
+
+- 登录页面支持动态加载 `login_heading`、`login_footer_text`、`footer_copyright`、`footer_icp_number`、`footer_icp_url` 字段
+- 配置修改后刷新页面即可生效，无需重新构建
+- 回退机制：后端不可用时使用 `branding.ts` 静态默认值
+
+#### 密码系统优化
+
+- 密码复杂度规则统一：至少8位，必须包含大写字母、小写字母和数字，允许特殊字符
+- 密码重置流程优化：成功提示 → 2秒延迟 → 跳转登录页
+- 邮箱重复使用确认：管理员可确认后使用重复邮箱（`force_email` 参数）
+
+#### 时区处理统一
+
+- 后端时间戳统一使用 `app.core.timezone.now()`（Asia/Shanghai）
+- 前端日期格式化统一使用 `Intl.DateTimeFormat` 指定 Asia/Shanghai 时区
+- 通知日志修复：aware datetime → naive datetime 转换，解决写入 `TIMESTAMP WITHOUT TIME ZONE` 字段失败问题
+
+#### 事件通知增强
+
+- 新增6个安全事件类型，覆盖用户全生命周期操作：
+  - `security.user_deleted`：用户删除事件
+  - `security.user_updated`：用户更新事件
+  - `security.password_changed`：密码修改事件
+  - `security.role_changed`：角色变更事件
+  - `security.login_locked`：登录锁定事件
+  - `security.password_reset_requested`：密码重置请求事件
+- 登录锁定事件自动触发通知，提升安全监控能力
+
+#### 会话管理增强
+
+- 新增 `useTokenExpiration` hook：前端主动检测 JWT 令牌过期时间
+- 支持令牌自动刷新和超时自动登出
+- 会话过期前1分钟显示警告提示
+
+#### 用户体验优化
+
+- 用户管理页面区分显示 Active/Locked/Disabled 三种状态（Locked 状态从 Redis 获取）
+- 忘记密码链接仅在密码输入错误次数触发安全校验后显示
+- 密码重置时自动传递用户名到重置页面，无需用户重复输入
+
+#### API 数据源测试认证修复
+
+- 修复 ARP API 类型数据源测试连接时未处理自定义 Header 认证的问题
+- 支持 bearer 和 header 两种认证方式
+
+#### 提交记录
+
+```
+fix(branding): sync login page branding config from backend
+feat(event): add security event emitters for user operations
+feat(auth): add token expiration detection and email availability check
+i18n: add missing auth translation keys
+refactor(notification): optimize service and channel implementations
+chore(service): minor service optimizations
+docs(changelog): update changelog for v3.6.1
+docs(branding): update branding guide to v3.6.1
+docs(release): add v3.6.1 release notes
+```
+
+#### 测试验证
+
+- ✅ 品牌配置动态加载验证通过
+- ✅ 密码重置流程端到端验证通过
+- ✅ 通知日志时区错误修复验证通过
+- ✅ 事件发射器集成测试通过
+- ✅ 后端单元测试 131 个通过（2 个失败为 v3.6.0 已存在的测试代码问题）
 
 ---
 
