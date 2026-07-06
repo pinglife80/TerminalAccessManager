@@ -33,23 +33,29 @@ class NotificationRulesEngine:
         db: AsyncSession | None = None,
     ) -> dict[str | None, NotificationRule]:
         try:
+            stmt = select(NotificationRule).where(
+                NotificationRule.enabled == True,
+                (NotificationRule.event_type == event_type) | 
+                (NotificationRule.event_type == "*"),
+            ).order_by(
+                (NotificationRule.event_type == event_type).desc(),
+                NotificationRule.priority.asc(),
+            )
+
             if db is None:
                 from app.core.database import async_session_factory
                 async with async_session_factory() as session:
-                    stmt = select(NotificationRule).where(
-                        NotificationRule.event_type == event_type,
-                        NotificationRule.enabled == True,
-                    )
                     result = await session.execute(stmt)
                     rules = result.scalars().all()
             else:
-                stmt = select(NotificationRule).where(
-                    NotificationRule.event_type == event_type,
-                    NotificationRule.enabled == True,
-                )
                 result = await db.execute(stmt)
                 rules = result.scalars().all()
-            return {rule.channel_name: rule for rule in rules}
+
+            result_rules: dict[str | None, NotificationRule] = {}
+            for rule in rules:
+                if rule.channel_name not in result_rules:
+                    result_rules[rule.channel_name] = rule
+            return result_rules
         except Exception as e:
             logger.error(f"Failed to load rules for {event_type}: {e}")
             return {}

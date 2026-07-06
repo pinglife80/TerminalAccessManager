@@ -341,12 +341,13 @@ class NotificationService:
         channel_name: str | None = None,
         event_type: str | None = None,
         status: str | None = None,
+        archived: bool | None = False,
         limit: int = 100,
         offset: int = 0,
     ) -> tuple[list[NotificationLog], int]:
         """Get notification logs with filtering and pagination."""
         logger_inst = self._get_logger()
-        return await logger_inst.get_notification_logs(self.db, channel_name, event_type, status, limit, offset)
+        return await logger_inst.get_notification_logs(self.db, channel_name, event_type, status, archived, limit, offset)
 
     async def publish_event(
         self,
@@ -463,52 +464,60 @@ class NotificationService:
                 )
                 lat_result = await db.execute(latency_stmt)
                 avg_latency_ms = lat_result.scalar()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Failed to calculate average latency: {e}")
 
-            ch_stmt = select(
-                NotificationLog.channel_name,
-                func.count().label("total"),
-                func.sum(func.cast(NotificationLog.status == "sent", Integer)).label("sent"),
-                func.sum(func.cast(NotificationLog.status == "failed", Integer)).label("failed"),
-            ).group_by(NotificationLog.channel_name).order_by(func.count().desc())
-            ch_result = await db.execute(ch_stmt)
-            by_channel = []
-            for row in ch_result.all():
-                ch_total = row[2]
-                ch_sent = row[3] or 0
-                ch_failed = row[4] or 0
-                ch_deliverable = ch_sent + ch_failed
-                ch_rate = (ch_sent / ch_deliverable * 100) if ch_deliverable > 0 else 100.0
-                by_channel.append({
-                    "channel_name": row[1],
-                    "total": ch_total,
-                    "sent": ch_sent,
-                    "failed": ch_failed,
-                    "success_rate": round(ch_rate, 2),
-                })
+            try:
+                ch_stmt = select(
+                    NotificationLog.channel_name,
+                    func.count(NotificationLog.id).label("total"),
+                    func.count(NotificationLog.id).filter(NotificationLog.status == "sent").label("sent"),
+                    func.count(NotificationLog.id).filter(NotificationLog.status == "failed").label("failed"),
+                ).group_by(NotificationLog.channel_name).order_by(func.count(NotificationLog.id).desc())
+                ch_result = await db.execute(ch_stmt)
+                by_channel = []
+                for row in ch_result.all():
+                    ch_total = row[2]
+                    ch_sent = row[3] or 0
+                    ch_failed = row[4] or 0
+                    ch_deliverable = ch_sent + ch_failed
+                    ch_rate = (ch_sent / ch_deliverable * 100) if ch_deliverable > 0 else 100.0
+                    by_channel.append({
+                        "channel_name": row[1],
+                        "total": ch_total,
+                        "sent": ch_sent,
+                        "failed": ch_failed,
+                        "success_rate": round(ch_rate, 2),
+                    })
+            except Exception as e:
+                logger.error(f"Failed to get channel statistics: {e}")
+                by_channel = []
 
-            ev_stmt = select(
-                NotificationLog.event_type,
-                func.count().label("total"),
-                func.sum(func.cast(NotificationLog.status == "sent", Integer)).label("sent"),
-                func.sum(func.cast(NotificationLog.status == "failed", Integer)).label("failed"),
-            ).group_by(NotificationLog.event_type).order_by(func.count().desc())
-            ev_result = await db.execute(ev_stmt)
-            by_event = []
-            for row in ev_result.all():
-                ev_total = row[2]
-                ev_sent = row[3] or 0
-                ev_failed = row[4] or 0
-                ev_deliverable = ev_sent + ev_failed
-                ev_rate = (ev_sent / ev_deliverable * 100) if ev_deliverable > 0 else 100.0
-                by_event.append({
-                    "event_type": row[1],
-                    "total": ev_total,
-                    "sent": ev_sent,
-                    "failed": ev_failed,
-                    "success_rate": round(ev_rate, 2),
-                })
+            try:
+                ev_stmt = select(
+                    NotificationLog.event_type,
+                    func.count(NotificationLog.id).label("total"),
+                    func.count(NotificationLog.id).filter(NotificationLog.status == "sent").label("sent"),
+                    func.count(NotificationLog.id).filter(NotificationLog.status == "failed").label("failed"),
+                ).group_by(NotificationLog.event_type).order_by(func.count(NotificationLog.id).desc())
+                ev_result = await db.execute(ev_stmt)
+                by_event = []
+                for row in ev_result.all():
+                    ev_total = row[2]
+                    ev_sent = row[3] or 0
+                    ev_failed = row[4] or 0
+                    ev_deliverable = ev_sent + ev_failed
+                    ev_rate = (ev_sent / ev_deliverable * 100) if ev_deliverable > 0 else 100.0
+                    by_event.append({
+                        "event_type": row[1],
+                        "total": ev_total,
+                        "sent": ev_sent,
+                        "failed": ev_failed,
+                        "success_rate": round(ev_rate, 2),
+                    })
+            except Exception as e:
+                logger.error(f"Failed to get event statistics: {e}")
+                by_event = []
 
         queue_size = 0
         retry_queue_size = 0

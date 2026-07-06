@@ -71,7 +71,7 @@ readonly BACKUP_DIR="${SCRIPT_DIR}/backups"
 readonly LOCK_FILE="/tmp/tam_manage.lock"
 readonly STATE_DIR="${SCRIPT_DIR}/.manage"
 readonly STATE_FILE="${STATE_DIR}/state.env"
-readonly VERSION="3.6.0"
+readonly VERSION="3.6.2"
 
 # Docker Compose project name (derived from directory name)
 readonly COMPOSE_PROJECT_NAME="tam"

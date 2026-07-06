@@ -7,7 +7,7 @@ import { getErrorMessage, formatDateTime } from '@/lib/utils';
 import {
   Bell, Plus, Edit2, Trash2, CheckCircle, AlertCircle, TestTube, Save, X,
   Mail, Link2, MessageCircle, FileText, ChevronDown, Send, XCircle,
-  LayoutTemplate, Shield, BarChart3,
+  LayoutTemplate, Shield, BarChart3, Archive,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { PrimaryButton } from '@/components/Button';
@@ -353,6 +353,50 @@ const Notifications: React.FC = () => {
     setLogPage(1);
   };
 
+  const handleArchiveLog = async (logId: number) => {
+    if (!confirm('Are you sure you want to archive this log?')) return;
+    try {
+      await apiClient.post(`${API_ENDPOINTS.NOTIFICATION_LOGS}/${logId}/archive`);
+      toast.success('Log archived successfully');
+      setLogPage(1);
+    } catch (err) {
+      toast.error(getErrorMessage(err));
+    }
+  };
+
+  const handleDeleteLog = async (logId: number) => {
+    if (!confirm('Are you sure you want to delete this log? This action cannot be undone.')) return;
+    try {
+      await apiClient.delete(`${API_ENDPOINTS.NOTIFICATION_LOGS}/${logId}`);
+      toast.success('Log deleted successfully');
+      setLogPage(1);
+    } catch (err) {
+      toast.error(getErrorMessage(err));
+    }
+  };
+
+  const handleArchiveAll = async () => {
+    if (!confirm('Archive all logs older than 30 days?')) return;
+    try {
+      const response = await apiClient.post(`${API_ENDPOINTS.NOTIFICATION_LOGS}/archive-all?days=30`);
+      toast.success(`${response.data.count} logs archived successfully`);
+      setLogPage(1);
+    } catch (err) {
+      toast.error(getErrorMessage(err));
+    }
+  };
+
+  const handleCleanup = async () => {
+    if (!confirm('Clean up (permanently delete) archived logs older than 90 days? This action cannot be undone.')) return;
+    try {
+      const response = await apiClient.delete(`${API_ENDPOINTS.NOTIFICATION_LOGS}/cleanup?days=90`);
+      toast.success(`${response.data.count} archived logs cleaned up successfully`);
+      setLogPage(1);
+    } catch (err) {
+      toast.error(getErrorMessage(err));
+    }
+  };
+
   const statCards = [
     { label: t('notifications.title'), value: stats.totalChannels, icon: Bell, color: 'text-blue-600' },
     { label: t('common.enabled'), value: stats.enabledChannels, icon: CheckCircle, color: 'text-green-600' },
@@ -510,7 +554,7 @@ const Notifications: React.FC = () => {
                                   onChange={(e) => handleToggleEnabled(channel, e.target.checked)}
                                   className="sr-only peer"
                                 />
-                                <div className="w-9 h-5 bg-gray-200 peer-focus:outline-none rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary-500 relative" />
+                                <div className="w-9 h-5 bg-gray-300 peer-focus:outline-none rounded-full peer dark:bg-gray-600 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-green-500 relative" />
                               </label>
                               <button
                                 onClick={() => handleTest(channel.id)}
@@ -624,6 +668,26 @@ const Notifications: React.FC = () => {
         {/* === Logs Tab (D7) === */}
         {activeTab === 'logs' && (
           <div className="bg-card rounded-2xl border border-border p-6">
+            {/* Actions Bar */}
+            <div className="flex flex-wrap items-center justify-between gap-4 mb-4">
+              <div className="flex gap-2">
+                <PrimaryButton
+                  type="button"
+                  variant="secondary"
+                  label="Archive All (30d)"
+                  onClick={() => handleArchiveAll()}
+                  size="sm"
+                />
+                <PrimaryButton
+                  type="button"
+                  variant="danger"
+                  label="Cleanup (90d)"
+                  onClick={() => handleCleanup()}
+                  size="sm"
+                />
+              </div>
+            </div>
+
             {/* Filters */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
               <div>
@@ -690,6 +754,7 @@ const Notifications: React.FC = () => {
                         <th className="py-2 px-3 font-medium">Recipient</th>
                         <th className="py-2 px-3 font-medium">Sent At</th>
                         <th className="py-2 px-3 font-medium">Error</th>
+                        <th className="py-2 px-3 font-medium">Actions</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -706,6 +771,24 @@ const Notifications: React.FC = () => {
                           <td className="py-2 px-3 text-muted-foreground max-w-[150px] truncate" title={log.recipient || ''}>{log.recipient || '-'}</td>
                           <td className="py-2 px-3 text-muted-foreground whitespace-nowrap">{formatDateTime(log.sent_at)}</td>
                           <td className="py-2 px-3 text-red-600 dark:text-red-400 text-xs max-w-[200px] truncate" title={log.error_message || ''}>{log.error_message || '-'}</td>
+                          <td className="py-2 px-3">
+                            <div className="flex items-center gap-1">
+                              <button
+                                onClick={() => handleArchiveLog(log.id)}
+                                className="p-1.5 text-muted-foreground hover:text-yellow-600 hover:bg-yellow-50 dark:hover:bg-yellow-900/20 rounded transition-colors"
+                                title="Archive"
+                              >
+                                <Archive className="h-3.5 w-3.5" />
+                              </button>
+                              <button
+                                onClick={() => handleDeleteLog(log.id)}
+                                className="p-1.5 text-muted-foreground hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded transition-colors"
+                                title="Delete"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </button>
+                            </div>
+                          </td>
                         </tr>
                       ))}
                     </tbody>

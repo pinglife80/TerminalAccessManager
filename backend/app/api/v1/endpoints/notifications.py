@@ -140,6 +140,7 @@ async def list_notification_logs(
     channel_name: str | None = Query(None, description="Filter by channel name"),
     event_type: str | None = Query(None, description="Filter by event type"),
     status: str | None = Query(None, description="Filter by status (sent, failed)"),
+    archived: bool | None = Query(False, description="Include archived logs"),
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
     notification_service: NotificationService = Depends(get_notification_service),
@@ -150,6 +151,7 @@ async def list_notification_logs(
         channel_name=channel_name,
         event_type=event_type,
         status=status,
+        archived=archived,
         limit=limit,
         offset=offset,
     )
@@ -539,3 +541,87 @@ async def retry_all_failed_notifications(
     """Retry all currently failed notifications"""
     count = await notification_service.retry_all_failed()
     return {"message": f"Queued {count} notification(s) for retry", "count": count}
+
+
+@router.delete("/logs/{log_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_notification_log(
+    log_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permission("notification:write")),
+):
+    """Delete a notification log by ID"""
+    result = await db.execute(
+        select(NotificationLog).where(NotificationLog.id == log_id)
+    )
+    log = result.scalar_one_or_none()
+    if not log:
+        raise HTTPException(status_code=404, detail="Notification log not found")
+    await db.delete(log)
+    await db.commit()
+
+
+@router.post("/logs/{log_id}/archive", response_model=dict)
+async def archive_notification_log(
+    log_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permission("notification:write")),
+):
+    """Archive a notification log by ID"""
+    result = await db.execute(
+        select(NotificationLog).where(NotificationLog.id == log_id)
+    )
+    log = result.scalar_one_or_none()
+    if not log:
+        raise HTTPException(status_code=404, detail="Notification log not found")
+    log.archived = True
+    await db.commit()
+    await db.refresh(log)
+    return {"message": "Notification log archived", "log_id": log_id}
+
+
+@router.post("/logs/archive-all", response_model=dict)
+async def archive_all_notification_logs(
+    days: int = Query(30, description="Archive logs older than this number of days"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permission("notification:write")),
+):
+    """Archive all notification logs older than specified days"""
+    from datetime import datetime, timedelta
+    cutoff = datetime.utcnow() - timedelta(days=days)
+    stmt = select(NotificationLog).where(
+        NotificationLog.sent_at < cutoff,
+        NotificationLog.archived == False,
+    )
+    result = await db.execute(stmt)
+    logs = result.scalars().all()
+    count = 0
+    for log in logs:
+        log.archived = True
+        count += 1
+    if count > 0:
+        await db.commit()
+    return {"message": f"Archived {count} notification log(s)", "count": count}
+
+
+@router.delete("/logs/cleanup", response_model=dict)
+async def cleanup_notification_logs(
+    days: int = Query(90, description="Delete archived logs older than this number of days"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permission("notification:write")),
+):
+    """Clean up (permanently delete) archived notification logs older than specified days"""
+    from datetime import datetime, timedelta
+    cutoff = datetime.utcnow() - timedelta(days=days)
+    stmt = select(NotificationLog).where(
+        NotificationLog.sent_at < cutoff,
+        NotificationLog.archived == True,
+    )
+    result = await db.execute(stmt)
+    logs = result.scalars().all()
+    count = 0
+    for log in logs:
+        await db.delete(log)
+        count += 1
+    if count > 0:
+        await db.commit()
+    return {"message": f"Cleaned up {count} archived notification log(s)", "count": count}
