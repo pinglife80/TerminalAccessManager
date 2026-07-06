@@ -27,7 +27,16 @@ export const formatDateTime = (dateString: string | null | undefined): string =>
     if (isNaN(date.getTime())) {
       return dateString;
     }
-    return date.toISOString().replace('T', ' ').slice(0, 19);
+    return new Intl.DateTimeFormat('zh-CN', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+      timeZone: 'Asia/Shanghai',
+    }).format(date);
   } catch {
     return dateString;
   }

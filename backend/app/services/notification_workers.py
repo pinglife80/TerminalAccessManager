@@ -11,6 +11,7 @@ from typing import Any
 
 from loguru import logger
 
+from app.core.timezone import now, now_utc
 from app.services.notification_channels import (
     NotificationChannelBase,
     NotificationEvent,
@@ -176,7 +177,7 @@ class NotificationWorkers:
         event = NotificationEvent(
             id=str(uuid.uuid4()),
             type=event_type,
-            timestamp=datetime.utcnow(),
+            timestamp=now(),
             data=dict(data) if data else {},
             source=source,
             severity=severity,
@@ -192,7 +193,7 @@ class NotificationWorkers:
                     "severity": event.severity,
                     "timestamp": event.timestamp.isoformat(),
                     "retry_count": 0,
-                    "queued_at": datetime.utcnow().isoformat(),
+                    "queued_at": now().isoformat(),
                 }
             )
             await redis.lpush(QUEUE_KEY, payload)
@@ -223,7 +224,7 @@ class NotificationWorkers:
         while self._worker_running:
             try:
                 redis = await self._get_redis()
-                now_ts = datetime.utcnow().timestamp()
+                now_ts = now_utc().timestamp()
                 items = await redis.zrangebyscore(RETRY_KEY, 0, now_ts)
                 for member in items:
                     try:
@@ -363,7 +364,7 @@ class NotificationWorkers:
             redis = await self._get_redis()
             new_retry_count = retry_count + 1
             delay = self._retry_delay(retry_count)
-            next_retry_ts = datetime.utcnow() + timedelta(seconds=delay)
+            next_retry_ts = now_utc() + timedelta(seconds=delay)
             new_payload = {**payload, "retry_count": new_retry_count}
             new_payload["_channel_name"] = channel_name
             member = json.dumps(new_payload, sort_keys=True)

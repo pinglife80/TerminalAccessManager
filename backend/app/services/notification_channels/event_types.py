@@ -40,6 +40,7 @@ class EventType(StrEnum):
     BACKUP_FAILED = "system.backup_failed"
     SYSTEM_ERROR = "system.error"
     SYSTEM_WARNING = "system.warning"
+    SYSTEM_ALERT = "system.alert"
 
     # Compliance events
     COMPLIANCE_RATE_LOW = "alert.compliance_rate_low"
@@ -47,6 +48,7 @@ class EventType(StrEnum):
     BLOCK_THRESHOLD_EXCEEDED = "alert.block_threshold"
     AUTO_BLOCK_TRIGGERED = "alert.auto_block_triggered"
     AUTO_UNBLOCK_TRIGGERED = "alert.auto_unblock_triggered"
+    POLICY_VIOLATION = "alert.policy_violation"
 
     # Admin events
     CONFIG_CHANGED = "admin.config_changed"
@@ -216,6 +218,12 @@ EVENT_METADATA = {
         "severity": "warning",
         "category": "system",
     },
+    EventType.SYSTEM_ALERT: {
+        "name": "系统告警",
+        "description": "系统发出告警通知",
+        "severity": "error",
+        "category": "system",
+    },
     EventType.COMPLIANCE_RATE_LOW: {
         "name": "合规率低",
         "description": "终端合规率低于阈值",
@@ -244,6 +252,12 @@ EVENT_METADATA = {
         "name": "封禁阈值超限",
         "description": "封禁数量超过预设阈值",
         "severity": "warning",
+        "category": "alert",
+    },
+    EventType.POLICY_VIOLATION: {
+        "name": "策略违规",
+        "description": "终端违反了安全策略",
+        "severity": "error",
         "category": "alert",
     },
     EventType.CONFIG_CHANGED: {

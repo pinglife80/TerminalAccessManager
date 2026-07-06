@@ -677,6 +677,12 @@ class ComplianceService:
                 skipped += len(entries) - len(successfully_unblocked_entries)
 
         if unblocked > 0:
+            # Emit auto-unblock event for notification
+            from app.services.event_emitter import emit_auto_unblock_triggered, emit_terminal_unblocked
+            for entry in successfully_unblocked_entries:
+                await emit_auto_unblock_triggered(entry.ip_address, entry.mac_address or "")
+                await emit_terminal_unblocked(entry.ip_address, entry.mac_address or "", "system")
+
             # Audit log for auto-unblock (before commit so it's persisted in the same transaction)
             await self.log_action("system", "auto_unblock_terminal", "terminal", None, {
                 "message": f"Auto-unblocked {unblocked} compliant terminals",

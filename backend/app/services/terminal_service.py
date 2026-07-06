@@ -526,6 +526,10 @@ class TerminalService:
                 )
                 self.db.add(blacklist_entry)
 
+                # Emit terminal blocked event for notification
+                from app.services.event_emitter import emit_terminal_blocked
+                await emit_terminal_blocked(ip_address, mac_address or "", f"Manual block for {block_time}", username)
+
                 # Log the action
                 await self.log_action(username, "block_terminal", "terminal", ip_address,
                                      {"message": f"Blocked IP {ip_address} (MAC: {mac_address}) for {block_time}",
@@ -617,6 +621,10 @@ class TerminalService:
                     logger.info(f"Compliance recalculated after manual unblock of {ip_address}")
                 except Exception as e:
                     logger.warning(f"Failed to recalculate compliance after unblock of {ip_address}: {e}")
+
+                # Emit terminal unblocked event for notification
+                from app.services.event_emitter import emit_terminal_unblocked
+                await emit_terminal_unblocked(ip_address, mac_address or "", username)
 
                 # Log the action
                 await self.log_action(username, "unblock_terminal", "terminal", ip_address,

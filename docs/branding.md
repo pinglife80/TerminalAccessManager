@@ -1,6 +1,6 @@
 # 品牌自定义指南
 
-> 文档版本：v3.3.0 | 更新日期：2026-06-17
+> 文档版本：v3.6.1 | 更新日期：2026-07-06
 
 ## 概述
 
@@ -128,17 +128,17 @@ interface BrandingConfig {
 | Logo 图标名 | `logo.name` | string | `Shield` | Lucide 图标名称 |
 | Logo 图片路径 | `logo.path` | string | `/logo.svg` | 图片文件路径 |
 | Logo 样式 | `logo.className` | string | `text-blue-500` | Tailwind CSS 类名 |
-| 登录标题 | `login.heading` | string | `Terminal Access Manager` | 登录页大标题 |
+| 登录标题 | `login.heading` | string | `Terminal Access Manager` | 登录页大标题（v3.6.1 新增：支持后端动态加载） |
 | 登录副标题 | `login.subheading` | string | `Sign in to your account` | 登录页副标题（优先使用 i18n 翻译键 `auth.signInToAccount`，branding 配置作为回退值） |
-| 登录页脚文字 | `login.footerText` | string | `Secure authentication · Session-based access control` | 登录卡片底部（优先使用 i18n 翻译键 `auth.secureAuthFooter`，branding 配置作为回退值） |
+| 登录页脚文字 | `login.footerText` | string | `Secure authentication · Session-based access control` | 登录卡片底部（优先使用 i18n 翻译键 `auth.secureAuthFooter`，branding 配置作为回退值；v3.6.1 新增：支持后端动态加载） |
 | 背景类型 | `login.background.type` | `'gradient'` \| `'image'` | `'gradient'` | 渐变色或背景图片 |
 | 渐变色类名 | `login.background.gradientClass` | string | `bg-gradient-to-br from-gray-50 via-blue-50 to-indigo-100` | Tailwind 渐变类 |
 | 背景图片路径 | `login.background.imagePath` | string | `/login-bg.jpg` | 背景图片路径 |
 | 按钮渐变色 | `login.buttonGradient` | string | `from-blue-600 to-indigo-600` | 登录按钮渐变 |
 | 头部渐变色 | `login.headerGradient` | string | `from-blue-600 to-indigo-600` | 登录头部渐变 |
-| 版权信息 | `footer.copyright` | string | `© {year} TerminalAccessManager (TAM)` | `{year}` 自动替换 |
-| ICP 备案号 | `footer.icpNumber` | string | `""` | 留空隐藏 |
-| ICP 链接 | `footer.icpUrl` | string | `https://beian.miit.gov.cn/` | 备案链接 |
+| 版权信息 | `footer.copyright` | string | `© {year} TerminalAccessManager (TAM)` | `{year}` 自动替换（v3.6.1 新增：支持后端动态加载） |
+| ICP 备案号 | `footer.icpNumber` | string | `""` | 留空隐藏（v3.6.1 新增：支持后端动态加载） |
+| ICP 链接 | `footer.icpUrl` | string | `https://beian.miit.gov.cn/` | 备案链接（v3.6.1 新增：支持后端动态加载） |
 | 额外链接 | `footer.links` | array | `[]` | 页脚附加链接 |
 
 ## 自定义操作指南

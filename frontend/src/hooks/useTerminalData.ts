@@ -383,6 +383,8 @@ export interface UserItem {
   provider_user_id: string | null;
   created_at: string | null;
   updated_at: string | null;
+  is_locked: boolean;
+  lock_remaining_seconds: number | null;
 }
 
 export const useUsers = (search?: string) => {

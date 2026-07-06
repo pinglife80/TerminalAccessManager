@@ -728,8 +728,13 @@ class DataSourceService:
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 headers = config.get("headers", {})
-                if config.get("auth_type") == "bearer" and config.get("token"):
-                    headers["Authorization"] = f"Bearer {config['token']}"
+                auth_type = config.get("auth_type", "")
+                token = config.get("token", "")
+                if auth_type == "bearer" and token:
+                    headers["Authorization"] = f"Bearer {token}"
+                elif auth_type == "header" and token:
+                    header_name = config.get("header_name", "X-Auth-Token")
+                    headers[header_name] = token
 
                 method = config.get("method", "GET").upper()
                 url = config.get("url", "")
