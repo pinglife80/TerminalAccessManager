@@ -9,8 +9,10 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import FileResponse
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import get_current_user, require_permission
+from app.core.database import get_db
 from app.models.user import User
 from app.schemas.backup import (
     BackupConfigResponse,
@@ -24,9 +26,9 @@ from app.services.backup_service import BackupService
 router = APIRouter(prefix="/backup", tags=["Backup"])
 
 
-def get_backup_service() -> BackupService:
-    """Dependency to get BackupService instance"""
-    return BackupService()
+def get_backup_service(db: AsyncSession = Depends(get_db)) -> BackupService:
+    """Dependency to get BackupService instance with database"""
+    return BackupService(db=db)
 
 
 @router.get("/config", response_model=BackupConfigResponse)
@@ -35,7 +37,7 @@ async def get_backup_config(
     current_user: User = Depends(get_current_user),
 ):
     """Get current backup configuration"""
-    config = backup_service.config
+    config = await backup_service.load_config()
     return BackupConfigResponse(
         enabled=config.enabled,
         schedule=config.schedule,
@@ -56,16 +58,20 @@ async def update_backup_config(
     current_user: User = Depends(require_permission("backup:write")),
 ):
     """Update backup configuration"""
-    backup_service.config.enabled = config_data.enabled
-    backup_service.config.schedule = config_data.schedule
-    backup_service.config.retention_days = config_data.retention_days
-    backup_service.config.storage_type = config_data.storage_type
-    backup_service.config.storage_config = config_data.storage_config
-    backup_service.config.backup_database = config_data.backup_database
-    backup_service.config.backup_config = config_data.backup_config
-    backup_service.config.backup_logs = config_data.backup_logs
-    backup_service.config.encrypt_backup = config_data.encrypt_backup
+    from app.services.backup_service import BackupConfig
 
+    config = BackupConfig(
+        enabled=config_data.enabled,
+        schedule=config_data.schedule,
+        retention_days=config_data.retention_days,
+        storage_type=config_data.storage_type,
+        storage_config=config_data.storage_config,
+        backup_database=config_data.backup_database,
+        backup_config=config_data.backup_config,
+        backup_logs=config_data.backup_logs,
+        encrypt_backup=config_data.encrypt_backup,
+    )
+    await backup_service.save_config(config)
     return config_data
 
 
@@ -183,38 +189,87 @@ async def delete_backup(
 async def test_backup_config(
     backup_service: BackupService = Depends(get_backup_service),
     current_user: User = Depends(require_permission("backup:write")),
+    db: AsyncSession = Depends(get_db),
 ):
     """Test backup configuration"""
+    results = {"database": "pending", "storage": "pending"}
+
     try:
-        # Test database connection
-        import psycopg2
+        from sqlalchemy import text
 
-        from app.core.config import settings
-
-        conn = psycopg2.connect(
-            host=settings.POSTGRES_SERVER,
-            port=settings.POSTGRES_PORT,
-            user=settings.POSTGRES_USER,
-            password=settings.POSTGRES_PASSWORD,
-            dbname=settings.POSTGRES_DB,
-        )
-        conn.close()
-
-        # Test remote storage if configured
-        if backup_service.config.storage_type != "local" and backup_service.config.storage_type == "sftp":
-            # This is a basic test - actual connection test would require more
-            pass
-
-        return BackupTestResult(
-            success=True,
-            message="Backup configuration test successful",
-            details={
-                "database": "connected",
-                "storage_type": backup_service.config.storage_type,
-            },
-        )
+        await db.execute(text("SELECT 1"))
+        results["database"] = "connected"
     except Exception as e:
         return BackupTestResult(
             success=False,
-            message=f"Backup configuration test failed: {str(e)}",
+            message=f"Database connection failed: {str(e)}",
+            details=results,
         )
+
+    config = await backup_service.load_config()
+    if config.storage_type == "sftp":
+        try:
+            import paramiko
+
+            sftp_config = config.storage_config
+            ssh = paramiko.SSHClient()
+            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
+            if sftp_config.get("key_filename"):
+                ssh.connect(
+                    hostname=sftp_config.get("host", ""),
+                    port=int(sftp_config.get("port", 22)),
+                    username=sftp_config.get("username", ""),
+                    key_filename=sftp_config.get("key_filename"),
+                    timeout=10,
+                )
+            else:
+                ssh.connect(
+                    hostname=sftp_config.get("host", ""),
+                    port=int(sftp_config.get("port", 22)),
+                    username=sftp_config.get("username", ""),
+                    password=sftp_config.get("password", ""),
+                    timeout=10,
+                )
+            ssh.close()
+            results["storage"] = "connected"
+        except Exception as e:
+            return BackupTestResult(
+                success=False,
+                message=f"SFTP connection failed: {str(e)}",
+                details=results,
+            )
+    elif config.storage_type == "ftp":
+        try:
+            import ftplib
+
+            ftp_config = config.storage_config
+            host = ftp_config.get("host", "localhost")
+            port = int(ftp_config.get("port", 21))
+            username = ftp_config.get("username", "")
+            password = ftp_config.get("password", "")
+            use_ssl = ftp_config.get("use_ssl", False)
+
+            if use_ssl:
+                ftp = ftplib.FTP_TLS()
+            else:
+                ftp = ftplib.FTP()
+
+            ftp.connect(host, port)
+            ftp.login(username, password)
+            ftp.quit()
+            results["storage"] = "connected"
+        except Exception as e:
+            return BackupTestResult(
+                success=False,
+                message=f"FTP connection failed: {str(e)}",
+                details=results,
+            )
+    else:
+        results["storage"] = "local (no test needed)"
+
+    return BackupTestResult(
+        success=True,
+        message="Backup configuration test successful",
+        details=results,
+    )

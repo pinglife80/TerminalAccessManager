@@ -5,6 +5,7 @@ Provides database and configuration backup functionality with FTP/SFTP support.
 """
 
 import asyncio
+import ftplib
 import hashlib
 import os
 import shutil
@@ -17,8 +18,11 @@ from typing import Any
 
 import paramiko
 from loguru import logger
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.models.backup_config import BackupConfigModel
 
 
 @dataclass
@@ -74,10 +78,12 @@ class BackupService:
     - Local and remote storage (SFTP/FTP)
     - Backup encryption
     - Retention policy management
+    - Database persistent configuration
     """
 
-    def __init__(self, config: BackupConfig | None = None):
+    def __init__(self, config: BackupConfig | None = None, db: AsyncSession | None = None):
         """Initialize backup service"""
+        self.db = db
         self.config = config or BackupConfig()
         self.backup_dir = os.path.join(settings.UPLOAD_DIR, "backups")
 
@@ -87,6 +93,79 @@ class BackupService:
             logger.warning(f"Permission denied for backup directory {self.backup_dir}, using /tmp/backups instead")
             self.backup_dir = "/tmp/backups"
             os.makedirs(self.backup_dir, exist_ok=True)
+
+    async def load_config(self) -> BackupConfig:
+        """Load backup configuration from database"""
+        if self.db is None:
+            return self.config
+
+        try:
+            result = await self.db.execute(select(BackupConfigModel))
+            model = result.scalar_one_or_none()
+
+            if model:
+                self.config = BackupConfig(
+                    enabled=model.enabled,
+                    schedule=model.schedule,
+                    retention_days=model.retention_days,
+                    storage_type=model.storage_type,
+                    storage_config=model.storage_config,
+                    backup_database=model.backup_database,
+                    backup_config=model.backup_config,
+                    backup_logs=model.backup_logs,
+                    encrypt_backup=model.encrypt_backup,
+                )
+            else:
+                model = BackupConfigModel()
+                self.db.add(model)
+                await self.db.commit()
+                self.config = BackupConfig()
+
+            return self.config
+        except Exception as e:
+            logger.error(f"Failed to load backup config from database: {e}")
+            return self.config
+
+    async def save_config(self, config: BackupConfig) -> None:
+        """Save backup configuration to database"""
+        if self.db is None:
+            self.config = config
+            return
+
+        try:
+            result = await self.db.execute(select(BackupConfigModel))
+            model = result.scalar_one_or_none()
+
+            if model:
+                model.enabled = config.enabled
+                model.schedule = config.schedule
+                model.retention_days = config.retention_days
+                model.storage_type = config.storage_type
+                model.storage_config = config.storage_config
+                model.backup_database = config.backup_database
+                model.backup_config = config.backup_config
+                model.backup_logs = config.backup_logs
+                model.encrypt_backup = config.encrypt_backup
+            else:
+                model = BackupConfigModel(
+                    enabled=config.enabled,
+                    schedule=config.schedule,
+                    retention_days=config.retention_days,
+                    storage_type=config.storage_type,
+                    storage_config=config.storage_config,
+                    backup_database=config.backup_database,
+                    backup_config=config.backup_config,
+                    backup_logs=config.backup_logs,
+                    encrypt_backup=config.encrypt_backup,
+                )
+                self.db.add(model)
+
+            await self.db.commit()
+            self.config = config
+            logger.info("Backup config saved to database")
+        except Exception as e:
+            logger.error(f"Failed to save backup config to database: {e}")
+            raise
 
     async def run_backup(self) -> BackupJob:
         """Execute a full backup job"""
@@ -294,8 +373,50 @@ class BackupService:
         """Upload backup to remote storage"""
         if self.config.storage_type == "sftp":
             return await self._upload_via_sftp(local_path)
+        elif self.config.storage_type == "ftp":
+            return await self._upload_via_ftp(local_path)
         else:
             return local_path
+
+    async def _upload_via_ftp(self, local_path: str) -> str:
+        """Upload backup via FTP"""
+        config = self.config.storage_config
+        host = config.get("host", "localhost")
+        port = int(config.get("port", 21))
+        username = config.get("username")
+        password = config.get("password")
+        remote_path = config.get("path", "/backups")
+        use_ssl = config.get("use_ssl", False)
+
+        try:
+            if use_ssl:
+                ftp = ftplib.FTP_TLS()
+            else:
+                ftp = ftplib.FTP()
+
+            ftp.connect(host, port)
+            ftp.login(username, password)
+            ftp.set_pasv(True)
+
+            try:
+                ftp.cwd(remote_path)
+            except ftplib.error_perm:
+                ftp.mkd(remote_path)
+                ftp.cwd(remote_path)
+
+            remote_filename = os.path.basename(local_path)
+            remote_file_path = f"{remote_path}/{remote_filename}"
+
+            with open(local_path, "rb") as f:
+                ftp.storbinary(f"STOR {remote_filename}", f)
+
+            ftp.quit()
+            logger.info(f"Backup uploaded via FTP: {remote_file_path}")
+            return remote_file_path
+
+        except Exception as e:
+            logger.error(f"FTP upload failed: {e}")
+            raise
 
     async def _upload_via_sftp(self, local_path: str) -> str:
         """Upload backup via SFTP"""

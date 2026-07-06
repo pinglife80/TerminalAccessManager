@@ -293,7 +293,7 @@ const Login: React.FC = () => {
       <div className="absolute top-4 right-4 z-10">
         <HeaderControls />
       </div>
-      <div className={`min-h-screen flex items-center justify-center p-4 ${
+      <div className={`min-h-screen flex flex-col items-center justify-center p-4 ${
         loginBgUrl ? 'bg-cover bg-center bg-no-repeat' : ''
       }`}
       style={loginBgUrl ? {
@@ -547,20 +547,22 @@ const Login: React.FC = () => {
               </div>
             )}
           </div>
-        </div>
 
-        {/* Footer text */}
-        <p className="text-center text-xs text-muted-foreground mt-6">
+        </div>
+      </div>
+
+      {/* Footer - positioned outside max-w-md container to allow full width */}
+      <div className="mt-8 w-full">
+        <p className="text-center text-xs text-muted-foreground whitespace-nowrap">
           {loginFooterText || t('auth.secureAuthFooter')}
         </p>
-        {/* Footer info */}
-        <div className="flex flex-col sm:flex-row items-center justify-center gap-2 text-xs text-muted-foreground mt-3">
+        <div className="flex flex-row items-center justify-center gap-2 text-xs text-muted-foreground mt-3 whitespace-nowrap">
           <span>{footerCopyright.replace('{year}', String(new Date().getFullYear()))}</span>
-          <span className="hidden sm:inline">|</span>
+          <span>|</span>
           <span>{appVersion}</span>
           {footerIcpNumber && (
             <>
-              <span className="hidden sm:inline">|</span>
+              <span>|</span>
               <a
                 href={footerIcpUrl}
                 target="_blank"
@@ -573,7 +575,7 @@ const Login: React.FC = () => {
           )}
         </div>
       </div>
-    </div>
+      </div>
     </div>
   );
 };

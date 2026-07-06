@@ -1,10 +1,114 @@
 # 版本跟踪记录
 
-> 文档版本：v3.6.2 | 更新日期：2026-07-06
+> 文档版本：v3.6.3 | 更新日期：2026-07-07
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
+
+---
+
+## [v3.6.3] - 2026-07-07
+
+### 备份管理增强 + Bug 修复 + 版本统一管理
+
+#### FTP备份支持
+
+- 新增 FTP 存储类型，支持普通 FTP 和 FTPS（SSL）两种模式
+- 后端 `backup_service.py` 新增 `_upload_via_ftp()` 方法，使用 ftplib 实现安全传输
+- 前端 `Backup.tsx` 添加 FTP 配置选项（主机、端口、用户名、密码、远程路径、SSL 开关）
+- API `/backup/test` 端点支持 FTP 连接测试
+
+#### 备份配置持久化
+
+- 创建 `BackupConfigModel` 数据库模型（`backup_config` 表），实现配置持久化
+- 包含字段：enabled、schedule、retention_days、storage_type、storage_config、backup_database、backup_config、backup_logs、encrypt_backup
+- 后端 `backup_service.py` 新增 `load_config()` 和 `save_config()` 方法
+- API `GET/PUT /backup/config` 使用数据库存储，刷新页面后配置保留
+
+#### 定时任务预设选择器
+
+- 前端 `Backup.tsx` 添加 SCHEDULE_PRESETS 预设选择器（每天凌晨2点、每天凌晨3点、每周日凌晨2点、自定义）
+- 只有选择"自定义"时才显示 crontab 输入栏
+- 添加 CRON 格式正则校验，失去焦点时触发校验并显示错误提示
+- 新增国际化翻译键（`cronRequired`、`cronInvalid`）
+
+#### 登录页页脚样式优化
+
+- 页脚区域移出 `max-w-md` 容器限制，内容横向自适应扩展
+- 使用 `flex-col` 确保页脚在登录框下方而非并排
+- 移除 `overflow-hidden` 和 `text-ellipsis`，取消长度限制
+- 保留 `whitespace-nowrap` 确保一行显示不换行
+
+#### FTP连接测试Bug修复
+
+- 修复 `ftplib.FTP.__init__()` 不支持 `port` 参数的问题
+- 改为先创建实例再调用 `connect(host, port)` 方法
+- 修复范围：`backup_service.py` 和 `backup.py` API 端点
+
+#### 版本号统一管理
+
+- 创建 `VERSION` 文件作为单一版本源（`3.6.3`）
+- `manage.sh`：从 VERSION 文件读取版本号并注入环境变量
+- `config.py`：添加 `_load_version()` 函数动态读取
+- `vite.config.ts`：添加 `getVersion()` 函数注入 `VITE_APP_VERSION`
+- `.env` 和 `.env.example`：更新版本号为 3.6.3
+
+### 数据库迁移
+
+- **023_backup_config_table**：创建 backup_config 表
+
+### 变更文件
+
+**后端（3 个修改 + 2 个新增）：**
+
+- `backend/app/services/backup_service.py` — FTP上传方法、配置持久化
+- `backend/app/api/v1/endpoints/backup.py` — 配置持久化、FTP测试
+- `backend/app/core/config.py` — 版本号动态读取
+- `backend/app/models/backup_config.py` — BackupConfigModel（新增）
+- `backend/alembic/versions/023_backup_config_table.py` — 数据库迁移（新增）
+
+**前端（2 个修改 + 1 个配置）：**
+
+- `frontend/src/pages/Backup.tsx` — FTP配置、预设选择器、CRON校验
+- `frontend/src/pages/Login.tsx` — 页脚布局优化
+- `frontend/vite.config.ts` — 版本号注入
+- `frontend/src/config/branding.ts` — 使用环境变量版本
+
+**基础设施（2 个修改 + 1 个新增）：**
+
+- `manage.sh` — 版本号读取和环境变量注入
+- `.env` / `.env.example` — 版本号更新
+- `VERSION` — 统一版本源文件（新增）
+
+**文档（2 个修改）：**
+
+- `docs/release-notes.md` — 本文档
+- `docs/changelog.md` — 追加 [3.6.3] 条目
+
+### 提交记录
+
+```
+feat(backup): add FTP backup support with SSL option
+feat(backup): implement backup config persistence with database
+feat(backup): add schedule preset selector with CRON validation
+fix(backup): fix FTP connection test port parameter error
+fix(login): optimize footer layout to allow full width display
+chore(version): unify version management with VERSION file
+docs(release): add v3.6.3 release notes
+docs(changelog): add v3.6.3 changelog
+```
+
+### 测试验证
+
+- ✅ FTP配置测试验证通过
+- ✅ 备份配置持久化验证通过（刷新后配置保留）
+- ✅ 定时任务预设选择器验证通过（自定义时显示输入栏）
+- ✅ CRON格式校验验证通过（无效格式显示错误）
+- ✅ 登录页页脚布局验证通过（在登录框下方，内容完整显示）
+- ✅ 版本号统一管理验证通过（所有位置显示3.6.3）
+- ✅ 数据库迁移 023 执行成功
+- ✅ Docker Compose 构建成功
 
 ---
 

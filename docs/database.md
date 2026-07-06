@@ -1,6 +1,6 @@
 # TerminalAccessManager 数据库设计文档
 
-> 文档版本：v3.6.2  更新日期：2026-07-06
+> 文档版本：v3.6.3  更新日期：2026-07-07
 
 ## 1. 概述
 
@@ -147,6 +147,23 @@ docker-compose.yml 中 PostgreSQL 的 `command` 参数列表如下：
 │ PK: (user_id,        │ │ PK: (role_id,        │
 │      role_id)        │ │      permission_id)  │
 └──────────────────────┘ └──────────────────────┘
+
+┌──────────────────┐
+│  backup_config   │
+├──────────────────┤
+│ id           PK  │
+│ enabled          │
+│ schedule         │
+│ retention_days   │
+│ storage_type     │
+│ storage_config   │
+│ backup_database  │
+│ backup_config    │
+│ backup_logs      │
+│ encrypt_backup   │
+│ created_at       │
+│ updated_at       │
+└──────────────────┘
 ```
 
 ---
@@ -736,6 +753,39 @@ docker-compose.yml 中 PostgreSQL 的 `command` 参数列表如下：
 |------|------|------|
 | ix_auth_providers_name | UNIQUE | name |
 | ix_auth_providers_type | SINGLE | provider_type |
+
+---
+
+### 3.16 backup_config — 备份配置表
+
+存储系统备份策略配置，支持定时备份、多种存储类型（本地/SFTP/FTP）、备份内容选择和加密选项。
+
+| 字段 | 类型 | 约束 | 默认值 | 说明 |
+|---|---|---|---|---|
+| id | INTEGER | PK | 自增 | 主键 |
+| enabled | BOOLEAN | NOT NULL | FALSE | 是否启用备份 |
+| schedule | VARCHAR(100) | NOT NULL | '0 2 * * *' | CRON 定时表达式 |
+| retention_days | INTEGER | NOT NULL | 7 | 备份保留天数 |
+| storage_type | VARCHAR(50) | NOT NULL | 'local' | 存储类型（local/sftp/ftp） |
+| storage_config | JSON | | {} | 存储配置（SFTP/FTP 参数） |
+| backup_database | BOOLEAN | NOT NULL | TRUE | 是否备份数据库 |
+| backup_config | BOOLEAN | NOT NULL | TRUE | 是否备份配置文件 |
+| backup_logs | BOOLEAN | NOT NULL | FALSE | 是否备份日志文件 |
+| encrypt_backup | BOOLEAN | NOT NULL | TRUE | 是否加密备份文件 |
+| created_at | TIMESTAMP WITH TZ | | utcnow | 创建时间 |
+| updated_at | TIMESTAMP WITH TZ | | utcnow, onupdate=utcnow | 更新时间 |
+
+**storage_config JSON 结构说明：**
+
+| 存储类型 | JSON 字段 | 说明 |
+|---|---|---|
+| local | 无特殊字段 | 使用本地 backups 目录 |
+| sftp | host, port, username, password, path | SFTP 连接参数 |
+| ftp | host, port, username, password, path, use_ssl | FTP 连接参数，use_ssl 为 true 时使用 FTPS |
+
+**约束说明：**
+- 表中只允许存在一条记录（通过应用层逻辑保证）
+- schedule 字段必须符合 CRON 5 字段格式：`分钟 小时 日 月 周`
 
 ---
 
