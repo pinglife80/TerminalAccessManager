@@ -1,6 +1,6 @@
 """Unit tests for notification service"""
 import os
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
@@ -99,24 +99,29 @@ class TestEmailChannel:
     """Test cases for EmailChannel"""
 
     @pytest.mark.asyncio
-    @patch("app.services.notification_channels.email_channel.EmailService")
-    async def test_send_email(self, mock_email_service_class):
+    @patch("app.services.notification_channels.email_channel.httpx.AsyncClient")
+    async def test_send_email(self, mock_client_class):
         """Test sending email notification"""
-        mock_email_service = AsyncMock()
-        mock_email_service.send_email = AsyncMock(return_value={"success": True})
-        mock_email_service_class.return_value = mock_email_service
+        mock_client = AsyncMock()
+        mock_response = AsyncMock()
+        mock_response.status_code = 200
+        mock_response.raise_for_status = Mock()
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_client.post = AsyncMock(return_value=mock_response)
+        mock_client_class.return_value = mock_client
 
         from app.services.notification_channels.email_channel import EmailChannel
 
-        channel = EmailChannel({"enabled": True})
+        channel = EmailChannel({"enabled": True, "smtp_url": "http://localhost:8080/smtp"})
         result = await channel.send(
             recipients=["test@example.com"],
             subject="Test",
             message="Test message"
         )
 
-        assert result["success"] is True
-        mock_email_service.send_email.assert_called_once()
+        assert result.success is True
+        mock_client.post.assert_called_once()
 
 
 class TestWebhookChannel:

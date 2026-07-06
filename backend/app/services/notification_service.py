@@ -25,6 +25,7 @@ from sqlalchemy import Integer, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.crypto import decrypt_config, has_encrypted_config
+from app.core.timezone import now
 from app.models.notification import (
     NotificationChannel,
     NotificationLog,
@@ -378,7 +379,7 @@ class NotificationService:
         event = NotificationEvent(
             id=str(__import__('uuid').uuid4()),
             type="custom",
-            timestamp=datetime.utcnow(),
+            timestamp=now(),
             data={"subject": subject, "message": message},
             source="user",
             severity="info",
@@ -401,7 +402,7 @@ class NotificationService:
         event = NotificationEvent(
             id=message_id,
             type=event_type,
-            timestamp=datetime.utcnow(),
+            timestamp=now(),
             data={},
             source="system",
             severity="info",
@@ -584,110 +585,4 @@ class NotificationService:
                     count += 1
             return count
 
-    async def emit_terminal_blocked(
-        self,
-        ip_address: str,
-        mac_address: str,
-        reason: str,
-        blocked_by: str,
-    ) -> list[NotificationResult]:
-        """Emit terminal blocked event"""
-        return await self.emit(
-            event_type=EventType.TERMINAL_BLOCKED,
-            data={
-                "ip_address": ip_address,
-                "mac_address": mac_address,
-                "reason": reason,
-                "blocked_by": blocked_by,
-            },
-            source="system",
-            severity="warning",
-        )
-
-    async def emit_terminal_unblocked(
-        self,
-        ip_address: str,
-        mac_address: str,
-        unblocked_by: str,
-    ) -> list[NotificationResult]:
-        """Emit terminal unblocked event"""
-        return await self.emit(
-            event_type=EventType.TERMINAL_UNBLOCKED,
-            data={
-                "ip_address": ip_address,
-                "mac_address": mac_address,
-                "unblocked_by": unblocked_by,
-            },
-            source="system",
-            severity="info",
-        )
-
-    async def emit_login_failed(
-        self,
-        username: str,
-        ip_address: str,
-        reason: str,
-    ) -> list[NotificationResult]:
-        """Emit login failed event"""
-        return await self.emit(
-            event_type=EventType.LOGIN_FAILED,
-            data={
-                "username": username,
-                "ip_address": ip_address,
-                "reason": reason,
-            },
-            source="system",
-            severity="warning",
-        )
-
-    async def emit_login_succeeded(
-        self,
-        username: str,
-        ip_address: str,
-    ) -> list[NotificationResult]:
-        """Emit login succeeded event"""
-        return await self.emit(
-            event_type=EventType.LOGIN_SUCCESS,
-            data={
-                "username": username,
-                "ip_address": ip_address,
-            },
-            source="system",
-            severity="info",
-        )
-
-    async def emit_policy_violation(
-        self,
-        policy_name: str,
-        terminal_ip: str,
-        details: dict,
-    ) -> list[NotificationResult]:
-        """Emit policy violation event"""
-        return await self.emit(
-            event_type=EventType.POLICY_VIOLATION,
-            data={
-                "policy_name": policy_name,
-                "terminal_ip": terminal_ip,
-                **details,
-            },
-            source="system",
-            severity="error",
-        )
-
-    async def emit_system_alert(
-        self,
-        alert_type: str,
-        message: str,
-        details: dict | None = None,
-    ) -> list[NotificationResult]:
-        """Emit system alert event"""
-        return await self.emit(
-            event_type=EventType.SYSTEM_ALERT,
-            data={
-                "alert_type": alert_type,
-                "message": message,
-                **(details or {}),
-            },
-            source="system",
-            severity="error",
-        )
+    

@@ -133,7 +133,7 @@ class EmailChannel(NotificationChannelBase):
         recipients: list[str] | None = None,
         subject: str | None = None,
         message: str | None = None,
-    ) -> dict | NotificationResult:
+    ) -> NotificationResult:
         """Send email notification.
 
         Uses the global email configuration (database-backed, with .env
@@ -141,16 +141,14 @@ class EmailChannel(NotificationChannelBase):
         emails and notification emails share the same SMTP settings.
         The legacy per-channel ``smtp_url`` config key is still honored
         when present, for backward compatibility with existing channels.
+
+        When subject/message are provided, they override the auto-generated
+        content but still use the real email delivery path.
         """
         if recipients:
             self.config["recipients"] = recipients
 
-        if subject and message:
-            email_service = EmailService()
-            result = await email_service.send_email(to=", ".join(recipients or []), subject=subject, body=message)
-            return result
-
-        if event is None:
+        if event is None and not (subject and message):
             raise ValueError("Either event or subject/message is required")
 
         email_recipients = self.get_recipients()
@@ -159,10 +157,21 @@ class EmailChannel(NotificationChannelBase):
                 success=False,
                 message="No recipients configured",
                 channel=self.channel_type,
-                event_id=event.id,
+                event_id=event.id if event else None,
             )
 
-        email_subject, body = self.format_email_content(event)
+        if subject and message:
+            email_subject = subject
+            body = message
+        elif event:
+            email_subject, body = self.format_email_content(event)
+        else:
+            return NotificationResult(
+                success=False,
+                message="No content to send",
+                channel=self.channel_type,
+                event_id=event.id if event else None,
+            )
 
         # Legacy path: per-channel HTTP SMTP relay URL (backward compat).
         # When present, send directly via httpx; otherwise route through
@@ -188,7 +197,7 @@ class EmailChannel(NotificationChannelBase):
                     success=True,
                     message=f"Email sent to {len(email_recipients)} recipients",
                     channel=self.channel_type,
-                    event_id=event.id,
+                    event_id=event.id if event else None,
                     recipient=", ".join(email_recipients),
                 )
             except httpx.HTTPStatusError as e:
@@ -197,7 +206,7 @@ class EmailChannel(NotificationChannelBase):
                     success=False,
                     message=f"HTTP error: {e.response.status_code}",
                     channel=self.channel_type,
-                    event_id=event.id,
+                    event_id=event.id if event else None,
                     error_code="HTTP_ERROR",
                 )
             except Exception as e:
@@ -206,7 +215,7 @@ class EmailChannel(NotificationChannelBase):
                     success=False,
                     message=f"Send failed: {str(e)}",
                     channel=self.channel_type,
-                    event_id=event.id,
+                    event_id=event.id if event else None,
                     error_code="SEND_ERROR",
                 )
 
@@ -234,14 +243,14 @@ class EmailChannel(NotificationChannelBase):
                     success=True,
                     message=f"Email sent to {sent_count}/{len(email_recipients)} recipients",
                     channel=self.channel_type,
-                    event_id=event.id,
+                    event_id=event.id if event else None,
                     recipient=", ".join(email_recipients[:sent_count]),
                 )
             return NotificationResult(
                 success=False,
                 message=f"Send failed: {last_error or 'unknown error'}",
                 channel=self.channel_type,
-                event_id=event.id,
+                event_id=event.id if event else None,
                 error_code="SEND_ERROR",
             )
 
@@ -251,7 +260,7 @@ class EmailChannel(NotificationChannelBase):
                 success=False,
                 message=f"Send failed: {str(e)}",
                 channel=self.channel_type,
-                event_id=event.id,
+                event_id=event.id if event else None,
                 error_code="SEND_ERROR",
             )
 
