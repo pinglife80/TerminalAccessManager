@@ -1,6 +1,6 @@
 # TerminalAccessManager API 文档
 
-> 文档版本：v3.6.4 | 更新日期：2026-07-08
+> 文档版本：v3.6.5 | 更新日期：2026-07-07
 
 > 基于 MAC 地址和 IP 地址的网络终端准入管理平台
 
@@ -4052,7 +4052,70 @@ PUT /api/v1/backup/config
 
 **所需权限**: `system.manage`
 
-**请求体**: 同获取配置返回格式
+**请求体**:
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| enabled | boolean | 否 | 是否启用自动备份 |
+| schedule | string | 否 | 备份计划（hourly/daily/weekly/monthly） |
+| retention_days | int | 否 | 保留天数（1-365） |
+| storage_type | string | 否 | 存储类型（local/ftp） |
+| storage_config | object | 否 | 存储配置 |
+| backup_database | boolean | 否 | 是否备份数据库 |
+| backup_config | boolean | 否 | 是否备份配置文件 |
+| backup_logs | boolean | 否 | 是否备份日志文件 |
+| encrypt_backup | boolean | 否 | 是否加密备份文件 |
+
+**本地存储配置示例**:
+
+```json
+{
+  "enabled": true,
+  "schedule": "daily",
+  "retention_days": 7,
+  "storage_type": "local",
+  "storage_config": {
+    "backup_path": "/backups"
+  },
+  "backup_database": true,
+  "backup_config": true,
+  "backup_logs": false,
+  "encrypt_backup": false
+}
+```
+
+**FTP存储配置示例**:
+
+```json
+{
+  "enabled": true,
+  "schedule": "daily",
+  "retention_days": 14,
+  "storage_type": "ftp",
+  "storage_config": {
+    "ftp_host": "ftp.example.com",
+    "ftp_port": 21,
+    "ftp_user": "backupuser",
+    "ftp_password": "securepassword",
+    "ftp_path": "/backups",
+    "ftp_passive": true,
+    "ftp_secure": false
+  },
+  "backup_database": true,
+  "backup_config": true,
+  "backup_logs": true,
+  "encrypt_backup": true
+}
+```
+
+**定时任务预设说明**:
+
+| 预设值 | 说明 |
+|--------|------|
+| hourly | 每小时执行一次 |
+| daily | 每天凌晨2:00执行 |
+| weekly | 每周日凌晨2:00执行 |
+| monthly | 每月1日凌晨2:00执行 |
 
 ### 16.3 执行手动备份
 

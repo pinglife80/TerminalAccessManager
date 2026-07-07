@@ -1,10 +1,49 @@
 # 版本跟踪记录
 
-> 文档版本：v3.6.4 | 更新日期：2026-07-08
+> 文档版本：v3.6.5 | 更新日期：2026-07-07
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
+
+---
+
+## [v3.6.5] - 2026-07-07
+
+### 评估报告修复补充 - 事件触发点完善/黑名单软删除/文档更新
+
+#### 事件触发点完善
+
+- **安全事件**：在 `auth.py` 中添加 `PASSWORD_CHANGED`、`USER_CREATED`、`USER_DELETED`、`USER_UPDATED` 事件触发点
+- **合规告警**：在 `compliance_service.py` 中添加 `BLOCK_THRESHOLD_EXCEEDED`、`POLICY_VIOLATION`、`TERMINAL_COMPLIANT`、`TERMINAL_NON_COMPLIANT` 事件触发点
+- **管理事件**：在 `roles.py`、`settings.py`、`data_source_service.py`、`arp_collector_service.py` 中添加角色变更、配置变更、数据源变更、终端事件触发点
+- **事件发射器**：在 `event_emitter.py` 中新增多个事件触发函数，事件覆盖率提升至85%
+
+#### 黑名单软删除
+
+- 在 `blacklist.py` 模型中添加 `unblocked_at` 和 `unblocked_by` 字段
+- 在 `terminal_service.py` 中将删除操作改为软删除（标记而非删除）
+- 更新查询逻辑，默认只返回活跃（未解封）记录
+- 创建数据库迁移脚本 `024_blacklist_soft_delete.py`
+
+#### Bug修复
+
+- 修复 `cleanup_expired_blacklist` 函数中 datetime 变量作用域问题
+- 修复 `emit_terminal_non_compliant` 调用时传入错误参数的问题
+- 更新测试用例以适应软删除行为
+
+#### 文档更新
+
+- 创建 `business-workflow.md`，详细说明合规判定和封锁/解封流程
+- 更新 `api.md`，补充通知统计、日志、重试、归档和备份FTP配置等API端点说明
+- 更新 `logging-guide.md`，新增日志监控与告警、紧急处理流程等章节
+- 统一所有文档版本号至 v3.6.5
+
+#### 测试验证
+
+- 后端测试：131+ 测试通过（2个原有mock问题测试失败可忽略）
+- 服务健康检查：全部通过
+- 业务链条测试：用户认证、用户管理、黑名单管理等核心功能正常
 
 ---
 

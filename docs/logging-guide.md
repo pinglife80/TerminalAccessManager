@@ -1,6 +1,6 @@
 # TerminalAccessManager 日志说明文档
 
-> 文档版本：v3.3.0  更新日期：2026-06-17
+> 文档版本：v3.6.5  更新日期：2026-07-07
 > **适用范围**：后端应用日志、前端运行时日志、审计日志、Docker 容器日志、Nginx 日志、PostgreSQL 日志、运维脚本日志
 
 ---
@@ -541,7 +541,7 @@ API 端点 → TerminalService.log_action() → audit_logs 表 → 前端审计�
 
 ### 4.2 审计操作类型清单
 
-#### 认证相关（5项）
+#### 认证相关（6项）
 
 | 操作类型 | 资源类型 | 触发端点 | 说明 |
 |---------|---------|---------|------|
@@ -550,23 +550,29 @@ API 端点 → TerminalService.log_action() → audit_logs 表 → 前端审计�
 | `logout` | auth | POST /auth/logout | 用户注销 |
 | `token_refresh` | auth | POST /auth/refresh | Token 刷新 |
 | `change_password` | auth | PUT /auth/me/password | 用户自行修改密码 |
+| `password_reset` | auth | POST /auth/password-reset/verify | 用户通过验证码重置密码 |
 
-#### 用户管理（5项）
+#### 用户管理（7项）
 
 | 操作类型 | 资源类型 | 触发端点 | 说明 |
 |---------|---------|---------|------|
 | `create_user` | user | POST /auth/users | 创建用户 |
 | `update_user` | user | PUT /auth/users/{id} | 更新用户信息 |
 | `delete_user` | user | DELETE /auth/users/{id} | 删除用户 |
-| `reset_password` | user | POST /auth/users/{id}/reset-password | 重置用户密码 |
+| `reset_password` | user | POST /auth/users/{id}/reset-password | 管理员重置用户密码 |
 | `unlock_user` | user | POST /auth/users/{id}/unlock | 解锁用户 |
+| `lock_user` | user | POST /auth/users/{id}/lock | 锁定用户 |
+| `change_role` | user | PUT /auth/users/{id}/role | 修改用户角色 |
 
-#### 终端管理（2项）
+#### 终端管理（5项）
 
 | 操作类型 | 资源类型 | 触发端点 | 说明 |
 |---------|---------|---------|------|
-| `block_terminal` | terminal | POST /terminals/{id}/block | 封禁终端 |
-| `unblock_terminal` | terminal | POST /terminals/{id}/unblock | 解封终端 |
+| `block_terminal` | terminal | POST /terminals/{id}/block | 手动封禁终端 |
+| `unblock_terminal` | terminal | POST /terminals/{id}/unblock | 手动解封终端 |
+| `auto_block_terminal` | terminal | 定时任务 | 自动封锁不合规终端 |
+| `auto_unblock_terminal` | terminal | 定时任务 | 自动解封合规终端 |
+| `recalculate_compliance` | terminal | POST /data-sources/compliance/recalculate | 重新计算合规状态 |
 
 #### 白名单管理（2项）
 
@@ -581,7 +587,7 @@ API 端点 → TerminalService.log_action() → audit_logs 表 → 前端审计�
 |---------|---------|---------|------|
 | `block_blacklist` | blacklist | POST /blacklist | 添加黑名单 |
 | `unblock_blacklist` | blacklist | DELETE /blacklist/{id}/unblock | 解除黑名单 |
-| `cleanup_expired` | blacklist | POST /blacklist/cleanup | 清理过期黑名单 |
+| `cleanup_expired_blacklist` | blacklist | POST /blacklist/cleanup | 清理过期黑名单 |
 
 #### 数据源管理（7项）
 
@@ -595,23 +601,61 @@ API 端点 → TerminalService.log_action() → audit_logs 表 → 前端审计�
 | `bind_datasource` | datasource | POST /data-sources/bindings/ | 绑定数据源到防火墙 |
 | `unbind_datasource` | datasource | DELETE /data-sources/bindings/{id} | 解绑数据源 |
 
-#### 合规基线管理（3项）
+#### 合规基线管理（6项）
 
 | 操作类型 | 资源类型 | 触发端点 | 说明 |
 |---------|---------|---------|------|
 | `create_baseline` | compliance | POST /compliance-baselines/ | 创建合规基线 |
 | `update_baseline` | compliance | PUT /compliance-baselines/{id} | 更新合规基线 |
 | `delete_baseline` | compliance | DELETE /compliance-baselines/{id} | 删除合规基线 |
+| `sync_baseline` | compliance | POST /compliance-baselines/{id}/sync | 同步合规基线数据 |
+| `test_baseline` | compliance | POST /compliance-baselines/{id}/test | 测试合规基线连接 |
+| `recalculate_compliance` | compliance | POST /data-sources/compliance/recalculate | 重新计算合规状态 |
 
-#### 系统管理（3项）
+#### 通知管理（9项）
+
+| 操作类型 | 资源类型 | 触发端点 | 说明 |
+|---------|---------|---------|------|
+| `create_notification_channel` | notification | POST /notifications/channels | 创建通知渠道 |
+| `update_notification_channel` | notification | PUT /notifications/channels/{id} | 更新通知渠道 |
+| `delete_notification_channel` | notification | DELETE /notifications/channels/{id} | 删除通知渠道 |
+| `create_notification_template` | notification | POST /notifications/templates | 创建通知模板 |
+| `update_notification_template` | notification | PUT /notifications/templates/{id} | 更新通知模板 |
+| `delete_notification_template` | notification | DELETE /notifications/templates/{id} | 删除通知模板 |
+| `create_notification_rule` | notification | POST /notifications/rules | 创建通知规则 |
+| `update_notification_rule` | notification | PUT /notifications/rules/{id} | 更新通知规则 |
+| `delete_notification_rule` | notification | DELETE /notifications/rules/{id} | 删除通知规则 |
+
+#### 备份管理（5项）
+
+| 操作类型 | 资源类型 | 触发端点 | 说明 |
+|---------|---------|---------|------|
+| `create_backup` | backup | POST /backup/run | 执行手动备份 |
+| `delete_backup` | backup | DELETE /backup/{filename} | 删除备份文件 |
+| `restore_backup` | backup | POST /backup/restore/{filename} | 恢复备份 |
+| `download_backup` | backup | GET /backup/download/{filename} | 下载备份文件 |
+| `update_backup_config` | backup | PUT /backup/config | 更新备份配置 |
+
+#### 认证提供商（4项）
+
+| 操作类型 | 资源类型 | 触发端点 | 说明 |
+|---------|---------|---------|------|
+| `create_auth_provider` | auth_provider | POST /auth/providers | 创建认证提供商 |
+| `update_auth_provider` | auth_provider | PUT /auth/providers/{id} | 更新认证提供商 |
+| `delete_auth_provider` | auth_provider | DELETE /auth/providers/{id} | 删除认证提供商 |
+| `test_auth_provider` | auth_provider | POST /auth/providers/{id}/test | 测试认证提供商连接 |
+
+#### 系统管理（6项）
 
 | 操作类型 | 资源类型 | 触发端点 | 说明 |
 |---------|---------|---------|------|
 | `update_config` | system | PUT /settings/{key} | 更新系统配置 |
 | `upload_branding` | system | POST /settings/upload | 上传品牌资源 |
 | `export_audit_logs` | system | GET /logs/export | 导出审计日志 |
+| `test_email` | system | POST /settings/email/test | 测试邮件配置 |
+| `save_email_config` | system | PUT /settings/update | 保存邮件配置 |
 
-**共计 30 项审计操作类型**。
+**共计 55 项审计操作类型**。
 
 ### 4.3 审计日志字段说明
 
@@ -620,11 +664,31 @@ API 端点 → TerminalService.log_action() → audit_logs 表 → 前端审计�
 | `id` | Integer | 主键 |
 | `username` | String | 操作人用户名 |
 | `action` | String | 操作类型（见上表） |
-| `resource_type` | String | 资源类型（auth/user/terminal/whitelist/blacklist/datasource/compliance/system） |
+| `resource_type` | String | 资源类型（auth/user/terminal/whitelist/blacklist/datasource/compliance/system/notification/backup/auth_provider） |
 | `resource_id` | String | 资源 ID（可为空） |
+| `resource_name` | String | 资源名称（如用户名、配置键名，可为空） |
 | `details` | JSON | 操作详情（含 message 和其他上下文） |
 | `ip_address` | String | 客户端 IP 地址 |
-| `timestamp` | DateTime | 操作时间（UTC） |
+| `created_at` | DateTime | 操作时间（UTC） |
+
+### 4.3.1 details 字段结构
+
+`details` 字段为 JSON 格式，包含操作的详细信息：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `message` | String | 操作描述信息 |
+| `key` | String | 配置键名（update_config 操作） |
+| `old_value` | Any | 旧值（update_config 操作） |
+| `new_value` | Any | 新值（update_config 操作） |
+| `changes` | Object | 变更详情（save_email_config 操作） |
+| `terminals` | Array | 受影响终端列表（auto_block/auto_unblock 操作，最多50条） |
+| `total_terminals` | Integer | 终端总数（auto_block/auto_unblock 操作） |
+| `source_tag` | String | 数据源标签（合规相关操作） |
+| `firewall_tags` | Array | 防火墙标签列表（封锁相关操作） |
+| `blocked` | Integer | 成功封锁数量（auto_block 操作） |
+| `unblocked` | Integer | 成功解封数量（auto_unblock 操作） |
+| `skipped` | Integer | 跳过数量（auto_block/auto_unblock 操作） |
 
 ### 4.4 审计日志查询与导出
 

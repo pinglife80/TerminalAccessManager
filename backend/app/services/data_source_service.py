@@ -773,6 +773,9 @@ class DataSourceService:
             )
             result = await svc.test_connection()
             await svc.close()
+            if result["success"]:
+                from app.services.event_emitter import emit_firewall_connection_restored
+                await emit_firewall_connection_restored(source.tag)
             return ConnectionTestResult(
                 success=result["success"],
                 message=result.get("message", "Sangfor AF connection test"),

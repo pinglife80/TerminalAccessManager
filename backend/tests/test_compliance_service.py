@@ -603,8 +603,9 @@ class TestCleanupExpiredBlacklist:
         with patch.object(ts_service, "_get_sangfor_service_by_tag", return_value=None):
             result = await ts_service.cleanup_expired_blacklist()
 
-        # The expired entry should be deleted from DB (not unblocked on firewall)
-        mock_db.delete.assert_called_once_with(expired_entry)
+        # The expired entry should be marked as unblocked (soft delete, not unblocked on firewall)
+        assert expired_entry.unblocked_at is not None
+        assert expired_entry.unblocked_by == "system"
         assert result >= 1
 
     @pytest.mark.asyncio

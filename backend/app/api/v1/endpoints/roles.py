@@ -155,6 +155,9 @@ async def create_role(
                         ip_address=get_client_ip(request),
                         resource_name=role.name)
 
+    from app.services.event_emitter import emit_role_changed
+    await emit_role_changed(current_user.username, role.name, "created", {"description": role.description})
+
     # Re-fetch to get full data
     return await get_role(role.id, current_user, db)
 
@@ -209,6 +212,11 @@ async def update_role(
                         ip_address=get_client_ip(request),
                         resource_name=role.name)
 
+    from app.services.event_emitter import emit_role_changed, emit_permission_changed
+    await emit_role_changed(current_user.username, role.name, "updated", {"changes": changes})
+    if "permission_ids" in changes:
+        await emit_permission_changed(current_user.username, role.name, "role_permissions_updated", {})
+
     return await get_role(role_id, current_user, db)
 
 
@@ -247,6 +255,9 @@ async def delete_role(
                         {"message": "Deleted role", "name": deleted_name},
                         ip_address=get_client_ip(request),
                         resource_name=deleted_name)
+
+    from app.services.event_emitter import emit_role_changed
+    await emit_role_changed(current_user.username, deleted_name, "deleted", {})
 
     return {"message": f"Role '{deleted_name}' deleted successfully", "success": True}
 

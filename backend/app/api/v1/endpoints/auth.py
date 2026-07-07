@@ -1122,6 +1122,9 @@ async def verify_and_reset_password(
                         ip_address=get_client_ip(request),
                         resource_name=user.username)
 
+    from app.services.event_emitter import emit_password_reset
+    await emit_password_reset(user.username)
+
     return {
         "message": "Password reset successfully. Please log in with your new password.",
         "success": True,

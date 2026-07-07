@@ -5,11 +5,13 @@ from pydantic_settings import BaseSettings
 
 
 def _load_version() -> str:
+    if "VERSION" in os.environ:
+        return os.environ["VERSION"]
     version_file = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "VERSION")
     if os.path.exists(version_file):
         with open(version_file, "r") as f:
             return f.read().strip()
-    return "3.6.4"
+    return "3.6.5"
 
 
 class Settings(BaseSettings):

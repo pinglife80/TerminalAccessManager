@@ -111,6 +111,8 @@ class BlacklistResponse(BlacklistBase):
     firewall_tag: str | None = None
     is_auto_blocked: bool = False
     auto_unblocked: bool = False
+    unblocked_at: datetime | None = None
+    unblocked_by: str | None = None
 
     class Config:
         from_attributes = True
