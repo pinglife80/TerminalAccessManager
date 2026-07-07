@@ -355,6 +355,20 @@ async def emit_password_reset_requested(
     )
 
 
+async def emit_password_reset(
+    username: str,
+) -> list[Any]:
+    """Emit password reset event"""
+    return await emit_event(
+        event_type="security.password_reset",
+        data={
+            "username": username,
+        },
+        source="system",
+        severity="info",
+    )
+
+
 async def emit_verification_code_sent(
     email: str,
     code_type: str,

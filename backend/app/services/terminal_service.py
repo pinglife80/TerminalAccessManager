@@ -909,19 +909,19 @@ class TerminalService:
     async def get_blacklist(self, query: BlacklistQuery | None = None,
                             skip: int = 0, limit: int = 50) -> list[Blacklist]:
         """Get blacklist entries with optional search and date filtering.
-        Default shows only active (auto_unblocked=False) records."""
+        Default shows only active (not unblocked) records."""
         conditions = []
 
         # Status filtering: default to active only
         if query and query.status:
             if query.status == 'active':
-                conditions.append(Blacklist.auto_unblocked == False)  # noqa: E712
+                conditions.append(Blacklist.unblocked_at.is_(None))
             elif query.status == 'unblocked':
-                conditions.append(Blacklist.auto_unblocked == True)  # noqa: E712
+                conditions.append(Blacklist.unblocked_at.is_not(None))
             # 'all' or other values: no filter
         else:
-            # Default: only show active (not auto-unblocked) records
-            conditions.append(Blacklist.auto_unblocked == False)  # noqa: E712
+            # Default: only show active (not unblocked) records
+            conditions.append(Blacklist.unblocked_at.is_(None))
 
         if query:
             # Search by MAC or IP
@@ -956,17 +956,17 @@ class TerminalService:
 
     async def get_blacklist_count(self, query: BlacklistQuery | None = None) -> int:
         """Get total count of blacklist entries matching search criteria.
-        Default counts only active (auto_unblocked=False) records."""
+        Default counts only active (not unblocked) records."""
         conditions = []
 
         # Status filtering: default to active only
         if query and query.status:
             if query.status == 'active':
-                conditions.append(Blacklist.auto_unblocked == False)  # noqa: E712
+                conditions.append(Blacklist.unblocked_at.is_(None))
             elif query.status == 'unblocked':
-                conditions.append(Blacklist.auto_unblocked == True)  # noqa: E712
+                conditions.append(Blacklist.unblocked_at.is_not(None))
         else:
-            conditions.append(Blacklist.auto_unblocked == False)  # noqa: E712
+            conditions.append(Blacklist.unblocked_at.is_(None))
 
         if query:
             # Search by MAC or IP
@@ -1229,7 +1229,9 @@ class TerminalService:
                 resource_id = blacklist_entry.mac_address if blacklist_entry.mac_address else blacklist_entry.ip_address
                 await self.log_action(username, "unblock_blacklist", "blacklist", resource_id, log_details)
 
-                await self.db.delete(blacklist_entry)
+                from datetime import datetime, UTC
+                blacklist_entry.unblocked_at = datetime.now(UTC)
+                blacklist_entry.unblocked_by = username
                 await self.db.commit()
                 return True
 
@@ -1296,8 +1298,9 @@ class TerminalService:
                     # Check if IP has active blocks (using pre-loaded set)
                     if entry.ip_address and entry.ip_address in active_block_ips:
                         # IP still has active blocks — don't unblock on firewall,
-                        # just delete the expired entry from DB
-                        await self.db.delete(entry)
+                        # just mark the expired entry as unblocked
+                        entry.unblocked_at = datetime.now(UTC)
+                        entry.unblocked_by = "system"
                         count += 1
                         continue
 
@@ -1345,7 +1348,8 @@ class TerminalService:
                         failed_unblock_ips.add(entry.ip_address)
 
                     if sangfor_unblock_success:
-                        await self.db.delete(entry)
+                        entry.unblocked_at = datetime.now(UTC)
+                        entry.unblocked_by = "system"
                         count += 1
                     else:
                         # Sangfor unblock failed — do NOT delete the blacklist entry

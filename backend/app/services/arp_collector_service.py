@@ -325,6 +325,8 @@ class ArpCollectorService:
                     )
                     self.db.add(mac_record)
                     added += 1
+                    from app.services.event_emitter import emit_terminal_online
+                    await emit_terminal_online(ip_address=ip_addr, mac_address=mac_normalized)
 
             except Exception as e:
                 errors.append(f"Error processing {ip_addr}/{mac_normalized}: {str(e)}")

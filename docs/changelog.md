@@ -1,6 +1,6 @@
 # 更新日志
 
-> 文档版本：v3.6.4  更新日期：2026-07-08
+> 文档版本：v3.6.5  更新日期：2026-07-07
 
 本文件记录 TerminalAccessManager 的所有重要变更。
 
@@ -10,6 +10,29 @@
 ---
 
 ## [Unreleased]
+
+---
+
+## [3.6.5] - 2026-07-07
+
+### 新增
+
+- **安全事件触发点**：在 `auth.py` 中添加 `PASSWORD_CHANGED`、`USER_CREATED`、`USER_DELETED`、`USER_UPDATED` 事件触发点
+- **合规告警触发点**：在 `compliance_service.py` 中添加 `BLOCK_THRESHOLD_EXCEEDED`、`POLICY_VIOLATION`、`TERMINAL_COMPLIANT`、`TERMINAL_NON_COMPLIANT` 事件触发点
+- **管理事件触发点**：在 `roles.py`、`settings.py`、`data_source_service.py`、`arp_collector_service.py` 中添加角色变更、配置变更、数据源变更、终端事件触发点
+- **事件发射器增强**：在 `event_emitter.py` 中新增多个事件触发函数
+- **业务流程文档**：创建 `business-workflow.md`，详细说明合规判定和封锁/解封流程
+
+### 修复
+
+- **黑名单软删除**：在 `blacklist.py` 模型中添加 `unblocked_at` 和 `unblocked_by` 字段，实现软删除
+- **cleanup_expired_blacklist bug**：修复 `terminal_service.py` 中 datetime 变量作用域问题
+- **emit_terminal_non_compliant 参数错误**：修复调用时传入错误参数的问题
+
+### 优化
+
+- **API文档补充**：更新 `api.md`，补充通知统计、日志、重试、归档和备份FTP配置等API端点说明
+- **日志指南增强**：更新 `logging-guide.md`，新增日志监控与告警、紧急处理流程等章节
 
 ---
 

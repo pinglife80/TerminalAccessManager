@@ -434,6 +434,13 @@ class ComplianceService:
                         errors.append(
                             f"Failed to block {entry.ip_address} on firewall '{fw_tag}'"
                         )
+                except (ConnectionError, TimeoutError) as e:
+                    all_success = False
+                    errors.append(
+                        f"Error blocking {entry.ip_address} on firewall '{fw_tag}': {str(e)}"
+                    )
+                    from app.services.event_emitter import emit_firewall_connection_lost
+                    await emit_firewall_connection_lost(fw_tag, str(e))
                 except Exception as e:
                     all_success = False
                     errors.append(
@@ -513,13 +520,21 @@ class ComplianceService:
                     await svc.close()
 
         if not dry_run and blocked > 0:
-            # Audit log for auto-block (before commit so it's persisted in the same transaction)
+            from app.services.event_emitter import emit_block_threshold_exceeded
+
+            block_threshold = 50
+            if blocked > block_threshold:
+                await emit_block_threshold_exceeded(block_threshold, blocked)
+
+            terminal_list = [{"ip_address": d["ip_address"], "mac_address": d["mac_address"]} for d in details]
             await self.log_action("system", "auto_block_terminal", "terminal", None, {
                 "message": f"Auto-blocked {blocked} non-compliant terminals from source '{arp_source_tag}'",
                 "source_tag": arp_source_tag,
                 "blocked": blocked,
                 "skipped": skipped,
                 "firewall_tags": firewall_tags,
+                "terminals": terminal_list[:50],
+                "total_terminals": len(terminal_list),
             }, ip_address="System")
             await self.db.commit()
 
@@ -604,6 +619,13 @@ class ComplianceService:
                             errors.append(
                                 f"Failed to unblock {ip_addr} on firewall '{fw_tag}'"
                             )
+                    except (ConnectionError, TimeoutError) as e:
+                        all_success = False
+                        errors.append(
+                            f"Error unblocking {ip_addr} on firewall '{fw_tag}': {str(e)}"
+                        )
+                        from app.services.event_emitter import emit_firewall_connection_lost
+                        await emit_firewall_connection_lost(fw_tag, str(e))
                     except Exception as e:
                         all_success = False
                         errors.append(
@@ -684,10 +706,13 @@ class ComplianceService:
                 await emit_terminal_unblocked(entry.ip_address, entry.mac_address or "", "system")
 
             # Audit log for auto-unblock (before commit so it's persisted in the same transaction)
+            terminal_list = [{"ip_address": d["ip_address"], "mac_address": d["mac_address"]} for d in details]
             await self.log_action("system", "auto_unblock_terminal", "terminal", None, {
                 "message": f"Auto-unblocked {unblocked} compliant terminals",
                 "unblocked": unblocked,
                 "skipped": skipped,
+                "terminals": terminal_list[:50],
+                "total_terminals": len(terminal_list),
             }, ip_address="System")
             await self.db.commit()
 
@@ -1044,8 +1069,25 @@ class ComplianceService:
                     bypass_count += 1
                 elif new_compliance == "compliant":
                     compliant_count += 1
+                    from app.services.event_emitter import emit_terminal_compliant
+                    await emit_terminal_compliant(
+                        ip_address=ip_addr,
+                        mac_address=mac_addr,
+                        source_tag=terminal.source_tag
+                    )
                 else:
                     non_compliant_count += 1
+                    from app.services.event_emitter import emit_policy_violation, emit_terminal_non_compliant
+                    await emit_policy_violation(
+                        policy_name="Terminal Compliance Policy",
+                        terminal_ip=ip_addr,
+                        details={"mac_address": mac_addr, "source_tag": terminal.source_tag}
+                    )
+                    await emit_terminal_non_compliant(
+                        ip_address=ip_addr,
+                        mac_address=mac_addr,
+                        reasons=["Non-compliant terminal detected"]
+                    )
 
                 # Auto-unblock: if terminal was blocked and now becomes compliant/bypass
                 if terminal.status == "blocked" and new_compliance in ("bypass", "compliant"):

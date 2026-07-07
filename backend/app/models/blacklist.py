@@ -22,12 +22,15 @@ class Blacklist(Base):
     firewall_tag = Column(String(50), nullable=True, index=True)  # Firewall tag
     is_auto_blocked = Column(Boolean, default=False)  # Auto-blocked by compliance check
     auto_unblocked = Column(Boolean, default=False)  # Auto-unblocked after becoming compliant
+    unblocked_at = Column(DateTime(timezone=True), nullable=True, index=True)  # Timestamp when unblocked
+    unblocked_by = Column(String(50), nullable=True)  # User who unblocked
 
     # Index for efficient queries
     __table_args__ = (
         Index('idx_blacklist_ip', 'ip_address'),
         Index('idx_blacklist_mac', 'mac_address'),
         Index('idx_blacklist_auto', 'is_auto_blocked', 'auto_unblocked'),
+        Index('idx_blacklist_unblocked', 'unblocked_at'),
     )
 
     def __repr__(self):

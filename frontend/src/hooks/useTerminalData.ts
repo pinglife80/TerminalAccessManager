@@ -39,6 +39,8 @@ export interface BlacklistEntry {
   firewall_tag: string | null;
   is_auto_blocked: boolean;
   auto_unblocked: boolean;
+  unblocked_at: string | null;
+  unblocked_by: string | null;
 }
 
 export interface DashboardStats {

@@ -82,12 +82,34 @@ async def update_configs(
     # Audit log for each updated config
     from app.services.terminal_service import TerminalService
     ts = TerminalService(db)
+    email_keys = {
+        "email_enabled", "email_host", "email_port", "email_use_tls", "email_use_ssl",
+        "email_username", "email_password", "email_from", "email_from_name", "email_rate_limit"
+    }
+    email_updates = [u for u in updates if u.key in email_keys]
+
     for update in updates:
         await ts.log_action(current_user.username, "update_config", "system", update.key,
                             {"message": "Updated system configuration", "key": update.key,
                              "old_value": old_values.get(update.key), "new_value": update.value},
                             ip_address=get_client_ip(request),
                             resource_name=update.key)
+
+    if email_updates:
+        email_changes = {}
+        for update in email_updates:
+            email_changes[update.key] = {
+                "old_value": old_values.get(update.key),
+                "new_value": update.value
+            }
+        await ts.log_action(current_user.username, "save_email_config", "system", "email_config",
+                            {"message": "Saved email configuration", "changes": email_changes},
+                            ip_address=get_client_ip(request),
+                            resource_name="email_config")
+
+    from app.services.event_emitter import emit_config_changed
+    changes = [{"key": u.key, "old_value": old_values.get(u.key), "new_value": u.value} for u in updates]
+    await emit_config_changed(current_user.username, changes)
 
     return results
 
@@ -118,6 +140,9 @@ async def update_single_config(
                          "old_value": old_value, "new_value": update.value},
                         ip_address=get_client_ip(request),
                         resource_name=key)
+
+    from app.services.event_emitter import emit_config_changed
+    await emit_config_changed(current_user.username, [{"key": key, "old_value": old_value, "new_value": update.value}])
 
     return result
 
