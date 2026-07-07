@@ -18,6 +18,8 @@ App mode config fields:
 from typing import Any
 
 import httpx
+
+from .base import format_timestamp
 from loguru import logger
 
 from app.services.notification_channels.base import (
@@ -123,7 +125,7 @@ class WeComChannel(NotificationChannelBase):
         # Build markdown content (WeCom supports a subset of markdown)
         content = f"### {event_name}\n\n"
         content += f"{metadata.get('description', '')}\n\n"
-        content += "> 时间: {}\n\n".format(event.timestamp.strftime('%Y-%m-%d %H:%M:%S'))
+        content += f"> 时间: {format_timestamp(event.timestamp)}\n\n"
         content += f"> 严重级别: **{event.severity.upper()}**\n\n"
         content += f"> 来源: {event.source}\n\n"
 

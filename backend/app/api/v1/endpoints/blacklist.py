@@ -10,6 +10,17 @@ from app.services.terminal_service import TerminalService
 router = APIRouter(prefix="/blacklist", tags=["Blacklist"])
 
 
+@router.get("/stats")
+async def get_blacklist_stats(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permission("blacklist:read"))
+):
+    """Get blacklist statistics (server-side global counts for active entries)."""
+    service = TerminalService(db)
+    stats = await service.get_blacklist_stats()
+    return stats
+
+
 @router.get("/", response_model=PaginatedResponse[BlacklistResponse])
 async def get_blacklist(
     search: str = Query(None, description="Search by MAC or IP"),

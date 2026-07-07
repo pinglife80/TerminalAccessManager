@@ -572,3 +572,248 @@ class BackupService:
             raise Exception(f"Database restoration failed: {error_msg}")
 
         logger.info("Database restoration completed")
+
+    async def list_remote_backups(self) -> list[dict]:
+        """List backups from remote storage (FTP/SFTP)"""
+        if self.config.storage_type == "sftp":
+            return await self._list_via_sftp()
+        elif self.config.storage_type == "ftp":
+            return await self._list_via_ftp()
+        return []
+
+    async def _list_via_ftp(self) -> list[dict]:
+        """List backups via FTP"""
+        config = self.config.storage_config
+        host = config.get("host", "localhost")
+        port = int(config.get("port", 21))
+        username = config.get("username")
+        password = config.get("password")
+        remote_path = config.get("path", "/backups")
+        use_ssl = config.get("use_ssl", False)
+
+        backups = []
+        try:
+            if use_ssl:
+                ftp = ftplib.FTP_TLS()
+            else:
+                ftp = ftplib.FTP()
+
+            ftp.connect(host, port)
+            ftp.login(username, password)
+            ftp.set_pasv(True)
+
+            try:
+                ftp.cwd(remote_path)
+            except ftplib.error_perm:
+                ftp.mkd(remote_path)
+                ftp.cwd(remote_path)
+
+            for filename in ftp.nlst():
+                if filename.endswith(".zip"):
+                    try:
+                        file_size = ftp.size(filename)
+                        mtime_str = ftp.voidcmd(f"MDTM {filename}")[4:].strip()
+                        mtime_dt = datetime.strptime(mtime_str, "%Y%m%d%H%M%S")
+                        backups.append({
+                            "filename": filename,
+                            "file_path": f"{remote_path}/{filename}",
+                            "file_size": file_size,
+                            "created_at": mtime_dt,
+                            "storage": "remote",
+                        })
+                    except Exception:
+                        backups.append({
+                            "filename": filename,
+                            "file_path": f"{remote_path}/{filename}",
+                            "file_size": None,
+                            "created_at": None,
+                            "storage": "remote",
+                        })
+
+            ftp.quit()
+        except Exception as e:
+            logger.error(f"FTP list failed: {e}")
+
+        return backups
+
+    async def _list_via_sftp(self) -> list[dict]:
+        """List backups via SFTP"""
+        config = self.config.storage_config
+        host = config.get("host", "localhost")
+        port = int(config.get("port", 22))
+        username = config.get("username")
+        password = config.get("password")
+        remote_path = config.get("path", "/backups")
+        key_filename = config.get("key_filename")
+
+        backups = []
+        try:
+            ssh = paramiko.SSHClient()
+            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
+            if key_filename:
+                ssh.connect(hostname=host, port=port, username=username, key_filename=key_filename)
+            else:
+                ssh.connect(hostname=host, port=port, username=username, password=password)
+
+            with ssh.open_sftp() as sftp:
+                try:
+                    sftp.stat(remote_path)
+                except FileNotFoundError:
+                    sftp.mkdir(remote_path)
+
+                for entry in sftp.listdir_attr(remote_path):
+                    if entry.filename.endswith(".zip"):
+                        backups.append({
+                            "filename": entry.filename,
+                            "file_path": f"{remote_path}/{entry.filename}",
+                            "file_size": entry.st_size,
+                            "created_at": datetime.fromtimestamp(entry.st_mtime),
+                            "storage": "remote",
+                        })
+
+            ssh.close()
+        except Exception as e:
+            logger.error(f"SFTP list failed: {e}")
+
+        return backups
+
+    async def download_from_remote(self, filename: str) -> str:
+        """Download backup from remote storage to local"""
+        if self.config.storage_type == "sftp":
+            return await self._download_via_sftp(filename)
+        elif self.config.storage_type == "ftp":
+            return await self._download_via_ftp(filename)
+        raise Exception("Only remote storage supported")
+
+    async def _download_via_ftp(self, filename: str) -> str:
+        """Download backup via FTP"""
+        config = self.config.storage_config
+        host = config.get("host", "localhost")
+        port = int(config.get("port", 21))
+        username = config.get("username")
+        password = config.get("password")
+        remote_path = config.get("path", "/backups")
+        use_ssl = config.get("use_ssl", False)
+
+        local_path = os.path.join(self.backup_dir, filename)
+
+        try:
+            if use_ssl:
+                ftp = ftplib.FTP_TLS()
+            else:
+                ftp = ftplib.FTP()
+
+            ftp.connect(host, port)
+            ftp.login(username, password)
+            ftp.set_pasv(True)
+
+            ftp.cwd(remote_path)
+            with open(local_path, "wb") as f:
+                ftp.retrbinary(f"RETR {filename}", f.write)
+
+            ftp.quit()
+            logger.info(f"Downloaded from FTP: {local_path}")
+            return local_path
+        except Exception as e:
+            logger.error(f"FTP download failed: {e}")
+            raise
+
+    async def _download_via_sftp(self, filename: str) -> str:
+        """Download backup via SFTP"""
+        config = self.config.storage_config
+        host = config.get("host", "localhost")
+        port = int(config.get("port", 22))
+        username = config.get("username")
+        password = config.get("password")
+        remote_path = config.get("path", "/backups")
+        key_filename = config.get("key_filename")
+
+        local_path = os.path.join(self.backup_dir, filename)
+
+        try:
+            ssh = paramiko.SSHClient()
+            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
+            if key_filename:
+                ssh.connect(hostname=host, port=port, username=username, key_filename=key_filename)
+            else:
+                ssh.connect(hostname=host, port=port, username=username, password=password)
+
+            with ssh.open_sftp() as sftp:
+                remote_file_path = os.path.join(remote_path, filename)
+                sftp.get(remote_file_path, local_path)
+
+            ssh.close()
+            logger.info(f"Downloaded from SFTP: {local_path}")
+            return local_path
+        except Exception as e:
+            logger.error(f"SFTP download failed: {e}")
+            raise
+
+    async def delete_from_remote(self, filename: str) -> bool:
+        """Delete backup from remote storage"""
+        if self.config.storage_type == "sftp":
+            return await self._delete_via_sftp(filename)
+        elif self.config.storage_type == "ftp":
+            return await self._delete_via_ftp(filename)
+        return False
+
+    async def _delete_via_ftp(self, filename: str) -> bool:
+        """Delete backup via FTP"""
+        config = self.config.storage_config
+        host = config.get("host", "localhost")
+        port = int(config.get("port", 21))
+        username = config.get("username")
+        password = config.get("password")
+        remote_path = config.get("path", "/backups")
+        use_ssl = config.get("use_ssl", False)
+
+        try:
+            if use_ssl:
+                ftp = ftplib.FTP_TLS()
+            else:
+                ftp = ftplib.FTP()
+
+            ftp.connect(host, port)
+            ftp.login(username, password)
+            ftp.set_pasv(True)
+
+            ftp.cwd(remote_path)
+            ftp.delete(filename)
+            ftp.quit()
+            logger.info(f"Deleted from FTP: {filename}")
+            return True
+        except Exception as e:
+            logger.error(f"FTP delete failed: {e}")
+            return False
+
+    async def _delete_via_sftp(self, filename: str) -> bool:
+        """Delete backup via SFTP"""
+        config = self.config.storage_config
+        host = config.get("host", "localhost")
+        port = int(config.get("port", 22))
+        username = config.get("username")
+        password = config.get("password")
+        remote_path = config.get("path", "/backups")
+        key_filename = config.get("key_filename")
+
+        try:
+            ssh = paramiko.SSHClient()
+            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
+            if key_filename:
+                ssh.connect(hostname=host, port=port, username=username, key_filename=key_filename)
+            else:
+                ssh.connect(hostname=host, port=port, username=username, password=password)
+
+            with ssh.open_sftp() as sftp:
+                remote_file_path = os.path.join(remote_path, filename)
+                sftp.remove(remote_file_path)
+
+            ssh.close()
+            logger.info(f"Deleted from SFTP: {filename}")
+            return True
+        except Exception as e:
+            logger.error(f"SFTP delete failed: {e}")
+            return False

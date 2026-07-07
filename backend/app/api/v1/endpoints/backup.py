@@ -120,10 +120,10 @@ async def list_backups(
     backup_service: BackupService = Depends(get_backup_service),
     current_user: User = Depends(get_current_user),
 ):
-    """List all available backups"""
+    """List all available backups (local + remote)"""
     backups = []
-    backup_dir = backup_service.backup_dir
 
+    backup_dir = backup_service.backup_dir
     if os.path.isdir(backup_dir):
         for filename in sorted(os.listdir(backup_dir), reverse=True):
             if filename.endswith(".zip"):
@@ -134,7 +134,15 @@ async def list_backups(
                     "file_path": file_path,
                     "file_size": stats.st_size,
                     "created_at": datetime.fromtimestamp(stats.st_mtime),
+                    "storage": "local",
                 })
+
+    config = await backup_service.load_config()
+    if config.storage_type != "local":
+        remote_backups = await backup_service.list_remote_backups()
+        backups.extend(remote_backups)
+
+    backups.sort(key=lambda x: x.get("created_at") or datetime.min, reverse=True)
 
     return BackupListResponse(backups=backups)
 
@@ -147,7 +155,7 @@ async def download_backup(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_permission("backup:write")),
 ):
-    """Download a backup file"""
+    """Download a backup file (from local or remote)"""
     if '..' in filename or filename.startswith('/') or filename.startswith('\\'):
         raise HTTPException(status_code=400, detail="Invalid filename")
 
@@ -155,7 +163,14 @@ async def download_backup(
     file_path = os.path.join(backup_service.backup_dir, safe_filename)
 
     if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="Backup file not found")
+        config = await backup_service.load_config()
+        if config.storage_type != "local":
+            try:
+                file_path = await backup_service.download_from_remote(safe_filename)
+            except Exception as e:
+                raise HTTPException(status_code=404, detail=f"Backup file not found: {str(e)}")
+        else:
+            raise HTTPException(status_code=404, detail="Backup file not found")
 
     ts = TerminalService(db)
     file_size = os.path.getsize(file_path)
@@ -218,18 +233,21 @@ async def delete_backup(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_permission("backup:write")),
 ):
-    """Delete a backup file"""
+    """Delete a backup file (from local and/or remote)"""
     if '..' in filename or filename.startswith('/') or filename.startswith('\\'):
         raise HTTPException(status_code=400, detail="Invalid filename")
 
     safe_filename = os.path.basename(filename)
     file_path = os.path.join(backup_service.backup_dir, safe_filename)
 
-    if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="Backup file not found")
+    file_size = 0
+    if os.path.exists(file_path):
+        file_size = os.path.getsize(file_path)
+        os.remove(file_path)
 
-    file_size = os.path.getsize(file_path)
-    os.remove(file_path)
+    config = await backup_service.load_config()
+    if config.storage_type != "local":
+        await backup_service.delete_from_remote(safe_filename)
 
     ts = TerminalService(db)
     await ts.log_action(

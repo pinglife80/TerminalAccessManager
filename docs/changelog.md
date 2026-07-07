@@ -1,6 +1,6 @@
 # 更新日志
 
-> 文档版本：v3.6.5  更新日期：2026-07-07
+> 文档版本：v3.6.6  更新日期：2026-07-08
 
 本文件记录 TerminalAccessManager 的所有重要变更。
 
@@ -10,6 +10,36 @@
 ---
 
 ## [Unreleased]
+
+---
+
+## [3.6.6] - 2026-07-08
+
+### 新增
+
+- **Operation Source 子菜单**：在数据源管理页面新增 Operation Source 标签页，独立管理 Sangfor 防火墙类型数据源，位于 Data Sources 和 Bindings 之间
+- **黑名单服务端统计接口**：新增 `GET /api/v1/blacklist/stats` 接口，提供全局统计数据（活跃/自动封锁/手动封锁/过期/活跃封锁数），解决前端统计基于当前页数据不准确的问题
+- **FTP 远程备份管理**：备份列表/下载/删除支持远程存储（FTP/SFTP），备份列表显示存储位置标签
+- **终端表 updated_at 字段**：新增 `updated_at` 字段区分创建时间和更新时间，ARP 采集仅更新 `updated_at` 不覆盖 `timestamp`
+
+### 修复
+
+- **黑名单 Unblocked 标签筛选不出数据**：统一筛选逻辑，active 同时检查 `auto_unblocked=False` 和 `unblocked_at IS NULL`，unblocked 检查 `auto_unblocked=True OR unblocked_at IS NOT NULL`；通过数据迁移 026 补全历史记录的 `unblocked_at` 字段
+- **角色名称修改不生效**：后端 `RoleUpdate` schema 添加 `name` 字段，`update_role` 支持自定义角色重命名并保护内置角色
+- **终端 timestamp 被覆盖**：ARP 采集更新终端时错误更新 `timestamp`（创建时间），现仅更新 `updated_at`
+- **白名单备注不一致**：白名单备注更新逻辑优化，支持备注变更时替换旧备注；白名单删除时清除关联终端备注（支持 CIDR 和 IP 范围匹配）
+- **Sangfor 测试连接 Last Test 不更新**：测试连接成功后使用直接 UPDATE 语句更新 `last_sync_at`（绕过 ORM expunge 问题）
+- **导航栏菜单同时选中**：父级菜单高亮基于路由匹配而非展开状态
+- **自动解封未设置 unblocked_at**：自动解封逻辑中 3 处补全 `unblocked_at = datetime.now(UTC)`
+- **通知时间戳时区不一致**：所有通知渠道统一使用 `format_timestamp()` 转换为 Asia/Shanghai 时区
+- **前端时间戳格式不一致**：统一 `formatDate` 为 `formatDateTime`，支持多语言和时区
+- **翻译键命名错误**：白名单 `identifier` 重命名为 `macAddress`/`ipAddress`，移除 `ipPattern`
+- **备份计划预设未国际化**：预设选项改用 i18n 翻译键
+
+### 优化
+
+- **黑名单 Unblocked 标签显示一致性**：UI 标签显示条件从 `auto_unblocked` 改为 `auto_unblocked || unblocked_at`，与后端筛选逻辑一致
+- **Sangfor 数据源独立管理**：DataSourcesTab 过滤 sangfor 类型，由 OperationSourceTab 专门管理
 
 ---
 

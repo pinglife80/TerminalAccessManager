@@ -1,9 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useForm } from 'react-hook-form';
 import { useTranslation } from 'react-i18next';
 import { apiClient } from '@/lib/api';
 import { API_ENDPOINTS } from '@/lib/constants';
-import { getErrorMessage } from '@/lib/utils';
+import { formatDate, getErrorMessage } from '@/lib/utils';
 import { HardDrive, Plus, Download, RotateCcw, Trash2, Play, Settings, CheckCircle, AlertCircle, TestTube, Save } from 'lucide-react';
 import { toast } from 'sonner';
 import { PrimaryButton } from '@/components/Button';
@@ -22,9 +22,10 @@ interface BackupConfig {
 
 interface BackupInfo {
   filename: string;
-  file_path: string;
-  file_size: number;
-  created_at: string;
+  file_path?: string;
+  file_size?: number;
+  created_at?: string;
+  storage: string;
 }
 
 interface BackupJob {
@@ -44,16 +45,6 @@ const STORAGE_TYPES = [
   { value: 'ftp', label: 'ftp' },
 ];
 
-const SCHEDULE_PRESETS = [
-  { label: '每天凌晨2点', value: '0 2 * * *' },
-  { label: '每天凌晨3点', value: '0 3 * * *' },
-  { label: '每天凌晨4点', value: '0 4 * * *' },
-  { label: '每周日凌晨2点', value: '0 2 * * 0' },
-  { label: '每周六凌晨2点', value: '0 2 * * 6' },
-  { label: '每月1号凌晨2点', value: '0 2 1 * *' },
-  { label: '自定义', value: 'custom' },
-];
-
 const CRON_REGEX = /^(\*|[0-5]?\d)\s+(\*|[01]?\d|2[0-3])\s+(\*|[1-9]|[12]\d|3[01])\s+(\*|[1-9]|1[0-2])\s+(\*|[0-6])$/;
 
 const validateCron = (value: string): boolean => {
@@ -62,6 +53,15 @@ const validateCron = (value: string): boolean => {
 
 const Backup: React.FC = () => {
   const { t } = useTranslation();
+  const schedulePresets = useMemo(() => [
+    { label: t('backup.schedulePresets.daily2am'), value: '0 2 * * *' },
+    { label: t('backup.schedulePresets.daily3am'), value: '0 3 * * *' },
+    { label: t('backup.schedulePresets.daily4am'), value: '0 4 * * *' },
+    { label: t('backup.schedulePresets.weeklySunday2am'), value: '0 2 * * 0' },
+    { label: t('backup.schedulePresets.weeklySaturday2am'), value: '0 2 * * 6' },
+    { label: t('backup.schedulePresets.monthly1st2am'), value: '0 2 1 * *' },
+    { label: t('backup.schedulePresets.custom'), value: 'custom' },
+  ], [t]);
   const [config, setConfig] = useState<BackupConfig | null>(null);
   const [backups, setBackups] = useState<BackupInfo[]>([]);
   const [runningJob, setRunningJob] = useState<BackupJob | null>(null);
@@ -98,7 +98,7 @@ const Backup: React.FC = () => {
       setConfig(response.data);
       reset(response.data);
       const schedule = response.data.schedule || '0 2 * * *';
-      const preset = SCHEDULE_PRESETS.find(p => p.value === schedule);
+      const preset = schedulePresets.find(p => p.value === schedule);
       setSelectedPreset(preset ? schedule : 'custom');
     } catch (err: unknown) {
       toast.error(getErrorMessage(err, t('backup.failedToLoadConfig')));
@@ -269,7 +269,7 @@ const Backup: React.FC = () => {
                       }
                     }}
                   >
-                    {SCHEDULE_PRESETS.map((preset) => (
+                    {schedulePresets.map((preset) => (
                       <option key={preset.value} value={preset.value}>{preset.label}</option>
                     ))}
                   </select>
@@ -465,7 +465,13 @@ const Backup: React.FC = () => {
                         <div>
                           <p className="font-medium text-foreground">{backup.filename}</p>
                           <p className="text-sm text-muted-foreground">
-                            {formatFileSize(backup.file_size)} - {new Date(backup.created_at).toLocaleString()}
+                            {backup.file_size !== undefined ? formatFileSize(backup.file_size) : '-'}
+                            {' - '}
+                            {formatDate(backup.created_at)}
+                            {' - '}
+                            <span className={backup.storage === 'remote' ? 'text-blue-500' : 'text-gray-500'}>
+                              {t(`backup.storageLocation.${backup.storage}`)}
+                            </span>
                           </p>
                         </div>
                       </div>

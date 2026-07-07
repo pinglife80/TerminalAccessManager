@@ -7,7 +7,7 @@ import { useAuthStore } from '@/store/auth';
 import { usePermission } from '@/hooks/usePermission';
 import { apiClient } from '@/lib/api';
 import { API_ENDPOINTS } from '@/lib/constants';
-import { getErrorMessage, useDebounce } from '@/lib/utils';
+import { formatDate, getErrorMessage, useDebounce } from '@/lib/utils';
 import { Search, Plus, Edit2, Trash2, Unlock, Lock, Shield, ShieldCheck, Eye, EyeOff, KeyRound, Users as UsersIcon, RefreshCw, ChevronDown, Download } from 'lucide-react';
 import { toast } from 'sonner';
 import { PrimaryButton, IconButton, ButtonGroup } from '@/components/Button';
@@ -423,7 +423,7 @@ const Users: React.FC = () => {
                       )}
                     </td>
                     <td className="px-4 sm:px-6 py-4 whitespace-nowrap text-sm text-muted-foreground">
-                      {user.created_at ? new Date(user.created_at).toLocaleDateString() : '—'}
+                      {formatDate(user.created_at)}
                     </td>
                     <td className="px-4 sm:px-6 py-4 whitespace-nowrap">
                       <div className="flex items-center justify-center">

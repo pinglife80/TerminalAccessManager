@@ -1,6 +1,6 @@
 # TerminalAccessManager 业务流程文档
 
-> 文档版本：v3.6.5 | 更新日期：2026-07-07
+> 文档版本：v3.6.6 | 更新日期：2026-07-08
 >
 > 本文档详细说明 TerminalAccessManager 的核心业务流程，包括数据采集、合规判定、封锁/解封的完整生命周期。
 
@@ -134,6 +134,25 @@ else:
 | 白名单变更 | 添加/删除白名单条目后触发 |
 | IPGuard同步完成 | 基线数据更新后触发 |
 | 手动触发 | 通过API手动触发合规重算 |
+
+### 3.6 白名单备注管理
+
+白名单条目支持备注（comment）字段，用于记录添加原因或管理信息。备注信息会同步写入匹配终端的 `remarks` 字段，便于在终端列表中追溯白名单来源。
+
+#### 添加白名单
+
+添加白名单条目时可填写备注，系统会将备注信息写入所有匹配终端的 `remarks` 字段：
+- MAC 地址类型：匹配单个终端
+- IP 地址类型：匹配单个终端
+- CIDR 类型：匹配网段内所有终端
+- IP 范围类型：匹配范围内所有终端
+
+#### 删除白名单
+
+删除白名单条目时，系统会自动清除关联终端的备注信息，确保备注与白名单状态一致：
+- 通过 `_remove_whitelist_comment` 方法实现
+- 支持 MAC/IP/CIDR/范围所有匹配类型的终端备注清除
+- 仅清除由该白名单条目写入的备注，不影响其他来源的备注信息
 
 ---
 
@@ -359,8 +378,10 @@ class Blacklist(Base):
 
 | 状态 | 条件 | 说明 |
 |------|------|------|
-| 活跃 | `unblocked_at is None` | 终端仍被封锁 |
-| 已解封 | `unblocked_at is not None` | 终端已解封，记录保留用于审计 |
+| 活跃 | `auto_unblocked == False AND unblocked_at IS NULL` | 终端仍被封锁 |
+| 已解封 | `auto_unblocked == True OR unblocked_at IS NOT NULL` | 终端已解封，记录保留用于审计 |
+
+> **注意：** v3.6.6 统一了黑名单筛选逻辑，同时考虑 `auto_unblocked` 和 `unblocked_at` 两个字段，避免历史数据中 `auto_unblocked=True` 但 `unblocked_at IS NULL` 的记录被遗漏。
 
 ### 7.3 清理流程
 

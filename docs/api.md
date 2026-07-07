@@ -1,6 +1,6 @@
 # TerminalAccessManager API 文档
 
-> 文档版本：v3.6.5 | 更新日期：2026-07-07
+> 文档版本：v3.6.6 | 更新日期：2026-07-08
 
 > 基于 MAC 地址和 IP 地址的网络终端准入管理平台
 
@@ -1092,12 +1092,15 @@ curl -X DELETE https://<HOST_IP>:8443/api/v1/whitelist/192.168.1.0/24 \
 | 参数 | 位置 | 类型 | 必填 | 说明 |
 |------|------|------|------|------|
 | search | Query | string | 否 | 按 MAC 或 IP 搜索 |
+| status | Query | string | 否 | 筛选状态：`active`（活跃，默认）/ `unblocked`（已解封）/ `all`（全部） |
 | start_date | Query | string | 否 | 起始日期（YYYY-MM-DD） |
 | end_date | Query | string | 否 | 截止日期（YYYY-MM-DD） |
 | skip | Query | int | 0 | 跳过记录数 |
 | limit | Query | int | 50 | 每页记录数（1-200） |
 
 > **MAC 地址格式无关搜索**：搜索 MAC 地址时，后端使用 `func.replace` 去除分隔符（`:`、`-`、`.`）后进行 ILIKE 匹配，因此输入 `AABBCCDDEEFF`、`AA:BB:CC:DD:EE:FF`、`AA-BB-CC-DD-EE-FF` 均可匹配同一条记录。
+>
+> **状态筛选逻辑**：`active` 筛选 `auto_unblocked=False AND unblocked_at IS NULL`；`unblocked` 筛选 `auto_unblocked=True OR unblocked_at IS NOT NULL`。
 
 **成功响应** `200`
 
@@ -1115,7 +1118,9 @@ curl -X DELETE https://<HOST_IP>:8443/api/v1/whitelist/192.168.1.0/24 \
       "source_tag": "switch-1f",
       "firewall_tag": "sangfor-af1",
       "is_auto_blocked": false,
-      "auto_unblocked": false
+      "auto_unblocked": false,
+      "unblocked_at": null,
+      "unblocked_by": null
     }
   ],
   "total": 10,
@@ -1133,7 +1138,42 @@ curl "https://<HOST_IP>:8443/api/v1/blacklist/?search=192.168&start_date=2025-06
 
 ---
 
-### 5.2 POST /blacklist/
+### 5.2 GET /blacklist/stats
+
+获取黑名单全局统计数据（基于活跃记录，不随分页变化）。
+
+- **认证要求**：需 `blacklist:read` 权限
+
+**成功响应** `200`
+
+```json
+{
+  "total_active": 15,
+  "auto_blocked": 10,
+  "manual_blocked": 5,
+  "expired": 3,
+  "active_blocks": 12
+}
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| total_active | int | 活跃（未解封）记录总数 |
+| auto_blocked | int | 自动封锁的活跃记录数 |
+| manual_blocked | int | 手动封锁的活跃记录数 |
+| expired | int | 已过期的活跃记录数 |
+| active_blocks | int | 未过期的活跃记录数（total_active - expired） |
+
+**用例**
+
+```bash
+curl "https://<HOST_IP>:8443/api/v1/blacklist/stats" \
+  -H "Authorization: Bearer <access_token>"
+```
+
+---
+
+### 5.3 POST /blacklist/
 
 > **⚠️ 已废弃**: 此端点已废弃，请使用 `POST /terminals/block/{ip_address}` 代替。此端点将在未来版本中移除。
 
@@ -1185,7 +1225,7 @@ curl -X POST https://<HOST_IP>:8443/api/v1/blacklist/ \
 
 ---
 
-### 5.3 DELETE /blacklist/{identifier}
+### 5.4 DELETE /blacklist/{identifier}
 
 删除黑名单条目，同时在深信服 AF 防火墙上执行解封。
 

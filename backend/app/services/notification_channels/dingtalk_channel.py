@@ -23,6 +23,8 @@ import time
 import urllib.parse
 from typing import Any
 
+from .base import format_timestamp
+
 import httpx
 from loguru import logger
 
@@ -162,7 +164,7 @@ class DingTalkChannel(NotificationChannelBase):
         content += f"{metadata.get('description', '')}\n\n"
         content += "---\n\n"
         content += f"**严重级别**: {event.severity.upper()}\n\n"
-        content += f"**时间**: {event.timestamp.strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+        content += f"**时间**: {format_timestamp(event.timestamp)}\n\n"
         content += f"**来源**: {event.source}\n\n"
 
         if event.data:

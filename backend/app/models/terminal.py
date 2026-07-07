@@ -29,6 +29,7 @@ class Terminal(Base):
     )  # blocked, unblocked
     comments = Column(Text, nullable=True)
     timestamp = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True)
+    updated_at = Column(DateTime(timezone=True), nullable=True, index=True)
     source = Column(String(50), default="arp")  # arp, ipguard, whitelist, manual
     source_tag = Column(String(50), nullable=True, index=True)  # Data source tag
     compliance_status = Column(String(20), default="unknown", index=True)  # compliant / bypass / non_compliant / unknown

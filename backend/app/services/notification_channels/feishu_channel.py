@@ -18,6 +18,7 @@ from typing import Any
 import httpx
 from loguru import logger
 
+from .base import format_timestamp
 from app.services.notification_channels.base import (
     ChannelTestResult,
     NotificationChannelBase,
@@ -159,7 +160,7 @@ class FeishuChannel(NotificationChannelBase):
                         "widgets": [
                             {
                                 "tag": "markdown",
-                                "content": f"**时间**\n{event.timestamp.strftime('%H:%M:%S')}",
+                                "content": f"**时间**\n{format_timestamp(event.timestamp)}",
                             }
                         ],
                     },

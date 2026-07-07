@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { useTerminals, useBlacklistCheck, Terminal } from '@/hooks/useTerminalData';
+import { useTerminals, useBlacklistCheck, useStats, useDataSources, Terminal } from '@/hooks/useTerminalData';
 import { useTranslation } from 'react-i18next';
 import { Search, Filter, RefreshCw, Clock, Server, Shield, ShieldOff, Plus, Download, Eye, Info, ChevronDown, Trash2 } from 'lucide-react';
 import { apiClient } from '@/lib/api';
@@ -169,6 +169,9 @@ const Terminals: React.FC = () => {
     ip_addresses: checkIpAddresses,
   });
 
+  const { data: stats } = useStats();
+  const { data: dataSources } = useDataSources();
+
   const blackListItems = blackListCheckData ?? [];
 
   // Build blacklist lookup sets for MAC and IP matching
@@ -238,12 +241,12 @@ const Terminals: React.FC = () => {
     });
   }, [macAddresses, blackMacSet, blackIpSet, blackEntryMap]);
 
-  // Extract unique source_tags and firewall_tags for filter dropdowns
+  // Extract unique source_tags from all data sources
   const sourceTagOptions = useMemo(() => {
     const tags = new Set<string>();
-    macAddresses.forEach((m) => { if (m.source_tag) tags.add(m.source_tag); });
+    dataSources?.forEach((ds) => { if (ds.tag) tags.add(ds.tag); });
     return Array.from(tags).sort();
-  }, [macAddresses]);
+  }, [dataSources]);
 
   const firewallTagOptions = useMemo(() => {
     const tags = new Set<string>();
@@ -457,12 +460,12 @@ const Terminals: React.FC = () => {
     toast.success(t('terminal.dataRefreshed'));
   };
 
-  // Stats - use server total and current page data for compliance counts
-  const totalTerminals = totalFromServer;
-  const normalCount = allTerminals.filter((m) => (m.compliance_status || 'unknown') === 'compliant').length;
-  const bypassCount = allTerminals.filter((m) => m.compliance_status === 'bypass').length;
-  const blockedCount = allTerminals.filter((m) => m.compliance_status === 'non_compliant').length;
-  const pendingCount = allTerminals.filter((m) => (m.compliance_status || 'unknown') === 'unknown').length;
+  // Stats - use server-side aggregation for compliance counts
+  const totalTerminals = stats?.total ?? totalFromServer;
+  const normalCount = stats?.compliant ?? allTerminals.filter((m) => (m.compliance_status || 'unknown') === 'compliant').length;
+  const bypassCount = stats?.bypass ?? allTerminals.filter((m) => m.compliance_status === 'bypass').length;
+  const blockedCount = stats?.non_compliant ?? allTerminals.filter((m) => m.compliance_status === 'non_compliant').length;
+  const pendingCount = stats?.unknown ?? allTerminals.filter((m) => (m.compliance_status || 'unknown') === 'unknown').length;
 
   // Helper to get status label via i18n
   const getStatusLabel = (status: string): string => {

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { NavLink } from 'react-router-dom';
+import { NavLink, useLocation } from 'react-router-dom';
 import {
   Shield,
   LayoutDashboard,
@@ -67,6 +67,7 @@ const Sidebar: React.FC = () => {
   const { t } = useTranslation();
   const { user, logout } = useAuthStore();
   const { appShortName, appSubtitle } = useBrandingStore();
+  const location = useLocation();
   const [collapsed, setCollapsed] = useState(false);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set(['/system-settings']));
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
@@ -100,6 +101,9 @@ const Sidebar: React.FC = () => {
     const label = navLabelKeyMap[item.label] ? t(navLabelKeyMap[item.label]) : item.label;
     const isExpanded = expandedGroups.has(item.path);
     const hasChildren = item.children && item.children.length > 0;
+    const isGroupActive = hasChildren
+      ? item.children?.some((child) => location.pathname === child.path || location.pathname.startsWith(child.path + '/'))
+      : false;
 
     if (!hasPermission(item)) {
       return null;
@@ -111,7 +115,7 @@ const Sidebar: React.FC = () => {
           <button
             onClick={() => toggleGroup(item.path)}
             className={`flex items-center ${collapsed ? 'justify-center' : 'space-x-3'} px-3 py-2.5 rounded-lg transition-colors group w-full ${
-              isExpanded
+              isGroupActive
                 ? 'bg-blue-600 text-white'
                 : 'text-gray-300 hover:bg-gray-800 hover:text-white'
             }`}

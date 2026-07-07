@@ -299,16 +299,10 @@ class ArpCollectorService:
                 existing = result.scalar_one_or_none()
 
                 if existing:
-                    # Update timestamp and source_tag
                     from datetime import datetime
-                    existing.timestamp = datetime.now(UTC)
+                    existing.updated_at = datetime.now(UTC)
                     existing.source_tag = source_tag
                     existing.source = "arp"
-                    # Reset compliance_status to "unknown" so the next
-                    # compliance check will re-evaluate it with current
-                    # whitelist/IPGuard data. This ensures terminals that
-                    # were previously non_compliant can become compliant
-                    # if the baseline data has changed.
                     existing.compliance_status = "unknown"
                     existing.wl_match_type = None
                     updated += 1

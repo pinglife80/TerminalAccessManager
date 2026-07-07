@@ -137,7 +137,7 @@ const Whitelist: React.FC = () => {
   };
 
   const handleExport = () => {
-    const headers = [t('whitelist.identifier'), t('whitelist.ipPattern'), t('whitelist.type'), t('whitelist.addedBy'), t('whitelist.addedDate'), t('terminal.comments')];
+    const headers = [t('whitelist.macAddress'), t('whitelist.ipAddress'), t('whitelist.type'), t('whitelist.addedBy'), t('whitelist.addedDate'), t('terminal.comments')];
     const rows = filteredWhitelist?.map((item) => [
       item.mac_address || '-',
       item.ip_pattern || '-',
@@ -303,10 +303,10 @@ const Whitelist: React.FC = () => {
             <thead className="bg-background">
               <tr>
                 <th className="px-4 sm:px-6 py-3.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                  {t('whitelist.identifier')}
+                  {t('whitelist.macAddress')}
                 </th>
                 <th className="px-4 sm:px-6 py-3.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                  {t('whitelist.ipPattern')}
+                  {t('whitelist.ipAddress')}
                 </th>
                 <th className="px-4 sm:px-6 py-3.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider">
                   {t('whitelist.type')}
@@ -587,13 +587,14 @@ const Whitelist: React.FC = () => {
             <div className="space-y-3">
               {selectedEntry.mac_address && (
                 <div className="flex justify-between">
-                  <span className="text-muted-foreground">{t('whitelist.identifier')}</span>
+                  <span className="text-muted-foreground">{t('whitelist.macAddress')}</span>
                   <span className="font-mono text-foreground">{selectedEntry.mac_address}</span>
                 </div>
               )}
+
               {selectedEntry.ip_pattern && (
                 <div className="flex justify-between">
-                  <span className="text-muted-foreground">{t('whitelist.ipPattern')}</span>
+                  <span className="text-muted-foreground">{t('whitelist.ipAddress')}</span>
                   <span className="font-mono text-foreground">{selectedEntry.ip_pattern}</span>
                 </div>
               )}

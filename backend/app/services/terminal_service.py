@@ -866,7 +866,68 @@ class TerminalService:
                 whitelist_entry = result.scalar_one_or_none()
 
             if whitelist_entry:
+                mac_address = whitelist_entry.mac_address
+                ip_pattern = whitelist_entry.ip_pattern
+
                 await self.db.delete(whitelist_entry)
+
+                from app.models.terminal import Terminal
+                def _remove_whitelist_comment(comments: str | None) -> str | None:
+                    if not comments or "Whitelist: " not in comments:
+                        return comments
+                    old_wl_start = comments.find("Whitelist: ")
+                    semicolon_pos = comments.find(";", old_wl_start)
+                    if semicolon_pos > old_wl_start:
+                        return comments[:old_wl_start].rstrip("; ") + comments[semicolon_pos+1:].lstrip()
+                    else:
+                        return comments[:old_wl_start].rstrip("; ")
+
+                if mac_address:
+                    normalized_mac = _normalize_mac(mac_address)
+                    stmt = select(Terminal).where(
+                        Terminal.mac_address_normalized == normalized_mac
+                    )
+                    result = await self.db.execute(stmt)
+                    for terminal in result.scalars().all():
+                        terminal.comments = _remove_whitelist_comment(terminal.comments)
+                        terminal.wl_match_type = None
+
+                if ip_pattern:
+                    if '/' in ip_pattern:
+                        try:
+                            network = ipaddress.ip_network(ip_pattern, strict=False)
+                            stmt = select(Terminal).where(Terminal.ip_address.is_not(None))
+                            result = await self.db.execute(stmt)
+                            for terminal in result.scalars().all():
+                                try:
+                                    if ipaddress.ip_address(terminal.ip_address) in network:
+                                        terminal.comments = _remove_whitelist_comment(terminal.comments)
+                                        terminal.wl_match_type = None
+                                except:
+                                    pass
+                        except:
+                            pass
+                    else:
+                        range_match = re.match(r'^(\d{1,3}\.\d{1,3}\.\d{1,3})\.(\d+)-(\d+)$', ip_pattern)
+                        if range_match:
+                            base_ip = range_match.group(1)
+                            start = int(range_match.group(2))
+                            end = int(range_match.group(3))
+                            for i in range(start, end + 1):
+                                ip = f"{base_ip}.{i}"
+                                stmt = select(Terminal).where(Terminal.ip_address == ip)
+                                result = await self.db.execute(stmt)
+                                for terminal in result.scalars().all():
+                                    terminal.comments = _remove_whitelist_comment(terminal.comments)
+                                    terminal.wl_match_type = None
+                        else:
+                            stmt = select(Terminal).where(Terminal.ip_address == ip_pattern)
+                            result = await self.db.execute(stmt)
+                            for terminal in result.scalars().all():
+                                terminal.comments = _remove_whitelist_comment(terminal.comments)
+                                terminal.wl_match_type = None
+
+                await self.db.flush()
 
                 # Invalidate whitelist cache and recalculate compliance for all terminals
                 try:
@@ -913,15 +974,23 @@ class TerminalService:
         conditions = []
 
         # Status filtering: default to active only
+        _active_filter = and_(
+            Blacklist.auto_unblocked == False,
+            Blacklist.unblocked_at.is_(None)
+        )
+        _unblocked_filter = or_(
+            Blacklist.auto_unblocked == True,
+            Blacklist.unblocked_at.is_not(None)
+        )
         if query and query.status:
             if query.status == 'active':
-                conditions.append(Blacklist.unblocked_at.is_(None))
+                conditions.append(_active_filter)
             elif query.status == 'unblocked':
-                conditions.append(Blacklist.unblocked_at.is_not(None))
+                conditions.append(_unblocked_filter)
             # 'all' or other values: no filter
         else:
             # Default: only show active (not unblocked) records
-            conditions.append(Blacklist.unblocked_at.is_(None))
+            conditions.append(_active_filter)
 
         if query:
             # Search by MAC or IP
@@ -960,13 +1029,21 @@ class TerminalService:
         conditions = []
 
         # Status filtering: default to active only
+        _active_filter = and_(
+            Blacklist.auto_unblocked == False,
+            Blacklist.unblocked_at.is_(None)
+        )
+        _unblocked_filter = or_(
+            Blacklist.auto_unblocked == True,
+            Blacklist.unblocked_at.is_not(None)
+        )
         if query and query.status:
             if query.status == 'active':
-                conditions.append(Blacklist.unblocked_at.is_(None))
+                conditions.append(_active_filter)
             elif query.status == 'unblocked':
-                conditions.append(Blacklist.unblocked_at.is_not(None))
+                conditions.append(_unblocked_filter)
         else:
-            conditions.append(Blacklist.unblocked_at.is_(None))
+            conditions.append(_active_filter)
 
         if query:
             # Search by MAC or IP
@@ -991,6 +1068,38 @@ class TerminalService:
 
         result = await self.db.execute(stmt)
         return result.scalar() or 0
+
+    async def get_blacklist_stats(self) -> dict:
+        """Get global blacklist statistics based on active (not unblocked) records."""
+        from sqlalchemy import case
+        from datetime import datetime, UTC
+
+        base_filter = and_(
+            Blacklist.auto_unblocked == False,
+            Blacklist.unblocked_at.is_(None)
+        )
+
+        stmt = select(
+            func.count(Blacklist.id).label('total_active'),
+            func.count(case((Blacklist.is_auto_blocked == True, 1))).label('auto_blocked'),
+            func.count(case((Blacklist.is_auto_blocked == False, 1))).label('manual_blocked'),
+            func.count(case(
+                ((Blacklist.expires_at.is_not(None)) & (Blacklist.expires_at < datetime.now(UTC)), 1)
+            )).label('expired'),
+        ).where(base_filter)
+
+        result = await self.db.execute(stmt)
+        row = result.one()
+
+        total_active = row.total_active or 0
+        expired = row.expired or 0
+        return {
+            "total_active": total_active,
+            "auto_blocked": row.auto_blocked or 0,
+            "manual_blocked": row.manual_blocked or 0,
+            "expired": expired,
+            "active_blocks": total_active - expired,
+        }
 
     async def check_blacklist(
         self,
