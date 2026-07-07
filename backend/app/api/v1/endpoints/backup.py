@@ -7,15 +7,17 @@ Provides REST API for managing backups.
 import os
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import get_current_user, require_permission
+from app.core.security import get_client_ip, get_current_user, require_permission
 from app.core.database import get_db
 from app.models.user import User
+from app.services.terminal_service import TerminalService
 from app.schemas.backup import (
     BackupConfigResponse,
+    BackupConfigUpdate,
     BackupJobResponse,
     BackupListResponse,
     BackupRestoreResponse,
@@ -53,8 +55,10 @@ async def get_backup_config(
 
 @router.put("/config", response_model=BackupConfigResponse)
 async def update_backup_config(
-    config_data: BackupConfigResponse,
+    config_data: BackupConfigUpdate,
+    request: Request,
     backup_service: BackupService = Depends(get_backup_service),
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_permission("backup:write")),
 ):
     """Update backup configuration"""
@@ -72,16 +76,33 @@ async def update_backup_config(
         encrypt_backup=config_data.encrypt_backup,
     )
     await backup_service.save_config(config)
-    return config_data
+    ts = TerminalService(db)
+    await ts.log_action(
+        current_user.username, "update_backup_config", "backup",
+        None,
+        {"enabled": config.enabled, "schedule": config.schedule, "storage_type": config.storage_type},
+        ip_address=get_client_ip(request),
+    )
+    return BackupConfigResponse(**config_data.model_dump())
 
 
 @router.post("/run", response_model=BackupJobResponse)
 async def run_backup(
+    request: Request,
     backup_service: BackupService = Depends(get_backup_service),
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_permission("backup:write")),
 ):
     """Run a manual backup"""
     job = await backup_service.run_backup()
+    ts = TerminalService(db)
+    await ts.log_action(
+        current_user.username, "run_backup", "backup",
+        str(job.id),
+        {"status": job.status, "file_path": job.file_path, "file_size": job.file_size},
+        ip_address=get_client_ip(request),
+        resource_name=job.file_path,
+    )
     return BackupJobResponse(
         id=job.id,
         status=job.status,
@@ -121,7 +142,9 @@ async def list_backups(
 @router.get("/download/{filename}")
 async def download_backup(
     filename: str,
+    request: Request,
     backup_service: BackupService = Depends(get_backup_service),
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_permission("backup:write")),
 ):
     """Download a backup file"""
@@ -134,6 +157,16 @@ async def download_backup(
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="Backup file not found")
 
+    ts = TerminalService(db)
+    file_size = os.path.getsize(file_path)
+    await ts.log_action(
+        current_user.username, "download_backup", "backup",
+        safe_filename,
+        {"filename": safe_filename, "file_size": file_size},
+        ip_address=get_client_ip(request),
+        resource_name=safe_filename,
+    )
+
     return FileResponse(
         path=file_path,
         filename=safe_filename,
@@ -144,7 +177,9 @@ async def download_backup(
 @router.post("/restore/{filename}", response_model=BackupRestoreResponse)
 async def restore_backup(
     filename: str,
+    request: Request,
     backup_service: BackupService = Depends(get_backup_service),
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_permission("backup:write")),
 ):
     """Restore from a backup file"""
@@ -159,6 +194,15 @@ async def restore_backup(
 
     success = await backup_service.restore_backup(file_path)
 
+    ts = TerminalService(db)
+    await ts.log_action(
+        current_user.username, "restore_backup", "backup",
+        safe_filename,
+        {"filename": safe_filename, "success": success},
+        ip_address=get_client_ip(request),
+        resource_name=safe_filename,
+    )
+
     return BackupRestoreResponse(
         success=success,
         message="Backup restored successfully" if success else "Backup restoration failed",
@@ -169,7 +213,9 @@ async def restore_backup(
 @router.delete("/{filename}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_backup(
     filename: str,
+    request: Request,
     backup_service: BackupService = Depends(get_backup_service),
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_permission("backup:write")),
 ):
     """Delete a backup file"""
@@ -182,7 +228,17 @@ async def delete_backup(
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="Backup file not found")
 
+    file_size = os.path.getsize(file_path)
     os.remove(file_path)
+
+    ts = TerminalService(db)
+    await ts.log_action(
+        current_user.username, "delete_backup", "backup",
+        safe_filename,
+        {"filename": safe_filename, "file_size": file_size},
+        ip_address=get_client_ip(request),
+        resource_name=safe_filename,
+    )
 
 
 @router.post("/test", response_model=BackupTestResult)

@@ -9,7 +9,7 @@ def _load_version() -> str:
     if os.path.exists(version_file):
         with open(version_file, "r") as f:
             return f.read().strip()
-    return "3.6.3"
+    return "3.6.4"
 
 
 class Settings(BaseSettings):

@@ -469,6 +469,24 @@ async def emit_system_warning(
     )
 
 
+async def emit_system_alert(
+    alert_type: str,
+    message: str,
+    details: dict | None = None,
+) -> list[Any]:
+    """Emit system alert event"""
+    return await emit_event(
+        event_type="system.system_alert",
+        data={
+            "alert_type": alert_type,
+            "message": message,
+            **(details or {}),
+        },
+        source="system",
+        severity="error",
+    )
+
+
 async def emit_config_changed(
     config_key: str,
     changed_by: str,

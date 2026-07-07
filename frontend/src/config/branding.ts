@@ -54,7 +54,7 @@ const branding: BrandingConfig = {
   /** Version number displayed in footer */
   /** Note: Actual version is dynamically fetched from backend /health API at runtime */
   /** Build-time version is read from VERSION file via VITE_APP_VERSION */
-  version: `v${import.meta.env.VITE_APP_VERSION || '3.6.3'}`,
+  version: `v${import.meta.env.VITE_APP_VERSION || '3.6.4'}`,
 
   /** Browser tab title (used in index.html and dynamic title updates) */
   title: 'Terminal Access Manager',

@@ -5,13 +5,14 @@ Provides REST API for managing notification channels and viewing notification lo
 """
 
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.security import get_current_user, require_permission
+from app.core.security import get_client_ip, get_current_user, require_permission
+from app.services.terminal_service import TerminalService
 from app.models.notification import NotificationRule, NotificationTemplate
 from app.models.user import User
 from app.schemas.notification import (
@@ -62,7 +63,9 @@ async def list_channels(
 @router.post("/channels", response_model=NotificationChannelResponse, status_code=status.HTTP_201_CREATED)
 async def create_channel(
     channel_data: NotificationChannelCreate,
+    request: Request,
     notification_service: NotificationService = Depends(get_notification_service),
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_permission("notification:write")),
 ):
     """Create a new notification channel"""
@@ -74,6 +77,14 @@ async def create_channel(
         description=channel_data.description,
         created_by=current_user.username,
         enabled=channel_data.enabled,
+    )
+    ts = TerminalService(db)
+    await ts.log_action(
+        current_user.username, "create_notification_channel", "notification_channel",
+        str(channel.id),
+        {"name": channel.name, "type": channel.channel_type, "enabled": channel.enabled},
+        ip_address=get_client_ip(request),
+        resource_name=channel.name,
     )
     return channel
 
@@ -95,7 +106,9 @@ async def get_channel(
 async def update_channel(
     channel_id: int,
     channel_data: NotificationChannelUpdate,
+    request: Request,
     notification_service: NotificationService = Depends(get_notification_service),
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_permission("notification:write")),
 ):
     """Update a notification channel"""
@@ -109,19 +122,39 @@ async def update_channel(
     )
     if not channel:
         raise HTTPException(status_code=404, detail="Channel not found")
+    ts = TerminalService(db)
+    await ts.log_action(
+        current_user.username, "update_notification_channel", "notification_channel",
+        str(channel.id),
+        {"name": channel.name, "enabled": channel.enabled},
+        ip_address=get_client_ip(request),
+        resource_name=channel.name,
+    )
     return channel
 
 
 @router.delete("/channels/{channel_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_channel(
     channel_id: int,
+    request: Request,
     notification_service: NotificationService = Depends(get_notification_service),
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_permission("notification:write")),
 ):
     """Delete a notification channel"""
-    deleted = await notification_service.delete_channel(channel_id)
-    if not deleted:
+    channel = await notification_service.get_channel_by_id(channel_id)
+    if not channel:
         raise HTTPException(status_code=404, detail="Channel not found")
+    channel_name = channel.name
+    deleted = await notification_service.delete_channel(channel_id)
+    ts = TerminalService(db)
+    await ts.log_action(
+        current_user.username, "delete_notification_channel", "notification_channel",
+        str(channel_id),
+        {"name": channel_name},
+        ip_address=get_client_ip(request),
+        resource_name=channel_name,
+    )
 
 
 @router.post("/channels/{channel_id}/test", response_model=ChannelTestResultResponse)
@@ -222,14 +255,13 @@ async def list_templates(
 @router.post("/templates", response_model=NotificationTemplateResponse, status_code=status.HTTP_201_CREATED)
 async def create_template(
     template_data: NotificationTemplateCreate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_permission("notification:write")),
 ):
     """Create a new notification template"""
-    # Validate event_type
     if template_data.event_type not in EVENT_METADATA:
         raise HTTPException(status_code=400, detail=f"Invalid event_type: {template_data.event_type}")
-    # Validate channel_type
     valid_channels = {ct.value for ct in CHANNEL_METADATA}
     if template_data.channel_type not in valid_channels:
         raise HTTPException(status_code=400, detail=f"Invalid channel_type: {template_data.channel_type}")
@@ -250,6 +282,14 @@ async def create_template(
         await db.rollback()
         raise HTTPException(status_code=409, detail="Template name or event+channel combination already exists")
     await db.refresh(template)
+    ts = TerminalService(db)
+    await ts.log_action(
+        current_user.username, "create_notification_template", "notification_template",
+        str(template.id),
+        {"name": template.name, "event_type": template.event_type, "channel_type": template.channel_type},
+        ip_address=get_client_ip(request),
+        resource_name=template.name,
+    )
     return NotificationTemplateResponse.model_validate(template)
 
 
@@ -273,6 +313,7 @@ async def get_template(
 async def update_template(
     template_id: int,
     template_data: NotificationTemplateUpdate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_permission("notification:write")),
 ):
@@ -294,12 +335,21 @@ async def update_template(
         await db.rollback()
         raise HTTPException(status_code=409, detail="Template name or event+channel combination already exists")
     await db.refresh(template)
+    ts = TerminalService(db)
+    await ts.log_action(
+        current_user.username, "update_notification_template", "notification_template",
+        str(template.id),
+        {"name": template.name, "event_type": template.event_type, "channel_type": template.channel_type},
+        ip_address=get_client_ip(request),
+        resource_name=template.name,
+    )
     return NotificationTemplateResponse.model_validate(template)
 
 
 @router.delete("/templates/{template_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_template(
     template_id: int,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_permission("notification:write")),
 ):
@@ -310,8 +360,17 @@ async def delete_template(
     template = result.scalar_one_or_none()
     if not template:
         raise HTTPException(status_code=404, detail="Template not found")
+    template_name = template.name
     await db.delete(template)
     await db.commit()
+    ts = TerminalService(db)
+    await ts.log_action(
+        current_user.username, "delete_notification_template", "notification_template",
+        str(template_id),
+        {"name": template_name},
+        ip_address=get_client_ip(request),
+        resource_name=template_name,
+    )
 
 
 @router.post("/templates/preview", response_model=NotificationTemplatePreviewResponse)
@@ -379,15 +438,14 @@ async def list_rules(
 @router.post("/rules", response_model=NotificationRuleResponse, status_code=status.HTTP_201_CREATED)
 async def create_rule(
     rule_data: NotificationRuleCreate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_permission("notification:write")),
 ):
     """Create a new notification rule"""
-    # Validate event_type
     if rule_data.event_type not in EVENT_METADATA:
         raise HTTPException(status_code=400, detail=f"Invalid event_type: {rule_data.event_type}")
 
-    # Validate escalate_severity
     valid_severities = {"info", "warning", "error", "critical"}
     if rule_data.escalate_severity not in valid_severities:
         raise HTTPException(
@@ -419,6 +477,14 @@ async def create_rule(
             detail="Rule name already exists, or a rule for this event+channel combination already exists",
         )
     await db.refresh(rule)
+    ts = TerminalService(db)
+    await ts.log_action(
+        current_user.username, "create_notification_rule", "notification_rule",
+        str(rule.id),
+        {"name": rule.name, "event_type": rule.event_type, "channel_name": rule.channel_name, "enabled": rule.enabled},
+        ip_address=get_client_ip(request),
+        resource_name=rule.name,
+    )
     return NotificationRuleResponse.model_validate(rule)
 
 
@@ -442,6 +508,7 @@ async def get_rule(
 async def update_rule(
     rule_id: int,
     rule_data: NotificationRuleUpdate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_permission("notification:write")),
 ):
@@ -453,12 +520,10 @@ async def update_rule(
     if not rule:
         raise HTTPException(status_code=404, detail="Rule not found")
 
-    # Validate event_type if being updated
     new_event_type = rule_data.event_type or rule.event_type
     if new_event_type not in EVENT_METADATA:
         raise HTTPException(status_code=400, detail=f"Invalid event_type: {new_event_type}")
 
-    # Validate escalate_severity if being updated
     new_severity = rule_data.escalate_severity or rule.escalate_severity
     valid_severities = {"info", "warning", "error", "critical"}
     if new_severity not in valid_severities:
@@ -480,12 +545,21 @@ async def update_rule(
             detail="Rule name already exists, or a rule for this event+channel combination already exists",
         )
     await db.refresh(rule)
+    ts = TerminalService(db)
+    await ts.log_action(
+        current_user.username, "update_notification_rule", "notification_rule",
+        str(rule.id),
+        {"name": rule.name, "event_type": rule.event_type, "channel_name": rule.channel_name, "enabled": rule.enabled},
+        ip_address=get_client_ip(request),
+        resource_name=rule.name,
+    )
     return NotificationRuleResponse.model_validate(rule)
 
 
 @router.delete("/rules/{rule_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_rule(
     rule_id: int,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_permission("notification:write")),
 ):
@@ -496,8 +570,17 @@ async def delete_rule(
     rule = result.scalar_one_or_none()
     if not rule:
         raise HTTPException(status_code=404, detail="Rule not found")
+    rule_name = rule.name
     await db.delete(rule)
     await db.commit()
+    ts = TerminalService(db)
+    await ts.log_action(
+        current_user.username, "delete_notification_rule", "notification_rule",
+        str(rule_id),
+        {"name": rule_name},
+        ip_address=get_client_ip(request),
+        resource_name=rule_name,
+    )
 
 
 # ==================== Statistics & Monitoring ====================

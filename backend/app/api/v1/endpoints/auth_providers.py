@@ -5,13 +5,14 @@ Provides REST API for managing authentication providers.
 """
 
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.security import get_current_user, require_permission
+from app.core.security import get_client_ip, get_current_user, require_permission
 from app.models.auth_config import AuthConfig
 from app.models.user import User
+from app.services.terminal_service import TerminalService
 from app.schemas.auth_provider import (
     AuthProviderCreate,
     AuthProviderResponse,
@@ -72,11 +73,11 @@ async def list_providers(
 @router.post("", response_model=AuthProviderResponse, status_code=status.HTTP_201_CREATED)
 async def create_provider(
     provider_data: AuthProviderCreate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_permission("settings:write")),
 ):
     """Create a new authentication provider"""
-    # Check if provider type is supported
     provider_class = AuthProviderFactory.get_provider_class(provider_data.provider_type)
     if not provider_class:
         raise HTTPException(
@@ -96,6 +97,14 @@ async def create_provider(
     db.add(provider)
     await db.commit()
     await db.refresh(provider)
+    ts = TerminalService(db)
+    await ts.log_action(
+        current_user.username, "create_auth_provider", "auth_provider",
+        str(provider.id),
+        {"name": provider.name, "provider_type": provider.provider_type, "enabled": provider.enabled},
+        ip_address=get_client_ip(request),
+        resource_name=provider.name,
+    )
     return provider
 
 
@@ -116,6 +125,7 @@ async def get_provider(
 async def update_provider(
     provider_id: int,
     provider_data: AuthProviderUpdate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_permission("settings:write")),
 ):
@@ -141,12 +151,21 @@ async def update_provider(
 
     await db.commit()
     await db.refresh(provider)
+    ts = TerminalService(db)
+    await ts.log_action(
+        current_user.username, "update_auth_provider", "auth_provider",
+        str(provider.id),
+        {"name": provider.name, "enabled": provider.enabled, "priority": provider.priority},
+        ip_address=get_client_ip(request),
+        resource_name=provider.name,
+    )
     return provider
 
 
 @router.delete("/{provider_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_provider(
     provider_id: int,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_permission("settings:write")),
 ):
@@ -154,14 +173,24 @@ async def delete_provider(
     provider = await db.get(AuthConfig, provider_id)
     if not provider:
         raise HTTPException(status_code=404, detail="Provider not found")
-
+    provider_name = provider.name
+    provider_type = provider.provider_type
     await db.delete(provider)
     await db.commit()
+    ts = TerminalService(db)
+    await ts.log_action(
+        current_user.username, "delete_auth_provider", "auth_provider",
+        str(provider_id),
+        {"name": provider_name, "provider_type": provider_type},
+        ip_address=get_client_ip(request),
+        resource_name=provider_name,
+    )
 
 
 @router.post("/{provider_id}/test", response_model=AuthTestResult)
 async def test_provider(
     provider_id: int,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_permission("settings:write")),
 ):
@@ -177,8 +206,24 @@ async def test_provider(
             db,
         )
         result = await provider.test_connection()
+        ts = TerminalService(db)
+        await ts.log_action(
+            current_user.username, "test_auth_provider", "auth_provider",
+            str(provider_id),
+            {"name": provider_config.name, "provider_type": provider_config.provider_type, "success": result.get("success", False)},
+            ip_address=get_client_ip(request),
+            resource_name=provider_config.name,
+        )
         return AuthTestResult(**result)
     except Exception as e:
+        ts = TerminalService(db)
+        await ts.log_action(
+            current_user.username, "test_auth_provider", "auth_provider",
+            str(provider_id),
+            {"name": provider_config.name, "provider_type": provider_config.provider_type, "success": False, "error": str(e)},
+            ip_address=get_client_ip(request),
+            resource_name=provider_config.name,
+        )
         return AuthTestResult(
             success=False,
             message=f"Test failed: {str(e)}",

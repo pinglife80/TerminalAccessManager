@@ -100,7 +100,7 @@ class BackupService:
             return self.config
 
         try:
-            result = await self.db.execute(select(BackupConfigModel))
+            result = await self.db.execute(select(BackupConfigModel).limit(1))
             model = result.scalar_one_or_none()
 
             if model:
