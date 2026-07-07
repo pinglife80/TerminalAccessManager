@@ -47,9 +47,11 @@ export interface DashboardStats {
   total: number;
   whitelisted: number;
   blocked: number;
-  active: number;
-  inactive: number;
-  pending: number;
+  unblocked: number;
+  compliant: number;
+  bypass: number;
+  non_compliant: number;
+  unknown: number;
 }
 
 export interface SangforStatus {
@@ -185,6 +187,25 @@ export const useBlacklist = (params?: BlacklistSearchParams) => {
       return response.data as PaginatedResponse<BlacklistEntry>;
     },
     placeholderData: keepPreviousData,
+    refetchInterval: refetchInterval,
+  });
+};
+
+export interface BlacklistStats {
+  total_active: number;
+  auto_blocked: number;
+  manual_blocked: number;
+  expired: number;
+  active_blocks: number;
+}
+
+export const useBlacklistStats = (refetchInterval?: number) => {
+  return useQuery({
+    queryKey: ['blacklist-stats'],
+    queryFn: async () => {
+      const response = await apiClient.get('/blacklist/stats');
+      return response.data as BlacklistStats;
+    },
     refetchInterval: refetchInterval,
   });
 };

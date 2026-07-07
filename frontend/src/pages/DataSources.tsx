@@ -11,13 +11,14 @@ import { useDataSources, useDataSourceBindings, useComplianceBaselines } from '@
 import { PrimaryButton, ButtonGroup } from '@/components/Button';
 import { PageSkeleton } from '@/components/Skeleton';
 import DataSourcesTab from '@/components/datasources/DataSourcesTab';
+import OperationSourceTab from '@/components/datasources/OperationSourceTab';
 import ComplianceBaselinesTab from '@/components/datasources/ComplianceBaselinesTab';
 import BindingsTab from '@/components/datasources/BindingsTab';
 
 const DataSources: React.FC = () => {
   const { t } = useTranslation();
   // Tab state
-  const [activeTab, setActiveTab] = useState<'sources' | 'bindings' | 'baselines'>('sources');
+  const [activeTab, setActiveTab] = useState<'sources' | 'operation-source' | 'bindings' | 'baselines'>('sources');
 
   // Data queries for refetch
   const { isLoading: dsLoading, data: dsData, refetch: dsRefetch } = useDataSources();
@@ -26,10 +27,12 @@ const DataSources: React.FC = () => {
 
   // Refs to child tab components for triggering add modals
   const dsTabRef = React.useRef<{ openAddModal: () => void } | null>(null);
+  const osTabRef = React.useRef<{ openAddModal: () => void } | null>(null);
   const blTabRef = React.useRef<{ openAddModal: () => void } | null>(null);
   const bindTabRef = React.useRef<{ openAddModal: () => void } | null>(null);
 
   const isLoading = ((activeTab === 'sources' && dsLoading && !dsData) ||
+    (activeTab === 'operation-source' && dsLoading && !dsData) ||
     (activeTab === 'bindings' && bindLoading && !bindData) ||
     (activeTab === 'baselines' && blLoading && !blData));
 
@@ -54,6 +57,14 @@ const DataSources: React.FC = () => {
               label={t('dataSources.addSource')}
               variant="success"
               onClick={() => dsTabRef.current?.openAddModal()}
+            />
+          )}
+          {activeTab === 'operation-source' && (
+            <PrimaryButton
+              icon={Plus}
+              label={t('dataSources.addOperationSource')}
+              variant="success"
+              onClick={() => osTabRef.current?.openAddModal()}
             />
           )}
           {activeTab === 'bindings' && (
@@ -90,6 +101,17 @@ const DataSources: React.FC = () => {
             {t('dataSources.dataSourcesTab')}
           </button>
           <button
+            onClick={() => setActiveTab('operation-source')}
+            className={`whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
+              activeTab === 'operation-source'
+                ? 'border-blue-500 text-blue-600'
+                : 'border-transparent text-muted-foreground hover:text-muted-foreground hover:border-border'
+            }`}
+          >
+            <Shield className="h-4 w-4 inline mr-2" />
+            {t('dataSources.operationSource')}
+          </button>
+          <button
             onClick={() => setActiveTab('bindings')}
             className={`whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
               activeTab === 'bindings'
@@ -123,6 +145,12 @@ const DataSources: React.FC = () => {
             <DataSourcesTab
               ref={dsTabRef}
               onAddClick={() => dsTabRef.current?.openAddModal()}
+            />
+          )}
+          {activeTab === 'operation-source' && (
+            <OperationSourceTab
+              ref={osTabRef}
+              onAddClick={() => osTabRef.current?.openAddModal()}
             />
           )}
           {activeTab === 'bindings' && (

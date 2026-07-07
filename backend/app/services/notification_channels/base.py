@@ -8,6 +8,16 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
+
+TZ_SHANGHAI = ZoneInfo('Asia/Shanghai')
+
+
+def format_timestamp(dt: datetime) -> str:
+    """Format timestamp to Asia/Shanghai timezone."""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=ZoneInfo('UTC'))
+    return dt.astimezone(TZ_SHANGHAI).strftime('%Y-%m-%d %H:%M:%S')
 
 
 @dataclass
@@ -148,7 +158,7 @@ class NotificationChannelBase(ABC):
         description = metadata.get("description", "")
 
         message = f"**{name}**\n\n{description}\n\n"
-        message += f"时间: {event.timestamp.strftime('%Y-%m-%d %H:%M:%S')}\n"
+        message += f"时间: {format_timestamp(event.timestamp)}\n"
 
         if event.data:
             message += "\n详细信息:\n"

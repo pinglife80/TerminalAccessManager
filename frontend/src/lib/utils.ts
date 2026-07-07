@@ -1,33 +1,15 @@
 import { useState, useEffect } from 'react';
 
-export const formatDate = (dateString: string | null | undefined): string => {
+export const formatDateTime = (dateString: string | null | undefined, locale?: string): string => {
   if (!dateString) return '-';
   try {
     const date = new Date(dateString);
     if (isNaN(date.getTime())) {
       return dateString;
     }
-    return date.toLocaleString('en-US', {
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-    });
-  } catch {
-    return dateString;
-  }
-};
-
-export const formatDateTime = (dateString: string | null | undefined): string => {
-  if (!dateString) return '-';
-  try {
-    const date = new Date(dateString);
-    if (isNaN(date.getTime())) {
-      return dateString;
-    }
-    return new Intl.DateTimeFormat('zh-CN', {
+    const i18nObj = typeof window !== 'undefined' ? (window as any).i18next : null;
+    const targetLocale = locale || (i18nObj?.language) || 'zh-CN';
+    return new Intl.DateTimeFormat(targetLocale, {
       year: 'numeric',
       month: '2-digit',
       day: '2-digit',
@@ -41,6 +23,8 @@ export const formatDateTime = (dateString: string | null | undefined): string =>
     return dateString;
   }
 };
+
+export const formatDate = formatDateTime;
 
 export const downloadCSV = (headers: string[], rows: (string | number | boolean | null | undefined)[][], filename: string): void => {
   const escapedRows = rows.map((row) =>

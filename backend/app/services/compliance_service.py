@@ -11,7 +11,7 @@ Core compliance checking logic:
 import contextlib
 import ipaddress
 import json
-from datetime import UTC
+from datetime import datetime, UTC
 
 from loguru import logger
 from sqlalchemy import select
@@ -662,6 +662,7 @@ class ComplianceService:
                 # All firewalls unblocked — update Terminal and mark all entries
                 for bl_entry in successfully_unblocked_entries:
                     bl_entry.auto_unblocked = True
+                    bl_entry.unblocked_at = datetime.now(UTC)
 
                 if ip_addr:
                     mac_stmt = select(Terminal).where(
@@ -696,6 +697,7 @@ class ComplianceService:
                 # still hold the block
                 for bl_entry in successfully_unblocked_entries:
                     bl_entry.auto_unblocked = True
+                    bl_entry.unblocked_at = datetime.now(UTC)
                 skipped += len(entries) - len(successfully_unblocked_entries)
 
         if unblocked > 0:
@@ -1053,13 +1055,29 @@ class ComplianceService:
             )
 
             # Sync whitelist comments to terminal when bypass (even if unchanged)
-            if new_compliance == "bypass" and wl_comments:
-                wl_comment_str = f"Whitelist: {wl_comments}"
-                if not terminal.comments or "Whitelist: " not in terminal.comments:
-                    if terminal.comments:
+            if new_compliance == "bypass":
+                wl_comment_str = f"Whitelist: {wl_comments}" if wl_comments else None
+                
+                if wl_comment_str:
+                    if terminal.comments and "Whitelist: " in terminal.comments:
+                        old_wl_start = terminal.comments.find("Whitelist: ")
+                        semicolon_pos = terminal.comments.find(";", old_wl_start)
+                        if semicolon_pos > old_wl_start:
+                            old_wl_end = semicolon_pos
+                            terminal.comments = terminal.comments[:old_wl_start] + wl_comment_str + terminal.comments[old_wl_end:]
+                        else:
+                            terminal.comments = terminal.comments[:old_wl_start] + wl_comment_str
+                    elif terminal.comments:
                         terminal.comments = f"{terminal.comments}; {wl_comment_str}"
                     else:
                         terminal.comments = wl_comment_str
+                elif terminal.comments and "Whitelist: " in terminal.comments:
+                    old_wl_start = terminal.comments.find("Whitelist: ")
+                    semicolon_pos = terminal.comments.find(";", old_wl_start)
+                    if semicolon_pos > old_wl_start:
+                        terminal.comments = terminal.comments[:old_wl_start].rstrip("; ") + terminal.comments[semicolon_pos+1:].lstrip()
+                    else:
+                        terminal.comments = terminal.comments[:old_wl_start].rstrip("; ")
 
             if compliance_changed:
                 terminal.compliance_status = new_compliance
@@ -1127,6 +1145,7 @@ class ComplianceService:
                                 for bl_entry in bl_entries:
                                     if bl_entry.auto_unblocked is False:
                                         bl_entry.auto_unblocked = True
+                                        bl_entry.unblocked_at = datetime.now(UTC)
                             logger.info(f"Auto-unblocked {ip_addr} (now {new_compliance}) from firewall(s) '{fw_info}'")
                         else:
                             logger.warning(f"Partial unblock failure for {ip_addr}, keeping blocked status")

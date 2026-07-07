@@ -681,15 +681,28 @@ class DataSourceService:
 
         try:
             if source.type == "arp_ssh":
-                return await self._test_ssh_connection(source)
+                result = await self._test_ssh_connection(source)
             elif source.type == "arp_api":
-                return await self._test_api_connection(source)
+                result = await self._test_api_connection(source)
             elif source.type == "sangfor":
-                return await self._test_sangfor_connection(source)
+                result = await self._test_sangfor_connection(source)
             else:
                 return ConnectionTestResult(
                     success=False, message=f"Unknown data source type: {source.type}"
                 )
+
+            # For push-type sources (e.g. sangfor), test_connection is the primary
+            # interaction — record it as last_sync_at so the UI can show "Last Test".
+            # Note: source is expunged from session in get_data_source_by_id, so we
+            # must use a direct UPDATE statement instead of ORM attribute assignment.
+            if result.success and source.type == "sangfor":
+                from datetime import datetime, UTC
+                from sqlalchemy import update as sa_update
+                stmt = sa_update(DataSource).where(DataSource.id == source_id).values(last_sync_at=datetime.now(UTC))
+                await self.db.execute(stmt)
+                await self.db.commit()
+
+            return result
         except Exception as e:
             logger.error(f"Connection test failed for {source.name}: {str(e)}")
             return ConnectionTestResult(

@@ -1,6 +1,6 @@
 # TerminalAccessManager 后端实现文档
 
-> 文档版本：v3.6.5 | 更新日期：2026-07-07
+> 文档版本：v3.6.6 | 更新日期：2026-07-08
 
 ## 1. 概述
 
@@ -750,6 +750,22 @@ def _normalize_mac_raw(mac: str) -> str:
     return mac.replace('-', '').replace(':', '').replace('.', '').upper()
 ```
 
+#### 黑名单全局统计 `get_blacklist_stats()`
+
+返回黑名单的全局统计数据，用于前端统计卡片展示，避免基于当前页数据计算导致统计不准确。
+
+**统计维度：**
+
+| 字段 | 说明 |
+|------|------|
+| `total_active` | 活跃黑名单总数（`auto_unblocked == False AND unblocked_at IS NULL`） |
+| `auto_blocked` | 自动封堵数量（`is_auto_blocked == True`） |
+| `manual_blocked` | 手动封堵数量（`is_auto_blocked == False`） |
+| `expired` | 已过期数量（`expires_at < now`） |
+| `active_blocks` | 活跃封堵数（同 `total_active`） |
+
+> **v3.6.6 新增：** 解决前端基于当前页数据计算统计不准确的问题，改为服务端全局统计。
+
 ---
 
 ### 4.2 ComplianceService (services/compliance_service.py)
@@ -1083,6 +1099,31 @@ API 响应中 IP 字段名兼容以下写法：
 | `httpx.TimeoutException` | ✅ 重试 | httpx 超时异常 |
 | HTTP 5xx 响应 | ✅ 重试 | 服务端错误 |
 | HTTP 4xx 响应 | ❌ 不重试 | 客户端错误，重试无意义 |
+
+---
+
+### 4.7 BackupService (services/backup_service.py)
+
+备份管理服务，支持本地备份和远程 FTP/SFTP 备份的创建、列表、下载、删除操作。
+
+#### 本地备份方法
+
+| 方法 | 说明 |
+|------|------|
+| `create_backup()` | 创建本地数据库备份（pg_dump + gzip） |
+| `list_backups()` | 列出本地备份文件 |
+| `download_backup()` | 下载本地备份文件 |
+| `delete_backup()` | 删除本地备份文件 |
+
+#### 远程备份方法（v3.6.6 新增）
+
+| 方法 | 说明 |
+|------|------|
+| `list_remote_backups()` | 列出 FTP/SFTP 远程存储的备份文件 |
+| `download_from_remote()` | 从远程存储下载备份文件到本地 |
+| `delete_from_remote()` | 删除远程存储中的备份文件 |
+
+> **远程备份说明：** BackupInfo schema 新增 `storage` 字段（`local`/`remote`），用于区分备份存储位置。前端备份管理页面根据该字段显示存储位置标签。
 
 ---
 

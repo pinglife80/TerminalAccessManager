@@ -55,9 +55,10 @@ class BackupInfo(BaseModel):
     """Schema for backup file information"""
 
     filename: str
-    file_path: str
-    file_size: int
-    created_at: datetime
+    file_path: str | None = None
+    file_size: int | None = None
+    created_at: datetime | None = None
+    storage: str = "local"
 
 
 class BackupListResponse(BaseModel):

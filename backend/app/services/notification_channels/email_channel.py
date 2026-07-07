@@ -9,6 +9,7 @@ from typing import Any
 import httpx
 from loguru import logger
 
+from .base import format_timestamp
 from app.services.notification_channels.base import (
     ChannelTestResult,
     NotificationChannelBase,
@@ -74,7 +75,7 @@ class EmailChannel(NotificationChannelBase):
                 <table style="width: 100%; border-collapse: collapse; margin: 20px 0;">
                     <tr>
                         <td style="padding: 10px; border: 1px solid #ddd; font-weight: bold; width: 120px;">时间</td>
-                        <td style="padding: 10px; border: 1px solid #ddd;">{event.timestamp.strftime('%Y-%m-%d %H:%M:%S')}</td>
+                        <td style="padding: 10px; border: 1px solid #ddd;">{format_timestamp(event.timestamp)}</td>
                     </tr>
                     <tr>
                         <td style="padding: 10px; border: 1px solid #ddd; font-weight: bold;">严重级别</td>
@@ -115,7 +116,7 @@ class EmailChannel(NotificationChannelBase):
 
 {metadata.get('description', '')}
 
-时间: {event.timestamp.strftime('%Y-%m-%d %H:%M:%S')}
+时间: {format_timestamp(event.timestamp)}
 严重级别: {event.severity.upper()}
 来源: {event.source}
 

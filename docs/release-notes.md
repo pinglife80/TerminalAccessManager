@@ -1,10 +1,62 @@
 # 版本跟踪记录
 
-> 文档版本：v3.6.5 | 更新日期：2026-07-07
+> 文档版本：v3.6.6 | 更新日期：2026-07-08
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
+
+---
+
+## [v3.6.6] - 2026-07-08
+
+### Bug 修复与数据一致性增强
+
+#### 黑名单管理修复
+
+- **Unblocked 标签筛选不出数据**：统一 active/unblocked 筛选逻辑，同时考虑 `auto_unblocked` 和 `unblocked_at` 两个字段；通过数据迁移 026 补全历史记录缺失的 `unblocked_at` 字段
+- **统计基于当前页数据**：新增 `GET /api/v1/blacklist/stats` 服务端统计接口，Active Tab 下使用全局统计数据
+- **Unblocked 标签显示一致性**：UI 标签显示条件从 `auto_unblocked` 改为 `auto_unblocked || unblocked_at`
+- **自动解封未设置 unblocked_at**：compliance_service.py 中 3 处自动解封逻辑补全 `unblocked_at` 字段
+
+#### 终端管理修复
+
+- **timestamp 被覆盖**：ARP 采集更新终端时错误更新 `timestamp`（创建时间），新增 `updated_at` 字段（迁移 025），采集仅更新 `updated_at`
+- **白名单备注不一致**：白名单备注更新逻辑优化（支持备注变更时替换旧备注）；白名单删除时清除关联终端备注和 `wl_match_type`（支持 CIDR 和 IP 范围匹配）
+
+#### 角色管理修复
+
+- **角色名称修改不生效**：`RoleUpdate` schema 添加 `name` 字段，`update_role` 支持自定义角色重命名，保护 5 个内置角色不可重命名，检查名称唯一性
+
+#### 数据源管理增强
+
+- **Operation Source 子菜单**：在数据源管理页面新增 Operation Source 标签页，独立管理 Sangfor 防火墙数据源，位于 Data Sources 和 Bindings 之间
+- **Sangfor 测试连接 Last Test 不更新**：测试连接成功后使用直接 UPDATE 语句更新 `last_sync_at`（绕过 ORM expunge 问题）
+
+#### 备份管理增强
+
+- **FTP 远程备份**：备份列表/下载/删除支持远程存储（FTP/SFTP），备份列表显示存储位置标签
+- **备份计划预设国际化**：预设选项改用 i18n 翻译键
+
+#### 前端修复
+
+- **导航栏菜单同时选中**：父级菜单高亮基于路由匹配（`isGroupActive`）而非展开状态
+- **通知时间戳时区不一致**：所有通知渠道统一使用 `format_timestamp()` 转换为 Asia/Shanghai 时区
+- **前端时间戳格式不一致**：统一 `formatDate` 为 `formatDateTime`，支持多语言和时区
+- **翻译键命名错误**：白名单 `identifier` 重命名为 `macAddress`/`ipAddress`
+
+#### 数据库迁移
+
+- `025_terminal_updated_at.py`：终端表添加 `updated_at` 列
+- `026_blacklist_fix_unblocked_at.py`：修复历史 `auto_unblocked=True` 但 `unblocked_at IS NULL` 的记录
+
+#### 文档更新
+
+- 更新 `changelog.md` 添加 v3.6.6 变更记录
+- 更新 `database.md` 补充 terminals/`updated_at` 和 blacklist/`unblocked_at`/`unblocked_by` 字段
+- 更新 `api.md` 添加 `/blacklist/stats` 接口说明
+- 更新 `user-guide.md` 添加 Operation Source 功能说明
+- 统一所有文档版本号至 v3.6.6
 
 ---
 

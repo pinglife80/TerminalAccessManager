@@ -1,6 +1,6 @@
 # 数据源全生命周期技术文档
 
-> 文档版本：v3.6.5 | 更新日期：2026-07-07
+> 文档版本：v3.6.6 | 更新日期：2026-07-08
 
 本文档详细描述 TerminalAccessManager 系统中数据源从配置、采集、解析、合规判定到自动处置的完整生命周期，涵盖架构设计、数据格式、输入输出规范和定时调度机制。
 
@@ -1510,6 +1510,8 @@ asyncpg.connect(host, port, username, password, database)
 > **这是系统中唯一对外部系统执行写操作的数据源，危险性最高。**
 >
 > **同步说明**：Sangfor 为推送型防火墙，仅执行封堵/解封命令，不涉及数据采集。因此"同步"操作对 Sangfor 无意义——前端已隐藏 Sangfor 类型的同步按钮，后端 `POST /data-sources/{id}/sync` 对 sangfor 类型返回"Sync is not applicable"提示。Sangfor 的可用性通过"测试连接"按钮验证。
+
+> **测试连接与 Last Test（v3.6.6 更新）**：在 Operation Source 标签页中，"Last Sync" 列重命名为 "Last Test"，因为 Sangfor 不执行同步操作。测试连接成功后，后端通过直接 SQL UPDATE 语句更新 `last_sync_at` 字段（而非 ORM 属性赋值），原因是 `get_data_source_by_id` 方法调用了 `self.db.expunge(source)` 使对象脱离 SQLAlchemy session 跟踪，导致 ORM 属性赋值后 commit 不会持久化。直接 UPDATE 绕过了 expunge 问题，确保测试时间正确保存。
 
 #### 16.5.1 封堵调用流程
 

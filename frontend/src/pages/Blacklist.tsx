@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Search, Trash2, AlertTriangle, Clock, Server, Download, Eye, Shield, RefreshCw, ChevronDown, Unlock } from 'lucide-react';
-import { useBlacklist, BlacklistEntry } from '@/hooks/useTerminalData';
+import { useBlacklist, useBlacklistStats, BlacklistEntry } from '@/hooks/useTerminalData';
 import { apiClient } from '@/lib/api';
 import { toast } from 'sonner';
 import { API_ENDPOINTS } from '@/lib/constants';
@@ -54,6 +54,8 @@ const Blacklist: React.FC = () => {
     limit: pageSize,
     refetchInterval: autoRefresh || undefined,
   });
+
+  const { data: blacklistStats } = useBlacklistStats(autoRefresh || undefined);
 
   // Extract items and total from paginated response
   const filteredBlacklist = blacklistData?.items ?? [];
@@ -120,7 +122,7 @@ const Blacklist: React.FC = () => {
       item.blocked_by,
       item.firewall_tag || '',
       item.is_auto_blocked ? t('blacklist.auto') : t('blacklist.manual'),
-      item.auto_unblocked ? t('common.yes') : t('common.no'),
+      (item.auto_unblocked || item.unblocked_at) ? t('common.yes') : t('common.no'),
       formatDate(item.blocked_at),
       formatDate(item.expires_at)
     ]) || [];
@@ -294,7 +296,7 @@ const Blacklist: React.FC = () => {
         <div className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden">
           <div className="p-4 text-center">
             <div className="text-xl sm:text-2xl font-bold text-orange-600">
-              {filteredBlacklist?.filter((b) => b.is_auto_blocked).length || 0}
+              {activeTab === 'active' ? (blacklistStats?.auto_blocked ?? 0) : (filteredBlacklist?.filter((b) => b.is_auto_blocked).length || 0)}
             </div>
             <div className="text-xs sm:text-sm text-muted-foreground mt-1">{t('blacklist.autoBlocked')}</div>
           </div>
@@ -303,7 +305,7 @@ const Blacklist: React.FC = () => {
         <div className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden">
           <div className="p-4 text-center">
             <div className="text-xl sm:text-2xl font-bold text-blue-600">
-              {filteredBlacklist?.filter((b) => !b.is_auto_blocked).length || 0}
+              {activeTab === 'active' ? (blacklistStats?.manual_blocked ?? 0) : (filteredBlacklist?.filter((b) => !b.is_auto_blocked).length || 0)}
             </div>
             <div className="text-xs sm:text-sm text-muted-foreground mt-1">{t('blacklist.manualBlocked')}</div>
           </div>
@@ -312,7 +314,7 @@ const Blacklist: React.FC = () => {
         <div className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden">
           <div className="p-4 text-center">
             <div className="text-xl sm:text-2xl font-bold text-amber-600">
-              {filteredBlacklist?.filter((b) => isExpired(b.expires_at)).length || 0}
+              {activeTab === 'active' ? (blacklistStats?.expired ?? 0) : (filteredBlacklist?.filter((b) => isExpired(b.expires_at)).length || 0)}
             </div>
             <div className="text-xs sm:text-sm text-muted-foreground mt-1">{t('blacklist.expiredBlocks')}</div>
           </div>
@@ -321,7 +323,7 @@ const Blacklist: React.FC = () => {
         <div className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden">
           <div className="p-4 text-center">
             <div className="text-xl sm:text-2xl font-bold text-muted-foreground">
-              {filteredBlacklist?.filter((b) => !isExpired(b.expires_at)).length || 0}
+              {activeTab === 'active' ? (blacklistStats?.active_blocks ?? 0) : (filteredBlacklist?.filter((b) => !isExpired(b.expires_at)).length || 0)}
             </div>
             <div className="text-xs sm:text-sm text-muted-foreground mt-1">{t('blacklist.activeBlocks')}</div>
           </div>
@@ -380,8 +382,8 @@ const Blacklist: React.FC = () => {
                   <tr
                     key={item.id}
                     className={`hover:bg-blue-50/30 transition-colors ${
-                      item.auto_unblocked ? 'opacity-60' : isExpired(item.expires_at) ? 'opacity-50' : ''
-                    } ${!item.auto_unblocked && item.is_auto_blocked ? 'bg-orange-50/30' : ''}`}
+                      (item.auto_unblocked || item.unblocked_at) ? 'opacity-60' : isExpired(item.expires_at) ? 'opacity-50' : ''
+                    } ${!(item.auto_unblocked || item.unblocked_at) && item.is_auto_blocked ? 'bg-orange-50/30' : ''}`}
                   >
                     <td className="px-4 sm:px-6 py-4 whitespace-nowrap">
                       <div className="flex items-center">
@@ -410,7 +412,7 @@ const Blacklist: React.FC = () => {
                           {t('blacklist.manual')}
                         </span>
                       )}
-                      {item.auto_unblocked && (
+                      {(item.auto_unblocked || item.unblocked_at) && (
                         <span className="ml-1 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
                           {t('blacklist.unblockedLabel')}
                         </span>
@@ -446,7 +448,7 @@ const Blacklist: React.FC = () => {
                           title={t('terminal.viewDetails')}
                           onClick={() => handleViewDetails(item)}
                         />
-                        {!item.auto_unblocked && (
+                        {!(item.auto_unblocked || item.unblocked_at) && (
                           <IconButton
                             icon={Trash2}
                             variant="success"
@@ -533,8 +535,8 @@ const Blacklist: React.FC = () => {
       <Modal isOpen={showDetailsModal && !!selectedEntry} onClose={() => { setShowDetailsModal(false); setSelectedEntry(null); }} title={t('blacklist.blockedTerminalDetails')} size="md">
         <div className="space-y-4">
           <div className="flex items-center gap-3 mb-2">
-            <div className={`w-12 h-12 rounded-full flex items-center justify-center ${selectedEntry?.auto_unblocked ? 'bg-green-100' : 'bg-red-100'}`}>
-              {selectedEntry?.auto_unblocked ? (
+            <div className={`w-12 h-12 rounded-full flex items-center justify-center ${(selectedEntry?.auto_unblocked || selectedEntry?.unblocked_at) ? 'bg-green-100' : 'bg-red-100'}`}>
+              {(selectedEntry?.auto_unblocked || selectedEntry?.unblocked_at) ? (
                 <Unlock className="h-6 w-6 text-green-600" />
               ) : (
                 <AlertTriangle className="h-6 w-6 text-red-600" />
@@ -585,8 +587,8 @@ const Blacklist: React.FC = () => {
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">{t('blacklist.autoUnblocked')}</span>
-                <span className={`px-2.5 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${selectedEntry?.auto_unblocked ? 'bg-green-100 text-green-800' : 'bg-muted text-foreground'}`}>
-                  {selectedEntry?.auto_unblocked ? t('common.yes') : t('common.no')}
+                <span className={`px-2.5 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${(selectedEntry?.auto_unblocked || selectedEntry?.unblocked_at) ? 'bg-green-100 text-green-800' : 'bg-muted text-foreground'}`}>
+                  {(selectedEntry?.auto_unblocked || selectedEntry?.unblocked_at) ? t('common.yes') : t('common.no')}
                 </span>
               </div>
               <div className="flex justify-between">
@@ -602,13 +604,13 @@ const Blacklist: React.FC = () => {
               <div className="flex justify-between">
                 <span className="text-muted-foreground">{t('common.status')}</span>
                 <span className={`px-2.5 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${
-                  selectedEntry?.auto_unblocked
+                  (selectedEntry?.auto_unblocked || selectedEntry?.unblocked_at)
                     ? 'bg-green-100 text-green-800'
                     : isExpired(selectedEntry?.expires_at || null)
                       ? 'bg-muted text-foreground'
                       : 'bg-red-100 text-red-800'
                 }`}>
-                  {selectedEntry?.auto_unblocked
+                  {(selectedEntry?.auto_unblocked || selectedEntry?.unblocked_at)
                     ? t('blacklist.unblockedLabel')
                     : isExpired(selectedEntry?.expires_at || null)
                       ? t('common.expired')
@@ -618,7 +620,7 @@ const Blacklist: React.FC = () => {
             </div>
           </div>
 
-          {!selectedEntry?.auto_unblocked && (
+          {!(selectedEntry?.auto_unblocked || selectedEntry?.unblocked_at) && (
             <PrimaryButton
               icon={Trash2}
               label={t('terminal.unblockTerminal')}

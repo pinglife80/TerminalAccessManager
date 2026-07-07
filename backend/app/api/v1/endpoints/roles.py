@@ -180,6 +180,18 @@ async def update_role(
     if role.name == "superadmin":
         raise HTTPException(status_code=400, detail="Cannot modify superadmin role")
 
+    BUILT_IN_ROLES = ['superadmin', 'admin', 'operator', 'auditor', 'viewer']
+
+    if data.name is not None:
+        if role.name in BUILT_IN_ROLES:
+            raise HTTPException(status_code=400, detail="Cannot rename built-in roles")
+
+        existing_role = await db.execute(select(Role).where(Role.name == data.name))
+        if existing_role.scalar_one_or_none():
+            raise HTTPException(status_code=400, detail=f"Role '{data.name}' already exists")
+
+        role.name = data.name
+
     if data.description is not None:
         role.description = data.description
 

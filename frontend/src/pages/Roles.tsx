@@ -455,8 +455,7 @@ const RoleFormModal: React.FC<{
       permission_ids: selectedPermIds,
     };
     if (role) {
-      // Update: only send description and permission_ids
-      await onSave({ name: role.name, description: description.trim(), permission_ids: selectedPermIds });
+      await onSave(data);
     } else {
       await onSave(data);
     }

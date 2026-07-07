@@ -38,6 +38,7 @@ class RoleCreate(BaseModel):
 
 
 class RoleUpdate(BaseModel):
+    name: str | None = Field(None, min_length=2, max_length=50, description="Role name (only for custom roles)")
     description: str | None = Field(None, max_length=200, description="Role description")
     permission_ids: list[int] | None = Field(None, description="Permission IDs to assign (replaces all)")
 

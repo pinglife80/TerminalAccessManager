@@ -103,7 +103,7 @@ const DataSourcesTab = forwardRef<{ openAddModal: () => void }, DataSourcesTabPr
   } | null>(null);
 
   // Derived data
-  const dsList = dataSources || [];
+  const dsList = (dataSources || []).filter((ds: DataSourceItem) => ds.type !== 'sangfor');
   const dsTotalPages = Math.max(1, Math.ceil(dsList.length / dsPageSize));
   const paginatedDs = useMemo(() => {
     const start = (dsPage - 1) * dsPageSize;

@@ -1,6 +1,6 @@
 # TerminalAccessManager 数据库设计文档
 
-> 文档版本：v3.6.5  更新日期：2026-07-07
+> 文档版本：v3.6.6  更新日期：2026-07-08
 
 ## 1. 概述
 
@@ -211,7 +211,8 @@ docker-compose.yml 中 PostgreSQL 的 `command` 参数列表如下：
 | mac_address | VARCHAR(17) | NOT NULL, INDEX | — | MAC 地址（格式 XX-XX-XX-XX-XX-XX） |
 | status | VARCHAR(20) | INDEX | 'unblocked' | 终端状态（blocked/unblocked） |
 | comments | TEXT | | NULL | 备注 |
-| timestamp | TIMESTAMP WITH TZ | INDEX | utcnow | 记录时间 |
+| timestamp | TIMESTAMP WITH TZ | INDEX | utcnow | 记录创建时间 |
+| updated_at | TIMESTAMP WITH TZ | INDEX | NULL | 记录更新时间（ARP 采集更新时写入，不覆盖 timestamp） |
 | source | VARCHAR(50) | | 'arp' | 数据来源 |
 | source_tag | VARCHAR(50) | INDEX | NULL | 数据源标签，关联 data_sources.tag |
 | compliance_status | VARCHAR(20) | INDEX | 'unknown' | 合规状态 |
@@ -319,6 +320,8 @@ docker-compose.yml 中 PostgreSQL 的 `command` 参数列表如下：
 | firewall_tag | VARCHAR(50) | INDEX | NULL | 防火墙标签 |
 | is_auto_blocked | BOOLEAN | | FALSE | 是否由合规检查自动阻断 |
 | auto_unblocked | BOOLEAN | | FALSE | 是否已自动解封（合规后） |
+| unblocked_at | TIMESTAMP WITH TZ | INDEX | NULL | 解封时间（NULL 表示未解封） |
+| unblocked_by | VARCHAR(50) | | NULL | 执行解封的用户名（手动解封时写入） |
 | mac_address_normalized | VARCHAR(12) | INDEX | NULL | MAC 地址标准化（去除分隔符的大写 12 位字符串） |
 
 **索引：**
@@ -328,6 +331,7 @@ docker-compose.yml 中 PostgreSQL 的 `command` 参数列表如下：
 | idx_blacklist_ip | COMPOSITE | (ip_address) |
 | idx_blacklist_mac | COMPOSITE | (mac_address) |
 | idx_blacklist_auto | COMPOSITE | (is_auto_blocked, auto_unblocked) |
+| idx_blacklist_unblocked | SINGLE | unblocked_at |
 | idx_blacklist_blocked_at | SINGLE | blocked_at |
 | idx_blacklist_expires_at | SINGLE | expires_at |
 | idx_blacklist_mac_normalized | SINGLE | mac_address_normalized | MAC 标准化列索引 |
