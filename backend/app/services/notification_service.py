@@ -468,22 +468,23 @@ class NotificationService:
                 logger.warning(f"Failed to calculate average latency: {e}")
 
             try:
+                from sqlalchemy import case
                 ch_stmt = select(
                     NotificationLog.channel_name,
                     func.count(NotificationLog.id).label("total"),
-                    func.count(NotificationLog.id).filter(NotificationLog.status == "sent").label("sent"),
-                    func.count(NotificationLog.id).filter(NotificationLog.status == "failed").label("failed"),
+                    func.sum(case((NotificationLog.status == "sent", 1), else_=0)).label("sent"),
+                    func.sum(case((NotificationLog.status == "failed", 1), else_=0)).label("failed"),
                 ).group_by(NotificationLog.channel_name).order_by(func.count(NotificationLog.id).desc())
                 ch_result = await db.execute(ch_stmt)
                 by_channel = []
                 for row in ch_result.all():
-                    ch_total = row[2]
-                    ch_sent = row[3] or 0
-                    ch_failed = row[4] or 0
+                    ch_total = row[1]
+                    ch_sent = row[2] or 0
+                    ch_failed = row[3] or 0
                     ch_deliverable = ch_sent + ch_failed
                     ch_rate = (ch_sent / ch_deliverable * 100) if ch_deliverable > 0 else 100.0
                     by_channel.append({
-                        "channel_name": row[1],
+                        "channel_name": row[0],
                         "total": ch_total,
                         "sent": ch_sent,
                         "failed": ch_failed,
@@ -494,22 +495,23 @@ class NotificationService:
                 by_channel = []
 
             try:
+                from sqlalchemy import case
                 ev_stmt = select(
                     NotificationLog.event_type,
                     func.count(NotificationLog.id).label("total"),
-                    func.count(NotificationLog.id).filter(NotificationLog.status == "sent").label("sent"),
-                    func.count(NotificationLog.id).filter(NotificationLog.status == "failed").label("failed"),
+                    func.sum(case((NotificationLog.status == "sent", 1), else_=0)).label("sent"),
+                    func.sum(case((NotificationLog.status == "failed", 1), else_=0)).label("failed"),
                 ).group_by(NotificationLog.event_type).order_by(func.count(NotificationLog.id).desc())
                 ev_result = await db.execute(ev_stmt)
                 by_event = []
                 for row in ev_result.all():
-                    ev_total = row[2]
-                    ev_sent = row[3] or 0
-                    ev_failed = row[4] or 0
+                    ev_total = row[1]
+                    ev_sent = row[2] or 0
+                    ev_failed = row[3] or 0
                     ev_deliverable = ev_sent + ev_failed
                     ev_rate = (ev_sent / ev_deliverable * 100) if ev_deliverable > 0 else 100.0
                     by_event.append({
-                        "event_type": row[1],
+                        "event_type": row[0],
                         "total": ev_total,
                         "sent": ev_sent,
                         "failed": ev_failed,

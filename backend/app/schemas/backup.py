@@ -24,6 +24,20 @@ class BackupConfigResponse(BaseModel):
     encrypt_backup: bool = True
 
 
+class BackupConfigUpdate(BaseModel):
+    """Schema for backup configuration update request"""
+
+    enabled: bool = False
+    schedule: str = "0 2 * * *"
+    retention_days: int = 7
+    storage_type: str = "local"
+    storage_config: dict[str, Any] = Field(default_factory=dict)
+    backup_database: bool = True
+    backup_config: bool = True
+    backup_logs: bool = False
+    encrypt_backup: bool = True
+
+
 class BackupJobResponse(BaseModel):
     """Schema for backup job response"""
 
