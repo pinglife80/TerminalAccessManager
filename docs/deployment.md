@@ -690,6 +690,22 @@ Deployment:
 ./manage.sh version
 ```
 
+#### `version check`
+
+检查所有版本号文件是否一致。
+
+```bash
+./manage.sh version check
+```
+
+#### `version bump <version>`
+
+一键升级版本号，自动更新所有版本相关文件。
+
+```bash
+./manage.sh version bump 3.6.7
+```
+
 ---
 
 ## 5. 典型运维场景

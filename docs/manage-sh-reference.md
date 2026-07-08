@@ -1013,8 +1013,76 @@ cp .env .env.backup             # 备份配置文件
 
 **风险等级：** 🟢 安全
 
+显示版本和系统信息。
+
 ```bash
 ./manage.sh version
+```
+
+#### `version check` — 版本一致性检查
+
+检查所有版本号文件是否一致。
+
+```bash
+./manage.sh version check
+```
+
+**输出示例：**
+
+```
+Version Consistency Check
+
+  ✓ VERSION: 3.6.7
+  ✓ frontend/package.json: 3.6.7
+  ✓ .env: 3.6.7
+  ✓ .env.example: 3.6.7
+  ✓ docker-compose.yml: 3.6.7
+  ✓ manage.sh: 3.6.7
+  ✓ frontend/vite.config.ts: 3.6.7
+
+✓ All versions are consistent (3.6.7)
+```
+
+#### `version bump <version>` — 一键版本升级
+
+自动更新所有版本号文件到指定版本。
+
+```bash
+./manage.sh version bump 3.6.7
+```
+
+**参数：**
+
+| 参数 | 说明 |
+|------|------|
+| `<version>` | 目标版本号，格式：X.Y.Z（如 3.6.7） |
+
+**更新的文件：**
+
+| 文件 | 更新内容 |
+|------|---------|
+| `VERSION` | 版本号 |
+| `frontend/package.json` | `version` 字段 |
+| `.env` | `VERSION=` 变量 |
+| `.env.example` | `VERSION=` 变量 |
+| `docker-compose.yml` | `VERSION` 默认值 |
+| `manage.sh` | VERSION fallback 值 |
+| `frontend/vite.config.ts` | getVersion() fallback 值 |
+
+**使用流程：**
+
+```bash
+# 1. 升级版本号
+./manage.sh version bump 3.6.7
+
+# 2. 验证一致性
+./manage.sh version check
+
+# 3. 重新部署
+./manage.sh -y update
+
+# 4. 健康检查
+./manage.sh health
 ```
 
 ---

@@ -1,10 +1,57 @@
 # 版本跟踪记录
 
-> 文档版本：v3.6.6 | 更新日期：2026-07-08
+> 文档版本：v3.6.7 | 更新日期：2026-07-08
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
+
+---
+
+## [v3.6.7] - 2026-07-08
+
+### 版本统一管理优化
+
+#### 新增功能
+
+- **版本一致性检查命令**：`./manage.sh version check`
+  - 检查 7 个版本号文件：VERSION、frontend/package.json、.env、.env.example、docker-compose.yml、manage.sh、frontend/vite.config.ts
+  - 显示每个文件的版本状态（一致/不一致）
+  - 不一致时给出修复建议
+
+- **一键版本升级命令**：`./manage.sh version bump <version>`
+  - 自动更新所有版本号文件到指定版本
+  - 版本格式验证（X.Y.Z）
+  - 提供后续操作指引
+
+#### 代码变更
+
+| 文件 | 变更内容 |
+|------|---------|
+| `manage.sh` | 新增 `cmd_version_check()` 和 `cmd_version_bump()` 函数，修复 VERSION fallback 值 |
+| `frontend/vite.config.ts` | 修复 getVersion() fallback 值为 3.6.6 |
+
+#### 文档更新
+
+| 文件 | 更新内容 |
+|------|---------|
+| `docs/manage-sh-reference.md` | 版本命令文档补充 check/bump 子命令 |
+| `docs/deployment.md` | 版本命令说明补充 check/bump 子命令 |
+| `docs/changelog.md` | 添加 v3.6.7 变更记录 |
+| `docs/release-notes.md` | 添加 v3.6.7 发布记录 |
+
+#### 验证方式
+
+```bash
+# 验证版本一致性
+./manage.sh version check
+
+# 验证服务健康
+./manage.sh health
+
+# 验证 API 版本
+curl -sk http://localhost:8000/api/v1/system/health
+```
 
 ---
 
