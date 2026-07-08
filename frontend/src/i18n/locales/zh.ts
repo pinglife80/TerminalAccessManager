@@ -203,6 +203,7 @@ const zh = {
     whitelistCommentPlaceholder: '备注（可选）',
     removedFromBlacklist: '已移出封禁列表',
     failedToRemoveFromBlacklist: '移出封禁列表失败',
+    failedToExport: '导出失败',
     confirmBlock: '确认封禁',
     confirmBlockMsg: '确定要封禁此终端吗？封禁后该终端的网络访问将被阻止。',
     confirmUnblock: '确认解封',
@@ -323,6 +324,7 @@ const zh = {
     failedToAdd: '添加到白名单失败',
     removedSuccessfully: '已从白名单移除',
     failedToRemove: '从白名单移除失败',
+    failedToExport: '导出失败',
     searchByMacIpDescription: '搜索 MAC 地址、IP 模式或描述...',
   },
   blacklist: {
@@ -381,6 +383,7 @@ const zh = {
     unblockedTab: '已解封',
     allTab: '全部',
     unblockedLabel: '已解封',
+    failedToExport: '导出失败',
   },
   auditLogs: {
     title: '审计日志',

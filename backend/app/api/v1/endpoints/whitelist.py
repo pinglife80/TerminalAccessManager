@@ -1,4 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+import csv
+from io import StringIO
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -79,3 +82,69 @@ async def delete_from_whitelist(
         )
 
     return {"message": "Successfully removed from whitelist", "success": True}
+
+
+@router.get("/export")
+async def export_whitelist(
+    search: str = Query(None, description="Search by MAC, IP, or comments"),
+    start_date: str = Query(None, description="Filter by start date (YYYY-MM-DD)"),
+    end_date: str = Query(None, description="Filter by end date (YYYY-MM-DD)"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permission("whitelist:read"))
+):
+    """Export whitelist as CSV with filtering support"""
+    from sqlalchemy import select, or_, and_, desc
+    from app.models.whitelist import Whitelist
+    from app.services.terminal_service import _parse_date_range, _escape_like, _normalize_mac
+
+    conditions = []
+
+    if search:
+        mac_clean = _normalize_mac(search)
+        conditions.append(
+            or_(
+                Whitelist.mac_address_normalized.ilike(f"%{_escape_like(mac_clean)}%"),
+                Whitelist.ip_pattern.ilike(f"%{_escape_like(search)}%"),
+                Whitelist.comments.ilike(f"%{_escape_like(search)}%"),
+            )
+        )
+
+    date_conditions = _parse_date_range(start_date, end_date)
+    for dc in date_conditions:
+        conditions.append(dc(Whitelist.created_at))
+
+    stmt = (
+        select(Whitelist)
+        .where(and_(*conditions) if conditions else True)
+        .order_by(desc(Whitelist.created_at))
+    )
+
+    result = await db.execute(stmt)
+    whitelist = result.scalars().all()
+
+    output = StringIO()
+    writer = csv.writer(output)
+
+    writer.writerow([
+        "ID", "MAC Address", "IP Pattern", "Pattern Type", "Comments", "Added By", "Created At"
+    ])
+
+    for w in whitelist:
+        writer.writerow([
+            w.id,
+            w.mac_address or "",
+            w.ip_pattern or "",
+            w.pattern_type or "",
+            w.comments or "",
+            w.added_by or "",
+            w.created_at or ""
+        ])
+
+    output.seek(0)
+
+    headers = {
+        "Content-Disposition": "attachment; filename=whitelist.csv",
+        "Content-Type": "text/csv",
+    }
+
+    return Response(content=output.getvalue(), headers=headers)

@@ -1,4 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+import csv
+from io import StringIO
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -57,6 +60,98 @@ async def search_mac_addresses(
     results = await service.search_macs(query)
     total = await service.search_macs_count(query)
     return {"items": results, "total": total, "skip": skip, "limit": limit}
+
+
+@router.get("/export")
+async def export_terminals(
+    ip: str = Query(None, description="Filter by IP address"),
+    mac: str = Query(None, description="Filter by MAC address"),
+    status_filter: str = Query(None, alias="status", description="Filter by status"),
+    compliance_status: str = Query(None, description="Filter by compliance status"),
+    source_tag: str = Query(None, description="Filter by source tag"),
+    firewall_tag: str = Query(None, description="Filter by firewall tag (via blacklist)"),
+    start_date: str = Query(None, description="Filter by start date (YYYY-MM-DD)"),
+    end_date: str = Query(None, description="Filter by end date (YYYY-MM-DD)"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permission("terminal:read"))
+):
+    """Export terminals as CSV with filtering support"""
+    from sqlalchemy import select, or_, and_, desc, func
+    from app.models.blacklist import Blacklist
+    from app.services.terminal_service import _parse_date_range, _escape_like, _normalize_mac
+
+    conditions = []
+
+    ip_mac_conditions = []
+    if ip:
+        ip_mac_conditions.append(Terminal.ip_address.ilike(f"%{_escape_like(ip)}%"))
+    if mac:
+        mac_clean = _normalize_mac(mac)
+        ip_mac_conditions.append(Terminal.mac_address_normalized.ilike(f"%{_escape_like(mac_clean)}%"))
+
+    if ip_mac_conditions:
+        conditions.append(or_(*ip_mac_conditions))
+
+    if status_filter:
+        conditions.append(Terminal.status == status_filter)
+
+    if compliance_status:
+        conditions.append(Terminal.compliance_status == compliance_status)
+
+    if source_tag:
+        conditions.append(Terminal.source_tag == source_tag)
+
+    if firewall_tag:
+        fw_subquery = (
+            select(Blacklist.ip_address)
+            .where(Blacklist.firewall_tag == firewall_tag)
+            .correlate(Terminal)
+        )
+        conditions.append(Terminal.ip_address.in_(fw_subquery))
+
+    date_conditions = _parse_date_range(start_date, end_date)
+    for dc in date_conditions:
+        conditions.append(dc(Terminal.timestamp))
+
+    stmt = (
+        select(Terminal)
+        .where(and_(*conditions) if conditions else True)
+        .order_by(desc(Terminal.timestamp))
+    )
+
+    result = await db.execute(stmt)
+    terminals = result.scalars().all()
+
+    output = StringIO()
+    writer = csv.writer(output)
+
+    writer.writerow([
+        "MAC Address", "IP Address", "Status", "Source", "Source Tag",
+        "Compliance Status", "Whitelist Match", "Firewall Tag", "Added", "Comments"
+    ])
+
+    for t in terminals:
+        writer.writerow([
+            t.mac_address or "",
+            t.ip_address or "",
+            t.status or "",
+            t.source or "",
+            t.source_tag or "",
+            t.compliance_status or "",
+            t.wl_match_type or "",
+            t.firewall_tag or "",
+            t.timestamp or "",
+            t.comments or ""
+        ])
+
+    output.seek(0)
+
+    headers = {
+        "Content-Disposition": "attachment; filename=terminals.csv",
+        "Content-Type": "text/csv",
+    }
+
+    return Response(content=output.getvalue(), headers=headers)
 
 
 @router.post("/block/{ip_address}", response_model=ResponseMessage)

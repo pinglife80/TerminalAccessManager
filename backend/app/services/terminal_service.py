@@ -871,65 +871,6 @@ class TerminalService:
 
                 await self.db.delete(whitelist_entry)
 
-                from app.models.terminal import Terminal
-                def _remove_whitelist_comment(comments: str | None) -> str | None:
-                    if not comments or "Whitelist: " not in comments:
-                        return comments
-                    old_wl_start = comments.find("Whitelist: ")
-                    semicolon_pos = comments.find(";", old_wl_start)
-                    if semicolon_pos > old_wl_start:
-                        return comments[:old_wl_start].rstrip("; ") + comments[semicolon_pos+1:].lstrip()
-                    else:
-                        return comments[:old_wl_start].rstrip("; ")
-
-                if mac_address:
-                    normalized_mac = _normalize_mac(mac_address)
-                    stmt = select(Terminal).where(
-                        Terminal.mac_address_normalized == normalized_mac
-                    )
-                    result = await self.db.execute(stmt)
-                    for terminal in result.scalars().all():
-                        terminal.comments = _remove_whitelist_comment(terminal.comments)
-                        terminal.wl_match_type = None
-
-                if ip_pattern:
-                    if '/' in ip_pattern:
-                        try:
-                            network = ipaddress.ip_network(ip_pattern, strict=False)
-                            stmt = select(Terminal).where(Terminal.ip_address.is_not(None))
-                            result = await self.db.execute(stmt)
-                            for terminal in result.scalars().all():
-                                try:
-                                    if ipaddress.ip_address(terminal.ip_address) in network:
-                                        terminal.comments = _remove_whitelist_comment(terminal.comments)
-                                        terminal.wl_match_type = None
-                                except:
-                                    pass
-                        except:
-                            pass
-                    else:
-                        range_match = re.match(r'^(\d{1,3}\.\d{1,3}\.\d{1,3})\.(\d+)-(\d+)$', ip_pattern)
-                        if range_match:
-                            base_ip = range_match.group(1)
-                            start = int(range_match.group(2))
-                            end = int(range_match.group(3))
-                            for i in range(start, end + 1):
-                                ip = f"{base_ip}.{i}"
-                                stmt = select(Terminal).where(Terminal.ip_address == ip)
-                                result = await self.db.execute(stmt)
-                                for terminal in result.scalars().all():
-                                    terminal.comments = _remove_whitelist_comment(terminal.comments)
-                                    terminal.wl_match_type = None
-                        else:
-                            stmt = select(Terminal).where(Terminal.ip_address == ip_pattern)
-                            result = await self.db.execute(stmt)
-                            for terminal in result.scalars().all():
-                                terminal.comments = _remove_whitelist_comment(terminal.comments)
-                                terminal.wl_match_type = None
-
-                await self.db.flush()
-
-                # Invalidate whitelist cache and recalculate compliance for all terminals
                 try:
                     from app.services.compliance_service import ComplianceService
                     compliance_svc = ComplianceService(self.db)

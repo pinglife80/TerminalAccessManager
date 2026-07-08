@@ -203,6 +203,7 @@ const en = {
     whitelistCommentPlaceholder: 'Comment (optional)',
     removedFromBlacklist: 'Removed from blacklist',
     failedToRemoveFromBlacklist: 'Failed to remove from blacklist',
+    failedToExport: 'Failed to export',
     confirmBlock: 'Confirm Block',
     confirmBlockMsg: 'Are you sure you want to block this terminal? Its network access will be denied.',
     confirmUnblock: 'Confirm Unblock',
@@ -323,6 +324,7 @@ const en = {
     failedToAdd: 'Failed to add to whitelist',
     removedSuccessfully: 'Removed from whitelist successfully',
     failedToRemove: 'Failed to remove from whitelist',
+    failedToExport: 'Failed to export',
     searchByMacIpDescription: 'Search by MAC address, IP pattern, or description...',
   },
   blacklist: {
@@ -381,6 +383,7 @@ const en = {
     unblockedTab: 'Unblocked',
     allTab: 'All',
     unblockedLabel: 'Unblocked',
+    failedToExport: 'Failed to export',
   },
   auditLogs: {
     title: 'Audit Logs',

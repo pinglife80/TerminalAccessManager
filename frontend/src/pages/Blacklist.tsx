@@ -11,7 +11,7 @@ import { EmptyState } from '@/components/StateDisplay';
 import { PageSkeleton } from '@/components/Skeleton';
 import { Modal } from '@/components/Modal';
 import { DateRangeFilter } from '@/components/DateRangeFilter';
-import { downloadCSV, formatDate, useDebounce, getErrorMessage } from '@/lib/utils';
+import { formatDate, useDebounce, getErrorMessage } from '@/lib/utils';
 
 const REFRESH_OPTIONS: { labelKey?: string; label: string; value: number }[] = [
   { labelKey: 'common.off', label: 'Off', value: 0 },
@@ -113,21 +113,30 @@ const Blacklist: React.FC = () => {
     setCurrentPage(1);
   };
 
-  const handleExport = () => {
-    const headers = [t('terminal.mac'), t('blacklist.ip'), t('blacklist.reason'), t('blacklist.blockedBy'), t('blacklist.firewall'), t('whitelist.type'), t('blacklist.autoUnblocked'), t('blacklist.blockedAt'), t('blacklist.expiresAt')];
-    const rows = filteredBlacklist?.map((item) => [
-      item.mac_address || '',
-      item.ip_address || '',
-      item.reason,
-      item.blocked_by,
-      item.firewall_tag || '',
-      item.is_auto_blocked ? t('blacklist.auto') : t('blacklist.manual'),
-      (item.auto_unblocked || item.unblocked_at) ? t('common.yes') : t('common.no'),
-      formatDate(item.blocked_at),
-      formatDate(item.expires_at)
-    ]) || [];
+  const handleExport = async () => {
+    try {
+      const params: Record<string, string> = {};
+      if (debouncedSearch) params['search'] = debouncedSearch;
+      if (startDate) params['start_date'] = startDate;
+      if (endDate) params['end_date'] = endDate;
+      params['status'] = statusParam;
 
-    downloadCSV(headers, rows, 'blocked-terminals');
+      const response = await apiClient.get(API_ENDPOINTS.BLACKLIST_EXPORT, {
+        params,
+        responseType: 'blob',
+      });
+
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', 'blocked-terminals.csv');
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (error: unknown) {
+      toast.error(getErrorMessage(error, t('blacklist.failedToExport')));
+    }
   };
 
   const isExpired = (expiresAt: string | null) => expiresAt ? new Date(expiresAt) < new Date() : false;
