@@ -1,10 +1,81 @@
 # 版本跟踪记录
 
-> 文档版本：v3.6.9 | 更新日期：2026-07-08
+> 文档版本：v3.6.10 | 更新日期：2026-07-09
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
+
+---
+
+## [v3.6.10] - 2026-07-09
+
+### 备份管理优化
+
+#### 新增功能
+
+- **定时备份白名单选项**：备份配置新增 `backup_whitelist` 字段，支持定时备份时选择是否包含白名单数据
+  - `BackupConfig` 数据类添加 `backup_whitelist: bool = True` 字段
+  - API Schema (`BackupConfigResponse`, `BackupConfigUpdate`) 添加对应字段
+  - 前端定时备份设置表单添加"备份白名单"复选框
+
+#### Bug 修复
+
+- **手动备份失败**：修复 `create_archive()` 方法签名参数不匹配问题
+  - 原方法定义：`create_archive(self, temp_dir, files)`
+  - 修复后：`create_archive(self, temp_dir, files, backup_type="full")`
+- **白名单备份失败**：修复 `NotificationRule` 模型字段映射错误
+  - 移除不存在的 `conditions` 字段
+  - 添加正确的字段：`suppress_enabled`, `suppress_window`, `escalate_enabled`, `escalate_threshold`, `escalate_window`, `escalate_severity`
+
+#### 代码变更
+
+| 文件 | 变更内容 |
+|------|---------|
+| `backend/app/services/backup_service.py` | 修复 `create_archive()` 方法签名，添加 `backup_type` 参数 |
+| `backend/app/services/backup_service.py` | 修复 `_backup_system_config_db()` 中 `NotificationRule` 字段映射 |
+| `backend/app/services/backup_service.py` | 修复 `_restore_system_config_db()` 中 `NotificationRule` 字段映射 |
+| `backend/app/services/backup_service.py` | `BackupConfig` 添加 `backup_whitelist` 字段 |
+| `backend/app/schemas/backup.py` | `BackupConfigResponse` 添加 `backup_whitelist` 字段 |
+| `backend/app/schemas/backup.py` | `BackupConfigUpdate` 添加 `backup_whitelist` 字段 |
+| `backend/app/api/v1/endpoints/backup.py` | `/config` GET 返回添加 `backup_whitelist` |
+| `backend/app/api/v1/endpoints/backup.py` | `/config` PUT 更新添加 `backup_whitelist` |
+| `frontend/src/pages/Backup.tsx` | `BackupConfig` 接口添加 `backup_whitelist` 字段 |
+| `frontend/src/pages/Backup.tsx` | 定时备份设置表单添加白名单备份复选框 |
+| `frontend/src/i18n/locales/zh.ts` | 添加 `backupWhitelist` 翻译 |
+| `frontend/src/i18n/locales/en.ts` | 添加 `backupWhitelist` 翻译 |
+| `frontend/src/i18n/locales/ja.ts` | 添加 `backupWhitelist` 和相关备份选项翻译 |
+
+#### i18n 翻译覆盖
+
+| 语言 | 翻译项 |
+|------|--------|
+| 中文 | `backupWhitelist: '备份白名单'` |
+| 英文 | `backupWhitelist: 'Backup Whitelist'` |
+| 日文 | `backupWhitelist: 'ホワイトリストをバックアップ'` |
+
+#### 文档更新
+
+| 文件 | 更新内容 |
+|------|---------|
+| `docs/changelog.md` | 添加 v3.6.10 变更记录 |
+| `docs/release-notes.md` | 添加 v3.6.10 发布记录 |
+| `.trae/documents/v3.6.10-release-plan.md` | v3.6.10 发布计划文档 |
+
+#### 验证方式
+
+```bash
+# 验证版本一致性
+./manage.sh version check
+
+# 验证服务健康
+./manage.sh health
+
+# 验证备份功能
+# 1. 手动执行全量备份
+# 2. 手动执行白名单备份
+# 3. 验证定时备份配置包含白名单选项
+```
 
 ---
 
