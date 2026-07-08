@@ -127,8 +127,7 @@ class ComplianceService:
 
             if wl_result:
                 entry["compliance_status"] = "bypass"
-                entry["wl_match_type"] = wl_result.get("match_type")
-                entry["wl_comments"] = wl_result.get("comments")
+                entry["wl_match_type"] = wl_result.get("match_type")  # "mac" or "ip" or "both"
                 bypass_list.append(entry)
             elif ig_match:
                 entry["compliance_status"] = "compliant"
@@ -999,198 +998,6 @@ class ComplianceService:
         except Exception:
             pass
 
-    async def _apply_compliance_result(
-        self,
-        terminal: Terminal,
-        new_compliance: str,
-        new_wl_match_type: str | None,
-        wl_comments: str | None,
-        ip_addr: str,
-        mac_addr: str,
-    ) -> dict:
-        """
-        Apply compliance result to a single terminal.
-        
-        This is the shared method for updating terminal compliance status,
-        ensuring consistent behavior across all compliance check paths.
-        
-        Args:
-            terminal: The terminal to update
-            new_compliance: The new compliance status (bypass/compliant/non_compliant)
-            new_wl_match_type: The whitelist match type (ip/mac) or None
-            wl_comments: The whitelist comments or None
-            ip_addr: IP address string
-            mac_addr: MAC address string
-        
-        Returns:
-            dict: {"status_changed": bool, "new_compliance": str, "unblocked": bool}
-        """
-        status_changed = terminal.compliance_status != new_compliance
-        unblocked = False
-
-        if new_compliance == "bypass":
-            wl_comment_str = f"Whitelist: {wl_comments}" if wl_comments else None
-            
-            if wl_comment_str:
-                if terminal.comments and "Whitelist: " in terminal.comments:
-                    old_wl_start = terminal.comments.find("Whitelist: ")
-                    semicolon_pos = terminal.comments.find(";", old_wl_start)
-                    if semicolon_pos > old_wl_start:
-                        old_wl_end = semicolon_pos
-                        terminal.comments = terminal.comments[:old_wl_start] + wl_comment_str + terminal.comments[old_wl_end:]
-                    else:
-                        terminal.comments = terminal.comments[:old_wl_start] + wl_comment_str
-                elif terminal.comments:
-                    terminal.comments = f"{terminal.comments}; {wl_comment_str}"
-                else:
-                    terminal.comments = wl_comment_str
-            elif terminal.comments and "Whitelist: " in terminal.comments:
-                old_wl_start = terminal.comments.find("Whitelist: ")
-                semicolon_pos = terminal.comments.find(";", old_wl_start)
-                if semicolon_pos > old_wl_start:
-                    terminal.comments = terminal.comments[:old_wl_start].rstrip("; ") + terminal.comments[semicolon_pos+1:].lstrip()
-                else:
-                    terminal.comments = terminal.comments[:old_wl_start].rstrip("; ")
-        elif terminal.comments and "Whitelist: " in terminal.comments:
-            old_wl_start = terminal.comments.find("Whitelist: ")
-            semicolon_pos = terminal.comments.find(";", old_wl_start)
-            if semicolon_pos > old_wl_start:
-                terminal.comments = terminal.comments[:old_wl_start].rstrip("; ") + terminal.comments[semicolon_pos+1:].lstrip()
-            else:
-                terminal.comments = terminal.comments[:old_wl_start].rstrip("; ")
-
-        terminal.compliance_status = new_compliance
-        terminal.wl_match_type = new_wl_match_type
-
-        if status_changed:
-            if new_compliance == "bypass":
-                pass
-            elif new_compliance == "compliant":
-                from app.services.event_emitter import emit_terminal_compliant
-                await emit_terminal_compliant(
-                    ip_address=ip_addr,
-                    mac_address=mac_addr,
-                )
-            else:
-                from app.services.event_emitter import emit_policy_violation, emit_terminal_non_compliant
-                await emit_policy_violation(
-                    policy_name="Terminal Compliance Policy",
-                    terminal_ip=ip_addr,
-                    details={"mac_address": mac_addr, "source_tag": terminal.source_tag}
-                )
-                await emit_terminal_non_compliant(
-                    ip_address=ip_addr,
-                    mac_address=mac_addr,
-                    reasons=["Non-compliant terminal detected"]
-                )
-
-            if terminal.status == "blocked" and new_compliance in ("bypass", "compliant"):
-                fw_tags = await self._get_bound_firewall_tags(terminal.source_tag)
-                if fw_tags:
-                    all_unblock_success = True
-                    for fw_tag in fw_tags:
-                        try:
-                            success = await self._unblock_on_firewall(ip_addr, fw_tag)
-                            if not success:
-                                all_unblock_success = False
-                                logger.warning(f"Failed to auto-unblock {ip_addr} on firewall '{fw_tag}'")
-                        except Exception as e:
-                            all_unblock_success = False
-                            logger.warning(f"Error auto-unblocking {ip_addr} on firewall '{fw_tag}': {e}")
-                    if all_unblock_success:
-                        terminal.status = "unblocked"
-                        terminal.firewall_tag = None
-                        unblocked = True
-                        fw_info = ",".join(fw_tags)
-                        unblock_comment = f"Auto-unblocked by TAM from firewall [{fw_info}]"
-                        if terminal.comments:
-                            terminal.comments = f"{terminal.comments}; {unblock_comment}"
-                        else:
-                            terminal.comments = unblock_comment
-                        mac_norm = mac_addr.replace('-', '').replace(':', '').replace('.', '').upper() if mac_addr else None
-                        for fw_tag in fw_tags:
-                            bl_stmt = select(Blacklist).where(
-                                (Blacklist.ip_address == ip_addr) &
-                                (Blacklist.mac_address_normalized == mac_norm) &
-                                (Blacklist.firewall_tag == fw_tag)
-                            )
-                            bl_result = await self.db.execute(bl_stmt)
-                            bl_entries = bl_result.scalars().all()
-                            for bl_entry in bl_entries:
-                                if bl_entry.auto_unblocked is False:
-                                    bl_entry.auto_unblocked = True
-                                    bl_entry.unblocked_at = datetime.now(UTC)
-                        logger.info(f"Auto-unblocked {ip_addr} (now {new_compliance}) from firewall(s) '{fw_info}'")
-                    else:
-                        logger.warning(f"Partial unblock failure for {ip_addr}, keeping blocked status")
-                else:
-                    terminal.status = "unblocked"
-                    terminal.firewall_tag = None
-                    unblocked = True
-
-            if new_compliance == "non_compliant" and terminal.status != "blocked":
-                fw_tags = await self._get_bound_firewall_tags(terminal.source_tag)
-                if fw_tags:
-                    all_block_success = True
-                    for fw_tag in fw_tags:
-                        try:
-                            success = await self._block_on_firewall(
-                                ip_addr, fw_tag,
-                                reason="Auto-blocked: compliance recalculation"
-                            )
-                            if not success:
-                                all_block_success = False
-                                logger.warning(f"Failed to auto-block {ip_addr} on firewall '{fw_tag}'")
-                        except Exception as e:
-                            all_block_success = False
-                            logger.warning(f"Error auto-blocking {ip_addr} on firewall '{fw_tag}': {e}")
-
-                    if all_block_success:
-                        terminal.status = "blocked"
-                        terminal.firewall_tag = fw_tags[0] if len(fw_tags) == 1 else ",".join(fw_tags)
-                        fw_info = ",".join(fw_tags)
-                        block_comment = f"Auto-blocked by TAM on firewall [{fw_info}]"
-                        if terminal.comments:
-                            terminal.comments = f"{terminal.comments}; {block_comment}"
-                        else:
-                            terminal.comments = block_comment
-                        import re
-                        block_time = await self._get_block_time()
-                        match = re.match(r'^(\d+)([dhm])$', block_time.lower())
-                        td = timedelta(days=30)
-                        if match:
-                            value = int(match.group(1))
-                            unit = match.group(2)
-                            if unit == 'd':
-                                td = timedelta(days=value)
-                            elif unit == 'h':
-                                td = timedelta(hours=value)
-                            elif unit == 'm':
-                                td = timedelta(minutes=value)
-                        mac_norm = mac_addr.replace('-', '').replace(':', '').replace('.', '').upper() if mac_addr else None
-                        for fw_tag in fw_tags:
-                            bl_entry = Blacklist(
-                                ip_address=ip_addr,
-                                mac_address=mac_addr,
-                                mac_address_normalized=mac_norm,
-                                reason="Auto-blocked: non-compliant (compliance recalculation)",
-                                blocked_by="system",
-                                expires_at=datetime.now(UTC) + td,
-                                source_tag=terminal.source_tag,
-                                firewall_tag=fw_tag,
-                                is_auto_blocked=True,
-                                auto_unblocked=False,
-                            )
-                            self.db.add(bl_entry)
-                        logger.info(f"Auto-blocked {ip_addr} (now non_compliant) on firewall(s) '{fw_info}'")
-        else:
-            if terminal.status == "blocked" and not terminal.firewall_tag:
-                fw_tags = await self._get_bound_firewall_tags(terminal.source_tag)
-                if fw_tags:
-                    terminal.firewall_tag = fw_tags[0] if len(fw_tags) == 1 else ",".join(fw_tags)
-
-        return {"status_changed": status_changed, "new_compliance": new_compliance, "unblocked": unblocked}
-
     async def recalculate_all_compliance(self) -> dict:
         """Recalculate compliance status for all existing terminals.
 
@@ -1203,9 +1010,11 @@ class ComplianceService:
             dict with counts: total, bypass, compliant, non_compliant,
             unchanged, unblocked (auto-unblocked from blocked state)
         """
+        # Load fresh whitelist and IPGuard data (cache already invalidated by caller)
         whitelist_data = await self._load_whitelist_cache()
         ipguard_data = await self._load_all_ipguard_cache()
 
+        # Query all terminals
         stmt = select(Terminal)
         result = await self.db.execute(stmt)
         terminals = result.scalars().all()
@@ -1223,6 +1032,7 @@ class ComplianceService:
             ip_addr = terminal.ip_address or ""
             mac_addr = terminal.mac_address or ""
 
+            # Determine new compliance status
             wl_result = self._match_whitelist_in_memory(whitelist_data, ip_addr, mac_addr)
             ig_match = self._match_ipguard_in_memory(ipguard_data, ip_addr, mac_addr)
 
@@ -1239,22 +1049,181 @@ class ComplianceService:
                 new_wl_match_type = None
                 wl_comments = None
 
-            result = await self._apply_compliance_result(
-                terminal, new_compliance, new_wl_match_type, wl_comments, ip_addr, mac_addr
-            )
+            status_changed = terminal.compliance_status != new_compliance
 
-            if result["status_changed"]:
+            if new_compliance == "bypass":
+                wl_comment_str = f"Whitelist: {wl_comments}" if wl_comments else None
+                
+                if wl_comment_str:
+                    if terminal.comments and "Whitelist: " in terminal.comments:
+                        old_wl_start = terminal.comments.find("Whitelist: ")
+                        semicolon_pos = terminal.comments.find(";", old_wl_start)
+                        if semicolon_pos > old_wl_start:
+                            old_wl_end = semicolon_pos
+                            terminal.comments = terminal.comments[:old_wl_start] + wl_comment_str + terminal.comments[old_wl_end:]
+                        else:
+                            terminal.comments = terminal.comments[:old_wl_start] + wl_comment_str
+                    elif terminal.comments:
+                        terminal.comments = f"{terminal.comments}; {wl_comment_str}"
+                    else:
+                        terminal.comments = wl_comment_str
+                elif terminal.comments and "Whitelist: " in terminal.comments:
+                    old_wl_start = terminal.comments.find("Whitelist: ")
+                    semicolon_pos = terminal.comments.find(";", old_wl_start)
+                    if semicolon_pos > old_wl_start:
+                        terminal.comments = terminal.comments[:old_wl_start].rstrip("; ") + terminal.comments[semicolon_pos+1:].lstrip()
+                    else:
+                        terminal.comments = terminal.comments[:old_wl_start].rstrip("; ")
+            elif terminal.comments and "Whitelist: " in terminal.comments:
+                old_wl_start = terminal.comments.find("Whitelist: ")
+                semicolon_pos = terminal.comments.find(";", old_wl_start)
+                if semicolon_pos > old_wl_start:
+                    terminal.comments = terminal.comments[:old_wl_start].rstrip("; ") + terminal.comments[semicolon_pos+1:].lstrip()
+                else:
+                    terminal.comments = terminal.comments[:old_wl_start].rstrip("; ")
+
+            terminal.compliance_status = new_compliance
+            terminal.wl_match_type = new_wl_match_type
+
+            if status_changed:
+
                 if new_compliance == "bypass":
                     bypass_count += 1
                 elif new_compliance == "compliant":
                     compliant_count += 1
+                    from app.services.event_emitter import emit_terminal_compliant
+                    await emit_terminal_compliant(
+                        ip_address=ip_addr,
+                        mac_address=mac_addr,
+                    )
                 else:
                     non_compliant_count += 1
+                    from app.services.event_emitter import emit_policy_violation, emit_terminal_non_compliant
+                    await emit_policy_violation(
+                        policy_name="Terminal Compliance Policy",
+                        terminal_ip=ip_addr,
+                        details={"mac_address": mac_addr, "source_tag": terminal.source_tag}
+                    )
+                    await emit_terminal_non_compliant(
+                        ip_address=ip_addr,
+                        mac_address=mac_addr,
+                        reasons=["Non-compliant terminal detected"]
+                    )
 
-                if result["unblocked"]:
-                    unblocked_count += 1
+                # Auto-unblock: if terminal was blocked and now becomes compliant/bypass
+                if terminal.status == "blocked" and new_compliance in ("bypass", "compliant"):
+                    # Find firewall tags via terminal's source_tag -> DataSourceBinding
+                    fw_tags = await self._get_bound_firewall_tags(terminal.source_tag)
+                    if fw_tags:
+                        all_unblock_success = True
+                        for fw_tag in fw_tags:
+                            try:
+                                success = await self._unblock_on_firewall(ip_addr, fw_tag)
+                                if not success:
+                                    all_unblock_success = False
+                                    logger.warning(f"Failed to auto-unblock {ip_addr} on firewall '{fw_tag}'")
+                            except Exception as e:
+                                all_unblock_success = False
+                                logger.warning(f"Error auto-unblocking {ip_addr} on firewall '{fw_tag}': {e}")
+                        if all_unblock_success:
+                            terminal.status = "unblocked"
+                            terminal.firewall_tag = None
+                            unblocked_count += 1
+                            fw_info = ",".join(fw_tags)
+                            unblock_comment = f"Auto-unblocked by TAM from firewall [{fw_info}]"
+                            if terminal.comments:
+                                terminal.comments = f"{terminal.comments}; {unblock_comment}"
+                            else:
+                                terminal.comments = unblock_comment
+                            # Mark matching Blacklist records as auto-unblocked
+                            mac_norm = mac_addr.replace('-', '').replace(':', '').replace('.', '').upper() if mac_addr else None
+                            for fw_tag in fw_tags:
+                                bl_stmt = select(Blacklist).where(
+                                    (Blacklist.ip_address == ip_addr) &
+                                    (Blacklist.mac_address_normalized == mac_norm) &
+                                    (Blacklist.firewall_tag == fw_tag)
+                                )
+                                bl_result = await self.db.execute(bl_stmt)
+                                bl_entries = bl_result.scalars().all()
+                                for bl_entry in bl_entries:
+                                    if bl_entry.auto_unblocked is False:
+                                        bl_entry.auto_unblocked = True
+                                        bl_entry.unblocked_at = datetime.now(UTC)
+                            logger.info(f"Auto-unblocked {ip_addr} (now {new_compliance}) from firewall(s) '{fw_info}'")
+                        else:
+                            logger.warning(f"Partial unblock failure for {ip_addr}, keeping blocked status")
+                    else:
+                        # No firewall binding, just update status
+                        terminal.status = "unblocked"
+                        terminal.firewall_tag = None
+                        unblocked_count += 1
+
+                # Auto-block: if terminal becomes non_compliant and has a bound firewall
+                if new_compliance == "non_compliant" and terminal.status != "blocked":
+                    # Find firewall tags via terminal's source_tag -> DataSourceBinding
+                    fw_tags = await self._get_bound_firewall_tags(terminal.source_tag)
+                    if fw_tags:
+                        all_block_success = True
+                        for fw_tag in fw_tags:
+                            try:
+                                success = await self._block_on_firewall(
+                                    ip_addr, fw_tag,
+                                    reason="Auto-blocked: compliance recalculation"
+                                )
+                                if not success:
+                                    all_block_success = False
+                                    logger.warning(f"Failed to auto-block {ip_addr} on firewall '{fw_tag}'")
+                            except Exception as e:
+                                all_block_success = False
+                                logger.warning(f"Error auto-blocking {ip_addr} on firewall '{fw_tag}': {e}")
+
+                        if all_block_success:
+                            terminal.status = "blocked"
+                            terminal.firewall_tag = fw_tags[0] if len(fw_tags) == 1 else ",".join(fw_tags)
+                            fw_info = ",".join(fw_tags)
+                            block_comment = f"Auto-blocked by TAM on firewall [{fw_info}]"
+                            if terminal.comments:
+                                terminal.comments = f"{terminal.comments}; {block_comment}"
+                            else:
+                                terminal.comments = block_comment
+                            # Create Blacklist record for each firewall with expires_at
+                            import re
+                            from datetime import datetime, timedelta
+                            block_time = await self._get_block_time()
+                            match = re.match(r'^(\d+)([dhm])$', block_time.lower())
+                            td = timedelta(days=30)
+                            if match:
+                                value = int(match.group(1))
+                                unit = match.group(2)
+                                if unit == 'd':
+                                    td = timedelta(days=value)
+                                elif unit == 'h':
+                                    td = timedelta(hours=value)
+                                elif unit == 'm':
+                                    td = timedelta(minutes=value)
+                            mac_norm = mac_addr.replace('-', '').replace(':', '').replace('.', '').upper() if mac_addr else None
+                            for fw_tag in fw_tags:
+                                bl_entry = Blacklist(
+                                    ip_address=ip_addr,
+                                    mac_address=mac_addr,
+                                    mac_address_normalized=mac_norm,
+                                    reason="Auto-blocked: non-compliant (compliance recalculation)",
+                                    blocked_by="system",
+                                    expires_at=datetime.now(UTC) + td,
+                                    source_tag=terminal.source_tag,
+                                    firewall_tag=fw_tag,
+                                    is_auto_blocked=True,
+                                    auto_unblocked=False,
+                                )
+                                self.db.add(bl_entry)
+                            logger.info(f"Auto-blocked {ip_addr} (now non_compliant) on firewall(s) '{fw_info}'")
             else:
                 unchanged_count += 1
+                # Backfill firewall_tag for blocked terminals missing it (historical data)
+                if terminal.status == "blocked" and not terminal.firewall_tag:
+                    fw_tags = await self._get_bound_firewall_tags(terminal.source_tag)
+                    if fw_tags:
+                        terminal.firewall_tag = fw_tags[0] if len(fw_tags) == 1 else ",".join(fw_tags)
 
         # Audit log for compliance recalculation
         if non_compliant_count > 0 or unblocked_count > 0:

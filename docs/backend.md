@@ -785,30 +785,6 @@ def _normalize_mac_raw(mac: str) -> str:
 - 一次性加载全部白名单和合规基准数据到内存，避免逐条查询。
 - 返回 `ComplianceCheckResult`：`total_checked`、`compliant`、`bypass`、`non_compliant`、`details`。
 - `details` 始终返回（包含 compliant/bypass/non_compliant 分类列表）。
-- `bypass` 列表中的条目包含 `wl_match_type` 和 `wl_comments` 字段，支持下游调用方获取匹配的白名单信息。
-
-#### 共享合规应用方法
-
-`_apply_compliance_result(terminal, new_compliance, new_wl_match_type, wl_comments, ip_addr, mac_addr)`：
-
-所有合规检查路径统一使用此方法应用合规结果，确保行为一致：
-
-| 功能 | 说明 |
-|------|------|
-| 更新 compliance_status | 设置终端的合规状态 |
-| 更新 wl_match_type | 设置白名单匹配类型 |
-| 更新 comments | 同步白名单备注（`Whitelist: xxx`），支持替换旧备注 |
-| 状态变更事件 | 合规状态变更时触发对应事件通知 |
-| 自动解封 | 终端从 blocked 变为 compliant/bypass 时自动解封 |
-| 自动封堵 | 终端变为 non_compliant 且未封锁时自动封堵 |
-
-**调用路径**：
-
-| 路径 | 调用时机 |
-|------|----------|
-| `recalculate_all_compliance` | 白名单变更、IPGuard 同步后全量重算 |
-| `arp_collector_service.process_arp_entries` | ARP 采集后批量合规检查 |
-| `main.py scheduled_compliance_check` | 定时合规检查任务 |
 
 #### 白名单匹配规则
 
@@ -920,7 +896,8 @@ def _normalize_mac_raw(mac: str) -> str:
 
 1. **Upsert**：按 IP+MAC 查找，存在则更新时间戳和来源并重置 `compliance_status="unknown"`（确保基线变更后重新评估），不存在则新建（`compliance_status="unknown"`）。
 2. **批量合规检查**：对 `compliance_status="unknown"` 的条目执行 `batch_check_compliance`。
-3. **应用合规结果**：使用 `_apply_compliance_result` 共享方法更新终端状态，包括 compliance_status、wl_match_type、comments（白名单备注）、自动封堵/解封、事件通知。
+3. **更新合规状态**：根据检查结果更新 `compliance_status` 和 `wl_match_type`。
+4. **触发自动封锁**：若存在 `non_compliant` 条目，异步触发 `auto_block_non_compliant`（fire-and-forget）。
 
 #### ARP 输出解析
 

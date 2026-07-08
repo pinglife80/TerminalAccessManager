@@ -130,26 +130,12 @@ else:
 
 | 触发场景 | 说明 |
 |---------|------|
-| ARP数据采集完成 | 新采集的终端自动触发合规检查，使用 `_apply_compliance_result` 共享方法 |
-| 白名单变更 | 添加/删除白名单条目后触发全量重算，使用 `_apply_compliance_result` 共享方法 |
-| IPGuard同步完成 | 基线数据更新后触发全量重算，使用 `_apply_compliance_result` 共享方法 |
-| 定时合规检查 | 定期检查 `compliance_status="unknown"` 的终端，使用 `_apply_compliance_result` 共享方法 |
+| ARP数据采集完成 | 新采集的终端自动触发合规检查 |
+| 白名单变更 | 添加/删除白名单条目后触发 |
+| IPGuard同步完成 | 基线数据更新后触发 |
 | 手动触发 | 通过API手动触发合规重算 |
 
-### 3.6 统一合规应用方法
-
-`_apply_compliance_result` 是所有合规检查路径共享的方法，确保行为一致性：
-
-| 功能 | 说明 |
-|------|------|
-| 更新 compliance_status | 设置终端的合规状态 |
-| 更新 wl_match_type | 设置白名单匹配类型 |
-| 更新 comments | 同步白名单备注（`Whitelist: xxx`），支持替换旧备注 |
-| 状态变更事件 | 合规状态变更时触发对应事件通知 |
-| 自动解封 | 终端从 blocked 变为 compliant/bypass 时自动解封 |
-| 自动封堵 | 终端变为 non_compliant 且未封锁时自动封堵 |
-
-### 3.7 白名单备注管理
+### 3.6 白名单备注管理
 
 白名单条目支持备注（comment）字段，用于记录添加原因或管理信息。备注信息会同步写入匹配终端的 `remarks` 字段，便于在终端列表中追溯白名单来源。
 

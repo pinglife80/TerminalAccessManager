@@ -1,86 +1,10 @@
 # 版本跟踪记录
 
-> 文档版本：v3.6.9 | 更新日期：2026-07-08
+> 文档版本：v3.6.7 | 更新日期：2026-07-08
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
-
----
-
-## [v3.6.9] - 2026-07-08
-
-### 合规判断逻辑一致性优化
-
-#### 新增功能
-
-- **数据导出功能**：终端管理、白名单管理、黑名单管理页面新增导出功能
-  - 支持全量导出和按筛选条件导出
-  - 后端新增 `GET /terminals/export`、`GET /whitelist/export`、`GET /blacklist/export` 端点
-  - 前端修改 `handleExport` 调用后端 API，传递所有筛选条件
-
-#### Bug 修复
-
-- **通知渠道创建 500 错误**：修复 `notifications.py` 中 `channel.channel_type` 属性访问错误
-- **合规判断逻辑不一致**：ARP 采集和定时任务的合规检查路径与白名单变更触发的全量重算路径行为不一致
-
-#### 代码变更
-
-| 文件 | 变更内容 |
-|------|---------|
-| `backend/app/services/compliance_service.py` | 新增 `_apply_compliance_result` 共享方法，修改 `recalculate_all_compliance` 和 `batch_check_compliance` |
-| `backend/app/services/arp_collector_service.py` | 使用共享方法 `_apply_compliance_result` |
-| `backend/app/main.py` | 定时任务使用共享方法 `_apply_compliance_result` |
-| `backend/app/api/v1/endpoints/notifications.py` | 修复 `channel.channel_type` → `channel.type` |
-| `backend/app/api/v1/endpoints/terminals.py` | 新增 `GET /terminals/export` 端点 |
-| `backend/app/api/v1/endpoints/whitelist.py` | 新增 `GET /whitelist/export` 端点 |
-| `backend/app/api/v1/endpoints/blacklist.py` | 新增 `GET /blacklist/export` 端点 |
-| `frontend/src/pages/Terminals.tsx` | 修改 `handleExport` 调用后端 API |
-| `frontend/src/pages/Whitelist.tsx` | 修改 `handleExport` 调用后端 API |
-| `frontend/src/pages/Blacklist.tsx` | 修改 `handleExport` 调用后端 API |
-
-#### 功能一致性对比
-
-| 功能 | 修改前（ARP/定时） | 修改后（统一） |
-|------|------------------|---------------|
-| 更新 comments（白名单备注） | ❌ | ✅ |
-| 触发事件通知 | ❌ | ✅ |
-| 自动解封 | ❌ | ✅ |
-| 自动封堵（同步） | ❌（异步） | ✅（同步） |
-
-#### 文档更新
-
-| 文件 | 更新内容 |
-|------|---------|
-| `docs/changelog.md` | 添加 v3.6.9 变更记录 |
-| `docs/release-notes.md` | 添加 v3.6.9 发布记录 |
-| `docs/backend.md` | 更新合规检查流程说明 |
-| `docs/datasource-lifecycle.md` | 更新 ARP 采集后的合规处理流程 |
-| `docs/business-workflow.md` | 更新合规判定流程 |
-
-#### 验证方式
-
-```bash
-# 验证版本一致性
-./manage.sh version check
-
-# 验证服务健康
-./manage.sh health
-
-# 验证数据一致性
-# bypass 终端备注完整性：SELECT COUNT(*) FROM terminals WHERE compliance_status='bypass' AND comments IS NULL
-```
-
----
-
-## [v3.6.8] - 2026-07-08
-
-### 数据导出与通知渠道修复
-
-#### Bug 修复
-
-- **数据导出功能**：前端数据导出仅支持导出当前页数据，改为调用后端 API 支持全量导出和筛选导出
-- **通知渠道 500 错误**：创建通知渠道时报 500 内部错误但实际创建成功的问题
 
 ---
 

@@ -8,7 +8,7 @@ function getVersion(): string {
   if (fs.existsSync(versionPath)) {
     return fs.readFileSync(versionPath, 'utf-8').trim()
   }
-  return '3.6.9'
+  return '3.6.7'
 }
 
 // https://vitejs.dev/config/
