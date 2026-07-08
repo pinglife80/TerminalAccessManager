@@ -71,7 +71,7 @@ readonly BACKUP_DIR="${SCRIPT_DIR}/backups"
 readonly LOCK_FILE="/tmp/tam_manage.lock"
 readonly STATE_DIR="${SCRIPT_DIR}/.manage"
 readonly STATE_FILE="${STATE_DIR}/state.env"
-VERSION=$(cat "${SCRIPT_DIR}/VERSION" 2>/dev/null || echo "3.6.4")
+VERSION=$(cat "${SCRIPT_DIR}/VERSION" 2>/dev/null || echo "3.6.7")
 
 # Docker Compose project name (derived from directory name)
 readonly COMPOSE_PROJECT_NAME="tam"
@@ -591,6 +591,16 @@ stop_services_ordered() {
 # Command: version
 ###############################################################################
 cmd_version() {
+    local subcommand="${1:-}"
+    
+    if [ "$subcommand" = "check" ]; then
+        cmd_version_check
+        return
+    elif [ "$subcommand" = "bump" ]; then
+        cmd_version_bump "$2"
+        return
+    fi
+
     echo -e "${CYAN}${BOLD}TerminalAccessManager${NC}"
     echo ""
     echo -e "  ${BOLD}Version:${NC}     ${VERSION}"
@@ -628,6 +638,129 @@ cmd_version() {
     else
         echo -e "  ${BOLD}Database:${NC}    ${DIM}not initialized${NC}"
     fi
+}
+
+cmd_version_check() {
+    echo -e "${CYAN}${BOLD}Version Consistency Check${NC}"
+    echo ""
+
+    local base_version="${VERSION}"
+    local all_ok="true"
+
+    local files=(
+        "VERSION"
+        "frontend/package.json"
+        ".env"
+        ".env.example"
+        "docker-compose.yml"
+        "manage.sh"
+        "frontend/vite.config.ts"
+    )
+
+    for file in "${files[@]}"; do
+        local file_path="${SCRIPT_DIR}/${file}"
+        local found_version=""
+
+        if [ ! -f "${file_path}" ]; then
+            echo -e "  ${RED}✗${NC} ${file}: ${RED}not found${NC}"
+            all_ok="false"
+            continue
+        fi
+
+        case "${file}" in
+            "VERSION")
+                found_version=$(cat "${file_path}" 2>/dev/null | tr -d '[:space:]')
+                ;;
+            "frontend/package.json")
+                found_version=$(grep '"version"' "${file_path}" 2>/dev/null | sed 's/.*"version": "\([^"]*\)".*/\1/' | tr -d '[:space:]')
+                ;;
+            ".env" | ".env.example")
+                found_version=$(grep '^VERSION=' "${file_path}" 2>/dev/null | cut -d'=' -f2 | tr -d '[:space:]')
+                ;;
+            "docker-compose.yml")
+                found_version=$(grep 'VERSION:' "${file_path}" 2>/dev/null | sed 's/.*-\([0-9]*\.[0-9]*\.[0-9]*\).*/\1/' | tr -d '[:space:]')
+                ;;
+            "manage.sh")
+                found_version=$(grep 'echo "3.6.' "${file_path}" 2>/dev/null | head -1 | sed 's/.*echo "\([0-9]*\.[0-9]*\.[0-9]*\)".*/\1/' | tr -d '[:space:]')
+                ;;
+            "frontend/vite.config.ts")
+                found_version=$(grep "return '" "${file_path}" 2>/dev/null | sed 's/.*return '\''\([0-9]*\.[0-9]*\.[0-9]*\)'\''.*/\1/' | tr -d '[:space:]')
+                ;;
+        esac
+
+        if [ -z "${found_version}" ]; then
+            echo -e "  ${YELLOW}?${NC} ${file}: ${YELLOW}version not detected${NC}"
+        elif [ "${found_version}" = "${base_version}" ]; then
+            echo -e "  ${GREEN}✓${NC} ${file}: ${GREEN}${found_version}${NC}"
+        else
+            echo -e "  ${RED}✗${NC} ${file}: ${RED}${found_version}${NC} (expected ${base_version})"
+            all_ok="false"
+        fi
+    done
+
+    echo ""
+    if [ "${all_ok}" = "true" ]; then
+        echo -e "${GREEN}${BOLD}✓ All versions are consistent (${base_version})${NC}"
+    else
+        echo -e "${RED}${BOLD}✗ Version inconsistency detected!${NC}"
+        echo -e "  Run '${CYAN}./manage.sh version bump ${base_version}${NC}' to fix"
+        exit 1
+    fi
+}
+
+cmd_version_bump() {
+    local new_version="${1}"
+    
+    if [ -z "${new_version}" ]; then
+        echo -e "${RED}Error:${NC} Please specify a version number"
+        echo ""
+        echo -e "Usage: ${CYAN}./manage.sh version bump <new_version>${NC}"
+        echo -e "Example: ${CYAN}./manage.sh version bump 3.6.7${NC}"
+        exit 1
+    fi
+
+    if ! echo "${new_version}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+        echo -e "${RED}Error:${NC} Invalid version format. Use X.Y.Z (e.g., 3.6.7)"
+        exit 1
+    fi
+
+    echo -e "${CYAN}${BOLD}Bumping version to ${new_version}${NC}"
+    echo ""
+
+    echo -e "  ${GREEN}✓${NC} VERSION"
+    echo "${new_version}" > "${SCRIPT_DIR}/VERSION"
+
+    echo -e "  ${GREEN}✓${NC} frontend/package.json"
+    sed -i.bak "s/\"version\": \"[0-9]*\.[0-9]*\.[0-9]*\"/\"version\": \"${new_version}\"/" "${SCRIPT_DIR}/frontend/package.json"
+    rm -f "${SCRIPT_DIR}/frontend/package.json.bak"
+
+    echo -e "  ${GREEN}✓${NC} .env"
+    sed -i.bak "s/^VERSION=[0-9]*\.[0-9]*\.[0-9]*$/VERSION=${new_version}/" "${SCRIPT_DIR}/.env" 2>/dev/null || true
+    rm -f "${SCRIPT_DIR}/.env.bak" 2>/dev/null || true
+
+    echo -e "  ${GREEN}✓${NC} .env.example"
+    sed -i.bak "s/^VERSION=[0-9]*\.[0-9]*\.[0-9]*$/VERSION=${new_version}/" "${SCRIPT_DIR}/.env.example"
+    rm -f "${SCRIPT_DIR}/.env.example.bak"
+
+    echo -e "  ${GREEN}✓${NC} docker-compose.yml"
+    sed -i.bak "s/:-[0-9]*\.[0-9]*\.[0-9]*\"/:-${new_version}\"/" "${SCRIPT_DIR}/docker-compose.yml"
+    rm -f "${SCRIPT_DIR}/docker-compose.yml.bak"
+
+    echo -e "  ${GREEN}✓${NC} manage.sh"
+    sed -i.bak "s/echo \"[0-9]*\.[0-9]*\.[0-9]*\"/echo \"${new_version}\"/" "${SCRIPT_DIR}/manage.sh"
+    rm -f "${SCRIPT_DIR}/manage.sh.bak"
+
+    echo -e "  ${GREEN}✓${NC} frontend/vite.config.ts"
+    sed -i.bak "s/return '[0-9]*\.[0-9]*\.[0-9]*'/return '${new_version}'/" "${SCRIPT_DIR}/frontend/vite.config.ts"
+    rm -f "${SCRIPT_DIR}/frontend/vite.config.ts.bak"
+
+    echo ""
+    echo -e "${GREEN}${BOLD}✓ Version bumped successfully to ${new_version}!${NC}"
+    echo ""
+    echo -e "Next steps:"
+    echo -e "  1. ${CYAN}./manage.sh version check${NC} — Verify all versions are consistent"
+    echo -e "  2. ${CYAN}./manage.sh -y update${NC} — Rebuild and restart services"
+    echo -e "  3. ${CYAN}./manage.sh health${NC} — Verify deployment is healthy"
 }
 
 ###############################################################################
@@ -3730,6 +3863,8 @@ cmd_help() {
     echo -e "  ${CYAN}ssl${NC} [--force]              Generate SSL certificates (idempotent)"
     echo -e "  ${CYAN}clean${NC}                     Remove ALL containers, volumes, data"
     echo -e "  ${CYAN}version${NC}                   Show version information"
+    echo -e "  ${CYAN}version check${NC}             Check version consistency across all files"
+    echo -e "  ${CYAN}version bump <ver>${NC}        Bump version in all version files"
     echo ""
     echo -e "${BOLD}Quick Start:${NC}"
     echo ""
@@ -3855,7 +3990,7 @@ main() {
         role)         cmd_role "$@" ;;
         validate)     cmd_validate ;;
         clean)        cmd_clean ;;
-        version)      cmd_version ;;
+        version)      cmd_version "$@" ;;
         help|--help|-h) cmd_help ;;
         *)
             log_error "Unknown command: ${command}"

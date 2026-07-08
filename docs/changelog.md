@@ -13,6 +13,19 @@
 
 ---
 
+## [3.6.7] - 2026-07-08
+
+### 新增
+
+- **版本一致性检查命令**：`./manage.sh version check`，检查所有版本号文件（VERSION、package.json、.env、.env.example、docker-compose.yml、manage.sh、vite.config.ts）是否一致
+- **一键版本升级命令**：`./manage.sh version bump <ver>`，自动更新所有版本号文件到指定版本，避免手动修改遗漏
+
+### 优化
+
+- **版本号 fallback 统一**：所有 fallback 版本号统一为 3.6.6，确保单一版本源失效时仍显示正确版本
+
+---
+
 ## [3.6.6] - 2026-07-08
 
 ### 新增
