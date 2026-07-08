@@ -352,29 +352,40 @@ class ArpCollectorService:
 
                 check_result = await compliance_service.batch_check_compliance(check_entries)
 
-                # Update compliance_status for each entry
-                compliant_ips = set()
-                bypass_data = {}  # ip -> wl_match_type
-                non_compliant_ips = set()
-
+                # Build lookup maps for compliance results
+                result_lookup = {}
                 if check_result.details:
-                    for item in check_result.details.get("compliant", []):
-                        compliant_ips.add(item.get("ip_address"))
                     for item in check_result.details.get("bypass", []):
-                        bypass_data[item.get("ip_address")] = item.get("wl_match_type")
+                        result_lookup[item.get("ip_address")] = {
+                            "compliance_status": "bypass",
+                            "wl_match_type": item.get("wl_match_type"),
+                            "wl_comments": item.get("wl_comments"),
+                        }
+                    for item in check_result.details.get("compliant", []):
+                        result_lookup[item.get("ip_address")] = {
+                            "compliance_status": "compliant",
+                            "wl_match_type": None,
+                            "wl_comments": None,
+                        }
                     for item in check_result.details.get("non_compliant", []):
-                        non_compliant_ips.add(item.get("ip_address"))
+                        result_lookup[item.get("ip_address")] = {
+                            "compliance_status": "non_compliant",
+                            "wl_match_type": None,
+                            "wl_comments": None,
+                        }
 
+                # Apply compliance results using shared method
                 for entry in unchecked_entries:
-                    if entry.ip_address in bypass_data:
-                        entry.compliance_status = "bypass"
-                        entry.wl_match_type = bypass_data[entry.ip_address]
-                    elif entry.ip_address in compliant_ips:
-                        entry.compliance_status = "compliant"
-                        entry.wl_match_type = None
-                    elif entry.ip_address in non_compliant_ips:
-                        entry.compliance_status = "non_compliant"
-                        entry.wl_match_type = None
+                    result = result_lookup.get(entry.ip_address)
+                    if result:
+                        await compliance_service._apply_compliance_result(
+                            entry,
+                            result["compliance_status"],
+                            result["wl_match_type"],
+                            result["wl_comments"],
+                            entry.ip_address or "",
+                            entry.mac_address or "",
+                        )
 
                 await self.db.commit()
 
@@ -382,12 +393,6 @@ class ArpCollectorService:
                     f"Compliance check for source '{source_tag}': "
                     f"{check_result.compliant} compliant, {check_result.bypass} bypass, {check_result.non_compliant} non-compliant"
                 )
-
-                # Trigger auto-block (fire and forget)
-                if check_result.non_compliant > 0:
-                    asyncio.create_task(
-                        self._auto_block_task(source_tag)
-                    )
 
         except Exception as e:
             logger.error(f"Compliance check failed for source '{source_tag}': {str(e)}")

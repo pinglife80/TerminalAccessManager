@@ -207,27 +207,42 @@ async def scheduled_compliance_check():
                                     for e in unchecked
                                 ]
                                 result = await service.batch_check_compliance(check_entries)
-                                # Update compliance_status for each entry
-                                bypass_data = {}  # ip -> wl_match_type
-                                compliant_ips = set()
-                                non_compliant_ips = set()
+
+                                # Build lookup maps for compliance results
+                                result_lookup = {}
                                 if result.details:
                                     for item in result.details.get("bypass", []):
-                                        bypass_data[item.get("ip_address")] = item.get("wl_match_type")
+                                        result_lookup[item.get("ip_address")] = {
+                                            "compliance_status": "bypass",
+                                            "wl_match_type": item.get("wl_match_type"),
+                                            "wl_comments": item.get("wl_comments"),
+                                        }
                                     for item in result.details.get("compliant", []):
-                                        compliant_ips.add(item.get("ip_address"))
+                                        result_lookup[item.get("ip_address")] = {
+                                            "compliance_status": "compliant",
+                                            "wl_match_type": None,
+                                            "wl_comments": None,
+                                        }
                                     for item in result.details.get("non_compliant", []):
-                                        non_compliant_ips.add(item.get("ip_address"))
+                                        result_lookup[item.get("ip_address")] = {
+                                            "compliance_status": "non_compliant",
+                                            "wl_match_type": None,
+                                            "wl_comments": None,
+                                        }
+
+                                # Apply compliance results using shared method
                                 for entry in unchecked:
-                                    if entry.ip_address in bypass_data:
-                                        entry.compliance_status = "bypass"
-                                        entry.wl_match_type = bypass_data[entry.ip_address]
-                                    elif entry.ip_address in compliant_ips:
-                                        entry.compliance_status = "compliant"
-                                        entry.wl_match_type = None
-                                    elif entry.ip_address in non_compliant_ips:
-                                        entry.compliance_status = "non_compliant"
-                                        entry.wl_match_type = None
+                                    r = result_lookup.get(entry.ip_address)
+                                    if r:
+                                        await service._apply_compliance_result(
+                                            entry,
+                                            r["compliance_status"],
+                                            r["wl_match_type"],
+                                            r["wl_comments"],
+                                            entry.ip_address or "",
+                                            entry.mac_address or "",
+                                        )
+
                                 await db.commit()
                                 if result.non_compliant > 0 or result.bypass > 0:
                                     logger.info(f"Compliance check for {source.tag}: {result.compliant} compliant, {result.bypass} bypass, {result.non_compliant} non-compliant")

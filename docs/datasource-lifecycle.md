@@ -542,15 +542,16 @@ process_arp_entries(entries, source_tag)
     │   └── 不存在: 创建新记录
     │       status="unblocked", source="arp", compliance_status="unknown"
     │
-    ├── 步骤 3: 批量合规检查
+    ├── 步骤 3: 批量合规检查与结果应用
     │   ├── 查找 source_tag 下 compliance_status="unknown" 的记录
-    │   ├── 调用 ComplianceService.batch_check_compliance()
-    │   ├── 更新 compliance_status: bypass / compliant / non_compliant
-    │   └── 更新 wl_match_type (仅 bypass)
-    │
-    └── 步骤 4: 触发自动封堵 (fire-and-forget)
-        └── 如果 non_compliant > 0 → asyncio.create_task(_auto_block_task)
-            使用独立数据库会话，避免与父请求会话冲突
+    │   ├── 调用 ComplianceService.batch_check_compliance() 获取合规结果
+    │   └── 使用 _apply_compliance_result() 共享方法应用结果：
+    │       ├── 更新 compliance_status: bypass / compliant / non_compliant
+    │       ├── 更新 wl_match_type (仅 bypass)
+    │       ├── 同步白名单备注到 comments 字段
+    │       ├── 状态变更时触发事件通知
+    │       ├── 自动解封 blocked 终端（变为 compliant/bypass）
+    │       └── 自动封堵 non_compliant 终端（同步执行）
 ```
 
 ### 5.7 同步结果格式
