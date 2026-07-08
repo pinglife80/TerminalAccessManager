@@ -82,7 +82,7 @@ async def create_channel(
     await ts.log_action(
         current_user.username, "create_notification_channel", "notification_channel",
         str(channel.id),
-        {"name": channel.name, "type": channel.channel_type, "enabled": channel.enabled},
+        {"name": channel.name, "type": channel.type, "enabled": channel.enabled},
         ip_address=get_client_ip(request),
         resource_name=channel.name,
     )

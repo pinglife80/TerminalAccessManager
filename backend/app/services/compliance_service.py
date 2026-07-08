@@ -1049,12 +1049,8 @@ class ComplianceService:
                 new_wl_match_type = None
                 wl_comments = None
 
-            compliance_changed = (
-                terminal.compliance_status != new_compliance
-                or terminal.wl_match_type != new_wl_match_type
-            )
+            status_changed = terminal.compliance_status != new_compliance
 
-            # Sync whitelist comments to terminal when bypass (even if unchanged)
             if new_compliance == "bypass":
                 wl_comment_str = f"Whitelist: {wl_comments}" if wl_comments else None
                 
@@ -1078,10 +1074,18 @@ class ComplianceService:
                         terminal.comments = terminal.comments[:old_wl_start].rstrip("; ") + terminal.comments[semicolon_pos+1:].lstrip()
                     else:
                         terminal.comments = terminal.comments[:old_wl_start].rstrip("; ")
+            elif terminal.comments and "Whitelist: " in terminal.comments:
+                old_wl_start = terminal.comments.find("Whitelist: ")
+                semicolon_pos = terminal.comments.find(";", old_wl_start)
+                if semicolon_pos > old_wl_start:
+                    terminal.comments = terminal.comments[:old_wl_start].rstrip("; ") + terminal.comments[semicolon_pos+1:].lstrip()
+                else:
+                    terminal.comments = terminal.comments[:old_wl_start].rstrip("; ")
 
-            if compliance_changed:
-                terminal.compliance_status = new_compliance
-                terminal.wl_match_type = new_wl_match_type
+            terminal.compliance_status = new_compliance
+            terminal.wl_match_type = new_wl_match_type
+
+            if status_changed:
 
                 if new_compliance == "bypass":
                     bypass_count += 1
@@ -1091,7 +1095,6 @@ class ComplianceService:
                     await emit_terminal_compliant(
                         ip_address=ip_addr,
                         mac_address=mac_addr,
-                        source_tag=terminal.source_tag
                     )
                 else:
                     non_compliant_count += 1

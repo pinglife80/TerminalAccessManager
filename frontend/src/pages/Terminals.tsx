@@ -20,7 +20,7 @@ const REFRESH_OPTIONS: { labelKey: string; label?: string; value: number }[] = [
   { labelKey: '', label: '10m', value: 600000 },
 ];
 
-import { downloadCSV, formatDate, useDebounce, getErrorMessage } from '@/lib/utils';
+import { formatDate, useDebounce, getErrorMessage } from '@/lib/utils';
 import { toast } from 'sonner';
 import { PrimaryButton, IconButton, ButtonGroup } from '@/components/Button';
 import { Pagination } from '@/components/Pagination';
@@ -419,22 +419,36 @@ const Terminals: React.FC = () => {
     }
   };
 
-  const handleExport = () => {
-    const headers = [t('terminal.mac'), t('terminal.ip'), t('common.status'), t('terminal.source'), t('terminal.sourceTag'), t('terminal.complianceStatus'), t('terminal.whitelistMatch'), t('terminal.firewallTag'), t('terminal.added'), t('terminal.comments')];
-    const rows = allTerminals?.map((mac) => [
-      mac.mac_address,
-      mac.ip_address,
-      STATUS_CONFIG[mac.status]?.label || mac.status,
-      mac.source,
-      mac.source_tag || '',
-      COMPLIANCE_CONFIG[mac.compliance_status || 'unknown']?.labelKey ? t(COMPLIANCE_CONFIG[mac.compliance_status || 'unknown']?.labelKey) : 'Unknown',
-      mac.wl_match_type || '',
-      mac.firewall_tag || '',
-      formatDate(mac.timestamp),
-      mac.comments || ''
-    ]) || [];
+  const handleExport = async () => {
+    try {
+      const params: Record<string, string> = {};
+      if (debouncedSearch) {
+        params['ip'] = debouncedSearch;
+        params['mac'] = debouncedSearch;
+      }
+      if (filterStatus !== 'all') params['status'] = filterStatus;
+      if (filterCompliance !== 'all') params['compliance_status'] = filterCompliance;
+      if (filterSource !== 'all') params['source_tag'] = filterSource;
+      if (filterFirewallTag !== 'all') params['firewall_tag'] = filterFirewallTag;
+      if (startDate) params['start_date'] = startDate;
+      if (endDate) params['end_date'] = endDate;
 
-    downloadCSV(headers, rows, 'terminals');
+      const response = await apiClient.get(API_ENDPOINTS.TERMINALS_EXPORT, {
+        params,
+        responseType: 'blob',
+      });
+
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', 'terminals.csv');
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (error: unknown) {
+      toast.error(getErrorMessage(error, t('terminal.failedToExport')));
+    }
   };
 
   const handleViewDetails = (mac: Terminal) => {

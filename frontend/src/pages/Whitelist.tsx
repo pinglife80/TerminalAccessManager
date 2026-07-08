@@ -5,7 +5,7 @@ import { Search, Plus, Trash2, User, Server, Globe, RefreshCw, Download, Clock, 
 import { apiClient } from '@/lib/api';
 import { toast } from 'sonner';
 import { API_ENDPOINTS } from '@/lib/constants';
-import { normalizeMacAddress, isValidMacAddress, isValidCidrOrRange, formatDate, downloadCSV, useDebounce, getErrorMessage } from '@/lib/utils';
+import { normalizeMacAddress, isValidMacAddress, isValidCidrOrRange, formatDate, useDebounce, getErrorMessage } from '@/lib/utils';
 import { PrimaryButton, IconButton } from '@/components/Button';
 import { Pagination } from '@/components/Pagination';
 import { EmptyState } from '@/components/StateDisplay';
@@ -136,18 +136,29 @@ const Whitelist: React.FC = () => {
     setCurrentPage(1);
   };
 
-  const handleExport = () => {
-    const headers = [t('whitelist.macAddress'), t('whitelist.ipAddress'), t('whitelist.type'), t('whitelist.addedBy'), t('whitelist.addedDate'), t('terminal.comments')];
-    const rows = filteredWhitelist?.map((item) => [
-      item.mac_address || '-',
-      item.ip_pattern || '-',
-      item.pattern_type || '-',
-      item.added_by,
-      formatDate(item.created_at),
-      item.comments || ''
-    ]) || [];
+  const handleExport = async () => {
+    try {
+      const params: Record<string, string> = {};
+      if (debouncedSearch) params['search'] = debouncedSearch;
+      if (startDate) params['start_date'] = startDate;
+      if (endDate) params['end_date'] = endDate;
 
-    downloadCSV(headers, rows, 'whitelist');
+      const response = await apiClient.get(API_ENDPOINTS.WHITELIST_EXPORT, {
+        params,
+        responseType: 'blob',
+      });
+
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', 'whitelist.csv');
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (error: unknown) {
+      toast.error(getErrorMessage(error, t('whitelist.failedToExport')));
+    }
   };
 
   const handleRemoveWhitelist = (identifier: string | null, ipPattern?: string | null) => {

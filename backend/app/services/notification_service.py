@@ -170,8 +170,11 @@ class NotificationService:
         await self.db.commit()
         await self.db.refresh(channel)
 
-        await self.initialize_channels()
-        await self._refresh_global_channels()
+        try:
+            await self.initialize_channels()
+            await self._refresh_global_channels()
+        except Exception as e:
+            logger.error(f"Failed to refresh channel cache after creation: {e}")
 
         logger.info(f"Created notification channel: {name}")
         return channel
@@ -204,8 +207,11 @@ class NotificationService:
         await self.db.commit()
         await self.db.refresh(channel)
 
-        await self.initialize_channels()
-        await self._refresh_global_channels()
+        try:
+            await self.initialize_channels()
+            await self._refresh_global_channels()
+        except Exception as e:
+            logger.error(f"Failed to refresh channel cache after update: {e}")
 
         logger.info(f"Updated notification channel: {channel.name}")
         return channel
@@ -219,8 +225,11 @@ class NotificationService:
         await self.db.delete(channel)
         await self.db.commit()
 
-        await self.initialize_channels()
-        await self._refresh_global_channels()
+        try:
+            await self.initialize_channels()
+            await self._refresh_global_channels()
+        except Exception as e:
+            logger.error(f"Failed to refresh channel cache after deletion: {e}")
 
         logger.info(f"Deleted notification channel: {channel.name}")
         return True

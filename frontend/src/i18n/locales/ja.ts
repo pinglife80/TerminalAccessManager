@@ -200,6 +200,7 @@ const ja = {
     whitelistCommentPlaceholder: 'コメント（任意）',
     removedFromBlacklist: 'ブラックリストから削除しました',
     failedToRemoveFromBlacklist: 'ブラックリストからの削除に失敗しました',
+    failedToExport: 'エクスポートに失敗しました',
     confirmBlock: 'ブロックの確認',
     confirmBlockMsg: 'この端末をブロックしますか？ブロック後、ネットワークアクセスが拒否されます。',
     confirmUnblock: 'ブロック解除の確認',
@@ -320,6 +321,7 @@ const ja = {
     failedToAdd: 'ホワイトリストへの追加に失敗しました',
     removedSuccessfully: 'ホワイトリストから削除しました',
     failedToRemove: 'ホワイトリストからの削除に失敗しました',
+    failedToExport: 'エクスポートに失敗しました',
     searchByMacIpDescription: 'MACアドレス、IPパターン、または説明で検索...',
   },
   blacklist: {
@@ -378,6 +380,7 @@ const ja = {
     unblockedTab: 'ブロック解除',
     allTab: 'すべて',
     unblockedLabel: 'ブロック解除済み',
+    failedToExport: 'エクスポートに失敗しました',
   },
   auditLogs: {
     title: '監査ログ',
