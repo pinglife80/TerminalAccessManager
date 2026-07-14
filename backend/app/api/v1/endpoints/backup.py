@@ -5,6 +5,7 @@ Provides REST API for managing backups.
 """
 
 import os
+import zipfile
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -18,6 +19,7 @@ from app.services.terminal_service import TerminalService
 from app.schemas.backup import (
     BackupConfigResponse,
     BackupConfigUpdate,
+    BackupContentsResponse,
     BackupJobResponse,
     BackupListResponse,
     BackupRestoreResponse,
@@ -48,6 +50,7 @@ async def get_backup_config(
         storage_config=config.storage_config,
         backup_database=config.backup_database,
         backup_config=config.backup_config,
+        backup_whitelist=config.backup_whitelist,
         backup_logs=config.backup_logs,
         encrypt_backup=config.encrypt_backup,
     )
@@ -72,6 +75,7 @@ async def update_backup_config(
         storage_config=config_data.storage_config,
         backup_database=config_data.backup_database,
         backup_config=config_data.backup_config,
+        backup_whitelist=config_data.backup_whitelist,
         backup_logs=config_data.backup_logs,
         encrypt_backup=config_data.encrypt_backup,
     )
@@ -89,15 +93,45 @@ async def update_backup_config(
 @router.post("/run", response_model=BackupJobResponse)
 async def run_backup(
     request: Request,
+    backup_type: str = "full",
     backup_service: BackupService = Depends(get_backup_service),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_permission("backup:write")),
 ):
     """Run a manual backup"""
-    job = await backup_service.run_backup()
+    job = await backup_service.run_backup(backup_type=backup_type)
     ts = TerminalService(db)
     await ts.log_action(
         current_user.username, "run_backup", "backup",
+        str(job.id),
+        {"status": job.status, "file_path": job.file_path, "file_size": job.file_size, "backup_type": backup_type},
+        ip_address=get_client_ip(request),
+        resource_name=job.file_path,
+    )
+    return BackupJobResponse(
+        id=job.id,
+        status=job.status,
+        started_at=job.started_at,
+        completed_at=job.completed_at,
+        file_path=job.file_path,
+        file_size=job.file_size,
+        checksum=job.checksum,
+        error_message=job.error_message,
+    )
+
+
+@router.post("/whitelist", response_model=BackupJobResponse)
+async def create_whitelist_backup(
+    request: Request,
+    backup_service: BackupService = Depends(get_backup_service),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permission("backup:write")),
+):
+    """Create a whitelist-only backup"""
+    job = await backup_service.run_backup(backup_type="whitelist")
+    ts = TerminalService(db)
+    await ts.log_action(
+        current_user.username, "create_whitelist_backup", "backup",
         str(job.id),
         {"status": job.status, "file_path": job.file_path, "file_size": job.file_size},
         ip_address=get_client_ip(request),
@@ -113,6 +147,104 @@ async def run_backup(
         checksum=job.checksum,
         error_message=job.error_message,
     )
+
+
+@router.get("/whitelist/list", response_model=BackupListResponse)
+async def get_whitelist_backups(
+    backup_service: BackupService = Depends(get_backup_service),
+    current_user: User = Depends(get_current_user),
+):
+    """List all whitelist backups"""
+    backups = []
+    backup_dir = backup_service.backup_dir
+    if os.path.isdir(backup_dir):
+        for filename in sorted(os.listdir(backup_dir), reverse=True):
+            if filename.endswith(".zip") and "whitelist" in filename.lower():
+                file_path = os.path.join(backup_dir, filename)
+                stats = os.stat(file_path)
+                backups.append({
+                    "filename": filename,
+                    "file_path": file_path,
+                    "file_size": stats.st_size,
+                    "created_at": datetime.fromtimestamp(stats.st_mtime),
+                    "storage": "local",
+                })
+
+    backups.sort(key=lambda x: x.get("created_at") or datetime.min, reverse=True)
+    return BackupListResponse(backups=backups)
+
+
+@router.post("/whitelist/restore/{filename}", response_model=BackupRestoreResponse)
+async def restore_whitelist_backup(
+    filename: str,
+    request: Request,
+    backup_service: BackupService = Depends(get_backup_service),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permission("backup:write")),
+):
+    """Restore from a whitelist backup"""
+    if '..' in filename or filename.startswith('/') or filename.startswith('\\'):
+        raise HTTPException(status_code=400, detail="Invalid filename")
+
+    safe_filename = os.path.basename(filename)
+    file_path = os.path.join(backup_service.backup_dir, safe_filename)
+
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="Backup file not found")
+
+    success = await backup_service.restore_whitelist(file_path)
+
+    ts = TerminalService(db)
+    await ts.log_action(
+        current_user.username, "restore_whitelist_backup", "backup",
+        safe_filename,
+        {"filename": safe_filename, "success": success},
+        ip_address=get_client_ip(request),
+        resource_name=safe_filename,
+    )
+
+    return BackupRestoreResponse(
+        success=success,
+        message="Whitelist restored successfully" if success else "Whitelist restoration failed",
+        backup_file=safe_filename,
+    )
+
+
+@router.get("/{filename}/contents", response_model=BackupContentsResponse)
+async def get_backup_contents(
+    filename: str,
+    backup_service: BackupService = Depends(get_backup_service),
+    current_user: User = Depends(get_current_user),
+):
+    """Get contents/metadata of a backup file"""
+    if '..' in filename or filename.startswith('/') or filename.startswith('\\'):
+        raise HTTPException(status_code=400, detail="Invalid filename")
+
+    safe_filename = os.path.basename(filename)
+    file_path = os.path.join(backup_service.backup_dir, safe_filename)
+
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="Backup file not found")
+
+    try:
+        contents = []
+        with zipfile.ZipFile(file_path, "r") as zipf:
+            for info in zipf.infolist():
+                contents.append({
+                    "filename": info.filename,
+                    "file_size": info.file_size,
+                    "compress_size": info.compress_size,
+                })
+
+        stats = os.stat(file_path)
+        return BackupContentsResponse(
+            filename=safe_filename,
+            file_size=stats.st_size,
+            created_at=datetime.fromtimestamp(stats.st_mtime),
+            contents=contents,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to read backup contents: {str(e)}")
 
 
 @router.get("/list", response_model=BackupListResponse)

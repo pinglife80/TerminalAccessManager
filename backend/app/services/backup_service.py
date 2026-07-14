@@ -7,6 +7,7 @@ Provides database and configuration backup functionality with FTP/SFTP support.
 import asyncio
 import ftplib
 import hashlib
+import json
 import os
 import shutil
 import tempfile
@@ -23,6 +24,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.models.backup_config import BackupConfigModel
+from app.models.system_config import SystemConfig
+from app.models.notification import NotificationChannel, NotificationRule, NotificationTemplate
+from app.models.auth_config import AuthConfig
+from app.models.data_source import DataSource
+from app.models.whitelist import Whitelist
 
 
 @dataclass
@@ -40,6 +46,7 @@ class BackupConfig:
     # Backup content
     backup_database: bool = True
     backup_config: bool = True
+    backup_whitelist: bool = True
     backup_logs: bool = False
 
     # Encryption
@@ -112,6 +119,7 @@ class BackupService:
                     storage_config=model.storage_config,
                     backup_database=model.backup_database,
                     backup_config=model.backup_config,
+                    backup_whitelist=getattr(model, "backup_whitelist", True),
                     backup_logs=model.backup_logs,
                     encrypt_backup=model.encrypt_backup,
                 )
@@ -133,7 +141,7 @@ class BackupService:
             return
 
         try:
-            result = await self.db.execute(select(BackupConfigModel))
+            result = await self.db.execute(select(BackupConfigModel).limit(1))
             model = result.scalar_one_or_none()
 
             if model:
@@ -144,6 +152,7 @@ class BackupService:
                 model.storage_config = config.storage_config
                 model.backup_database = config.backup_database
                 model.backup_config = config.backup_config
+                model.backup_whitelist = config.backup_whitelist
                 model.backup_logs = config.backup_logs
                 model.encrypt_backup = config.encrypt_backup
             else:
@@ -155,6 +164,7 @@ class BackupService:
                     storage_config=config.storage_config,
                     backup_database=config.backup_database,
                     backup_config=config.backup_config,
+                    backup_whitelist=config.backup_whitelist,
                     backup_logs=config.backup_logs,
                     encrypt_backup=config.encrypt_backup,
                 )
@@ -167,42 +177,52 @@ class BackupService:
             logger.error(f"Failed to save backup config to database: {e}")
             raise
 
-    async def run_backup(self) -> BackupJob:
-        """Execute a full backup job"""
+    async def run_backup(self, backup_type: str = "full") -> BackupJob:
+        """Execute a backup job"""
         job = BackupJob(
-            id=self._generate_backup_id(),
+            id=self._generate_backup_id(backup_type),
             status="running",
             started_at=datetime.now(),
         )
 
         try:
-            # Create temporary directory for backup files
             with tempfile.TemporaryDirectory() as temp_dir:
                 backup_files = []
 
-                # Database backup
-                if self.config.backup_database:
-                    db_path = await self.backup_database(temp_dir)
-                    backup_files.append(db_path)
+                if backup_type == "full" or backup_type == "database":
+                    if self.config.backup_database:
+                        db_path = await self.backup_database(temp_dir)
+                        backup_files.append(db_path)
 
-                # Configuration backup
-                if self.config.backup_config:
-                    config_path = await self.backup_config(temp_dir)
-                    backup_files.append(config_path)
+                if backup_type == "full" or backup_type == "config":
+                    if self.config.backup_config:
+                        config_path = await self.backup_config(temp_dir)
+                        backup_files.append(config_path)
 
-                # Logs backup
-                if self.config.backup_logs:
-                    logs_path = await self._backup_logs(temp_dir)
-                    backup_files.append(logs_path)
+                        system_config_path = await self._backup_system_config_db(temp_dir)
+                        if system_config_path:
+                            backup_files.append(system_config_path)
 
-                # Create archive
-                archive_path = await self.create_archive(temp_dir, backup_files)
+                        branding_path = await self._backup_branding(temp_dir)
+                        if branding_path:
+                            backup_files.append(branding_path)
+
+                if backup_type == "full" or backup_type == "whitelist":
+                    whitelist_path = await self.backup_whitelist(temp_dir)
+                    if whitelist_path:
+                        backup_files.append(whitelist_path)
+
+                if backup_type == "full" or backup_type == "logs":
+                    if self.config.backup_logs:
+                        logs_path = await self._backup_logs(temp_dir)
+                        backup_files.append(logs_path)
+
+                archive_path = await self.create_archive(temp_dir, backup_files, backup_type)
                 job.file_path = archive_path
                 if os.path.exists(archive_path):
                     job.file_size = await asyncio.to_thread(os.path.getsize, archive_path)
                     job.checksum = await self._calculate_checksum(archive_path)
 
-                # Upload to remote storage if configured
                 if self.config.storage_type != "local":
                     remote_path = await self._upload_backup(archive_path)
                     job.file_path = remote_path
@@ -210,7 +230,6 @@ class BackupService:
             job.status = "completed"
             job.completed_at = datetime.now()
 
-            # Cleanup old backups
             await self.cleanup_old_backups()
 
             logger.info(f"Backup completed: {job.file_path}")
@@ -228,10 +247,10 @@ class BackupService:
 
         return job
 
-    def _generate_backup_id(self) -> str:
-        """Generate a unique backup ID"""
+    def _generate_backup_id(self, backup_type: str = "full") -> str:
+        """Generate a unique backup ID with type identifier"""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        return f"backup_{timestamp}"
+        return f"backup_{backup_type}_{timestamp}"
 
     async def _backup_database(self, temp_dir: str) -> str:
         """Backup PostgreSQL database using pg_dump"""
@@ -342,10 +361,360 @@ class BackupService:
         logger.info("Logs backup completed")
         return archive_path
 
-    async def _create_archive(self, temp_dir: str, files: list) -> str:
+    async def _backup_system_config_db(self, temp_dir: str) -> str:
+        """Backup system configuration from database tables"""
+        config_data = {}
+        config_path = os.path.join(temp_dir, "config")
+        os.makedirs(config_path, exist_ok=True)
+
+        if self.db is None:
+            logger.warning("No database session available, skipping system config backup")
+            return ""
+
+        try:
+            result = await self.db.execute(select(SystemConfig))
+            config_data["system_config"] = [
+                {
+                    "key": row.key,
+                    "value": row.value,
+                    "category": row.category,
+                    "value_type": row.value_type,
+                    "description": row.description,
+                    "is_readonly": row.is_readonly,
+                }
+                for row in result.scalars().all()
+            ]
+
+            result = await self.db.execute(select(NotificationChannel))
+            config_data["notification_channels"] = [
+                {
+                    "id": row.id,
+                    "name": row.name,
+                    "type": row.type,
+                    "config": row.config,
+                    "enabled": row.enabled,
+                    "events": row.events,
+                    "description": row.description,
+                }
+                for row in result.scalars().all()
+            ]
+
+            result = await self.db.execute(select(NotificationRule))
+            config_data["notification_rules"] = [
+                {
+                    "id": row.id,
+                    "name": row.name,
+                    "event_type": row.event_type,
+                    "channel_name": row.channel_name,
+                    "enabled": row.enabled,
+                    "priority": row.priority,
+                    "description": row.description,
+                    "suppress_enabled": row.suppress_enabled,
+                    "suppress_window": row.suppress_window,
+                    "escalate_enabled": row.escalate_enabled,
+                    "escalate_threshold": row.escalate_threshold,
+                    "escalate_window": row.escalate_window,
+                    "escalate_severity": row.escalate_severity,
+                }
+                for row in result.scalars().all()
+            ]
+
+            result = await self.db.execute(select(NotificationTemplate))
+            config_data["notification_templates"] = [
+                {
+                    "id": row.id,
+                    "name": row.name,
+                    "event_type": row.event_type,
+                    "channel_type": row.channel_type,
+                    "subject": row.subject,
+                    "body": row.body,
+                    "is_default": row.is_default,
+                }
+                for row in result.scalars().all()
+            ]
+
+            result = await self.db.execute(select(AuthConfig))
+            config_data["auth_providers"] = [
+                {
+                    "id": row.id,
+                    "name": row.name,
+                    "provider_type": row.provider_type,
+                    "config": row.config,
+                    "enabled": row.enabled,
+                    "priority": row.priority,
+                }
+                for row in result.scalars().all()
+            ]
+
+            result = await self.db.execute(select(DataSource))
+            config_data["datasource"] = [
+                {
+                    "id": row.id,
+                    "name": row.name,
+                    "type": row.type,
+                    "config": row.config,
+                    "enabled": row.enabled,
+                }
+                for row in result.scalars().all()
+            ]
+
+            config_file = os.path.join(config_path, "system_config.json")
+            with open(config_file, "w", encoding="utf-8") as f:
+                json.dump(config_data, f, ensure_ascii=False, indent=2)
+
+            logger.info("System config backup completed")
+            return config_file
+        except Exception as e:
+            logger.error(f"Failed to backup system config: {e}")
+            return ""
+
+    async def _restore_system_config_db(self, temp_dir: str) -> bool:
+        """Restore system configuration to database tables"""
+        config_file = os.path.join(temp_dir, "config", "system_config.json")
+        if not os.path.exists(config_file):
+            logger.warning("system_config.json not found in backup, skipping")
+            return False
+
+        if self.db is None:
+            logger.warning("No database session available, skipping system config restore")
+            return False
+
+        try:
+            with open(config_file, "r", encoding="utf-8") as f:
+                config_data = json.load(f)
+
+            if "system_config" in config_data:
+                await self.db.execute(SystemConfig.__table__.delete())
+                for item in config_data["system_config"]:
+                    self.db.add(SystemConfig(**item))
+
+            if "notification_channels" in config_data:
+                await self.db.execute(NotificationChannel.__table__.delete())
+                for item in config_data["notification_channels"]:
+                    obj = NotificationChannel(
+                        name=item["name"],
+                        type=item["type"],
+                        config=item["config"],
+                        enabled=item["enabled"],
+                        events=item["events"],
+                        description=item.get("description"),
+                    )
+                    self.db.add(obj)
+
+            if "notification_rules" in config_data:
+                await self.db.execute(NotificationRule.__table__.delete())
+                for item in config_data["notification_rules"]:
+                    obj = NotificationRule(
+                        name=item["name"],
+                        event_type=item["event_type"],
+                        channel_name=item["channel_name"],
+                        enabled=item["enabled"],
+                        priority=item.get("priority", 100),
+                        description=item.get("description"),
+                        suppress_enabled=item.get("suppress_enabled", False),
+                        suppress_window=item.get("suppress_window", 300),
+                        escalate_enabled=item.get("escalate_enabled", False),
+                        escalate_threshold=item.get("escalate_threshold", 5),
+                        escalate_window=item.get("escalate_window", 3600),
+                        escalate_severity=item.get("escalate_severity", "error"),
+                    )
+                    self.db.add(obj)
+
+            if "notification_templates" in config_data:
+                await self.db.execute(NotificationTemplate.__table__.delete())
+                for item in config_data["notification_templates"]:
+                    obj = NotificationTemplate(
+                        name=item["name"],
+                        event_type=item["event_type"],
+                        channel_type=item["channel_type"],
+                        subject=item.get("subject"),
+                        body=item.get("body"),
+                        is_default=item.get("is_default", False),
+                    )
+                    self.db.add(obj)
+
+            if "auth_providers" in config_data:
+                await self.db.execute(AuthConfig.__table__.delete())
+                for item in config_data["auth_providers"]:
+                    obj = AuthConfig(
+                        name=item["name"],
+                        provider_type=item["provider_type"],
+                        config=item["config"],
+                        enabled=item["enabled"],
+                        priority=item.get("priority", 100),
+                    )
+                    self.db.add(obj)
+
+            if "datasource" in config_data:
+                await self.db.execute(DataSource.__table__.delete())
+                for item in config_data["datasource"]:
+                    obj = DataSource(
+                        name=item["name"],
+                        type=item["type"],
+                        config=item["config"],
+                        enabled=item["enabled"],
+                    )
+                    self.db.add(obj)
+
+            await self.db.commit()
+            logger.info("System config restoration completed")
+            return True
+        except Exception as e:
+            await self.db.rollback()
+            logger.error(f"Failed to restore system config: {e}")
+            return False
+
+    async def _backup_branding(self, temp_dir: str) -> str:
+        """Backup branding asset files"""
+        branding_path = os.path.join(temp_dir, "branding")
+        os.makedirs(branding_path, exist_ok=True)
+
+        upload_dir = getattr(settings, 'UPLOAD_DIR', '/app/uploads')
+        branding_dir = os.path.join(upload_dir, "branding")
+
+        if os.path.isdir(branding_dir):
+            for file in os.listdir(branding_dir):
+                src = os.path.join(branding_dir, file)
+                dst = os.path.join(branding_path, file)
+                if os.path.isfile(src):
+                    shutil.copy(src, dst)
+
+        archive_path = os.path.join(temp_dir, "branding.zip")
+        with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as zipf:
+            for root, _dirs, files in os.walk(branding_path):
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    arcname = os.path.relpath(file_path, temp_dir)
+                    zipf.write(file_path, arcname)
+
+        logger.info("Branding backup completed")
+        return archive_path
+
+    async def _restore_branding(self, temp_dir: str) -> bool:
+        """Restore branding asset files"""
+        branding_zip = os.path.join(temp_dir, "branding.zip")
+        if not os.path.exists(branding_zip):
+            logger.warning("branding.zip not found in backup, skipping")
+            return False
+
+        upload_dir = getattr(settings, 'UPLOAD_DIR', '/app/uploads')
+        branding_dir = os.path.join(upload_dir, "branding")
+        os.makedirs(branding_dir, exist_ok=True)
+
+        try:
+            with zipfile.ZipFile(branding_zip, "r") as zipf:
+                zipf.extractall(temp_dir)
+
+            branding_path = os.path.join(temp_dir, "branding")
+            if os.path.isdir(branding_path):
+                for file in os.listdir(branding_path):
+                    src = os.path.join(branding_path, file)
+                    dst = os.path.join(branding_dir, file)
+                    if os.path.isfile(src):
+                        shutil.copy(src, dst)
+
+            logger.info("Branding restoration completed")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to restore branding: {e}")
+            return False
+
+    async def backup_whitelist(self, temp_dir: str) -> str:
+        """Export whitelist to JSON file"""
+        whitelist_path = os.path.join(temp_dir, "whitelist")
+        os.makedirs(whitelist_path, exist_ok=True)
+
+        if self.db is None:
+            logger.warning("No database session available, skipping whitelist backup")
+            return ""
+
+        try:
+            result = await self.db.execute(select(Whitelist))
+            whitelist_data = [
+                {
+                    "id": row.id,
+                    "mac_address": row.mac_address,
+                    "mac_address_normalized": row.mac_address_normalized,
+                    "ip_pattern": row.ip_pattern,
+                    "pattern_type": row.pattern_type,
+                    "comments": row.comments,
+                    "added_by": row.added_by,
+                    "created_at": row.created_at.isoformat() if row.created_at else None,
+                }
+                for row in result.scalars().all()
+            ]
+
+            whitelist_file = os.path.join(whitelist_path, "whitelist.json")
+            with open(whitelist_file, "w", encoding="utf-8") as f:
+                json.dump(whitelist_data, f, ensure_ascii=False, indent=2)
+
+            archive_path = os.path.join(temp_dir, "whitelist.zip")
+            with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as zipf:
+                zipf.write(whitelist_file, "whitelist/whitelist.json")
+
+            logger.info("Whitelist backup completed")
+            return archive_path
+        except Exception as e:
+            logger.error(f"Failed to backup whitelist: {e}")
+            return ""
+
+    async def restore_whitelist(self, file_path: str) -> bool:
+        """Restore whitelist from backup file"""
+        if not await self.verify_backup(file_path):
+            raise Exception("Backup file is corrupted or missing")
+
+        if self.db is None:
+            logger.warning("No database session available, skipping whitelist restore")
+            return False
+
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                with zipfile.ZipFile(file_path, "r") as zipf:
+                    zipf.extractall(temp_dir)
+
+                whitelist_file = os.path.join(temp_dir, "whitelist", "whitelist.json")
+                if not os.path.exists(whitelist_file):
+                    whitelist_file = os.path.join(temp_dir, "whitelist.json")
+
+                if not os.path.exists(whitelist_file):
+                    logger.warning("whitelist.json not found in backup")
+                    return False
+
+                with open(whitelist_file, "r", encoding="utf-8") as f:
+                    whitelist_data = json.load(f)
+
+                await self.db.execute(Whitelist.__table__.delete())
+                for item in whitelist_data:
+                    obj = Whitelist(
+                        mac_address=item.get("mac_address"),
+                        mac_address_normalized=item.get("mac_address_normalized"),
+                        ip_pattern=item.get("ip_pattern"),
+                        pattern_type=item.get("pattern_type", "single_ip"),
+                        comments=item.get("comments"),
+                        added_by=item.get("added_by", "system"),
+                    )
+                    self.db.add(obj)
+
+                await self.db.commit()
+                logger.info("Whitelist restoration completed")
+
+                try:
+                    from app.services.compliance_service import recalculate_all_compliance
+                    await recalculate_all_compliance(self.db)
+                    logger.info("Compliance recalculation triggered after whitelist restore")
+                except Exception as e:
+                    logger.error(f"Failed to trigger compliance recalculation: {e}")
+
+                return True
+        except Exception as e:
+            await self.db.rollback()
+            logger.error(f"Failed to restore whitelist: {e}")
+            return False
+
+    async def _create_archive(self, temp_dir: str, files: list, backup_type: str = "full") -> str:
         """Create a single archive from backup files"""
         def _create_archive_sync():
-            archive_name = f"{self._generate_backup_id()}.zip"
+            archive_name = f"{self._generate_backup_id(backup_type)}.zip"
             archive_path = os.path.join(self.backup_dir, archive_name)
 
             with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as zipf:
@@ -485,9 +854,9 @@ class BackupService:
         """Backup configuration files"""
         return await self._backup_config(temp_dir)
 
-    async def create_archive(self, temp_dir: str, files: list) -> str:
+    async def create_archive(self, temp_dir: str, files: list, backup_type: str = "full") -> str:
         """Create a single archive from backup files"""
-        return await self._create_archive(temp_dir, files)
+        return await self._create_archive(temp_dir, files, backup_type)
 
     async def validate_backup(self, backup_path: str) -> bool:
         """Validate backup integrity"""
@@ -527,14 +896,16 @@ class BackupService:
 
         try:
             with tempfile.TemporaryDirectory() as temp_dir:
-                # Extract backup
                 with zipfile.ZipFile(backup_path, "r") as zipf:
                     zipf.extractall(temp_dir)
 
-                # Restore database if present
                 db_file = os.path.join(temp_dir, "database.sql")
                 if os.path.exists(db_file):
                     await self._restore_database(db_file)
+
+                await self._restore_system_config_db(temp_dir)
+
+                await self._restore_branding(temp_dir)
 
                 logger.info("Backup restoration completed")
                 return True
