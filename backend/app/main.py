@@ -103,6 +103,78 @@ async def cleanup_expired_blacklist():
             logger.error(f"Error in blacklist cleanup task: {type(e).__name__}: {e} [source=scheduler]")
 
 
+async def cleanup_expired_logs():
+    """Background task to periodically clean up expired audit and notification logs"""
+    while True:
+        try:
+            await asyncio.sleep(86400)
+            if await _is_task_paused("log_cleanup"):
+                continue
+            if not await _acquire_task_lock("log_cleanup", 7200):
+                continue
+            try:
+                async with async_session_factory() as db:
+                    from app.services.config_service import ConfigService
+                    config_service = ConfigService(db)
+                    
+                    retention_days = await config_service.get_value("audit_log_retention_days")
+                    if retention_days is None:
+                        retention_days = 90
+                    else:
+                        retention_days = int(retention_days)
+
+                    from datetime import datetime, timedelta, UTC
+                    cutoff_time = datetime.now(UTC) - timedelta(days=retention_days)
+
+                    from sqlalchemy import delete, select, func
+                    from app.models.log import AuditLog
+                    from app.models.notification import NotificationLog
+
+                    audit_stmt = delete(AuditLog).where(AuditLog.timestamp < cutoff_time)
+                    audit_result = await db.execute(audit_stmt)
+                    audit_deleted = audit_result.rowcount or 0
+
+                    notif_stmt = delete(NotificationLog).where(
+                        NotificationLog.sent_at < cutoff_time,
+                        NotificationLog.archived == True
+                    )
+                    notif_result = await db.execute(notif_stmt)
+                    notif_deleted = notif_result.rowcount or 0
+
+                    await db.commit()
+
+                    if audit_deleted > 0 or notif_deleted > 0:
+                        logger.info(f"Cleaned up {audit_deleted} audit logs and {notif_deleted} notification logs older than {retention_days} days [source=scheduler]")
+            finally:
+                await _release_task_lock("log_cleanup")
+        except Exception as e:
+            logger.error(f"Error in log cleanup task: {type(e).__name__}: {e} [source=scheduler]")
+
+
+async def firewall_reconciliation():
+    """Background task to periodically reconcile firewall blocked IPs with database blacklist"""
+    while True:
+        try:
+            await asyncio.sleep(300)
+            if await _is_task_paused("firewall_reconciliation"):
+                continue
+            if not await _acquire_task_lock("firewall_reconciliation", 600):
+                continue
+            try:
+                async with async_session_factory() as db:
+                    from app.services.firewall_reconciliation_service import FirewallReconciliationService
+                    recon_svc = FirewallReconciliationService(db)
+                    results = await recon_svc.reconcile()
+
+                    if results["missing_in_db"] or results["missing_in_firewall"]:
+                        logger.warning(f"Firewall reconciliation found {len(results['missing_in_db'])} IPs missing in DB and {len(results['missing_in_firewall'])} IPs missing in firewall")
+                        logger.info(f"Reconciliation results: created_in_db={results['created_in_db']}, marked_unblocked={results['marked_unblocked']}, unblocked_on_firewall={results['unblocked_on_firewall']}")
+            finally:
+                await _release_task_lock("firewall_reconciliation")
+        except Exception as e:
+            logger.error(f"Error in firewall reconciliation task: {type(e).__name__}: {e} [source=scheduler]")
+
+
 async def scheduled_arp_collection():
     """Background task to periodically collect ARP data from all enabled sources"""
     while True:
@@ -367,6 +439,8 @@ async def lifespan(app: FastAPI):
     ipguard_sync_task = asyncio.create_task(scheduled_ipguard_sync())
     compliance_check_task = asyncio.create_task(scheduled_compliance_check())
     auto_unblock_task = asyncio.create_task(scheduled_auto_unblock())
+    log_cleanup_task = asyncio.create_task(cleanup_expired_logs())
+    firewall_reconciliation_task = asyncio.create_task(firewall_reconciliation())
     logger.info("All background scheduler tasks started")
 
     yield
@@ -379,9 +453,9 @@ async def lifespan(app: FastAPI):
     logger.info("Notification workers stopped")
 
     # Cancel background tasks and wait for them to finish
-    for task in [cleanup_task, arp_collection_task, ipguard_sync_task, compliance_check_task, auto_unblock_task]:
+    for task in [cleanup_task, arp_collection_task, ipguard_sync_task, compliance_check_task, auto_unblock_task, log_cleanup_task, firewall_reconciliation_task]:
         task.cancel()
-    await asyncio.gather(*[cleanup_task, arp_collection_task, ipguard_sync_task, compliance_check_task, auto_unblock_task], return_exceptions=True)
+    await asyncio.gather(*[cleanup_task, arp_collection_task, ipguard_sync_task, compliance_check_task, auto_unblock_task, log_cleanup_task, firewall_reconciliation_task], return_exceptions=True)
     logger.info("Background tasks cancelled")
 
     # Close Redis connections
@@ -392,6 +466,15 @@ async def lifespan(app: FastAPI):
     from app.core.database import engine
     await engine.dispose()
     logger.info("Database engine disposed")
+
+    # Close email HTTP client
+    try:
+        from app.services.notification_channels.email_channel import _email_http_client
+        if _email_http_client is not None and not _email_http_client.is_closed:
+            await _email_http_client.aclose()
+            logger.info("Email HTTP client closed")
+    except Exception as e:
+        logger.warning(f"Error closing email HTTP client: {e}")
 
 
 # Determine API docs visibility based on environment
