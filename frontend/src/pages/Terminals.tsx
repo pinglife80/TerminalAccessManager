@@ -235,10 +235,14 @@ const Terminals: React.FC = () => {
     });
   }, [macAddresses, blackMacSet, blackIpSet, blackEntryMap]);
 
-  // Extract unique source_tags from all data sources
+  // Extract unique source_tags from ARP data sources only
   const sourceTagOptions = useMemo(() => {
     const tags = new Set<string>();
-    dataSources?.forEach((ds) => { if (ds.tag) tags.add(ds.tag); });
+    dataSources?.forEach((ds) => {
+      if (ds.tag && (ds.type === 'arp_ssh' || ds.type === 'arp_api')) {
+        tags.add(ds.tag);
+      }
+    });
     return Array.from(tags).sort();
   }, [dataSources]);
 

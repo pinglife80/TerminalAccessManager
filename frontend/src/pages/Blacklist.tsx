@@ -21,7 +21,7 @@ const REFRESH_OPTIONS: { labelKey?: string; label: string; value: number }[] = [
   { label: '10m', value: 600000 },
 ];
 
-type BlacklistTab = 'active' | 'unblocked' | 'all';
+
 
 const Blacklist: React.FC = () => {
   const { t } = useTranslation();
@@ -37,13 +37,12 @@ const Blacklist: React.FC = () => {
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [autoRefresh, setAutoRefresh] = useState<number>(0);
-  const [activeTab, setActiveTab] = useState<BlacklistTab>('active');
 
   // Debounce search term
   const debouncedSearch = useDebounce(searchTerm, 500);
 
-  // Determine status parameter based on active tab
-  const statusParam = activeTab === 'active' ? 'active' : activeTab === 'unblocked' ? 'unblocked' : 'all';
+  // Always show active (blocked) records only
+  const statusParam = 'active';
 
   const { data: blacklistData, isLoading, refetch } = useBlacklist({
     search: debouncedSearch || undefined,
@@ -69,11 +68,6 @@ const Blacklist: React.FC = () => {
 
   const handlePageSizeChange = (size: number) => {
     setPageSize(size);
-    setCurrentPage(1);
-  };
-
-  const handleTabChange = (tab: BlacklistTab) => {
-    setActiveTab(tab);
     setCurrentPage(1);
   };
 
@@ -141,12 +135,6 @@ const Blacklist: React.FC = () => {
 
   const isExpired = (expiresAt: string | null) => expiresAt ? new Date(expiresAt) < new Date() : false;
 
-  const tabs: { key: BlacklistTab; labelKey: string }[] = [
-    { key: 'active', labelKey: 'blacklist.activeTab' },
-    { key: 'unblocked', labelKey: 'blacklist.unblockedTab' },
-    { key: 'all', labelKey: 'blacklist.allTab' },
-  ];
-
   return (
     <div className="min-h-full bg-background p-4 sm:p-6 lg:p-8">
       {isLoading && !blacklistData ? (
@@ -157,7 +145,7 @@ const Blacklist: React.FC = () => {
       <div className="mb-6 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div>
           <h1 className="text-2xl sm:text-3xl font-bold text-foreground">{t('blacklist.blockedTerminals')}</h1>
-          <p className="text-muted-foreground mt-1">{t('blacklist.manageBlocked')}</p>
+          <p className="text-muted-foreground mt-1">{t('blacklist.manageBlocked')}
         </div>
         <PrimaryButton
           icon={Download}
@@ -165,25 +153,6 @@ const Blacklist: React.FC = () => {
           variant="success"
           onClick={handleExport}
         />
-      </div>
-
-      {/* Tab Navigation */}
-      <div className="mb-6">
-        <div className="flex gap-1 bg-muted/50 p-1 rounded-xl w-fit">
-          {tabs.map((tab) => (
-            <button
-              key={tab.key}
-              onClick={() => handleTabChange(tab.key)}
-              className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-                activeTab === tab.key
-                  ? 'bg-card text-foreground shadow-sm'
-                  : 'text-muted-foreground hover:text-foreground hover:bg-card/50'
-              }`}
-            >
-              {t(tab.labelKey)}
-            </button>
-          ))}
-        </div>
       </div>
 
       {/* Search and Filter */}
@@ -305,7 +274,7 @@ const Blacklist: React.FC = () => {
         <div className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden">
           <div className="p-4 text-center">
             <div className="text-xl sm:text-2xl font-bold text-orange-600">
-              {activeTab === 'active' ? (blacklistStats?.auto_blocked ?? 0) : (filteredBlacklist?.filter((b) => b.is_auto_blocked).length || 0)}
+              {blacklistStats?.auto_blocked ?? 0}
             </div>
             <div className="text-xs sm:text-sm text-muted-foreground mt-1">{t('blacklist.autoBlocked')}</div>
           </div>
@@ -314,7 +283,7 @@ const Blacklist: React.FC = () => {
         <div className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden">
           <div className="p-4 text-center">
             <div className="text-xl sm:text-2xl font-bold text-blue-600">
-              {activeTab === 'active' ? (blacklistStats?.manual_blocked ?? 0) : (filteredBlacklist?.filter((b) => !b.is_auto_blocked).length || 0)}
+              {blacklistStats?.manual_blocked ?? 0}
             </div>
             <div className="text-xs sm:text-sm text-muted-foreground mt-1">{t('blacklist.manualBlocked')}</div>
           </div>
@@ -323,7 +292,7 @@ const Blacklist: React.FC = () => {
         <div className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden">
           <div className="p-4 text-center">
             <div className="text-xl sm:text-2xl font-bold text-amber-600">
-              {activeTab === 'active' ? (blacklistStats?.expired ?? 0) : (filteredBlacklist?.filter((b) => isExpired(b.expires_at)).length || 0)}
+              {blacklistStats?.expired ?? 0}
             </div>
             <div className="text-xs sm:text-sm text-muted-foreground mt-1">{t('blacklist.expiredBlocks')}</div>
           </div>
@@ -332,7 +301,7 @@ const Blacklist: React.FC = () => {
         <div className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden">
           <div className="p-4 text-center">
             <div className="text-xl sm:text-2xl font-bold text-muted-foreground">
-              {activeTab === 'active' ? (blacklistStats?.active_blocks ?? 0) : (filteredBlacklist?.filter((b) => !isExpired(b.expires_at)).length || 0)}
+              {blacklistStats?.active_blocks ?? 0}
             </div>
             <div className="text-xs sm:text-sm text-muted-foreground mt-1">{t('blacklist.activeBlocks')}</div>
           </div>
