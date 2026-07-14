@@ -4,11 +4,17 @@ import path from 'path'
 import fs from 'fs'
 
 function getVersion(): string {
-  const versionPath = path.resolve(__dirname, '../VERSION')
-  if (fs.existsSync(versionPath)) {
-    return fs.readFileSync(versionPath, 'utf-8').trim()
+  const paths = [
+    path.resolve(__dirname, '../VERSION'),
+    path.resolve(__dirname, 'VERSION'),
+    path.resolve(__dirname, '../../VERSION'),
+  ]
+  for (const versionPath of paths) {
+    if (fs.existsSync(versionPath)) {
+      return fs.readFileSync(versionPath, 'utf-8').trim()
+    }
   }
-  return '3.6.11'
+  throw new Error('VERSION file not found. Please create a VERSION file in the project root.')
 }
 
 // https://vitejs.dev/config/

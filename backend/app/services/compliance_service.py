@@ -976,6 +976,13 @@ class ComplianceService:
 
             if not fw_source or not fw_source.enabled:
                 logger.warning(f"Firewall '{firewall_tag}' not found or disabled")
+                await self.log_action("system", "firewall_block", "firewall", firewall_tag, {
+                    "message": f"Failed to block IP {ip_address} on firewall {firewall_tag}: firewall not found or disabled",
+                    "ip_address": ip_address,
+                    "firewall_tag": firewall_tag,
+                    "success": False,
+                    "error": "firewall_not_found_or_disabled",
+                }, ip_address="System")
                 return False
 
             from app.core.crypto import decrypt_config
@@ -994,9 +1001,23 @@ class ComplianceService:
 
             svc.enqueue_operation(FirewallOperationType.BLOCK, ip_address, firewall_tag, reason)
             logger.info(f"Queued block operation for {ip_address} on firewall '{firewall_tag}'")
+            await self.log_action("system", "firewall_block", "firewall", firewall_tag, {
+                "message": f"Blocked IP {ip_address} on firewall {firewall_tag}",
+                "ip_address": ip_address,
+                "firewall_tag": firewall_tag,
+                "success": True,
+                "reason": reason,
+            }, ip_address="System")
             return True
         except Exception as e:
             logger.error(f"Failed to queue block {ip_address} on firewall '{firewall_tag}': {str(e)}")
+            await self.log_action("system", "firewall_block", "firewall", firewall_tag, {
+                "message": f"Failed to block IP {ip_address} on firewall {firewall_tag}: {str(e)}",
+                "ip_address": ip_address,
+                "firewall_tag": firewall_tag,
+                "success": False,
+                "error": str(e),
+            }, ip_address="System")
             return False
 
     async def _unblock_on_firewall(self, ip_address: str, firewall_tag: str) -> bool:
@@ -1010,6 +1031,13 @@ class ComplianceService:
 
             if not fw_source or not fw_source.enabled:
                 logger.warning(f"Firewall '{firewall_tag}' not found or disabled")
+                await self.log_action("system", "firewall_unblock", "firewall", firewall_tag, {
+                    "message": f"Failed to unblock IP {ip_address} on firewall {firewall_tag}: firewall not found or disabled",
+                    "ip_address": ip_address,
+                    "firewall_tag": firewall_tag,
+                    "success": False,
+                    "error": "firewall_not_found_or_disabled",
+                }, ip_address="System")
                 return False
 
             from app.core.crypto import decrypt_config
@@ -1028,9 +1056,22 @@ class ComplianceService:
 
             svc.enqueue_operation(FirewallOperationType.UNBLOCK, ip_address)
             logger.info(f"Queued unblock operation for {ip_address} on firewall '{firewall_tag}'")
+            await self.log_action("system", "firewall_unblock", "firewall", firewall_tag, {
+                "message": f"Unblocked IP {ip_address} on firewall {firewall_tag}",
+                "ip_address": ip_address,
+                "firewall_tag": firewall_tag,
+                "success": True,
+            }, ip_address="System")
             return True
         except Exception as e:
             logger.error(f"Failed to queue unblock {ip_address} on firewall '{firewall_tag}': {str(e)}")
+            await self.log_action("system", "firewall_unblock", "firewall", firewall_tag, {
+                "message": f"Failed to unblock IP {ip_address} on firewall {firewall_tag}: {str(e)}",
+                "ip_address": ip_address,
+                "firewall_tag": firewall_tag,
+                "success": False,
+                "error": str(e),
+            }, ip_address="System")
             return False
 
     # ------------------------------------------------------------------
@@ -1104,10 +1145,21 @@ class ComplianceService:
             else:
                 terminal.comments = terminal.comments[:old_wl_start].rstrip("; ")
 
+        old_compliance = terminal.compliance_status
         terminal.compliance_status = new_compliance
         terminal.wl_match_type = new_wl_match_type
 
         if status_changed:
+            await self.log_action("system", "compliance_status_changed", "terminal",
+                                f"{ip_addr}_{mac_addr}", {
+                                    "message": f"Terminal compliance status changed from {old_compliance} to {new_compliance}",
+                                    "ip_address": ip_addr,
+                                    "mac_address": mac_addr,
+                                    "old_compliance": old_compliance,
+                                    "new_compliance": new_compliance,
+                                    "wl_match_type": new_wl_match_type,
+                                }, ip_address="System")
+
             if new_compliance == "bypass":
                 pass
             elif new_compliance == "compliant":

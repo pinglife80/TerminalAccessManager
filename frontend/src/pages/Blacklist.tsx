@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Search, AlertTriangle, Clock, Server, Download, Eye, Shield, RefreshCw, ChevronDown, Unlock } from 'lucide-react';
-import { useBlacklist, useBlacklistStats, BlacklistEntry } from '@/hooks/useTerminalData';
+import { useBlacklist, BlacklistEntry } from '@/hooks/useTerminalData';
 import { apiClient } from '@/lib/api';
 import { toast } from 'sonner';
 import { API_ENDPOINTS } from '@/lib/constants';
@@ -51,7 +51,7 @@ const Blacklist: React.FC = () => {
     refetchInterval: autoRefresh || undefined,
   });
 
-  const { data: blacklistStats } = useBlacklistStats(autoRefresh || undefined);
+
 
   // Extract items and total from paginated response
   const filteredBlacklist = blacklistData?.items ?? [];
@@ -234,53 +234,6 @@ const Blacklist: React.FC = () => {
         )}
         </>
         )}
-      </div>
-
-      {/* Stats */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 mb-6">
-        <div className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden">
-          <div className="p-4 text-center">
-            <div className="text-xl sm:text-2xl font-bold text-red-600">{totalFromServer}</div>
-            <div className="text-xs sm:text-sm text-muted-foreground mt-1">{t('blacklist.blockedDevices')}</div>
-          </div>
-          <div className="h-1 bg-gradient-to-r from-red-400 to-red-600" />
-        </div>
-        <div className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden">
-          <div className="p-4 text-center">
-            <div className="text-xl sm:text-2xl font-bold text-orange-600">
-              {blacklistStats?.auto_blocked ?? 0}
-            </div>
-            <div className="text-xs sm:text-sm text-muted-foreground mt-1">{t('blacklist.autoBlocked')}</div>
-          </div>
-          <div className="h-1 bg-gradient-to-r from-orange-400 to-orange-600" />
-        </div>
-        <div className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden">
-          <div className="p-4 text-center">
-            <div className="text-xl sm:text-2xl font-bold text-blue-600">
-              {blacklistStats?.manual_blocked ?? 0}
-            </div>
-            <div className="text-xs sm:text-sm text-muted-foreground mt-1">{t('blacklist.manualBlocked')}</div>
-          </div>
-          <div className="h-1 bg-gradient-to-r from-blue-400 to-blue-600" />
-        </div>
-        <div className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden">
-          <div className="p-4 text-center">
-            <div className="text-xl sm:text-2xl font-bold text-amber-600">
-              {blacklistStats?.expired ?? 0}
-            </div>
-            <div className="text-xs sm:text-sm text-muted-foreground mt-1">{t('blacklist.expiredBlocks')}</div>
-          </div>
-          <div className="h-1 bg-gradient-to-r from-amber-400 to-amber-600" />
-        </div>
-        <div className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden">
-          <div className="p-4 text-center">
-            <div className="text-xl sm:text-2xl font-bold text-muted-foreground">
-              {blacklistStats?.active_blocks ?? 0}
-            </div>
-            <div className="text-xs sm:text-sm text-muted-foreground mt-1">{t('blacklist.activeBlocks')}</div>
-          </div>
-          <div className="h-1 bg-gradient-to-r from-gray-400 to-gray-600" />
-        </div>
       </div>
 
       {/* Table */}

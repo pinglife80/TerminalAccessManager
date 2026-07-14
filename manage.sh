@@ -71,7 +71,13 @@ readonly BACKUP_DIR="${SCRIPT_DIR}/backups"
 readonly LOCK_FILE="/tmp/tam_manage.lock"
 readonly STATE_DIR="${SCRIPT_DIR}/.manage"
 readonly STATE_FILE="${STATE_DIR}/state.env"
-VERSION=$(cat "${SCRIPT_DIR}/VERSION" 2>/dev/null || echo "3.6.11")
+if [ -f "${SCRIPT_DIR}/VERSION" ]; then
+    VERSION=$(cat "${SCRIPT_DIR}/VERSION" 2>/dev/null | tr -d '[:space:]')
+else
+    echo "ERROR: VERSION file not found in ${SCRIPT_DIR}" >&2
+    echo "Please create a VERSION file with the version number (e.g., 3.6.14)" >&2
+    exit 1
+fi
 
 # Docker Compose project name (derived from directory name)
 readonly COMPOSE_PROJECT_NAME="tam"
