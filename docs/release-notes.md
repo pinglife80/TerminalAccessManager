@@ -1,10 +1,80 @@
 # 版本跟踪记录
 
-> 文档版本：v3.6.10 | 更新日期：2026-07-09
+> 文档版本：v3.6.11 | 更新日期：2026-07-14
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
+
+---
+
+## [v3.6.11] - 2026-07-14
+
+### 系统稳定性优化
+
+#### Bug 修复
+
+- **数据库连接泄漏**
+  - 问题描述：日志中频繁出现 `The garbage collector is trying to clean up non-checked-in connection` 错误
+  - 根因：`notification_logging.py` 中数据库会话管理不当，使用 `async with` 创建会话后立即返回导致连接泄漏
+  - 修复方案：重构所有日志方法，使用 try/finally 模式确保会话正确关闭
+  - 关联文件：`backend/app/services/notification_logging.py`, `backend/app/core/database.py`
+
+- **邮件限流**
+  - 问题描述：`Rate limit exceeded for qiangnian.zheng@inceptio.ai`
+  - 根因：合规计算时大量终端状态变化触发大量邮件发送，超过 SMTP 服务限流
+  - 修复方案：所有通知事件先经过 `NotificationAggregator` 聚合，5分钟窗口内同类事件合并发送
+  - 关联文件：`backend/app/services/event_emitter.py`, `backend/app/services/compliance_service.py`
+
+- **防火墙并发限制**
+  - 问题描述：`当前在线用户已超过最大并发用户限制`
+  - 根因：合规计算时多个终端并发调用 Sangfor API，超过设备并发连接限制
+  - 修复方案：防火墙操作改为队列串行处理，使用信号量限制最大并发连接数为3
+  - 关联文件：`backend/app/services/compliance_service.py`, `backend/app/services/sangfor_service.py`
+
+#### 架构优化
+
+- **合规计算分批处理**：将合规计算改为分批事务处理，每批100个终端
+  - 每批独立执行 flush() 和 commit()，避免长事务锁定
+  - 减少单事务处理时间，降低连接持有时间
+
+- **通知聚合器**：新增 `NotificationAggregator` 模块
+  - 实现事件收集、合并和异步发送逻辑
+  - 支持时间窗口聚合（5分钟）
+  - 支持定期发送任务（每30秒检查并发送聚合通知）
+
+#### 代码变更清单
+
+| 文件 | 变更内容 | 类型 |
+|------|---------|------|
+| `backend/app/core/database.py` | 优化连接池配置 | fix |
+| `backend/app/services/notification_logging.py` | 重构数据库会话管理 | fix |
+| `backend/app/services/event_emitter.py` | 修改 emit_event 经过聚合器 | fix |
+| `backend/app/services/compliance_service.py` | 分批处理 + 队列化防火墙操作 | fix |
+| `backend/app/services/sangfor_service.py` | 队列处理逻辑（已有） | — |
+| `backend/app/services/notification_aggregator.py` | 新增通知聚合器模块 | feat |
+
+#### 验证方式
+
+```bash
+# 验证服务健康
+./manage.sh health
+
+# 触发合规计算验证
+./manage.sh scheduler trigger compliance_check
+
+# 检查日志无错误
+./manage.sh logs backend -n 100 | grep -E "garbage|rate limit|并发用户"
+# 预期结果：无匹配输出
+```
+
+#### 文档更新
+
+| 文件 | 更新内容 |
+|------|---------|
+| `docs/changelog.md` | 添加 v3.6.11 变更记录 |
+| `docs/release-notes.md` | 添加 v3.6.11 发布记录 |
+| `.trae/documents/code-review-commit-plan.md` | 代码审查和提交计划 |
 
 ---
 
