@@ -2,9 +2,12 @@ import base64
 import contextlib
 import ipaddress
 import json
+import os
 import re
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, UTC
 from typing import Any
+
+import pytz
 
 from loguru import logger
 from sqlalchemy import and_, desc, func, or_, select
@@ -32,17 +35,20 @@ def _normalize_mac(mac: str) -> str:
 def _parse_date_range(start_date: str | None, end_date: str | None):
     """Parse date range strings into datetime objects for filtering"""
     conditions = []
+    tz_name = os.environ.get("TZ", "Asia/Shanghai")
+    tz = pytz.timezone(tz_name)
+    
     if start_date:
         try:
-            start_dt = datetime.strptime(start_date, "%Y-%m-%d").replace(tzinfo=UTC)
+            naive_start = datetime.strptime(start_date, "%Y-%m-%d")
+            start_dt = tz.localize(naive_start)
             conditions.append(lambda col: col >= start_dt)
         except ValueError:
             pass
     if end_date:
         try:
-            end_dt = datetime.strptime(end_date, "%Y-%m-%d").replace(
-                hour=23, minute=59, second=59, tzinfo=UTC
-            )
+            naive_end = datetime.strptime(end_date, "%Y-%m-%d")
+            end_dt = tz.localize(naive_end.replace(hour=23, minute=59, second=59))
             conditions.append(lambda col: col <= end_dt)
         except ValueError:
             pass
@@ -230,9 +236,8 @@ class TerminalService:
             )
             status_counts = dict(status_result.all())
 
-            # Whitelist count
-            whitelist_result = await self.db.execute(select(func.count()).select_from(Whitelist))
-            whitelisted = whitelist_result.scalar() or 0
+            # Whitelist count - count terminals with compliance_status='bypass' instead of Whitelist entries
+            whitelisted = compliance_counts.get("bypass", 0)
 
             return {
                 "total": total,
@@ -588,6 +593,10 @@ class TerminalService:
                 existing = result.scalar_one_or_none()
 
             if existing:
+                old_mac = existing.mac_address
+                old_ip_pattern = existing.ip_pattern
+                old_comments = existing.comments
+                
                 existing.comments = comments
                 if normalized_mac:
                     existing.mac_address = normalized_mac
@@ -595,6 +604,18 @@ class TerminalService:
                 if ip_pattern:
                     existing.ip_pattern = ip_pattern
                     existing.pattern_type = pattern_type
+                
+                log_details = {
+                    "message": f"Updated whitelist entry {old_mac or old_ip_pattern}",
+                    "old_mac_address": old_mac,
+                    "new_mac_address": normalized_mac,
+                    "old_ip_pattern": old_ip_pattern,
+                    "new_ip_pattern": ip_pattern,
+                    "old_comments": old_comments,
+                    "new_comments": comments,
+                }
+                resource_id = str(existing.id)
+                await self.log_action(username, "whitelist_update", "whitelist", resource_id, log_details)
             else:
                 whitelist_entry = Whitelist(
                     mac_address=normalized_mac,
@@ -605,6 +626,16 @@ class TerminalService:
                     added_by=username
                 )
                 self.db.add(whitelist_entry)
+                
+                log_details = {
+                    "message": f"Created whitelist entry for {normalized_mac or ip_pattern}",
+                    "mac_address": normalized_mac,
+                    "ip_pattern": ip_pattern,
+                    "pattern_type": pattern_type,
+                    "comments": comments,
+                }
+                resource_id = normalized_mac or ip_pattern
+                await self.log_action(username, "whitelist_create", "whitelist", resource_id, log_details)
 
             # Invalidate whitelist cache and recalculate compliance for all terminals
             try:
@@ -615,24 +646,6 @@ class TerminalService:
                 logger.info(f"Whitelist add triggered compliance recalculation: {recalc_result}")
             except Exception as e:
                 logger.warning(f"Failed to recalculate compliance after whitelist add: {e}")
-
-            # Build log details
-            if ip_address and mac_address:
-                log_details = {"message": f"Added MAC {normalized_mac} and IP pattern {ip_pattern} ({pattern_type}) to whitelist",
-                               "mac": normalized_mac, "ip_pattern": ip_pattern, "match_type": pattern_type}
-                resource_id = normalized_mac
-            elif ip_address:
-                log_details = {"message": f"Added IP pattern {ip_pattern} ({pattern_type}) to whitelist",
-                               "ip_pattern": ip_pattern, "match_type": pattern_type}
-                resource_id = ip_pattern
-            elif mac_address:
-                log_details = {"message": f"Added MAC {normalized_mac} to whitelist",
-                               "mac": normalized_mac}
-                resource_id = normalized_mac
-            else:
-                log_details = {"message": "Added entry to whitelist"}
-                resource_id = None
-            await self.log_action(username, "add_whitelist", "whitelist", resource_id, log_details)
 
             await self.db.commit()
 
@@ -708,14 +721,16 @@ class TerminalService:
                 if whitelist_entry.ip_pattern:
                     log_details_parts.append(f"IP {whitelist_entry.ip_pattern}")
 
-                log_details = {"message": f"Removed {' and '.join(log_details_parts)} from whitelist"}
-                if whitelist_entry.mac_address:
-                    log_details["mac"] = whitelist_entry.mac_address
-                if whitelist_entry.ip_pattern:
-                    log_details["ip_pattern"] = whitelist_entry.ip_pattern
+                log_details = {
+                    "message": f"Deleted whitelist entry {whitelist_entry.id}",
+                    "deleted_mac_address": whitelist_entry.mac_address,
+                    "deleted_ip_pattern": whitelist_entry.ip_pattern,
+                    "deleted_pattern_type": whitelist_entry.pattern_type,
+                    "deleted_comments": whitelist_entry.comments,
+                }
 
-                resource_id = whitelist_entry.mac_address if whitelist_entry.mac_address else whitelist_entry.ip_pattern
-                await self.log_action(username, "remove_whitelist", "whitelist", resource_id, log_details)
+                resource_id = str(whitelist_entry.id)
+                await self.log_action(username, "whitelist_delete", "whitelist", resource_id, log_details)
 
                 await self.db.commit()
                 return True
