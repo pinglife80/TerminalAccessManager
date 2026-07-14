@@ -40,6 +40,9 @@ async def emit_event(
 
     This is a fire-and-forget operation - errors are logged but not raised.
 
+    Events are first aggregated through NotificationAggregator to avoid
+    sending excessive emails during high-traffic periods.
+
     Args:
         event_type: Event type (e.g., "terminal.blocked")
         data: Event data payload
@@ -49,27 +52,46 @@ async def emit_event(
     Returns:
         List of notification results (may be empty if service not initialized)
     """
-    service = get_notification_service()
-    if not service:
-        logger.debug(f"Notification service not initialized, skipping event: {event_type}")
-        return []
-
     try:
-        # Check if emit method exists
-        if hasattr(service, "emit"):
-            results = await service.emit(
-                event_type=event_type,
-                data=data,
-                source=source,
-                severity=severity,
-            )
-            return results
-        else:
-            logger.warning("Notification service has no emit method")
-            return []
-    except Exception as e:
-        logger.error(f"Failed to emit event {event_type}: {e}")
+        from app.services.notification_channels.base import NotificationEvent
+        from app.services.notification_aggregator import get_notification_aggregator
+        
+        event = NotificationEvent(
+            id=str(__import__('uuid').uuid4()),
+            type=event_type,
+            timestamp=__import__('datetime').datetime.now(),
+            data=dict(data) if data else {},
+            source=source,
+            severity=severity,
+        )
+        
+        aggregator = await get_notification_aggregator()
+        await aggregator.add_event(event)
+        logger.debug(f"Event {event_type} added to aggregator")
         return []
+    except Exception as e:
+        logger.error(f"Failed to add event {event_type} to aggregator: {e}")
+        
+        service = get_notification_service()
+        if not service:
+            logger.debug(f"Notification service not initialized, skipping event: {event_type}")
+            return []
+
+        try:
+            if hasattr(service, "emit"):
+                results = await service.emit(
+                    event_type=event_type,
+                    data=data,
+                    source=source,
+                    severity=severity,
+                )
+                return results
+            else:
+                logger.warning("Notification service has no emit method")
+                return []
+        except Exception as e2:
+            logger.error(f"Failed to emit event {event_type}: {e2}")
+            return []
 
 
 def emit_event_sync(
