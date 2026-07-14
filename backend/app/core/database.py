@@ -8,11 +8,13 @@ from app.core.config import settings
 _engine_kwargs = {
     "echo": settings.DEBUG,
     "pool_pre_ping": True,
-    "pool_recycle": 3600,
+    "pool_recycle": 300,
+    "pool_timeout": 60,
+    "pool_use_lifo": True,
 }
 if not settings.DATABASE_URL.startswith("sqlite"):
-    _engine_kwargs["pool_size"] = 10
-    _engine_kwargs["max_overflow"] = 20
+    _engine_kwargs["pool_size"] = 30
+    _engine_kwargs["max_overflow"] = 100
 
 engine = create_async_engine(
     settings.DATABASE_URL,
