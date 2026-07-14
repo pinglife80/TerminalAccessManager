@@ -32,15 +32,15 @@ import { DateRangeFilter } from '@/components/DateRangeFilter';
 /**
  * Determine action buttons for a terminal based on status matrix:
  * - compliant + unblocked: view only (no actions)
- * - compliant + blocked: view + unblock
- * - bypass: view + remove from whitelist (already in whitelist)
- * - non_compliant + blocked: view only (no actions - auto-blocked by system)
- * - non_compliant + unblocked + in blacklist: view + remove from blacklist + add to whitelist
- * - non_compliant + unblocked + not in blacklist: view + add to whitelist
- * - unknown + unblocked: view + add to whitelist
- * - unknown + blocked: view + unblock
+ * - compliant: view only (system auto-manages)
+ * - bypass: view only (whitelist removal in Whitelist Management page)
+ * - non_compliant + blocked: add to whitelist only (for exemption)
+ * - non_compliant + unblocked: add to whitelist only
+ * - unknown: add to whitelist only (for temporary exemption)
  *
- * Note: Manual block is intentionally disabled to preserve compliance auto-detection business loop.
+ * Note: All manual block/unblock actions are intentionally disabled to preserve 
+ * compliance auto-detection business loop. Whitelist removal is centralized in 
+ * Whitelist Management page.
  */
 function getTerminalActions(terminal: Terminal): {
   canBlock: boolean;
@@ -52,40 +52,28 @@ function getTerminalActions(terminal: Terminal): {
   const cs = terminal.compliance_status || 'unknown';
   const st = terminal.status;
 
-  // compliant + unblocked: view + add to whitelist (quick add)
-  if (cs === 'compliant' && st !== 'blocked') {
-    return { canBlock: false, canUnblock: false, canAddWhitelist: true, canRemoveWhitelist: false, canRemoveBlacklist: false };
+  // compliant: view only (system auto-manages block/unblock)
+  if (cs === 'compliant') {
+    return { canBlock: false, canUnblock: false, canAddWhitelist: false, canRemoveWhitelist: false, canRemoveBlacklist: false };
   }
-  // compliant + blocked: view + unblock + add to whitelist
-  if (cs === 'compliant' && st === 'blocked') {
-    return { canBlock: false, canUnblock: true, canAddWhitelist: true, canRemoveWhitelist: false, canRemoveBlacklist: false };
-  }
-  // bypass: view + remove from whitelist only (already in whitelist, no add needed)
+  // bypass: view only (whitelist removal in Whitelist Management page)
   if (cs === 'bypass') {
-    return { canBlock: false, canUnblock: false, canAddWhitelist: false, canRemoveWhitelist: true, canRemoveBlacklist: false };
+    return { canBlock: false, canUnblock: false, canAddWhitelist: false, canRemoveWhitelist: false, canRemoveBlacklist: false };
   }
-  // non_compliant + blocked: view only (auto-blocked, let system handle)
+  // non_compliant + blocked: add to whitelist only (for exemption)
   if (cs === 'non_compliant' && st === 'blocked') {
     return { canBlock: false, canUnblock: false, canAddWhitelist: true, canRemoveWhitelist: false, canRemoveBlacklist: false };
   }
-  // non_compliant + unblocked + in blacklist: can remove from blacklist + add to whitelist
-  if (cs === 'non_compliant' && st !== 'blocked' && terminal.black_match_type) {
-    return { canBlock: false, canUnblock: false, canAddWhitelist: true, canRemoveWhitelist: false, canRemoveBlacklist: true };
-  }
-  // non_compliant + unblocked + not in blacklist: view + add to whitelist (block disabled - auto-handled by system)
+  // non_compliant + unblocked: add to whitelist only
   if (cs === 'non_compliant' && st !== 'blocked') {
     return { canBlock: false, canUnblock: false, canAddWhitelist: true, canRemoveWhitelist: false, canRemoveBlacklist: false };
   }
-  // unknown + unblocked: can add to whitelist
-  if (cs === 'unknown' && st !== 'blocked') {
+  // unknown: add to whitelist only (for temporary exemption)
+  if (cs === 'unknown') {
     return { canBlock: false, canUnblock: false, canAddWhitelist: true, canRemoveWhitelist: false, canRemoveBlacklist: false };
   }
-  // unknown + blocked: can unblock + add to whitelist
-  if (cs === 'unknown' && st === 'blocked') {
-    return { canBlock: false, canUnblock: true, canAddWhitelist: true, canRemoveWhitelist: false, canRemoveBlacklist: false };
-  }
-  // fallback: view only + add to whitelist
-  return { canBlock: false, canUnblock: false, canAddWhitelist: true, canRemoveWhitelist: false, canRemoveBlacklist: false };
+  // fallback: view only
+  return { canBlock: false, canUnblock: false, canAddWhitelist: false, canRemoveWhitelist: false, canRemoveBlacklist: false };
 }
 
 const Terminals: React.FC = () => {

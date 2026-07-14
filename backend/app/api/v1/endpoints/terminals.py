@@ -1,11 +1,11 @@
 import csv
 from io import StringIO
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.security import get_client_ip, require_permission
+from app.core.security import require_permission
 from app.models.terminal import Terminal
 from app.models.user import User
 from app.schemas.terminal import PaginatedResponse, ResponseMessage, TerminalQuery, TerminalResponse
@@ -152,33 +152,6 @@ async def export_terminals(
     }
 
     return Response(content=output.getvalue(), headers=headers)
-
-
-@router.post("/unblock/{ip_address}", response_model=ResponseMessage)
-async def unblock_ip_address(
-    ip_address: str,
-    mac_address: str | None = Query(None, description="MAC address to unblock (if omitted, unblocks all MACs for this IP)"),
-    firewall_tag: str | None = Query(None, description="Firewall tag to route unblock operation"),
-    comments: str | None = Query(None, description="Comment for the unblock action"),
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_permission("terminal:write")),
-    request: Request = None
-):
-    """Unblock an IP address via Sangfor API"""
-    client_ip = get_client_ip(request)
-    service = TerminalService(db)
-    result = await service.unblock_ip(ip_address, current_user.username,
-                                       mac_address=mac_address,
-                                       firewall_tag=firewall_tag, comments=comments,
-                                       client_ip=client_ip)
-
-    if not result["success"]:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=result["message"]
-        )
-
-    return result
 
 
 @router.get("/{mac_id}", response_model=TerminalResponse)
