@@ -154,33 +154,6 @@ async def export_terminals(
     return Response(content=output.getvalue(), headers=headers)
 
 
-@router.post("/block/{ip_address}", response_model=ResponseMessage)
-async def block_ip_address(
-    ip_address: str,
-    mac_address: str = Query(..., description="MAC address associated with IP"),
-    block_time: str = Query("30d", description="Block duration (e.g. 30d, 15d, 7d, 1h)"),
-    firewall_tag: str | None = Query(None, description="Firewall tag to route block operation"),
-    comments: str | None = Query(None, description="Comment for the block action"),
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_permission("terminal:write")),
-    request: Request = None
-):
-    """Block an IP address via Sangfor API"""
-    client_ip = get_client_ip(request)
-    service = TerminalService(db)
-    result = await service.block_ip(ip_address, mac_address, current_user.username,
-                                     block_time=block_time, firewall_tag=firewall_tag,
-                                     comments=comments, client_ip=client_ip)
-
-    if not result["success"]:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=result["message"]
-        )
-
-    return result
-
-
 @router.post("/unblock/{ip_address}", response_model=ResponseMessage)
 async def unblock_ip_address(
     ip_address: str,

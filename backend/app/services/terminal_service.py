@@ -184,13 +184,23 @@ class TerminalService:
             return None
 
         config = source.config
-        return SangforService(
+        if config:
+            config = decrypt_config(config)
+        return await SangforService.get_cached_service(
             base_url=config.get("base_url", ""),
             username=config.get("username", ""),
             password=config.get("password", ""),
             verify_ssl=config.get("verify_ssl", True),
             ca_bundle=config.get("ca_bundle", ""),
         )
+
+    async def _get_all_sangfor_tags(self) -> list[str]:
+        """Get all enabled Sangfor firewall tags"""
+        stmt = select(DataSource.tag).where(
+            (DataSource.type == "sangfor") & (DataSource.enabled == True)
+        )
+        result = await self.db.execute(stmt)
+        return [row[0] for row in result.all()]
 
     # ------------------------------------------------------------------
     # Stats
@@ -511,20 +521,41 @@ class TerminalService:
                     if comments is not None:
                         mac_record.comments = comments
 
-                # Add to blacklist with configurable expiration
-                expires_at = datetime.now(UTC) + _parse_block_time(block_time)
-                blacklist_entry = Blacklist(
-                    ip_address=ip_address,
-                    mac_address=mac_address,
-                    mac_address_normalized=_normalize_mac(mac_address),
-                    blocked_by=username,
-                    expires_at=expires_at,
-                    source_tag="manual",
-                    firewall_tag=firewall_tag,
-                    is_auto_blocked=False,
-                    auto_unblocked=False,
+                # Check for existing blacklist entry (idempotency)
+                # Match by IP/MAC regardless of firewall_tag to prevent duplicate active entries
+                mac_norm = _normalize_mac(mac_address)
+                stmt = select(Blacklist).where(
+                    (Blacklist.ip_address == ip_address) &
+                    (Blacklist.mac_address_normalized == mac_norm) &
+                    (Blacklist.auto_unblocked == False) &
+                    (Blacklist.unblocked_at.is_(None))
                 )
-                self.db.add(blacklist_entry)
+                result = await self.db.execute(stmt)
+                existing_entry = result.scalar_one_or_none()
+
+                expires_at = datetime.now(UTC) + _parse_block_time(block_time)
+
+                if existing_entry:
+                    # Update existing entry instead of creating duplicate
+                    existing_entry.expires_at = expires_at
+                    existing_entry.blocked_by = username
+                    existing_entry.auto_unblocked = False
+                    existing_entry.firewall_tag = firewall_tag
+                    logger.info(f"Updated existing blacklist entry for {ip_address}/{mac_address}")
+                else:
+                    # Add to blacklist with configurable expiration
+                    blacklist_entry = Blacklist(
+                        ip_address=ip_address,
+                        mac_address=mac_address,
+                        mac_address_normalized=mac_norm,
+                        blocked_by=username,
+                        expires_at=expires_at,
+                        source_tag="manual",
+                        firewall_tag=firewall_tag,
+                        is_auto_blocked=False,
+                        auto_unblocked=False,
+                    )
+                    self.db.add(blacklist_entry)
 
                 # Emit terminal blocked event for notification
                 from app.services.event_emitter import emit_terminal_blocked
@@ -568,23 +599,35 @@ class TerminalService:
             if firewall_tag:
                 sangfor_svc = await self._get_sangfor_service_by_tag(firewall_tag)
 
-            # Call Sangfor API to unblock IP if configured
-            sangfor_success = False
-            svc = sangfor_svc or self.sangfor
-
-            if svc and svc.base_url:
-                try:
-                    response = await svc.unblock_ip([{"srcIP": ip_address}])
-                    sangfor_success = response.get('code') == 0
-                    if not sangfor_success:
-                        logger.warning(f"Sangfor unblock failed for {ip_address}: {response.get('message')}")
-                except Exception as e:
-                    logger.warning(f"Sangfor API error when unblocking {ip_address}: {str(e)}")
-                finally:
-                    await svc.close()
+            # Call Sangfor API to unblock IP on all configured firewalls
+            sangfor_success = True
+            failed_firewalls = []
+            
+            if firewall_tag:
+                firewalls_to_try = [firewall_tag]
             else:
-                # Sangfor not configured, skip firewall operation
-                sangfor_success = True
+                firewalls_to_try = await self._get_all_sangfor_tags()
+
+            for fw_tag in firewalls_to_try:
+                try:
+                    fw_svc = await self._get_sangfor_service_by_tag(fw_tag)
+                    if fw_svc and fw_svc.base_url:
+                        response = await fw_svc.unblock_ip([{"srcIP": ip_address}])
+                        if response.get('code') != 0:
+                            failed_firewalls.append(fw_tag)
+                            logger.warning(f"Sangfor unblock failed on {fw_tag} for {ip_address}: {response.get('message')}")
+                        await fw_svc.close()
+                    else:
+                        logger.debug(f"Skipping unblock on {fw_tag}: firewall not configured")
+                except Exception as e:
+                    failed_firewalls.append(fw_tag)
+                    logger.warning(f"Sangfor API error when unblocking {ip_address} on {fw_tag}: {str(e)}")
+
+            if failed_firewalls:
+                sangfor_success = False
+                logger.error(f"Unblock failed on firewalls: {', '.join(failed_firewalls)}")
+            elif not firewalls_to_try:
+                logger.debug("No firewalls configured, skipping unblock operation")
 
             if sangfor_success:
                 # Update terminal status - filter by MAC if provided
@@ -607,11 +650,15 @@ class TerminalService:
                     stmt = stmt.where(Blacklist.firewall_tag == firewall_tag)
                 if mac_address:
                     mac_norm = _normalize_mac(mac_address)
-                    stmt = stmt.where(Blacklist.mac_address_normalized == mac_norm.replace('-', '').upper())
+                    stmt = stmt.where(Blacklist.mac_address_normalized == mac_norm)
                 result = await self.db.execute(stmt)
                 blacklist_entries = result.scalars().all()
+
+                # Mark all matching blacklist entries as unblocked and update unblocked_at
                 for entry in blacklist_entries:
                     entry.auto_unblocked = True
+                    entry.unblocked_at = datetime.now(UTC)
+                    entry.unblocked_by = username
 
                 # Trigger compliance recalculation so compliance_status updates immediately
                 try:
@@ -1162,20 +1209,32 @@ class TerminalService:
                     mac_record.status = TerminalStatus.BLOCKED.value
                     mac_record.firewall_tag = firewall_tag
 
-            # Add to blacklist
-            blacklist_entry = Blacklist(
-                ip_address=ip_address or None,
-                mac_address=normalized_mac,
-                mac_address_normalized=_normalize_mac(normalized_mac) if normalized_mac else None,
-                reason=reason,
-                expires_at=expires_at,
-                blocked_by=username,
-                source_tag="manual",
-                firewall_tag=firewall_tag,
-                is_auto_blocked=False,
-                auto_unblocked=False,
+            # Check if already in blacklist (idempotency)
+            existing_stmt = select(Blacklist).where(
+                Blacklist.ip_address == (ip_address or None),
+                Blacklist.mac_address_normalized == (_normalize_mac(normalized_mac) if normalized_mac else None),
+                Blacklist.unblocked_at.is_(None)
             )
-            self.db.add(blacklist_entry)
+            existing_result = await self.db.execute(existing_stmt)
+            existing_entry = existing_result.scalar_one_or_none()
+
+            if existing_entry:
+                logger.info(f"IP {ip_address or 'N/A'} MAC {normalized_mac or 'N/A'} already in blacklist, skipping")
+            else:
+                # Add to blacklist
+                blacklist_entry = Blacklist(
+                    ip_address=ip_address or None,
+                    mac_address=normalized_mac,
+                    mac_address_normalized=_normalize_mac(normalized_mac) if normalized_mac else None,
+                    reason=reason,
+                    expires_at=expires_at,
+                    blocked_by=username,
+                    source_tag="manual",
+                    firewall_tag=firewall_tag,
+                    is_auto_blocked=False,
+                    auto_unblocked=False,
+                )
+                self.db.add(blacklist_entry)
 
             log_details_parts = []
             if normalized_mac:

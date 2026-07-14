@@ -17,6 +17,23 @@ from app.services.notification_channels.base import (
     NotificationResult,
 )
 
+_email_http_client: httpx.AsyncClient | None = None
+
+
+def _get_email_http_client() -> httpx.AsyncClient:
+    """Get or create a shared HTTP client for email relay with connection pooling."""
+    global _email_http_client
+    if _email_http_client is None or _email_http_client.is_closed:
+        _email_http_client = httpx.AsyncClient(
+            timeout=30.0,
+            limits=httpx.Limits(
+                max_connections=10,
+                max_keepalive_connections=5,
+                keepalive_expiry=300,
+            ),
+        )
+    return _email_http_client
+
 
 class EmailService:
     """Email service wrapper for test compatibility"""
@@ -180,18 +197,18 @@ class EmailChannel(NotificationChannelBase):
         smtp_url = self.config.get("smtp_url")
         if smtp_url:
             try:
-                async with httpx.AsyncClient(timeout=30.0) as client:
-                    response = await client.post(
-                        smtp_url,
-                        json={
-                            "from": self.config.get("from_email", "noreply@tam.local"),
-                            "to": email_recipients,
-                            "subject": email_subject,
-                            "html": body,
-                        },
-                        headers={"Content-Type": "application/json"},
-                    )
-                    response.raise_for_status()
+                client = _get_email_http_client()
+                response = await client.post(
+                    smtp_url,
+                    json={
+                        "from": self.config.get("from_email", "noreply@tam.local"),
+                        "to": email_recipients,
+                        "subject": email_subject,
+                        "html": body,
+                    },
+                    headers={"Content-Type": "application/json"},
+                )
+                response.raise_for_status()
 
                 logger.info(f"Email notification sent to {len(email_recipients)} recipients (legacy relay): {email_subject}")
                 return NotificationResult(

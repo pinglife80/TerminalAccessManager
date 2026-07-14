@@ -1,4 +1,7 @@
-from typing import Any
+from typing import Any, Dict, Optional, Tuple
+import asyncio
+from datetime import datetime, timedelta
+from enum import Enum
 
 import httpx
 from loguru import logger
@@ -13,6 +16,19 @@ TAM_DESCRIPTION_PREFIX = "TAM"
 
 # Sangfor AF API base path (all endpoints start with /api)
 API_PREFIX = "/api"
+
+# Global cache for SangforService instances to reuse connections
+_service_cache: Dict[str, 'SangforService'] = {}
+_cache_lock = asyncio.Lock()
+_token_expiry: Dict[str, datetime] = {}
+
+# Firewall operation types
+class FirewallOperationType(Enum):
+    BLOCK = "block"
+    UNBLOCK = "unblock"
+
+# Maximum concurrent connections to Sangfor AF
+MAX_CONCURRENT_OPERATIONS = 3
 
 
 class SangforService:
@@ -52,6 +68,14 @@ class SangforService:
         self._verify_ssl = verify_ssl
         self._ca_bundle = ca_bundle
         self._authenticating = False
+        self._connection_pool_limits = httpx.Limits(
+            max_connections=5,
+            max_keepalive_connections=3,
+            keepalive_expiry=300,
+        )
+        self._operation_queue: asyncio.Queue[Tuple[FirewallOperationType, str, str, str]] = asyncio.Queue()
+        self._semaphore = asyncio.Semaphore(MAX_CONCURRENT_OPERATIONS)
+        self._queue_running = False
 
     def _get_verify_setting(self) -> bool | str:
         """Get SSL verification setting."""
@@ -64,11 +88,12 @@ class SangforService:
         return True
 
     def _create_client(self, **kwargs) -> httpx.AsyncClient:
-        """Create an httpx AsyncClient with common settings."""
+        """Create an httpx AsyncClient with common settings and connection pooling."""
         defaults = {
             "verify": self._get_verify_setting(),
             "timeout": 30.0,
             "follow_redirects": True,
+            "limits": self._connection_pool_limits,
         }
         defaults.update(kwargs)
         return httpx.AsyncClient(**defaults)
@@ -95,51 +120,53 @@ class SangforService:
 
         self._authenticating = True
         try:
-            async with self._create_client() as client:
-                login_url = f"{self.base_url}{API_PREFIX}/v1/namespaces/public/login"
-                logger.debug(f"Authenticating with Sangfor AF: {login_url}")
+            if not self.session:
+                self.session = self._create_client(
+                    headers={'Content-Type': 'application/json'}
+                )
+            
+            login_url = f"{self.base_url}{API_PREFIX}/v1/namespaces/public/login"
+            logger.debug(f"Authenticating with Sangfor AF: {login_url}")
 
-                response = await client.post(
-                    login_url,
-                    json={"name": self.username, "password": self.password}
+            response = await self.session.post(
+                login_url,
+                json={"name": self.username, "password": self.password}
+            )
+
+            if response.status_code in (301, 302, 303, 307, 308):
+                redirect_location = response.headers.get('location', 'unknown')
+                raise ConnectionError(
+                    f"Sangfor AF login endpoint returned redirect "
+                    f"({response.status_code}) to '{redirect_location}'. "
+                    f"The API URL may be incorrect. "
+                    f"Expected: {login_url}"
                 )
 
-                if response.status_code in (301, 302, 303, 307, 308):
-                    redirect_location = response.headers.get('location', 'unknown')
-                    raise ConnectionError(
-                        f"Sangfor AF login endpoint returned redirect "
-                        f"({response.status_code}) to '{redirect_location}'. "
-                        f"The API URL may be incorrect. "
-                        f"Expected: {login_url}"
-                    )
+            response.raise_for_status()
+            data = response.json()
 
-                response.raise_for_status()
-                data = response.json()
+            if data.get("code") != 0:
+                raise ConnectionError(
+                    f"Sangfor AF login failed: code={data.get('code')}, "
+                    f"message={data.get('message', 'unknown')}"
+                )
 
-                if data.get("code") != 0:
-                    raise ConnectionError(
-                        f"Sangfor AF login failed: code={data.get('code')}, "
-                        f"message={data.get('message', 'unknown')}"
-                    )
+            # Parse token from response
+            login_data = data.get("data", {})
+            login_result = login_data.get("loginResult", {})
+            token = login_result.get("token")
 
-                # Parse token from response
-                login_data = data.get("data", {})
-                login_result = login_data.get("loginResult", {})
-                token = login_result.get("token")
+            if not token:
+                raise ValueError(
+                    f"Unexpected Sangfor AF login response: missing token. "
+                    f"Response: {str(data)[:500]}"
+                )
 
-                if not token:
-                    raise ValueError(
-                        f"Unexpected Sangfor AF login response: missing token. "
-                        f"Response: {str(data)[:500]}"
-                    )
+            self.token = token
 
-                self.token = token
+            self.session.cookies.set('token', self.token)
 
-                # Set token in session cookies (per AF8.0.75.md section 1.3)
-                if self.session:
-                    self.session.cookies.set('token', self.token)
-
-                logger.info("Successfully authenticated with Sangfor API")
+            logger.info("Successfully authenticated with Sangfor API")
 
         except httpx.ConnectError as e:
             raise ConnectionError(
@@ -392,7 +419,7 @@ class SangforService:
                 logger.error(f"Error unblocking IP {ip} on Sangfor AF: {str(e)}")
                 results["errors"].append({"ip": ip, "error": str(e)})
 
-        success = len(results["unblocked"]) > 0 or len(results["skipped"]) > 0
+        success = len(results["unblocked"]) > 0
         return {
             "code": 0 if success else 1,
             "message": f"Unblocked {len(results['unblocked'])}, skipped {len(results['skipped'])}, errors {len(results['errors'])}",
@@ -448,7 +475,13 @@ class SangforService:
                 params=params
             )
             response.raise_for_status()
-            return response.json()
+            
+            result = response.json()
+            if not isinstance(result, dict):
+                logger.error(f"get_blocked_ips returned unexpected type: {type(result).__name__}")
+                return {"code": -1, "data": {"items": []}}
+            
+            return result
 
         except Exception as e:
             logger.error(f"Failed to get blocked IPs: {str(e)}")
@@ -573,9 +606,171 @@ class SangforService:
                 "message": f"Sangfor AF connection failed: {str(e)}",
             }
 
+    @classmethod
+    async def get_cached_service(
+        cls,
+        base_url: str | None = None,
+        username: str | None = None,
+        password: str | None = None,
+        verify_ssl: bool = True,
+        ca_bundle: str = "",
+    ) -> 'SangforService':
+        """Get or create a cached SangforService instance to reuse connections.
+        
+        This prevents creating multiple authenticated sessions to the same firewall,
+        which can exceed the firewall's concurrent user limit.
+        """
+        url_key = (base_url or settings.SANGFOR_BASE_URL or "").rstrip("/")
+        
+        async with _cache_lock:
+            if url_key in _service_cache:
+                service = _service_cache[url_key]
+                
+                if service.token:
+                    expiry = _token_expiry.get(url_key)
+                    if expiry and datetime.now() < expiry:
+                        logger.debug(f"Reusing cached SangforService for {url_key}")
+                        return service
+                    
+                    await service.keepalive()
+                    _token_expiry[url_key] = datetime.now() + timedelta(minutes=8)
+                    return service
+            
+            service = cls(
+                base_url=base_url,
+                username=username,
+                password=password,
+                verify_ssl=verify_ssl,
+                ca_bundle=ca_bundle,
+            )
+            
+            try:
+                await service._authenticate()
+                _service_cache[url_key] = service
+                _token_expiry[url_key] = datetime.now() + timedelta(minutes=8)
+                logger.info(f"Created new cached SangforService for {url_key}")
+            except Exception as e:
+                logger.error(f"Failed to authenticate SangforService for {url_key}, not caching: {e}")
+                raise
+            
+            return service
+
     async def close(self):
-        """Close the HTTP session"""
+        """Close the HTTP session and remove from cache"""
+        url_key = self.base_url
+        self._queue_running = False
+        
         if self.session:
             await self.session.aclose()
             self.session = None
             self.token = None
+        
+        async with _cache_lock:
+            if url_key in _service_cache:
+                del _service_cache[url_key]
+            if url_key in _token_expiry:
+                del _token_expiry[url_key]
+
+    def enqueue_operation(self, op_type: FirewallOperationType, ip: str, source_tag: str = "", reason: str = ""):
+        """Enqueue a firewall operation for async processing."""
+        self._operation_queue.put_nowait((op_type, ip, source_tag, reason))
+        if not self._queue_running:
+            self._queue_running = True
+            asyncio.create_task(self._process_queue())
+
+    async def _process_queue(self):
+        """Process the operation queue with concurrency control."""
+        while self._queue_running or not self._operation_queue.empty():
+            try:
+                op_type, ip, source_tag, reason = await asyncio.wait_for(
+                    self._operation_queue.get(), timeout=5.0
+                )
+                
+                async with self._semaphore:
+                    try:
+                        if op_type == FirewallOperationType.BLOCK:
+                            await self._execute_block(ip, source_tag, reason)
+                        elif op_type == FirewallOperationType.UNBLOCK:
+                            await self._execute_unblock(ip)
+                    except Exception as e:
+                        logger.error(f"Failed to process {op_type.value} operation for {ip}: {str(e)}")
+                
+                self._operation_queue.task_done()
+            except asyncio.TimeoutError:
+                continue
+            except Exception as e:
+                logger.error(f"Error processing operation queue: {str(e)}")
+
+    async def _execute_block(self, ip: str, source_tag: str, reason: str):
+        """Execute a single block operation with retry."""
+        for attempt in range(3):
+            try:
+                existing = await self._find_blacklist_entry(ip)
+                if existing and self.is_tam_managed_entry(existing.get("description", "")):
+                    logger.info(f"IP {ip} already blocked by TAM, skipping")
+                    return
+
+                description = self._make_description(source_tag, reason)
+                response = await self._request_with_backoff(
+                    "POST",
+                    f"{self.base_url}{API_PREFIX}/v1/namespaces/public/whiteblacklist",
+                    json={
+                        "url": ip,
+                        "type": "BLACK",
+                        "description": description,
+                        "enable": True,
+                    }
+                )
+
+                if response.status_code == 409:
+                    logger.info(f"IP {ip} already in AF blacklist, skipping")
+                    return
+
+                response.raise_for_status()
+                data = response.json()
+
+                if data.get("code") == 0:
+                    logger.info(f"Blocked IP {ip} on Sangfor AF (blacklist)")
+                else:
+                    logger.error(f"Failed to block IP {ip}: {data.get('message', 'unknown')}")
+                return
+            except Exception as e:
+                if attempt < 2:
+                    wait = 2 ** attempt
+                    logger.warning(f"Block operation for {ip} failed (attempt {attempt+1}/3), retrying in {wait}s: {str(e)}")
+                    await asyncio.sleep(wait)
+                else:
+                    logger.error(f"Block operation for {ip} failed after 3 attempts: {str(e)}")
+
+    async def _execute_unblock(self, ip: str):
+        """Execute a single unblock operation with retry."""
+        for attempt in range(3):
+            try:
+                existing = await self._find_blacklist_entry(ip)
+                if not existing:
+                    logger.info(f"IP {ip} not in AF blacklist, skipping unblock")
+                    return
+
+                if not self.is_tam_managed_entry(existing.get("description", "")):
+                    logger.warning(f"IP {ip} not TAM-managed, skipping unblock")
+                    return
+
+                response = await self._request_with_backoff(
+                    "DELETE",
+                    f"{self.base_url}{API_PREFIX}/v1/namespaces/public/whiteblacklist/{ip}"
+                )
+                response.raise_for_status()
+                data = response.json()
+
+                if data.get("code") == 0:
+                    logger.info(f"Unblocked IP {ip} on Sangfor AF")
+                else:
+                    logger.error(f"Failed to unblock IP {ip}: {data.get('message', 'unknown')}")
+                return
+            except Exception as e:
+                if attempt < 2:
+                    wait = 2 ** attempt
+                    logger.warning(f"Unblock operation for {ip} failed (attempt {attempt+1}/3), retrying in {wait}s: {str(e)}")
+                    await asyncio.sleep(wait)
+                else:
+                    logger.error(f"Unblock operation for {ip} failed after 3 attempts: {str(e)}")

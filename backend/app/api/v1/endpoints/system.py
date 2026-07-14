@@ -103,3 +103,21 @@ async def health_check():
         health_status["status"] = "unhealthy"
 
     return health_status
+
+
+@router.post("/firewall-reconciliation", response_model=dict)
+async def trigger_firewall_reconciliation(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Trigger manual firewall reconciliation to sync firewall blocked IPs with database"""
+    from app.services.firewall_reconciliation_service import FirewallReconciliationService
+    
+    recon_svc = FirewallReconciliationService(db)
+    results = await recon_svc.reconcile()
+    
+    return {
+        "success": True,
+        "message": "Firewall reconciliation completed",
+        **results,
+    }

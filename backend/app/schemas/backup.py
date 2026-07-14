@@ -20,6 +20,7 @@ class BackupConfigResponse(BaseModel):
     storage_config: dict[str, Any] = Field(default_factory=dict)
     backup_database: bool = True
     backup_config: bool = True
+    backup_whitelist: bool = True
     backup_logs: bool = False
     encrypt_backup: bool = True
 
@@ -34,6 +35,7 @@ class BackupConfigUpdate(BaseModel):
     storage_config: dict[str, Any] = Field(default_factory=dict)
     backup_database: bool = True
     backup_config: bool = True
+    backup_whitelist: bool = True
     backup_logs: bool = False
     encrypt_backup: bool = True
 
@@ -81,3 +83,20 @@ class BackupTestResult(BaseModel):
     success: bool
     message: str
     details: dict[str, Any] | None = None
+
+
+class BackupContentInfo(BaseModel):
+    """Schema for backup file content information"""
+
+    filename: str
+    file_size: int
+    compress_size: int
+
+
+class BackupContentsResponse(BaseModel):
+    """Schema for backup contents response"""
+
+    filename: str
+    file_size: int
+    created_at: datetime
+    contents: list[BackupContentInfo]

@@ -15,5 +15,6 @@ class BackupConfigModel(Base):
     storage_config: Mapped[dict] = mapped_column(JSON, default=dict)
     backup_database: Mapped[bool] = mapped_column(Boolean, default=True)
     backup_config: Mapped[bool] = mapped_column(Boolean, default=True)
+    backup_whitelist: Mapped[bool] = mapped_column(Boolean, default=True)
     backup_logs: Mapped[bool] = mapped_column(Boolean, default=False)
     encrypt_backup: Mapped[bool] = mapped_column(Boolean, default=True)

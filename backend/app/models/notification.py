@@ -4,7 +4,7 @@ Notification Models for TerminalAccessManager.
 Database models for notification channels and notification logs.
 """
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlalchemy import JSON, Boolean, DateTime, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
@@ -25,9 +25,9 @@ class NotificationChannel(Base):
     events: Mapped[list] = mapped_column(JSON, nullable=False, default=list)  # Subscribed event types
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_by: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
     )
 
     def __repr__(self) -> str:
@@ -56,9 +56,9 @@ class NotificationLog(Base):
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     details: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     retry_count: Mapped[int] = mapped_column(Integer, default=0)
-    next_retry_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
-    sent_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
-    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     archived: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
 
     def __repr__(self) -> str:
@@ -88,9 +88,9 @@ class NotificationTemplate(Base):
     is_default: Mapped[bool] = mapped_column(Boolean, default=False)
     priority: Mapped[int] = mapped_column(Integer, default=100)
     created_by: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
     )
 
     def __repr__(self) -> str:
@@ -142,9 +142,9 @@ class NotificationRule(Base):
     escalate_severity: Mapped[str] = mapped_column(String(20), default="error")  # info, warning, error, critical
 
     created_by: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
     )
 
     def __repr__(self) -> str:

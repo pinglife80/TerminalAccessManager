@@ -6,11 +6,13 @@ Core compliance checking logic:
 - Auto-block non-compliant terminals
 - Auto-unblock terminals that have become compliant
 - Redis caching for performance optimization
+- Distributed lock for concurrent compliance recalculation
 """
 
 import contextlib
 import ipaddress
 import json
+import uuid
 from datetime import datetime, timedelta, UTC
 
 from loguru import logger
@@ -36,10 +38,51 @@ IPGUARD_CACHE_TTL = 600  # 10 minutes
 WHITELIST_CACHE_KEY = "whitelist:all"
 WHITELIST_CACHE_TTL = 300  # 5 minutes
 
+# Distributed lock for compliance recalculation
+COMPLIANCE_RECALC_LOCK_KEY = "compliance:recalc:lock"
+COMPLIANCE_RECALC_LOCK_TTL = 60  # 60 seconds
+
 
 async def _get_redis():
     from app.core.security import get_redis_client
     return await get_redis_client()
+
+
+async def _acquire_compliance_lock() -> str | None:
+    """Acquire a distributed lock for compliance recalculation.
+    
+    Returns a lock token if acquired, None otherwise.
+    The lock prevents concurrent compliance recalculation which can cause
+    inconsistent terminal states.
+    """
+    try:
+        redis = await _get_redis()
+        lock_token = str(uuid.uuid4())
+        acquired = await redis.set(
+            COMPLIANCE_RECALC_LOCK_KEY,
+            lock_token,
+            nx=True,
+            ex=COMPLIANCE_RECALC_LOCK_TTL,
+        )
+        if acquired:
+            logger.debug(f"Acquired compliance recalculation lock: {lock_token}")
+            return lock_token
+        return None
+    except Exception as e:
+        logger.warning(f"Failed to acquire compliance lock: {e}")
+        return None
+
+
+async def _release_compliance_lock(token: str) -> None:
+    """Release the distributed lock for compliance recalculation."""
+    try:
+        redis = await _get_redis()
+        current_token = await redis.get(COMPLIANCE_RECALC_LOCK_KEY)
+        if current_token == token:
+            await redis.delete(COMPLIANCE_RECALC_LOCK_KEY)
+            logger.debug(f"Released compliance recalculation lock: {token}")
+    except Exception as e:
+        logger.warning(f"Failed to release compliance lock: {e}")
 
 
 class ComplianceService:
@@ -321,13 +364,14 @@ class ComplianceService:
         4. Create Blacklist records (is_auto_blocked=True)
         """
         # Find non-compliant entries from this ARP source that are not already in blacklist
-        # First, get all currently blacklisted IPs for this source
-        bl_stmt = select(Blacklist.ip_address).where(
+        # First, get all currently blacklisted IP+MAC combinations for this source
+        bl_stmt = select(Blacklist.ip_address, Blacklist.mac_address_normalized).where(
             (Blacklist.source_tag == arp_source_tag) &
-            (Blacklist.auto_unblocked == False)
+            (Blacklist.auto_unblocked == False) &
+            (Blacklist.unblocked_at.is_(None))
         )
         bl_result = await self.db.execute(bl_stmt)
-        blacklisted_ips = set(row[0] for row in bl_result.all())
+        blacklisted_pairs = set((row[0], row[1]) for row in bl_result.all())
 
         stmt = (
             select(Terminal)
@@ -340,9 +384,13 @@ class ComplianceService:
         result = await self.db.execute(stmt)
         non_compliant_entries = result.scalars().all()
 
-        # Filter out entries already in blacklist
+        # Filter out entries already in blacklist (IP+MAC level)
+        def is_already_blacklisted(entry):
+            mac_norm = entry.mac_address.replace('-', '').replace(':', '').replace('.', '').upper() if entry.mac_address else None
+            return (entry.ip_address, mac_norm) in blacklisted_pairs
+
         non_compliant_entries = [
-            e for e in non_compliant_entries if e.ip_address not in blacklisted_ips
+            e for e in non_compliant_entries if not is_already_blacklisted(e)
         ]
 
         if not non_compliant_entries:
@@ -416,37 +464,28 @@ class ComplianceService:
                 continue
 
             # Block on each associated firewall (using pre-resolved services)
-            all_success = True
+            # Operations are queued to avoid exceeding firewall concurrent user limits
             for fw_tag in firewall_tags:
                 svc = sangfor_services.get(fw_tag)
                 if not svc:
-                    all_success = False
                     errors.append(
                         f"Failed to block {entry.ip_address} on firewall '{fw_tag}'"
                     )
                     continue
                 try:
-                    response = await svc.block_ip(
-                        [entry.ip_address], source_tag=fw_tag,
+                    from app.services.sangfor_service import FirewallOperationType
+                    svc.enqueue_operation(
+                        FirewallOperationType.BLOCK,
+                        entry.ip_address,
+                        source_tag=fw_tag,
                         reason=f"Auto-blocked: non-compliant (source={arp_source_tag})"
                     )
-                    if response.get('code') != 0:
-                        all_success = False
-                        errors.append(
-                            f"Failed to block {entry.ip_address} on firewall '{fw_tag}'"
-                        )
-                except (ConnectionError, TimeoutError) as e:
-                    all_success = False
-                    errors.append(
-                        f"Error blocking {entry.ip_address} on firewall '{fw_tag}': {str(e)}"
-                    )
-                    from app.services.event_emitter import emit_firewall_connection_lost
-                    await emit_firewall_connection_lost(fw_tag, str(e))
+                    logger.debug(f"Queued block operation for {entry.ip_address} on firewall '{fw_tag}'")
                 except Exception as e:
-                    all_success = False
                     errors.append(
-                        f"Error blocking {entry.ip_address} on firewall '{fw_tag}': {str(e)}"
+                        f"Error queuing block for {entry.ip_address} on firewall '{fw_tag}': {str(e)}"
                     )
+            all_success = len(errors) == 0
 
             if all_success:
                 # Update MAC status
@@ -741,10 +780,12 @@ class ComplianceService:
         """Match IP+MAC against in-memory whitelist data.
         Returns dict with "match_type" ("mac"/"ip"/"both") and "comments" (str or None),
         or None if no match."""
+        normalized_mac = mac_address.upper().replace(":", "").replace("-", "").replace(".", "") if mac_address else ""
+
         for entry in whitelist_data:
             # MAC-only whitelist entry: match by MAC only
             if entry.get("pattern_type") == "mac_only":
-                if entry.get("mac_address") and entry["mac_address"].upper() == mac_address.upper().replace(":", "-"):
+                if entry.get("mac_address") and entry["mac_address"].upper() == normalized_mac:
                     return {"match_type": "mac", "comments": entry.get("comments")}
                 continue
 
@@ -756,7 +797,7 @@ class ComplianceService:
             # Check MAC match
             mac_match = False
             if entry.get("mac_address"):
-                mac_match = entry["mac_address"].upper() == mac_address.upper().replace(":", "-")
+                mac_match = entry["mac_address"].upper() == normalized_mac
 
             # If both IP and MAC are specified, both must match
             # If only IP is specified, IP must match
@@ -783,11 +824,17 @@ class ComplianceService:
                 network = ipaddress.IPv4Network(ip_pattern, strict=False)
                 return target_ip in network
             elif pattern_type == "ip_range":
-                # IP range format: 192.168.1.1-100
                 return self._ip_in_range(ip_address, ip_pattern)
             else:
-                return ip_address == ip_pattern
-        except (ValueError, TypeError):
+                if '/' in ip_pattern:
+                    network = ipaddress.IPv4Network(ip_pattern, strict=False)
+                    return target_ip in network
+                elif '-' in ip_pattern:
+                    return self._ip_in_range(ip_address, ip_pattern)
+                else:
+                    return ip_address == ip_pattern
+        except (ValueError, TypeError) as e:
+            logger.debug(f"IP pattern match failed for {ip_address} against {ip_pattern}: {e}")
             return ip_address == ip_pattern
 
     def _ip_in_range(self, ip_address: str, ip_range: str) -> bool:
@@ -919,7 +966,7 @@ class ComplianceService:
         self, ip_address: str, firewall_tag: str, block_time: str = "30d",
         reason: str = "Auto-blocked: non-compliant"
     ) -> bool:
-        """Block an IP on the specified firewall via permanent blacklist"""
+        """Block an IP on the specified firewall via permanent blacklist (queued)"""
         try:
             stmt = select(DataSource).where(
                 (DataSource.tag == firewall_tag) & (DataSource.type == "sangfor")
@@ -932,11 +979,12 @@ class ComplianceService:
                 return False
 
             from app.core.crypto import decrypt_config
-            from app.services.sangfor_service import SangforService
+            from app.services.sangfor_service import SangforService, FirewallOperationType
             config = fw_source.config
             if config:
                 config = decrypt_config(config)
-            svc = SangforService(
+            
+            svc = await SangforService.get_cached_service(
                 base_url=config.get("base_url", ""),
                 username=config.get("username", ""),
                 password=config.get("password", ""),
@@ -944,18 +992,15 @@ class ComplianceService:
                 ca_bundle=config.get("ca_bundle", ""),
             )
 
-            response = await svc.block_ip(
-                [ip_address], source_tag=firewall_tag, reason=reason
-            )
-            await svc.close()
-
-            return response.get("code") == 0
+            svc.enqueue_operation(FirewallOperationType.BLOCK, ip_address, firewall_tag, reason)
+            logger.info(f"Queued block operation for {ip_address} on firewall '{firewall_tag}'")
+            return True
         except Exception as e:
-            logger.error(f"Failed to block {ip_address} on firewall '{firewall_tag}': {str(e)}")
+            logger.error(f"Failed to queue block {ip_address} on firewall '{firewall_tag}': {str(e)}")
             return False
 
     async def _unblock_on_firewall(self, ip_address: str, firewall_tag: str) -> bool:
-        """Unblock an IP on the specified firewall"""
+        """Unblock an IP on the specified firewall (queued)"""
         try:
             stmt = select(DataSource).where(
                 (DataSource.tag == firewall_tag) & (DataSource.type == "sangfor")
@@ -968,11 +1013,12 @@ class ComplianceService:
                 return False
 
             from app.core.crypto import decrypt_config
-            from app.services.sangfor_service import SangforService
+            from app.services.sangfor_service import SangforService, FirewallOperationType
             config = fw_source.config
             if config:
                 config = decrypt_config(config)
-            svc = SangforService(
+            
+            svc = await SangforService.get_cached_service(
                 base_url=config.get("base_url", ""),
                 username=config.get("username", ""),
                 password=config.get("password", ""),
@@ -980,12 +1026,11 @@ class ComplianceService:
                 ca_bundle=config.get("ca_bundle", ""),
             )
 
-            response = await svc.unblock_ip([{"srcIP": ip_address}])
-            await svc.close()
-
-            return response.get("code") == 0
+            svc.enqueue_operation(FirewallOperationType.UNBLOCK, ip_address)
+            logger.info(f"Queued unblock operation for {ip_address} on firewall '{firewall_tag}'")
+            return True
         except Exception as e:
-            logger.error(f"Failed to unblock {ip_address} on firewall '{firewall_tag}': {str(e)}")
+            logger.error(f"Failed to queue unblock {ip_address} on firewall '{firewall_tag}': {str(e)}")
             return False
 
     # ------------------------------------------------------------------
@@ -1066,63 +1111,95 @@ class ComplianceService:
             if new_compliance == "bypass":
                 pass
             elif new_compliance == "compliant":
-                from app.services.event_emitter import emit_terminal_compliant
-                await emit_terminal_compliant(
-                    ip_address=ip_addr,
-                    mac_address=mac_addr,
+                from app.services.notification_aggregator import get_notification_aggregator
+                from app.services.notification_channels.base import NotificationEvent
+                import uuid
+                from datetime import datetime
+                aggregator = await get_notification_aggregator()
+                event = NotificationEvent(
+                    id=str(uuid.uuid4()),
+                    type="terminal.compliant",
+                    timestamp=datetime.now(),
+                    data={"ip_address": ip_addr, "mac_address": mac_addr},
+                    source="system",
+                    severity="info",
                 )
+                await aggregator.add_event(event)
             else:
-                from app.services.event_emitter import emit_policy_violation, emit_terminal_non_compliant
-                await emit_policy_violation(
-                    policy_name="Terminal Compliance Policy",
-                    terminal_ip=ip_addr,
-                    details={"mac_address": mac_addr, "source_tag": terminal.source_tag}
+                from app.services.notification_aggregator import get_notification_aggregator
+                from app.services.notification_channels.base import NotificationEvent
+                import uuid
+                from datetime import datetime
+                aggregator = await get_notification_aggregator()
+                event1 = NotificationEvent(
+                    id=str(uuid.uuid4()),
+                    type="alert.policy_violation",
+                    timestamp=datetime.now(),
+                    data={"policy_name": "Terminal Compliance Policy", "terminal_ip": ip_addr, "mac_address": mac_addr, "source_tag": terminal.source_tag},
+                    source="system",
+                    severity="error",
                 )
-                await emit_terminal_non_compliant(
-                    ip_address=ip_addr,
-                    mac_address=mac_addr,
-                    reasons=["Non-compliant terminal detected"]
+                event2 = NotificationEvent(
+                    id=str(uuid.uuid4()),
+                    type="terminal.non_compliant",
+                    timestamp=datetime.now(),
+                    data={"ip_address": ip_addr, "mac_address": mac_addr, "reasons": ["Non-compliant terminal detected"]},
+                    source="system",
+                    severity="warning",
                 )
+                await aggregator.add_event(event1)
+                await aggregator.add_event(event2)
 
             if terminal.status == "blocked" and new_compliance in ("bypass", "compliant"):
                 fw_tags = await self._get_bound_firewall_tags(terminal.source_tag)
                 if fw_tags:
-                    all_unblock_success = True
+                    successful_fw_tags = []
+                    failed_fw_tags = []
+                    
                     for fw_tag in fw_tags:
                         try:
                             success = await self._unblock_on_firewall(ip_addr, fw_tag)
-                            if not success:
-                                all_unblock_success = False
+                            if success:
+                                successful_fw_tags.append(fw_tag)
+                            else:
+                                failed_fw_tags.append(fw_tag)
                                 logger.warning(f"Failed to auto-unblock {ip_addr} on firewall '{fw_tag}'")
                         except Exception as e:
-                            all_unblock_success = False
+                            failed_fw_tags.append(fw_tag)
                             logger.warning(f"Error auto-unblocking {ip_addr} on firewall '{fw_tag}': {e}")
-                    if all_unblock_success:
+                    
+                    if successful_fw_tags:
                         terminal.status = "unblocked"
                         terminal.firewall_tag = None
                         unblocked = True
-                        fw_info = ",".join(fw_tags)
+                        fw_info = ",".join(successful_fw_tags)
                         unblock_comment = f"Auto-unblocked by TAM from firewall [{fw_info}]"
+                        if failed_fw_tags:
+                            unblock_comment += f" (failed on: {','.join(failed_fw_tags)})"
                         if terminal.comments:
                             terminal.comments = f"{terminal.comments}; {unblock_comment}"
                         else:
                             terminal.comments = unblock_comment
                         mac_norm = mac_addr.replace('-', '').replace(':', '').replace('.', '').upper() if mac_addr else None
-                        for fw_tag in fw_tags:
-                            bl_stmt = select(Blacklist).where(
-                                (Blacklist.ip_address == ip_addr) &
-                                (Blacklist.mac_address_normalized == mac_norm) &
-                                (Blacklist.firewall_tag == fw_tag)
-                            )
-                            bl_result = await self.db.execute(bl_stmt)
-                            bl_entries = bl_result.scalars().all()
-                            for bl_entry in bl_entries:
-                                if bl_entry.auto_unblocked is False:
-                                    bl_entry.auto_unblocked = True
-                                    bl_entry.unblocked_at = datetime.now(UTC)
-                        logger.info(f"Auto-unblocked {ip_addr} (now {new_compliance}) from firewall(s) '{fw_info}'")
+                        
+                        bl_stmt = select(Blacklist).where(
+                            (Blacklist.ip_address == ip_addr) &
+                            (Blacklist.mac_address_normalized == mac_norm) &
+                            (Blacklist.unblocked_at.is_(None)) &
+                            (Blacklist.auto_unblocked == False)
+                        )
+                        bl_result = await self.db.execute(bl_stmt)
+                        bl_entries = bl_result.scalars().all()
+                        for bl_entry in bl_entries:
+                            bl_entry.auto_unblocked = True
+                            bl_entry.unblocked_at = datetime.now(UTC)
+                        
+                        if failed_fw_tags:
+                            logger.warning(f"Partially auto-unblocked {ip_addr} (now {new_compliance}): succeeded on [{fw_info}], failed on [{','.join(failed_fw_tags)}]")
+                        else:
+                            logger.info(f"Auto-unblocked {ip_addr} (now {new_compliance}) from firewall(s) '{fw_info}'")
                     else:
-                        logger.warning(f"Partial unblock failure for {ip_addr}, keeping blocked status")
+                        logger.warning(f"Auto-unblock failed for {ip_addr} on all firewalls, keeping blocked status")
                 else:
                     terminal.status = "unblocked"
                     terminal.firewall_tag = None
@@ -1168,21 +1245,35 @@ class ComplianceService:
                             elif unit == 'm':
                                 td = timedelta(minutes=value)
                         mac_norm = mac_addr.replace('-', '').replace(':', '').replace('.', '').upper() if mac_addr else None
-                        for fw_tag in fw_tags:
-                            bl_entry = Blacklist(
-                                ip_address=ip_addr,
-                                mac_address=mac_addr,
-                                mac_address_normalized=mac_norm,
-                                reason="Auto-blocked: non-compliant (compliance recalculation)",
-                                blocked_by="system",
-                                expires_at=datetime.now(UTC) + td,
-                                source_tag=terminal.source_tag,
-                                firewall_tag=fw_tag,
-                                is_auto_blocked=True,
-                                auto_unblocked=False,
-                            )
-                            self.db.add(bl_entry)
-                        logger.info(f"Auto-blocked {ip_addr} (now non_compliant) on firewall(s) '{fw_info}'")
+                        
+                        # Check for existing blacklist entry (idempotency)
+                        existing_bl_stmt = select(Blacklist).where(
+                            (Blacklist.ip_address == ip_addr) &
+                            (Blacklist.mac_address_normalized == mac_norm) &
+                            (Blacklist.unblocked_at.is_(None)) &
+                            (Blacklist.auto_unblocked == False)
+                        )
+                        existing_bl_result = await self.db.execute(existing_bl_stmt)
+                        existing_bl = existing_bl_result.scalar_one_or_none()
+                        
+                        if existing_bl:
+                            logger.info(f"IP {ip_addr} MAC {mac_addr} already in blacklist, skipping")
+                        else:
+                            for fw_tag in fw_tags:
+                                bl_entry = Blacklist(
+                                    ip_address=ip_addr,
+                                    mac_address=mac_addr,
+                                    mac_address_normalized=mac_norm,
+                                    reason="Auto-blocked: non-compliant (compliance recalculation)",
+                                    blocked_by="system",
+                                    expires_at=datetime.now(UTC) + td,
+                                    source_tag=terminal.source_tag,
+                                    firewall_tag=fw_tag,
+                                    is_auto_blocked=True,
+                                    auto_unblocked=False,
+                                )
+                                self.db.add(bl_entry)
+                            logger.info(f"Auto-blocked {ip_addr} (now non_compliant) on firewall(s) '{fw_info}'")
         else:
             if terminal.status == "blocked" and not terminal.firewall_tag:
                 fw_tags = await self._get_bound_firewall_tags(terminal.source_tag)
@@ -1199,94 +1290,139 @@ class ComplianceService:
         Also handles auto-unblock for terminals that become compliant
         while currently blocked on firewall.
 
+        Uses distributed lock to prevent concurrent recalculation which
+        can cause inconsistent terminal states.
+
         Returns:
             dict with counts: total, bypass, compliant, non_compliant,
             unchanged, unblocked (auto-unblocked from blocked state)
         """
-        whitelist_data = await self._load_whitelist_cache()
-        ipguard_data = await self._load_all_ipguard_cache()
+        lock_token = await _acquire_compliance_lock()
+        if not lock_token:
+            logger.warning("Compliance recalculation skipped: another instance is already running")
+            return {"total": 0, "bypass": 0, "compliant": 0, "non_compliant": 0, "unchanged": 0, "unblocked": 0, "skipped": True}
 
-        stmt = select(Terminal)
-        result = await self.db.execute(stmt)
-        terminals = result.scalars().all()
+        try:
+            start_time = datetime.now(UTC)
+            logger.info(f"Starting compliance recalculation at {start_time.isoformat()}")
 
-        if not terminals:
-            return {"total": 0, "bypass": 0, "compliant": 0, "non_compliant": 0, "unchanged": 0, "unblocked": 0}
+            whitelist_data = await self._load_whitelist_cache()
+            ipguard_data = await self._load_all_ipguard_cache()
 
-        bypass_count = 0
-        compliant_count = 0
-        non_compliant_count = 0
-        unchanged_count = 0
-        unblocked_count = 0
+            logger.debug(f"Loaded {len(whitelist_data)} whitelist entries")
+            ipguard_total = sum(len(v) for v in ipguard_data.values())
+            logger.debug(f"Loaded {ipguard_total} IPGuard entries from {len(ipguard_data)} sources")
 
-        for terminal in terminals:
-            ip_addr = terminal.ip_address or ""
-            mac_addr = terminal.mac_address or ""
+            stmt = select(Terminal)
+            result = await self.db.execute(stmt)
+            terminals = result.scalars().all()
 
-            wl_result = self._match_whitelist_in_memory(whitelist_data, ip_addr, mac_addr)
-            ig_match = self._match_ipguard_in_memory(ipguard_data, ip_addr, mac_addr)
+            logger.info(f"Found {len(terminals)} terminals to recalculate")
 
-            if wl_result:
-                new_compliance = "bypass"
-                new_wl_match_type = wl_result.get("match_type")
-                wl_comments = wl_result.get("comments")
-            elif ig_match:
-                new_compliance = "compliant"
-                new_wl_match_type = None
-                wl_comments = None
-            else:
-                new_compliance = "non_compliant"
-                new_wl_match_type = None
-                wl_comments = None
+            if not terminals:
+                logger.info("No terminals found, returning early")
+                return {"total": 0, "bypass": 0, "compliant": 0, "non_compliant": 0, "unchanged": 0, "unblocked": 0}
 
-            result = await self._apply_compliance_result(
-                terminal, new_compliance, new_wl_match_type, wl_comments, ip_addr, mac_addr
+            BATCH_SIZE = 100
+            bypass_count = 0
+            compliant_count = 0
+            non_compliant_count = 0
+            unchanged_count = 0
+            unblocked_count = 0
+
+            for batch_start in range(0, len(terminals), BATCH_SIZE):
+                batch_terminals = terminals[batch_start:batch_start + BATCH_SIZE]
+                batch_num = batch_start // BATCH_SIZE + 1
+                total_batches = (len(terminals) + BATCH_SIZE - 1) // BATCH_SIZE
+
+                logger.debug(f"Processing batch {batch_num}/{total_batches} ({len(batch_terminals)} terminals)")
+
+                for idx, terminal in enumerate(batch_terminals):
+                    ip_addr = terminal.ip_address or ""
+                    mac_addr = terminal.mac_address or ""
+                    old_compliance = terminal.compliance_status
+
+                    wl_result = self._match_whitelist_in_memory(whitelist_data, ip_addr, mac_addr)
+                    ig_match = self._match_ipguard_in_memory(ipguard_data, ip_addr, mac_addr)
+
+                    if wl_result:
+                        new_compliance = "bypass"
+                        new_wl_match_type = wl_result.get("match_type")
+                        wl_comments = wl_result.get("comments")
+                    elif ig_match:
+                        new_compliance = "compliant"
+                        new_wl_match_type = None
+                        wl_comments = None
+                    else:
+                        new_compliance = "non_compliant"
+                        new_wl_match_type = None
+                        wl_comments = None
+
+                    if old_compliance != new_compliance:
+                        logger.debug(
+                            f"Terminal[{batch_start + idx}] {ip_addr}/{mac_addr}: "
+                            f"{old_compliance} → {new_compliance} "
+                            f"(whitelist={bool(wl_result)}, ipguard={ig_match})"
+                        )
+
+                    result = await self._apply_compliance_result(
+                        terminal, new_compliance, new_wl_match_type, wl_comments, ip_addr, mac_addr
+                    )
+
+                    if result["status_changed"]:
+                        if new_compliance == "bypass":
+                            bypass_count += 1
+                        elif new_compliance == "compliant":
+                            compliant_count += 1
+                        else:
+                            non_compliant_count += 1
+
+                        if result["unblocked"]:
+                            unblocked_count += 1
+                    else:
+                        unchanged_count += 1
+
+                await self.db.flush()
+                await self.db.commit()
+                logger.debug(f"Batch {batch_num}/{total_batches} committed")
+
+            end_time = datetime.now(UTC)
+            duration_ms = (end_time - start_time).total_seconds() * 1000
+
+            if non_compliant_count > 0 or unblocked_count > 0 or bypass_count > 0 or compliant_count > 0:
+                await self.log_action("system", "recalculate_compliance", "terminal", None, {
+                    "message": f"Compliance recalculation: {len(terminals)} total, "
+                               f"{bypass_count} → bypass, {compliant_count} → compliant, "
+                               f"{non_compliant_count} → non_compliant, {unblocked_count} auto-unblocked",
+                    "total": len(terminals),
+                    "bypass": bypass_count,
+                    "compliant": compliant_count,
+                    "non_compliant": non_compliant_count,
+                    "unchanged": unchanged_count,
+                    "unblocked": unblocked_count,
+                    "duration_ms": round(duration_ms, 2),
+                    "whitelist_entries": len(whitelist_data),
+                    "ipguard_entries": ipguard_total,
+                }, ip_address="System")
+
+            logger.info(
+                f"Compliance recalculation complete: {len(terminals)} total, "
+                f"{bypass_count} → bypass, {compliant_count} → compliant, "
+                f"{non_compliant_count} → non_compliant, {unchanged_count} unchanged, "
+                f"{unblocked_count} auto-unblocked, duration={duration_ms:.2f}ms"
             )
 
-            if result["status_changed"]:
-                if new_compliance == "bypass":
-                    bypass_count += 1
-                elif new_compliance == "compliant":
-                    compliant_count += 1
-                else:
-                    non_compliant_count += 1
-
-                if result["unblocked"]:
-                    unblocked_count += 1
-            else:
-                unchanged_count += 1
-
-        # Audit log for compliance recalculation
-        if non_compliant_count > 0 or unblocked_count > 0:
-            await self.log_action("system", "recalculate_compliance", "terminal", None, {
-                "message": f"Compliance recalculation: {len(terminals)} total, "
-                           f"{non_compliant_count} → non_compliant, {unblocked_count} auto-unblocked",
+            return {
                 "total": len(terminals),
                 "bypass": bypass_count,
                 "compliant": compliant_count,
                 "non_compliant": non_compliant_count,
+                "unchanged": unchanged_count,
                 "unblocked": unblocked_count,
-            }, ip_address="System")
-
-        # Flush changes (caller is responsible for final commit to maintain
-        # transaction atomicity with the triggering operation, e.g. whitelist add)
-        await self.db.flush()
-
-        logger.info(
-            f"Compliance recalculation complete: {len(terminals)} total, "
-            f"{bypass_count} → bypass, {compliant_count} → compliant, "
-            f"{non_compliant_count} → non_compliant, {unchanged_count} unchanged, "
-            f"{unblocked_count} auto-unblocked"
-        )
-
-        return {
-            "total": len(terminals),
-            "bypass": bypass_count,
-            "compliant": compliant_count,
-            "non_compliant": non_compliant_count,
-            "unchanged": unchanged_count,
-            "unblocked": unblocked_count,
-        }
+                "duration_ms": round(duration_ms, 2),
+            }
+        finally:
+            await _release_compliance_lock(lock_token)
 
     async def _get_bound_firewall_tag(self, source_tag: str) -> str | None:
         """Find the firewall data source tag bound to the given ARP source tag.

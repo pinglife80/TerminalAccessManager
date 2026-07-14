@@ -33,12 +33,14 @@ import { DateRangeFilter } from '@/components/DateRangeFilter';
  * Determine action buttons for a terminal based on status matrix:
  * - compliant + unblocked: view only (no actions)
  * - compliant + blocked: view + unblock
- * - bypass: view + remove from whitelist
- * - non_compliant + blocked: view only (no actions)
- * - non_compliant + unblocked + in blacklist: view + remove from blacklist
- * - non_compliant + unblocked + not in blacklist: view + block
- * - unknown + unblocked: view + add to whitelist (block disabled - no compliance basis)
+ * - bypass: view + remove from whitelist (already in whitelist)
+ * - non_compliant + blocked: view only (no actions - auto-blocked by system)
+ * - non_compliant + unblocked + in blacklist: view + remove from blacklist + add to whitelist
+ * - non_compliant + unblocked + not in blacklist: view + add to whitelist
+ * - unknown + unblocked: view + add to whitelist
  * - unknown + blocked: view + unblock
+ *
+ * Note: Manual block is intentionally disabled to preserve compliance auto-detection business loop.
  */
 function getTerminalActions(terminal: Terminal): {
   canBlock: boolean;
@@ -50,40 +52,40 @@ function getTerminalActions(terminal: Terminal): {
   const cs = terminal.compliance_status || 'unknown';
   const st = terminal.status;
 
-  // compliant + unblocked: view only
+  // compliant + unblocked: view + add to whitelist (quick add)
   if (cs === 'compliant' && st !== 'blocked') {
-    return { canBlock: false, canUnblock: false, canAddWhitelist: false, canRemoveWhitelist: false, canRemoveBlacklist: false };
+    return { canBlock: false, canUnblock: false, canAddWhitelist: true, canRemoveWhitelist: false, canRemoveBlacklist: false };
   }
-  // compliant + blocked: can unblock
+  // compliant + blocked: view + unblock + add to whitelist
   if (cs === 'compliant' && st === 'blocked') {
-    return { canBlock: false, canUnblock: true, canAddWhitelist: false, canRemoveWhitelist: false, canRemoveBlacklist: false };
+    return { canBlock: false, canUnblock: true, canAddWhitelist: true, canRemoveWhitelist: false, canRemoveBlacklist: false };
   }
-  // bypass: can remove from whitelist
+  // bypass: view + remove from whitelist only (already in whitelist, no add needed)
   if (cs === 'bypass') {
     return { canBlock: false, canUnblock: false, canAddWhitelist: false, canRemoveWhitelist: true, canRemoveBlacklist: false };
   }
-  // non_compliant + blocked: view only
+  // non_compliant + blocked: view only (auto-blocked, let system handle)
   if (cs === 'non_compliant' && st === 'blocked') {
-    return { canBlock: false, canUnblock: false, canAddWhitelist: false, canRemoveWhitelist: false, canRemoveBlacklist: false };
+    return { canBlock: false, canUnblock: false, canAddWhitelist: true, canRemoveWhitelist: false, canRemoveBlacklist: false };
   }
-  // non_compliant + unblocked + in blacklist: can remove from blacklist
+  // non_compliant + unblocked + in blacklist: can remove from blacklist + add to whitelist
   if (cs === 'non_compliant' && st !== 'blocked' && terminal.black_match_type) {
-    return { canBlock: false, canUnblock: false, canAddWhitelist: false, canRemoveWhitelist: false, canRemoveBlacklist: true };
+    return { canBlock: false, canUnblock: false, canAddWhitelist: true, canRemoveWhitelist: false, canRemoveBlacklist: true };
   }
-  // non_compliant + unblocked + not in blacklist: can block
+  // non_compliant + unblocked + not in blacklist: view + add to whitelist (block disabled - auto-handled by system)
   if (cs === 'non_compliant' && st !== 'blocked') {
-    return { canBlock: true, canUnblock: false, canAddWhitelist: false, canRemoveWhitelist: false, canRemoveBlacklist: false };
+    return { canBlock: false, canUnblock: false, canAddWhitelist: true, canRemoveWhitelist: false, canRemoveBlacklist: false };
   }
-  // unknown + unblocked: can add to whitelist (block disabled - no compliance basis)
+  // unknown + unblocked: can add to whitelist
   if (cs === 'unknown' && st !== 'blocked') {
     return { canBlock: false, canUnblock: false, canAddWhitelist: true, canRemoveWhitelist: false, canRemoveBlacklist: false };
   }
-  // unknown + blocked: can unblock
+  // unknown + blocked: can unblock + add to whitelist
   if (cs === 'unknown' && st === 'blocked') {
-    return { canBlock: false, canUnblock: true, canAddWhitelist: false, canRemoveWhitelist: false, canRemoveBlacklist: false };
+    return { canBlock: false, canUnblock: true, canAddWhitelist: true, canRemoveWhitelist: false, canRemoveBlacklist: false };
   }
-  // fallback: view only
-  return { canBlock: false, canUnblock: false, canAddWhitelist: false, canRemoveWhitelist: false, canRemoveBlacklist: false };
+  // fallback: view only + add to whitelist
+  return { canBlock: false, canUnblock: false, canAddWhitelist: true, canRemoveWhitelist: false, canRemoveBlacklist: false };
 }
 
 const Terminals: React.FC = () => {
@@ -106,10 +108,10 @@ const Terminals: React.FC = () => {
   const debouncedSearch = useDebounce(searchTerm, 500);
 
   // Loading states for operations
-  const [blockingId, setBlockingId] = useState<number | null>(null);
   const [whitelistId, setWhitelistId] = useState<number | null>(null);
   const [removingWlId, setRemovingWlId] = useState<number | null>(null);
   const [removingBlId, setRemovingBlId] = useState<number | null>(null);
+  const [unblockingId, setUnblockingId] = useState<number | null>(null);
 
   // Confirmation dialogs - Whitelist Add
   const [showWlAddDialog, setShowWlAddDialog] = useState(false);
@@ -119,14 +121,6 @@ const Terminals: React.FC = () => {
   // Confirmation dialogs - Whitelist Remove
   const [showWlRemoveConfirm, setShowWlRemoveConfirm] = useState(false);
   const [wlRemoveTarget, setWlRemoveTarget] = useState<Terminal | null>(null);
-
-  // Confirmation dialogs - Block
-  const [showBlockConfirm, setShowBlockConfirm] = useState(false);
-  const [blockTarget, setBlockTarget] = useState<Terminal | null>(null);
-  const [blockComment, setBlockComment] = useState('');
-  const [availableFirewallTags, setAvailableFirewallTags] = useState<string[]>([]);
-  const [selectedFirewallTag, setSelectedFirewallTag] = useState<string>('');
-  const [hasNoBinding, setHasNoBinding] = useState(false);
 
   // Confirmation dialogs - Unblock
   const [showUnblockConfirm, setShowUnblockConfirm] = useState(false);
@@ -267,57 +261,6 @@ const Terminals: React.FC = () => {
 
   // --- Action handlers with confirmation dialogs ---
 
-  const handleBlock = async (mac: Terminal) => {
-    setBlockTarget(mac);
-    setBlockComment('');
-    setSelectedFirewallTag(mac.firewall_tag || '');
-    setHasNoBinding(false);
-    setAvailableFirewallTags([]);
-
-    // Query available firewall tags for this terminal's source_tag
-    if (!mac.source_tag) {
-      setHasNoBinding(true);
-    } else {
-      try {
-        const bindingsResponse = await apiClient.get(`${API_ENDPOINTS.DATA_SOURCE_BINDINGS}?arp_source_tag=${mac.source_tag}`);
-        const bindings = bindingsResponse.data || [];
-        const fwTags = bindings.map((b: { firewall_tag: string }) => b.firewall_tag).filter(Boolean);
-        setAvailableFirewallTags(fwTags);
-        if (fwTags.length === 0) {
-          setHasNoBinding(true);
-        }
-      } catch {
-        // Silently fail - user can still manually specify
-      }
-    }
-    setShowBlockConfirm(true);
-  };
-
-  const confirmBlock = async () => {
-    if (!blockTarget) return;
-    setBlockingId(blockTarget.id);
-    try {
-      const params: Record<string, string> = {
-        mac_address: blockTarget.mac_address,
-        block_time: '30d',
-      };
-      if (blockComment.trim()) params['comments'] = blockComment.trim();
-      if (selectedFirewallTag.trim()) params['firewall_tag'] = selectedFirewallTag.trim();
-      await apiClient.post(`${API_ENDPOINTS.TERMINALS_BLOCK}${blockTarget.ip_address}`, null, {
-        params
-      });
-      toast.success(t('terminal.blocked'));
-      refetch();
-      refetchBlacklist();
-    } catch (error: unknown) {
-      toast.error(getErrorMessage(error, t('terminal.failedToBlock')));
-    } finally {
-      setBlockingId(null);
-      setShowBlockConfirm(false);
-      setBlockTarget(null);
-    }
-  };
-
   const handleUnblock = (mac: Terminal) => {
     setUnblockTarget(mac);
     setUnblockComment('');
@@ -326,7 +269,7 @@ const Terminals: React.FC = () => {
 
   const confirmUnblock = async () => {
     if (!unblockTarget) return;
-    setBlockingId(unblockTarget.id);
+    setUnblockingId(unblockTarget.id);
     try {
       const params: Record<string, string> = {};
       if (unblockComment.trim()) params['comments'] = unblockComment.trim();
@@ -339,7 +282,7 @@ const Terminals: React.FC = () => {
     } catch (error: unknown) {
       toast.error(getErrorMessage(error, t('terminal.failedToUnblock')));
     } finally {
-      setBlockingId(null);
+      setUnblockingId(null);
       setShowUnblockConfirm(false);
       setUnblockTarget(null);
     }
@@ -920,23 +863,13 @@ const Terminals: React.FC = () => {
                               onClick={() => handleRemoveFromWhitelist(mac)}
                             />
                           )}
-                          {actions.canBlock && (
-                            <IconButton
-                              icon={Shield}
-                              variant="danger"
-                              size="md"
-                              title={t('terminal.blockTerminal')}
-                              loading={blockingId === mac.id}
-                              onClick={() => handleBlock(mac)}
-                            />
-                          )}
                           {actions.canUnblock && (
                             <IconButton
                               icon={ShieldOff}
                               variant="secondary"
                               size="md"
                               title={t('terminal.unblockTerminal')}
-                              loading={blockingId === mac.id}
+                              loading={unblockingId === mac.id}
                               onClick={() => handleUnblock(mac)}
                             />
                           )}
@@ -1072,15 +1005,6 @@ const Terminals: React.FC = () => {
                     className="flex-1"
                   />
                 )}
-                {actions.canBlock && (
-                  <PrimaryButton
-                    icon={Shield}
-                    label={t('terminal.blockTerminal')}
-                    variant="danger"
-                    onClick={() => { if (selectedTerminal) handleBlock(selectedTerminal); }}
-                    className="flex-1"
-                  />
-                )}
                 {actions.canUnblock && (
                   <PrimaryButton
                     icon={ShieldOff}
@@ -1167,66 +1091,6 @@ const Terminals: React.FC = () => {
         </div>
       </Modal>
 
-      {/* Block Confirmation Dialog */}
-      <Modal isOpen={showBlockConfirm && !!blockTarget} onClose={() => { setShowBlockConfirm(false); setBlockTarget(null); }} title={t('terminal.confirmBlock')} size="sm">
-        <div className="flex items-center gap-4 mb-4">
-          <div className="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center">
-            <Shield className="h-6 w-6 text-red-600" />
-          </div>
-          <div>
-            <p className="text-sm text-muted-foreground">{t('terminal.confirmBlockMsg')}</p>
-          </div>
-        </div>
-        {renderTerminalInfo(blockTarget)}
-
-        {/* Firewall tag selector */}
-        {availableFirewallTags.length > 0 && (
-          <div className="mb-3">
-            <label className="block text-sm font-medium text-muted-foreground mb-1">{t('terminal.selectFirewall')}</label>
-            <select
-              value={selectedFirewallTag}
-              onChange={(e) => setSelectedFirewallTag(e.target.value)}
-              className="w-full px-3 py-2 border border-border rounded-lg text-sm bg-background"
-            >
-              <option value="">{t('auto')}</option>
-              {availableFirewallTags.map((tag) => (
-                <option key={tag} value={tag}>{tag}</option>
-              ))}
-            </select>
-          </div>
-        )}
-
-        {/* No binding warning */}
-        {hasNoBinding && (
-          <div className="mb-3 p-2.5 bg-red-50 border border-red-200 rounded-lg flex items-start gap-2">
-            <ShieldOff className="h-4 w-4 text-red-600 mt-0.5 shrink-0" />
-            <div>
-              <p className="text-sm font-medium text-red-800">{t('terminal.noBindingBlock')}</p>
-              <p className="text-xs text-red-700 mt-0.5">{t('terminal.noBindingBlockDetail')}</p>
-            </div>
-          </div>
-        )}
-
-        {renderCommentInput(blockComment, setBlockComment)}
-        <div className="flex gap-3 mt-4">
-          <PrimaryButton
-            label={t('common.cancel')}
-            variant="secondary"
-            onClick={() => { setShowBlockConfirm(false); setBlockTarget(null); }}
-            className="flex-1"
-          />
-          <PrimaryButton
-            icon={Shield}
-            label={t('terminal.blockTerminal')}
-            variant="danger"
-            onClick={confirmBlock}
-            loading={blockingId === blockTarget?.id}
-            disabled={hasNoBinding}
-            className="flex-1"
-          />
-        </div>
-      </Modal>
-
       {/* Unblock Confirmation Dialog */}
       <Modal isOpen={showUnblockConfirm && !!unblockTarget} onClose={() => { setShowUnblockConfirm(false); setUnblockTarget(null); }} title={t('terminal.confirmUnblock')} size="sm">
         <div className="flex items-center gap-4 mb-4">
@@ -1251,7 +1115,7 @@ const Terminals: React.FC = () => {
             label={t('terminal.unblockTerminal')}
             variant="secondary"
             onClick={confirmUnblock}
-            loading={blockingId === unblockTarget?.id}
+            loading={unblockingId === unblockTarget?.id}
             className="flex-1"
           />
         </div>

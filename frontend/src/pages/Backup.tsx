@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { apiClient } from '@/lib/api';
 import { API_ENDPOINTS } from '@/lib/constants';
 import { formatDate, getErrorMessage } from '@/lib/utils';
-import { HardDrive, Plus, Download, RotateCcw, Trash2, Play, Settings, CheckCircle, AlertCircle, TestTube, Save } from 'lucide-react';
+import { HardDrive, Plus, Download, RotateCcw, Trash2, Play, Settings, CheckCircle, AlertCircle, TestTube, Save, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { PrimaryButton } from '@/components/Button';
 
@@ -16,6 +16,7 @@ interface BackupConfig {
   storage_config: Record<string, unknown>;
   backup_database: boolean;
   backup_config: boolean;
+  backup_whitelist: boolean;
   backup_logs: boolean;
   encrypt_backup: boolean;
 }
@@ -39,10 +40,31 @@ interface BackupJob {
   error_message?: string;
 }
 
+interface BackupContentInfo {
+  filename: string;
+  file_size: number;
+  compress_size: number;
+}
+
+interface BackupContents {
+  filename: string;
+  file_size: number;
+  created_at: string;
+  contents: BackupContentInfo[];
+}
+
 const STORAGE_TYPES = [
   { value: 'local', label: 'local' },
   { value: 'sftp', label: 'sftp' },
   { value: 'ftp', label: 'ftp' },
+];
+
+const BACKUP_TYPES = [
+  { value: 'full', label: 'full' },
+  { value: 'database', label: 'database' },
+  { value: 'config', label: 'config' },
+  { value: 'whitelist', label: 'whitelist' },
+  { value: 'logs', label: 'logs' },
 ];
 
 const CRON_REGEX = /^(\*|[0-5]?\d)\s+(\*|[01]?\d|2[0-3])\s+(\*|[1-9]|[12]\d|3[01])\s+(\*|[1-9]|1[0-2])\s+(\*|[0-6])$/;
@@ -64,12 +86,19 @@ const Backup: React.FC = () => {
   ], [t]);
   const [config, setConfig] = useState<BackupConfig | null>(null);
   const [backups, setBackups] = useState<BackupInfo[]>([]);
+  const [whitelistBackups, setWhitelistBackups] = useState<BackupInfo[]>([]);
   const [runningJob, setRunningJob] = useState<BackupJob | null>(null);
   const [loading, setLoading] = useState(true);
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [testLoading, setTestLoading] = useState(false);
   const [selectedPreset, setSelectedPreset] = useState<string>('0 2 * * *');
   const [customCronError, setCustomCronError] = useState<string>('');
+  const [selectedBackupType, setSelectedBackupType] = useState<string>('full');
+  const [showRestoreModal, setShowRestoreModal] = useState(false);
+  const [restoreTarget, setRestoreTarget] = useState<string | null>(null);
+  const [restoreContents, setRestoreContents] = useState<BackupContents | null>(null);
+  const [restoreLoading, setRestoreLoading] = useState(false);
+  const [isWhitelistRestore, setIsWhitelistRestore] = useState(false);
 
   const { register, handleSubmit, reset, watch, setValue } = useForm<BackupConfig>({
     defaultValues: {
@@ -90,6 +119,7 @@ const Backup: React.FC = () => {
   useEffect(() => {
     fetchConfig();
     fetchBackups();
+    fetchWhitelistBackups();
   }, []);
 
   const fetchConfig = async () => {
@@ -117,6 +147,15 @@ const Backup: React.FC = () => {
     }
   };
 
+  const fetchWhitelistBackups = async () => {
+    try {
+      const response = await apiClient.get(API_ENDPOINTS.BACKUP_WHITELIST_LIST);
+      setWhitelistBackups(response.data.backups || []);
+    } catch (err: unknown) {
+      toast.error(getErrorMessage(err, t('backup.failedToLoadBackups')));
+    }
+  };
+
   const onSubmit = async (data: BackupConfig) => {
     try {
       await apiClient.put(API_ENDPOINTS.BACKUP_CONFIG, data);
@@ -129,11 +168,28 @@ const Backup: React.FC = () => {
 
   const handleRunBackup = async () => {
     try {
-      const response = await apiClient.post(API_ENDPOINTS.BACKUP_RUN);
+      const response = await apiClient.post(`${API_ENDPOINTS.BACKUP_RUN}?backup_type=${selectedBackupType}`);
       setRunningJob(response.data);
       toast.info(t('backup.backupStarted'));
       setTimeout(() => {
         fetchBackups();
+        if (selectedBackupType === 'whitelist') {
+          fetchWhitelistBackups();
+        }
+        setRunningJob(null);
+      }, 5000);
+    } catch (err: unknown) {
+      toast.error(getErrorMessage(err, t('backup.failedToRunBackup')));
+    }
+  };
+
+  const handleCreateWhitelistBackup = async () => {
+    try {
+      const response = await apiClient.post(API_ENDPOINTS.BACKUP_WHITELIST);
+      setRunningJob(response.data);
+      toast.info(t('backup.backupStarted'));
+      setTimeout(() => {
+        fetchWhitelistBackups();
         setRunningJob(null);
       }, 5000);
     } catch (err: unknown) {
@@ -160,11 +216,34 @@ const Backup: React.FC = () => {
     }
   };
 
-  const handleRestore = async (filename: string) => {
-    if (!confirm(t('backup.confirmRestore', { filename }))) return;
+  const handleRestore = async (filename: string, isWhitelist = false) => {
+    setRestoreTarget(filename);
+    setIsWhitelistRestore(isWhitelist);
+    setRestoreLoading(true);
     try {
-      await apiClient.post(API_ENDPOINTS.BACKUP_RESTORE.replace('{{filename}}', filename));
+      const response = await apiClient.get(API_ENDPOINTS.BACKUP_CONTENTS.replace('{{filename}}', filename));
+      setRestoreContents(response.data);
+    } catch (err: unknown) {
+      toast.error(getErrorMessage(err, t('backup.failedToLoadBackups')));
+    } finally {
+      setRestoreLoading(false);
+      setShowRestoreModal(true);
+    }
+  };
+
+  const executeRestore = async (filename: string, isWhitelist = false) => {
+    try {
+      if (isWhitelist) {
+        await apiClient.post(API_ENDPOINTS.BACKUP_WHITELIST_RESTORE.replace('{{filename}}', filename));
+      } else {
+        await apiClient.post(API_ENDPOINTS.BACKUP_RESTORE.replace('{{filename}}', filename));
+      }
       toast.success(t('backup.restoredSuccessfully'));
+      setShowRestoreModal(false);
+      setRestoreTarget(null);
+      setRestoreContents(null);
+      fetchBackups();
+      fetchWhitelistBackups();
     } catch (err: unknown) {
       toast.error(getErrorMessage(err, t('backup.failedToRestore')));
     }
@@ -176,6 +255,7 @@ const Backup: React.FC = () => {
       await apiClient.delete(API_ENDPOINTS.BACKUP_DELETE.replace('{{filename}}', filename));
       toast.success(t('backup.deletedSuccessfully'));
       fetchBackups();
+      fetchWhitelistBackups();
     } catch (err: unknown) {
       toast.error(getErrorMessage(err, t('backup.failedToDelete')));
     }
@@ -202,7 +282,6 @@ const Backup: React.FC = () => {
   return (
     <div className="min-h-full bg-background p-4 sm:p-6 lg:p-8">
       <div className="max-w-6xl mx-auto">
-        {/* Page Header */}
         <div className="flex items-center justify-between mb-6">
           <div>
             <h1 className="text-2xl sm:text-3xl font-bold text-foreground flex items-center gap-2">
@@ -224,17 +303,29 @@ const Backup: React.FC = () => {
               )}
               {t('backup.testConfig')}
             </button>
-            <PrimaryButton
-              label={t('backup.runBackup')}
-              onClick={handleRunBackup}
-              disabled={!!runningJob}
-              icon={Play}
-            />
+            <div className="flex items-center gap-2">
+              <select
+                value={selectedBackupType}
+                onChange={(e) => setSelectedBackupType(e.target.value)}
+                className="px-3 py-2 border border-border rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+              >
+                {BACKUP_TYPES.map((type) => (
+                  <option key={type.value} value={type.value}>
+                    {t(`backup.backupType.${type.value}`)}
+                  </option>
+                ))}
+              </select>
+              <PrimaryButton
+                label={t('backup.runBackup')}
+                onClick={handleRunBackup}
+                disabled={!!runningJob}
+                icon={Play}
+              />
+            </div>
           </div>
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Config Section */}
           <div className="lg:col-span-1">
             <div className="bg-card rounded-2xl border border-border p-6">
               <h2 className="text-lg font-semibold text-foreground mb-4 flex items-center gap-2">
@@ -325,7 +416,6 @@ const Backup: React.FC = () => {
                   </select>
                 </div>
 
-                {/* Remote Storage Config */}
                 {(storageType === 'sftp' || storageType === 'ftp') && (
                   <div className="border border-border rounded-lg p-4 space-y-3">
                     <h3 className="font-medium text-foreground text-sm">{t('backup.remoteSettings')}</h3>
@@ -382,7 +472,6 @@ const Backup: React.FC = () => {
                   </div>
                 )}
 
-                {/* Backup Options */}
                 <div className="space-y-2">
                   <h3 className="font-medium text-foreground text-sm">{t('backup.backupOptions')}</h3>
                   <label className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -392,6 +481,10 @@ const Backup: React.FC = () => {
                   <label className="flex items-center gap-2 text-sm text-muted-foreground">
                     <input {...register('backup_config')} type="checkbox" className="rounded border-border" />
                     {t('backup.backupConfig')}
+                  </label>
+                  <label className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <input {...register('backup_whitelist')} type="checkbox" className="rounded border-border" />
+                    {t('backup.backupWhitelist')}
                   </label>
                   <label className="flex items-center gap-2 text-sm text-muted-foreground">
                     <input {...register('backup_logs')} type="checkbox" className="rounded border-border" />
@@ -425,8 +518,7 @@ const Backup: React.FC = () => {
             </div>
           </div>
 
-          {/* Backups List Section */}
-          <div className="lg:col-span-2">
+          <div className="lg:col-span-2 space-y-6">
             <div className="bg-card rounded-2xl border border-border p-6">
               <h2 className="text-lg font-semibold text-foreground mb-4 flex items-center gap-2">
                 <HardDrive className="h-5 w-5 text-muted-foreground" />
@@ -484,7 +576,73 @@ const Backup: React.FC = () => {
                           <Download className="h-4 w-4" />
                         </button>
                         <button
-                          onClick={() => handleRestore(backup.filename)}
+                          onClick={() => handleRestore(backup.filename, false)}
+                          className="p-2 text-muted-foreground hover:text-green-600 hover:bg-green-50 rounded-lg transition-colors"
+                          title={t('backup.restore')}
+                        >
+                          <RotateCcw className="h-4 w-4" />
+                        </button>
+                        <button
+                          onClick={() => handleDelete(backup.filename)}
+                          className="p-2 text-muted-foreground hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                          title={t('common.delete')}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="bg-card rounded-2xl border border-border p-6">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-lg font-semibold text-foreground flex items-center gap-2">
+                  <HardDrive className="h-5 w-5 text-muted-foreground" />
+                  {t('backup.whitelistBackup.title')}
+                </h2>
+                <PrimaryButton
+                  label={t('backup.whitelistBackup.createWhitelistBackup')}
+                  onClick={handleCreateWhitelistBackup}
+                  disabled={!!runningJob}
+                  icon={Plus}
+                  size="sm"
+                />
+              </div>
+
+              {whitelistBackups.length === 0 ? (
+                <div className="text-center py-8">
+                  <HardDrive className="h-10 w-10 text-muted-foreground mx-auto mb-3" />
+                  <p className="text-muted-foreground text-sm">{t('backup.noBackups')}</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {whitelistBackups.map((backup) => (
+                    <div key={backup.filename} className="flex items-center justify-between p-4 bg-background rounded-xl">
+                      <div className="flex items-center gap-4">
+                        <div className="w-10 h-10 rounded-lg bg-green-100 flex items-center justify-center">
+                          <HardDrive className="h-5 w-5 text-green-600" />
+                        </div>
+                        <div>
+                          <p className="font-medium text-foreground">{backup.filename}</p>
+                          <p className="text-sm text-muted-foreground">
+                            {backup.file_size !== undefined ? formatFileSize(backup.file_size) : '-'}
+                            {' - '}
+                            {formatDate(backup.created_at)}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => handleDownload(backup.filename)}
+                          className="p-2 text-muted-foreground hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                          title={t('common.download')}
+                        >
+                          <Download className="h-4 w-4" />
+                        </button>
+                        <button
+                          onClick={() => handleRestore(backup.filename, true)}
                           className="p-2 text-muted-foreground hover:text-green-600 hover:bg-green-50 rounded-lg transition-colors"
                           title={t('backup.restore')}
                         >
@@ -505,6 +663,83 @@ const Backup: React.FC = () => {
             </div>
           </div>
         </div>
+
+        {showRestoreModal && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+            <div className="bg-card rounded-2xl border border-border w-full max-w-md max-h-[80vh] overflow-hidden">
+              <div className="flex items-center justify-between p-4 border-b border-border">
+                <h3 className="text-lg font-semibold text-foreground">{t('backup.restoreConfirm.title')}</h3>
+                <button
+                  onClick={() => {
+                    setShowRestoreModal(false);
+                    setRestoreTarget(null);
+                    setRestoreContents(null);
+                  }}
+                  className="p-1 hover:bg-muted rounded-lg transition-colors"
+                >
+                  <X className="h-5 w-5 text-muted-foreground" />
+                </button>
+              </div>
+              <div className="p-4 overflow-y-auto">
+                {restoreLoading ? (
+                  <div className="flex justify-center py-8">
+                    <div className="w-6 h-6 border-4 border-blue-500 border-t-transparent rounded-full animate-spin" />
+                  </div>
+                ) : restoreContents && (
+                  <>
+                    <div className="bg-warning/10 border border-warning/30 rounded-lg p-3 mb-4">
+                      <AlertCircle className="h-4 w-4 text-warning inline mr-2" />
+                      <span className="text-sm text-warning">{t('backup.restoreConfirm.warning')}</span>
+                    </div>
+
+                    <div className="mb-4">
+                      <p className="text-sm font-medium text-foreground mb-2">{t('backup.backupContents.title')}</p>
+                      <div className="bg-background rounded-lg p-3 space-y-2 max-h-48 overflow-y-auto">
+                        {restoreContents.contents.map((content) => (
+                          <div key={content.filename} className="flex items-center justify-between text-sm">
+                            <span className="text-muted-foreground">{content.filename}</span>
+                            <span className="text-muted-foreground">{formatFileSize(content.file_size)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="space-y-2 text-sm">
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">{t('backup.backupContents.filename')}</span>
+                        <span className="text-foreground">{restoreContents.filename}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">{t('backup.size')}</span>
+                        <span className="text-foreground">{formatFileSize(restoreContents.file_size)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">{t('backup.lastBackup')}</span>
+                        <span className="text-foreground">{formatDate(restoreContents.created_at)}</span>
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
+              <div className="flex items-center justify-end gap-3 p-4 border-t border-border">
+                <button
+                  onClick={() => {
+                    setShowRestoreModal(false);
+                    setRestoreTarget(null);
+                    setRestoreContents(null);
+                  }}
+                  className="px-4 py-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  {t('backup.restoreConfirm.cancel')}
+                </button>
+                <PrimaryButton
+                  label={t('backup.restoreConfirm.confirm')}
+                  onClick={() => restoreTarget && executeRestore(restoreTarget, isWhitelistRestore)}
+                />
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
