@@ -7,15 +7,15 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
----
+***
 
-## [Unreleased]
+## \[Unreleased]
 
 ### 修复
 
 - **数据库连接泄漏**：修复 `notification_logging.py` 中数据库会话未正确关闭导致的连接泄漏问题
   - 重构会话管理逻辑，使用 try/finally 确保会话正确释放
-  - 优化连接池配置（pool_size=30, max_overflow=100, pool_recycle=300）
+  - 优化连接池配置（pool\_size=30, max\_overflow=100, pool\_recycle=300）
 - **邮件限流**：修复大量合规状态变化事件触发 SMTP 限流问题
   - 所有通知事件先经过 `NotificationAggregator` 聚合后再发送
   - 实现时间窗口聚合（5分钟），同类事件合并发送
@@ -40,12 +40,12 @@
   - 支持定期对账任务
 - **终端管理优化**：增强终端管理功能
   - 优化终端 API 端点
-  - 改进终端服务逻辑
-  - 更新终端管理 UI
+  - 改进终端服务逻辑UI
+  - 更新终端管理&#x20;
 
----
+***
 
-## [3.6.10] - 2026-07-09
+## \[3.6.10] - 2026-07-09
 
 ### 新增
 
@@ -61,9 +61,9 @@
 
 - **备份配置字段完善**：`BackupConfig`、API Schema、前端接口统一添加 `backup_whitelist` 字段支持
 
----
+***
 
-## [3.6.9] - 2026-07-08
+## \[3.6.9] - 2026-07-08
 
 ### 新增
 
@@ -77,24 +77,24 @@
 ### 优化
 
 - **合规检查路径统一**：所有合规检查路径（ARP 采集、定时任务、白名单变更）统一使用 `_apply_compliance_result` 方法，确保以下行为一致：
-  - 更新 compliance_status 和 wl_match_type
+  - 更新 compliance\_status 和 wl\_match\_type
   - 更新 comments（白名单备注）
   - 状态变更时触发事件通知
   - 自动封堵/解封逻辑
-- **`batch_check_compliance` 返回白名单备注**：新增 `wl_comments` 字段，支持下游调用方获取匹配的白名单备注信息
+- **`batch_check_compliance`** **返回白名单备注**：新增 `wl_comments` 字段，支持下游调用方获取匹配的白名单备注信息
 
----
+***
 
-## [3.6.8] - 2026-07-08
+## \[3.6.8] - 2026-07-08
 
 ### 修复
 
 - **数据导出功能**：前端数据导出仅支持导出当前页数据，改为调用后端 API 支持全量导出和筛选导出
 - **通知渠道 500 错误**：创建通知渠道时报 500 内部错误但实际创建成功的问题
 
----
+***
 
-## [3.6.7] - 2026-07-08
+## \[3.6.7] - 2026-07-08
 
 ### 新增
 
@@ -105,16 +105,16 @@
 
 - **版本号 fallback 统一**：所有 fallback 版本号统一为 3.6.6，确保单一版本源失效时仍显示正确版本
 
----
+***
 
-## [3.6.6] - 2026-07-08
+## \[3.6.6] - 2026-07-08
 
 ### 新增
 
 - **Operation Source 子菜单**：在数据源管理页面新增 Operation Source 标签页，独立管理 Sangfor 防火墙类型数据源，位于 Data Sources 和 Bindings 之间
 - **黑名单服务端统计接口**：新增 `GET /api/v1/blacklist/stats` 接口，提供全局统计数据（活跃/自动封锁/手动封锁/过期/活跃封锁数），解决前端统计基于当前页数据不准确的问题
 - **FTP 远程备份管理**：备份列表/下载/删除支持远程存储（FTP/SFTP），备份列表显示存储位置标签
-- **终端表 updated_at 字段**：新增 `updated_at` 字段区分创建时间和更新时间，ARP 采集仅更新 `updated_at` 不覆盖 `timestamp`
+- **终端表 updated\_at 字段**：新增 `updated_at` 字段区分创建时间和更新时间，ARP 采集仅更新 `updated_at` 不覆盖 `timestamp`
 
 ### 修复
 
@@ -124,7 +124,7 @@
 - **白名单备注不一致**：白名单备注更新逻辑优化，支持备注变更时替换旧备注；白名单删除时清除关联终端备注（支持 CIDR 和 IP 范围匹配）
 - **Sangfor 测试连接 Last Test 不更新**：测试连接成功后使用直接 UPDATE 语句更新 `last_sync_at`（绕过 ORM expunge 问题）
 - **导航栏菜单同时选中**：父级菜单高亮基于路由匹配而非展开状态
-- **自动解封未设置 unblocked_at**：自动解封逻辑中 3 处补全 `unblocked_at = datetime.now(UTC)`
+- **自动解封未设置 unblocked\_at**：自动解封逻辑中 3 处补全 `unblocked_at = datetime.now(UTC)`
 - **通知时间戳时区不一致**：所有通知渠道统一使用 `format_timestamp()` 转换为 Asia/Shanghai 时区
 - **前端时间戳格式不一致**：统一 `formatDate` 为 `formatDateTime`，支持多语言和时区
 - **翻译键命名错误**：白名单 `identifier` 重命名为 `macAddress`/`ipAddress`，移除 `ipPattern`
@@ -135,9 +135,9 @@
 - **黑名单 Unblocked 标签显示一致性**：UI 标签显示条件从 `auto_unblocked` 改为 `auto_unblocked || unblocked_at`，与后端筛选逻辑一致
 - **Sangfor 数据源独立管理**：DataSourcesTab 过滤 sangfor 类型，由 OperationSourceTab 专门管理
 
----
+***
 
-## [3.6.5] - 2026-07-07
+## \[3.6.5] - 2026-07-07
 
 ### 新增
 
@@ -150,17 +150,17 @@
 ### 修复
 
 - **黑名单软删除**：在 `blacklist.py` 模型中添加 `unblocked_at` 和 `unblocked_by` 字段，实现软删除
-- **cleanup_expired_blacklist bug**：修复 `terminal_service.py` 中 datetime 变量作用域问题
-- **emit_terminal_non_compliant 参数错误**：修复调用时传入错误参数的问题
+- **cleanup\_expired\_blacklist bug**：修复 `terminal_service.py` 中 datetime 变量作用域问题
+- **emit\_terminal\_non\_compliant 参数错误**：修复调用时传入错误参数的问题
 
 ### 优化
 
 - **API文档补充**：更新 `api.md`，补充通知统计、日志、重试、归档和备份FTP配置等API端点说明
 - **日志指南增强**：更新 `logging-guide.md`，新增日志监控与告警、紧急处理流程等章节
 
----
+***
 
-## [3.6.3] - 2026-07-07
+## \[3.6.3] - 2026-07-07
 
 ### 新增
 
@@ -178,9 +178,9 @@
 
 - **版本号统一管理**：创建 `VERSION` 文件作为单一版本源，所有需要版本号的地方（manage.sh、config.py、vite.config.ts、.env）统一引用
 
----
+***
 
-## [3.6.2] - 2026-07-06
+## \[3.6.2] - 2026-07-06
 
 ### 新增
 
@@ -193,9 +193,9 @@
 - **监控统计内部服务错误**：修复SQL函数兼容性问题，优化异常处理，添加详细错误日志
 - **Channel开关颜色显示**：启用状态改为绿色，关闭状态改为灰色，更加直观
 
----
+***
 
-## [3.6.1] - 2026-07-06
+## \[3.6.1] - 2026-07-06
 
 ### 新增
 
@@ -219,9 +219,9 @@
 - **忘记密码显示逻辑**：仅在密码输入错误次数触发安全校验后显示忘记密码链接
 - **密码重置邮箱传递**：密码重置时自动传递用户名到重置页面，无需用户重复输入
 
----
+***
 
-## [3.6.0] - 2026-07-03
+## \[3.6.0] - 2026-07-03
 
 ### 新增
 
@@ -235,7 +235,7 @@
 - **重试机制（P3）**：失败通知自动指数退避重试（默认 3 次，首重试 10s），使用 Redis ZSet 管理重试调度
 - **监控统计面板（P3）**：8 个核心统计卡片（总发送、成功数、失败数、成功率、待重试、平均延迟、渠道数、规则数），各渠道成功率进度条，30 秒自动刷新
 - **手动重试功能（P3）**：支持单条失败通知重发和批量重发所有失败通知
-- **3 个新数据库迁移**：017_notification_templates、018_notification_rules、019_notification_async_retry
+- **3 个新数据库迁移**：017\_notification\_templates、018\_notification\_rules、019\_notification\_async\_retry
 
 ### 修复
 
@@ -249,13 +249,13 @@
 ### 优化
 
 - **通知服务架构优化**：采用 request-scoped + singleton 双模式设计，API 端点与后台 worker 复用同一服务类
-- **PostgreSQL 部分唯一索引**：notification_rules 表使用部分唯一索引解决 NULL channel_name 唯一性约束问题
+- **PostgreSQL 部分唯一索引**：notification\_rules 表使用部分唯一索引解决 NULL channel\_name 唯一性约束问题
 - **升级通知绕过抑制**：escalated 事件自动设置 `bypass_suppression` 标志，确保升级后的 severity 总能送达
 - **前端国际化完善**：补全 emailSettings、notificationTemplates、notificationRules、notificationMonitor 四个命名空间的中/英翻译（各 45+ 键）
 
----
+***
 
-## [3.5.1] - 2026-07-03
+## \[3.5.1] - 2026-07-03
 
 ### 修复
 
@@ -265,9 +265,9 @@
 - **认证提供者类型精简**：移除认证提供者管理页面中无实际意义的Local类型选项（Local认证为系统内置，无需用户配置）
 - **Profile页面翻译修复**：修复LDAP用户Profile页面邮箱标签显示为`profile.email`的翻译键名错误
 
----
+***
 
-## [3.5.0] - 2026-07-01
+## \[3.5.0] - 2026-07-01
 
 ### 新增
 
@@ -280,41 +280,41 @@
 ### 修复
 
 - **路径遍历漏洞**：backup.py download/restore/delete端点添加路径检查和文件名净化
-- **LDAP DN注入**：ldap_provider.py添加用户名验证和特殊字符转义函数
-- **2FA验证码暴力破解防护**：email_service.py添加验证码最大尝试次数限制（默认5次）
-- **敏感信息备份泄露**：backup_service.py移除.env文件备份，只备份docker-compose.yml和manage.sh
+- **LDAP DN注入**：ldap\_provider.py添加用户名验证和特殊字符转义函数
+- **2FA验证码暴力破解防护**：email\_service.py添加验证码最大尝试次数限制（默认5次）
+- **敏感信息备份泄露**：backup\_service.py移除.env文件备份，只备份docker-compose.yml和manage.sh
 - **FTP支持移除**：删除FTP上传代码，强制使用SFTP安全传输
 - **SFTP主机密钥验证**：添加AutoAddPolicy主机密钥验证策略
 
 ### 优化
 
 - **N+1查询优化**：roles.py使用JOIN一次性获取所有角色权限和用户计数
-- **异步性能优化**：backup_service.py使用asyncio.to_thread包装同步文件操作
+- **异步性能优化**：backup\_service.py使用asyncio.to\_thread包装同步文件操作
 - **通知模块权限控制**：notifications.py添加notification:read/manage权限检查
 - **Nginx限流调整**：API限流从60r/m提升至300r/m，认证限流从10r/m提升至30r/m
 - **前端国际化完善**：补全备份、认证、通知模块的中/英/日翻译
 
----
+***
 
-## [3.4.0] - 2026-06-22
+## \[3.4.0] - 2026-06-22
 
 ### 新增
 
 - 系统版本和环境信息展示：前端页脚和 Dashboard System Status 页面显示版本号和部署模式
 - 角色权限 i18n 完整实现：5个内置角色和29个权限的三语言翻译（中文/英文/日语）
-- 多环境配置分离：支持双层 env_file（.env + .env.{ENVIRONMENT}），开发/生产环境独立配置
+- 多环境配置分离：支持双层 env\_file（.env + .env.{ENVIRONMENT}），开发/生产环境独立配置
 - Nginx 镜像版本锁定：docker-compose.yml 锁定 nginx:1.27-alpine
 
 ### 修复
 
 - 白名单删除 404 错误：修复删除端点路由匹配问题，支持 MAC-only、IP-only、复合条目删除
-- 白名单删除 MAC 匹配错误：使用 mac_address_normalized 字段查询，确保标准化格式匹配
+- 白名单删除 MAC 匹配错误：使用 mac\_address\_normalized 字段查询，确保标准化格式匹配
 - 超管角色初始化错误：修复系统初始化时 admin 用户未正确关联 superadmin 角色的问题
 - 权限列 i18n 命名冲突：修复 roles.permissions 键同时定义为字符串和对象的问题
 
----
+***
 
-## [3.3.1] - 2026-06-17
+## \[3.3.1] - 2026-06-17
 
 ### Fixed
 
@@ -324,44 +324,44 @@
 - 前端黑名单页面添加 Tab 切换（活跃封堵/已解封/全部）
 - 已解封记录不再显示"解封"按钮，行样式降低透明度区分
 
----
+***
 
-## [3.3.0] - 2026-06-17
+## \[3.3.0] - 2026-06-17
 
 ### 新增
 
 - 审计日志 `resource_name` 字段：存储人类可读资源名称（用户名、数据源名称、IP 地址等），替代无意义的 #id 显示
 - 审计日志 keyset 分页：`/api/v1/logs/search` 新增 cursor 参数，支持深分页高性能查询
-- Docker 安全加固：docker-compose.prod.yml 实现容器安全最佳实践（no-new-privileges、cap_drop:ALL、read_only）
+- Docker 安全加固：docker-compose.prod.yml 实现容器安全最佳实践（no-new-privileges、cap\_drop:ALL、read\_only）
 - Docker 健康检查：所有服务添加 healthcheck 配置，支持容器编排健康探测
 - Sangfor API 指数退避重试：`_request_with_backoff` 方法，最多 3 次重试，等待时间指数增长（1s→2s→4s，上限 10s）
-- 核心服务单元测试：compliance_service 22 个测试用例（状态转换、自动封堵/解封、过期清理、白名单匹配、合规重算）
+- 核心服务单元测试：compliance\_service 22 个测试用例（状态转换、自动封堵/解封、过期清理、白名单匹配、合规重算）
 - 灾难恢复计划：docs/disaster-recovery.md（故障分级 P0-P3、各组件恢复步骤、RPO/RTO 目标）
 - 运维操作手册：docs/operations-runbook.md（日常巡检、故障排查、定时任务管理、升级回滚）
 - 部署模式统一：`deploy --dev` 替代 `deploy --demo`，自动设置 ENVIRONMENT 变量
 - 开发环境 Nginx 配置：tam.dev.conf（HTTP 直连 + 放宽限流 120r/m+30r/m）
 - docker-compose.dev.yml：开发环境 override 文件，自动加载 tam.dev.conf
-- Mock 数据业务对齐：28 种 verb_resource action、JSON details、resource_name、firewall_tag 绑定关系一致
+- Mock 数据业务对齐：28 种 verb\_resource action、JSON details、resource\_name、firewall\_tag 绑定关系一致
 
 ### 改进
 
-- 审计日志 action 命名统一为 verb_resource 格式：block_ip→block_terminal, unblock_ip→unblock_terminal, auto_block→auto_block_terminal, auto_unblock→auto_unblock_terminal, cleanup_expired→cleanup_expired_blacklist, role_change→change_role
-- N+1 查询优化：cleanup_expired_blacklist 批量预加载 Terminal + 批量检查活跃 Blacklist + 缓存 SangforService；batch_check_compliance 一次性加载白名单和 IPGuard 数据
-- Nginx 生产限速调整：api_limit 30r/m→60r/m，auth_limit 5r/m→10r/m，避免前端正常操作触发限速
+- 审计日志 action 命名统一为 verb\_resource 格式：block\_ip→block\_terminal, unblock\_ip→unblock\_terminal, auto\_block→auto\_block\_terminal, auto\_unblock→auto\_unblock\_terminal, cleanup\_expired→cleanup\_expired\_blacklist, role\_change→change\_role
+- N+1 查询优化：cleanup\_expired\_blacklist 批量预加载 Terminal + 批量检查活跃 Blacklist + 缓存 SangforService；batch\_check\_compliance 一次性加载白名单和 IPGuard 数据
+- Nginx 生产限速调整：api\_limit 30r/m→60r/m，auth\_limit 5r/m→10r/m，避免前端正常操作触发限速
 - 生产环境禁止 mock generate：`cmd_mock()` 检测 ENVIRONMENT=production 时拒绝执行
-- Mock 数据 blocked_by 修正：自动封堵 blocked_by="system"，手动封堵使用操作者用户名
-- 从 git 移除 sangfor_api 文件夹和 todos.md：仅保留本地，不再追踪到仓库
+- Mock 数据 blocked\_by 修正：自动封堵 blocked\_by="system"，手动封堵使用操作者用户名
+- 从 git 移除 sangfor\_api 文件夹和 todos.md：仅保留本地，不再追踪到仓库
 - 终端封堵绑定验证：封堵终端前强制检查绑定关系，无绑定时显示防火墙选择器和无绑定错误提示（Terminals.tsx）
 - 数据源标签页绑定状态列：数据源列表新增绑定状态列，已禁用 ARP 数据源显示"合规状态已冻结"（DataSourcesTab.tsx）
 - 启用无绑定数据源确认对话框：启用未绑定防火墙的 ARP 数据源时弹出确认提示（DataSourcesTab.tsx）
 - 绑定关系下拉框包含已禁用数据源：ARP 和防火墙数据源下拉框现在包含已禁用的数据源，以 `[已禁用]` 后缀标识（BindingsTab.tsx）
-- ARP 数据源禁用触发合规重置：禁用 ARP 数据源时自动重置关联终端 `compliance_status` 为 `unknown`（data_sources.py、terminal_service.py）
+- ARP 数据源禁用触发合规重置：禁用 ARP 数据源时自动重置关联终端 `compliance_status` 为 `unknown`（data\_sources.py、terminal\_service.py）
 - i18n 三语言补全：新增绑定状态、合规冻结、无绑定封堵提示等翻译键（zh.ts、en.ts、ja.ts）
 - 两阶段删除机制：数据源、绑定关系、合规基准删除前提供影响预览 API（`POST /{id}/delete-preview`）
 - 安全删除：自动解封终端、清理黑名单记录、清理 Redis 缓存、触发合规重算
 - 前端 DeletePreviewModal 组件：展示影响范围、操作清单、受影响资源统计
 - 数据源 tag 和合规基准 tag 修改禁止（tag 为系统全局标识符，修改会导致关联数据断裂）
-- RBAC 角色权限控制：4张核心表（roles/permissions/user_roles/role_permissions），5个预设角色（superadmin/admin/operator/auditor/viewer），29个权限码覆盖10个功能模块
+- RBAC 角色权限控制：4张核心表（roles/permissions/user\_roles/role\_permissions），5个预设角色（superadmin/admin/operator/auditor/viewer），29个权限码覆盖10个功能模块
 - `require_permission` 权限检查工厂函数：FastAPI 依赖注入 + Redis 缓存（TTL 300s）+ superuser 短路
 - 角色 CRUD API：7个端点（列表/详情/创建/编辑/删除/权限列表/角色用户列表）
 - 用户角色分配 API：`PUT /roles/users/{id}/roles`（单角色分配）
@@ -395,9 +395,9 @@
 
 ### 修复
 
-- 修复 compliance_service.py 导入错误（`app.models.audit_log` → `app.models.log`）导致后端启动失败
+- 修复 compliance\_service.py 导入错误（`app.models.audit_log` → `app.models.log`）导致后端启动失败
 - 搜索返回空结果（Whitelist/Blacklist/AuditLogs）：`_escape_like` 对已包裹 `%` 的字符串转义导致 LIKE 模式错误
-- AuditLog 搜索缺少 action 字段：搜索只覆盖 ip_address/username/details
+- AuditLog 搜索缺少 action 字段：搜索只覆盖 ip\_address/username/details
 - MAC 搜索从前缀匹配改为包含匹配：`ilike(f"{value}%")` → `ilike(f"%{value}%")`
 - API 全局阻塞（30s+）：paramiko SSH 同步操作阻塞 asyncio 事件循环，改用 `asyncio.to_thread()`
 - 307 重定向 + CSP 错误：前端 API 路径带尾部斜杠，后端路由不带
@@ -410,34 +410,34 @@
 - 用户使用手册（user-guide.md）修正与实际系统功能不一致的描述：仪表板快捷操作（4 个非 5 个）、终端封堵不支持批量选择、终端详情字段修正、黑名单详情移除不存在的审计日志关联、合规基准页面为标签页非独立页面、系统设置无前端管理界面（仅 API）、Logo 不支持动态上传、密码策略为硬编码不可配置、移除不存在的 SSO 和并发会话控制
 - 快速上手指南（quick-start-guide.md）修正终端封堵操作描述（不支持批量勾选）
 
----
+***
 
-## [3.2.0] - 2026-06-10
+## \[3.2.0] - 2026-06-10
 
 ### 新增
 
-- Request-ID 链路追踪：新增 `RequestIDMiddleware` + `ContextVar`，每个 HTTP 请求自动分配 12 位 hex request_id（优先读取客户端 `X-Request-ID` 请求头），响应头返回 `X-Request-ID`，日志格式自动注入 request_id 字段
+- Request-ID 链路追踪：新增 `RequestIDMiddleware` + `ContextVar`，每个 HTTP 请求自动分配 12 位 hex request\_id（优先读取客户端 `X-Request-ID` 请求头），响应头返回 `X-Request-ID`，日志格式自动注入 request\_id 字段
 - 时区全局控制：`config.py` 新增 `TZ` 配置项（默认 `Asia/Shanghai`），`docker-compose.yml` 5 个服务统一添加 `TZ` 环境变量，PostgreSQL 添加 `log_timezone`/`timezone` 参数，后端启动时调用 `time.tzset()` 使 loguru `ZZ` 显示正确时区偏移
 - 前端日志本地时区：`logger.ts` 的 `formatTimestamp()` 从 UTC ISO 格式（`Z` 后缀）改为本地时区+偏移量格式（如 `+08:00`），日志时间与用户本地时间一致
 
 ### 改进
 
-- 日志格式函数化：`logging_config.py` 从静态 `LOG_FORMAT` 字符串改为 `_log_format()` 动态函数，运行时自动从 ContextVar 注入 request_id，非请求上下文显示 `-`
-- 请求日志增强：`RequestLoggingMiddleware` 日志消息增加 `req_id=` 字段，与格式字段中的 request_id 一致
+- 日志格式函数化：`logging_config.py` 从静态 `LOG_FORMAT` 字符串改为 `_log_format()` 动态函数，运行时自动从 ContextVar 注入 request\_id，非请求上下文显示 `-`
+- 请求日志增强：`RequestLoggingMiddleware` 日志消息增加 `req_id=` 字段，与格式字段中的 request\_id 一致
 - Docker 安全加固注释化：`security_opt`/`cap_drop`/`read_only` 等生产加固项改为注释（标注 `Production hardening`），开发环境直接运行，生产环境取消注释即可启用
-- 日志文档补全：`logging-guide.md` 新增 7 个章节（文档版本历史、日志监控与告警、紧急处理流程、性能影响说明、日志分析常用命令、日志配置变更指南、Request-ID 链路追踪）+ 3 项修正（审计归档 cron 示例、前端日志渐进式接入标注、Request-ID 与 error_id 关联说明）
+- 日志文档补全：`logging-guide.md` 新增 7 个章节（文档版本历史、日志监控与告警、紧急处理流程、性能影响说明、日志分析常用命令、日志配置变更指南、Request-ID 链路追踪）+ 3 项修正（审计归档 cron 示例、前端日志渐进式接入标注、Request-ID 与 error\_id 关联说明）
 
----
+***
 
-## [3.1.0] - 2026-06-09
+## \[3.1.0] - 2026-06-09
 
 ### 新增
 
 - Redis fail-open 降级策略：`security.py` 中 10 个 Redis 交互函数统一添加 try/except 异常处理，Redis 不可用时按策略降级（黑名单放行、版本号返回 0、登录防护放行等），避免 Redis 故障导致服务不可用
 - MAC 地址标准化列：`terminals`/`whitelist`/`blacklist` 三张表新增 `mac_address_normalized` 列（VARCHAR(12)，去除分隔符的大写 MAC），Alembic 005 迁移脚本含数据回填和索引创建，6 处 MAC 搜索从 `func.replace()` 变换改为标准化列查询，4 处 MAC 写入点自动填充标准化列
-- 全局异常处理中间件：新增 `error_handler.py`，注册 3 个异常处理器（HTTPException 透传、RequestValidationError 保留 422 格式、未捕获异常返回 500 + error_id + 日志），统一错误响应格式
+- 全局异常处理中间件：新增 `error_handler.py`，注册 3 个异常处理器（HTTPException 透传、RequestValidationError 保留 422 格式、未捕获异常返回 500 + error\_id + 日志），统一错误响应格式
 - CI/CD 流水线：新增 `.github/workflows/ci.yml`（6 个 Job：lint-backend/test-backend/lint-frontend/test-frontend/build-backend/build-frontend），`backend/pyproject.toml`（ruff 配置），`frontend/.eslintrc.json`
-- 后端测试基础设施：重写 `conftest.py`（mock_redis fixture + 内存模拟 Redis），新增 `test_security.py`（4 个测试类 19 用例）、`test_terminals.py`（2 个测试类 10 用例）、`test_whitelist.py`（2 个测试类 3 用例）、`test_blacklist.py`（2 个测试类 2 用例），修复 `test_app.py`/`test_auth.py`/`test_core.py` 与代码变更同步
+- 后端测试基础设施：重写 `conftest.py`（mock\_redis fixture + 内存模拟 Redis），新增 `test_security.py`（4 个测试类 19 用例）、`test_terminals.py`（2 个测试类 10 用例）、`test_whitelist.py`（2 个测试类 3 用例）、`test_blacklist.py`（2 个测试类 2 用例），修复 `test_app.py`/`test_auth.py`/`test_core.py` 与代码变更同步
 - 前端测试基础设施：新增 `vitest.config.ts`、`src/test/setup.ts`、3 个测试文件（`utils.test.ts` 42 用例、`theme.test.ts` 8 用例、`auth.test.ts` 8 用例），共 58 个测试用例
 - LICENSE 文件：项目根目录新增 MIT License 文件
 - manage.sh `cmd_restore` Redis RDB 恢复：恢复数据库时同步恢复 Redis RDB 文件
@@ -448,14 +448,14 @@
 - docker-compose.yml：5 个服务统一添加 `cap_drop: [ALL]`，`nginx` 添加 `cap_add: [NET_BIND_SERVICE]`（绑定低位端口），容器安全加固
 - 评估文档综合评分从 8.6 提升至 8.8（安全 8.5→9.0，鲁棒性 8.5→9.0）
 
----
+***
 
-## [3.0.0] - 2026-06-09
+## \[3.0.0] - 2026-06-09
 
 ### 安全修复（Critical）
 
-- 服务端验证码机制：新增 `GET /auth/captcha` 端点生成算术验证码，答案存入 Redis（5 分钟 TTL），登录时校验 captcha_id + 答案，前端移除本地验证码生成和校验逻辑
-- 加密密钥分离：新增 `ENCRYPTION_KEY` 配置字段，生产环境启动时强制校验（未设置或与 SECRET_KEY 相同则拒绝启动），开发环境回退到 SECRET_KEY 并输出警告日志
+- 服务端验证码机制：新增 `GET /auth/captcha` 端点生成算术验证码，答案存入 Redis（5 分钟 TTL），登录时校验 captcha\_id + 答案，前端移除本地验证码生成和校验逻辑
+- 加密密钥分离：新增 `ENCRYPTION_KEY` 配置字段，生产环境启动时强制校验（未设置或与 SECRET\_KEY 相同则拒绝启动），开发环境回退到 SECRET\_KEY 并输出警告日志
 - 移除不安全默认密码：docker-compose.yml 移除 `DB_PASSWORD:-password`、`REDIS_PASSWORD:-redis_password`、`SECRET_KEY:-your-secret-key-change-in-production` 等弱默认值，改用 `:?` 必填语法；manage.sh 新增 `_check_required_env` 函数检查必需环境变量
 
 ### 安全修复（High）
@@ -470,7 +470,7 @@
 ### 安全修复（Medium）
 
 - JWT Token 类型区分：access token 添加 `"type": "access"` 字段，refresh token 添加 `"type": "refresh"` 字段，refresh 端点验证 Token 类型
-- 上传文件安全加固：新增 `ALLOWED_EXTENSIONS` 扩展名白名单（.jpg/.jpeg/.png/.gif/.ico），移除 SVG 支持（XSS 风险），双重校验 content_type + 扩展名，文件名 UUID 重命名
+- 上传文件安全加固：新增 `ALLOWED_EXTENSIONS` 扩展名白名单（.jpg/.jpeg/.png/.gif/.ico），移除 SVG 支持（XSS 风险），双重校验 content\_type + 扩展名，文件名 UUID 重命名
 - /uploads/ 访问控制：Nginx 添加 Referer 检查，恶意来源返回 403
 - 审计日志导出权限：导出端点从 `get_current_user` 改为 `get_current_active_superuser`，仅超管可导出
 - Redis 密码安全：manage.sh 22 处 `redis-cli -a` 改为 `REDISCLI_AUTH` 环境变量，密码不再暴露在进程列表
@@ -483,9 +483,9 @@
 - 新增 `_escape_like` 和 `token_version` 单元测试
 - 修复 `test_login_wrong_password` 断言适配结构化 detail 响应
 
----
+***
 
-## [2.5.0] - 2026-06-09
+## \[2.5.0] - 2026-06-09
 
 ### 新增
 
@@ -510,9 +510,9 @@
 - 页面闪烁修复：Suspense 移到 Layout Outlet 外层、QueryClient `staleTime` 30s、Sidebar hover 预加载页面组件
 - 搜索闪烁修复：前端使用 `keepPreviousData` 防止搜索时页面闪烁
 
----
+***
 
-## [2.4.0] - 2026-06-09
+## \[2.4.0] - 2026-06-09
 
 ### 新增
 
@@ -521,8 +521,8 @@
 - Terminals 搜索新增 `compliance_status` 过滤参数
 - 前端4个页面搜索输入框添加 300ms debounce，减少无效 API 请求
 - 前端4个页面实现服务端分页，支持浏览全部数据
-- 数据库索引优化：whitelist.created_at、blacklist.blocked_at/expires_at、audit_logs.ip_address
-- 数据库迁移脚本 003_search_indexes.py
+- 数据库索引优化：whitelist.created\_at、blacklist.blocked\_at/expires\_at、audit\_logs.ip\_address
+- 数据库迁移脚本 003\_search\_indexes.py
 - 认证状态恢复机制：`initializeAuth()` 在应用启动时从 sessionStorage 恢复认证状态
 - 401 拦截器并发控制：多个 401 请求只触发一次 token 刷新，排队的请求用新 token 重发
 - 会话过期提示：token 刷新失败时 toast 提示"Session expired"
@@ -541,9 +541,9 @@
 - 修复前端分页与后端分页矛盾导致只能看到前50条数据的问题
 - 修复 logs/export 无 limit 限制可能导致 OOM 的问题（新增 limit 参数，默认10000，最大50000）
 
----
+***
 
-## [2.3.0] - 2026-06-08
+## \[2.3.0] - 2026-06-08
 
 ### 新增
 
@@ -562,24 +562,24 @@
 
 - `firewall_query` 定时任务改用 `TerminalService._get_sangfor_service_by_tag()` + `SangforService.get_blocked_ips()`（原调用不存在的 `query_firewall_blacklist` 方法）
 
----
+***
 
-## [2.2.0] - 2026-06
+## \[2.2.0] - 2026-06
 
 ### 重构
 
 - **MacAddress → Terminal 重命名**：数据库表 `mac_addresses` → `terminals`，后端模型 `MacAddress` → `Terminal`，Schema `MacAddressBase/Create/Update/Response/Query` → `TerminalBase/Create/Update/Response/Query`，服务 `MacService` → `TerminalService`，API 路由 `/mac` → `/terminals`，前端组件 `MacAddresses` → `Terminals`，前端路由 `/mac-addresses` → `/terminals`，前端 Hook `useMacAddresses` → `useTerminals`，前端类型 `MacAddress` → `Terminal`，文件名 `mac_address.py` → `terminal.py`、`mac_service.py` → `terminal_service.py`、`mac_addresses.py` → `terminals.py`、`MacAddresses.tsx` → `Terminals.tsx`、`useMacData.ts` → `useTerminalData.ts`
-- **API 路由 `/mac` → `/terminals`**：`GET /api/v1/mac/` → `GET /api/v1/terminals/`，`GET /api/v1/mac/search` → `GET /api/v1/terminals/search`，`POST /api/v1/mac/block/{ip}` → `POST /api/v1/terminals/block/{ip}`，`POST /api/v1/mac/unblock/{ip}` → `POST /api/v1/terminals/unblock/{ip}`，`GET /api/v1/mac/{id}` → `GET /api/v1/terminals/{id}`
+- **API 路由** **`/mac`** **→** **`/terminals`**：`GET /api/v1/mac/` → `GET /api/v1/terminals/`，`GET /api/v1/mac/search` → `GET /api/v1/terminals/search`，`POST /api/v1/mac/block/{ip}` → `POST /api/v1/terminals/block/{ip}`，`POST /api/v1/mac/unblock/{ip}` → `POST /api/v1/terminals/unblock/{ip}`，`GET /api/v1/mac/{id}` → `GET /api/v1/terminals/{id}`
 - **IP Guard → ComplianceBaseline 分离**：新增 `compliance_baselines` 数据库表，新增 `ComplianceBaseline` 模型、Schema、Endpoint，DataSource 的 `type` 不再包含 `ipguard`（只保留 `arp_ssh`/`arp_api`/`sangfor`），新增 API 路由 `/compliance-baselines/`（CRUD + test + sync），前端 DataSources 页面新增 "Compliance Baselines" Tab，数据库迁移脚本 `002_terminal_baseline.py`
 
----
+***
 
-## [2.1.0] - 2026-06
+## \[2.1.0] - 2026-06
 
 ### 新功能
 
 - **数据源管理系统**：新增 DataSource 和 DataSourceBinding 数据模型，统一管理 ARP 数据源（SSH/API）、IP Guard 合规基准、深信服防火墙，支持数据源 CRUD、测试连接、手动同步
-- **合规检查引擎**：新增 ComplianceService，4 种合规状态判定（compliant/bypass/non_compliant/unknown），白名单匹配类型标记（wl_match_type: mac/ip/both），IPGuard 基准匹配，自动封禁/解封按防火墙 Tag 路由
+- **合规检查引擎**：新增 ComplianceService，4 种合规状态判定（compliant/bypass/non\_compliant/unknown），白名单匹配类型标记（wl\_match\_type: mac/ip/both），IPGuard 基准匹配，自动封禁/解封按防火墙 Tag 路由
 - **多防火墙支持**：数据源绑定（DataSourceBinding）关联 ARP 数据源与防火墙，封禁/解封操作按 Tag 路由到对应防火墙，多防火墙场景创建独立 Blacklist 记录
 - **定时任务可配置**：5 个定时任务频率参数（ARP 采集、IPGuard 同步、防火墙查询、合规检查、自动解封），支持 30 秒 - 1 天间隔，通过 `manage.sh config set` 修改
 - **Scheduler 配置分类**：系统配置新增 `scheduler` 分类，SchedulerConfigResponse 包含 5 个间隔配置项
@@ -592,17 +592,17 @@
 - **Whitelist 详情查看**：白名单页面新增详情弹窗，comments 字段改为必填
 - **Terminal 合规状态**：终端页面从 6 种状态改为 4 种合规状态（Normal/Bypass/Blocked/Pending），集成黑名单数据展示，Bypass 显示匹配类型（MAC/IP/Both），Blocked 显示防火墙 Tag
 - **Terminal 快捷操作**：Bypass 条目支持"从白名单移除"，Blocked 条目支持"从黑名单移除"
-- **Dashboard 合规统计**：统计卡片更新为 5 个（Total/Normal/Bypass/Blocked/Pending），compliance_status 分组统计
-- **导航权限控制**：NAV_ITEMS 新增 adminOnly 字段，Data Sources 和 Users 页面仅管理员可见
+- **Dashboard 合规统计**：统计卡片更新为 5 个（Total/Normal/Bypass/Blocked/Pending），compliance\_status 分组统计
+- **导航权限控制**：NAV\_ITEMS 新增 adminOnly 字段，Data Sources 和 Users 页面仅管理员可见
 
 ### 改进
 
 - **终端总数统计**：Total 统计仅计算 ARP 数据源条目（source='arp'），不再包含白名单独立条目
-- **黑名单手动封禁**：手动封禁 source_tag 标记为 "manual"，compliance_status 设置为 "non_compliant"
-- **黑名单手动解封**：按 firewall_tag 过滤删除 Blacklist 记录，compliance_status 设置为 "unknown"
+- **黑名单手动封禁**：手动封禁 source\_tag 标记为 "manual"，compliance\_status 设置为 "non\_compliant"
+- **黑名单手动解封**：按 firewall\_tag 过滤删除 Blacklist 记录，compliance\_status 设置为 "unknown"
 - **白名单 CIDR 匹配**：存储原始 pattern，使用 ipaddress 模块判断包含关系，不展开 CIDR
 - **合规检查缓存**：IPGuard 数据 Redis 缓存 10 分钟 TTL，白名单数据 Redis 缓存 5 分钟 TTL
-- **ARP 采集后合规更新**：ARP 采集完成后自动运行合规检查，更新 compliance_status 和 wl_match_type
+- **ARP 采集后合规更新**：ARP 采集完成后自动运行合规检查，更新 compliance\_status 和 wl\_match\_type
 - **Demo 默认密码**：Demo 模式默认密码从 admin123 改为 Admin123（满足密码复杂度要求）
 - **前端类型对齐**：MacAddress、WhitelistEntry、BlacklistEntry、DataSourceItem 等类型定义与后端 schema 完全对齐
 - **前端 UI 统一**：所有页面按钮使用默认 md 尺寸，Dashboard Overview 放在页面标题下方
@@ -611,16 +611,16 @@
 
 - 修复 Stats API `GET /mac/stats` 被 `GET /mac/{mac_id}` 路由匹配的问题
 - 修复 Scheduler 配置未出现在 settings API 的问题（AllConfigsResponse 缺少 scheduler 字段）
-- 修复 ConfigService 缺少 get_value 方法导致 _get_scheduler_interval 调用失败
-- 修复 MacAddress 模型缺少 wl_match_type 字段导致前端类型不匹配
-- 修复 arp_collector_service.py 合规检查后未更新 wl_match_type
-- 修复 main.py scheduled_compliance_check 未更新 wl_match_type
+- 修复 ConfigService 缺少 get\_value 方法导致 \_get\_scheduler\_interval 调用失败
+- 修复 MacAddress 模型缺少 wl\_match\_type 字段导致前端类型不匹配
+- 修复 arp\_collector\_service.py 合规检查后未更新 wl\_match\_type
+- 修复 main.py scheduled\_compliance\_check 未更新 wl\_match\_type
 - 修复前端 MacAddresses.tsx 中 removingWlId/removingBlId/whitelistId 与 mac.id 类型比较错误（string | null vs number）
 - 修复前端 MacAddresses.tsx 中 CheckCircle 未使用导入导致构建失败
 
----
+***
 
-## [2.0.0] - 2026-06
+## \[2.0.0] - 2026-06
 
 ### 新功能
 
@@ -647,7 +647,7 @@
 
 - **登录错误提示**：登录失败提示改为持久显示，支持手动关闭
 - **图标一致性**：Dashboard 与导航栏图标统一（Whitelisted=List, Blocked=ShieldOff）
-- **Blacklist ip_address 可空**：黑名单 IP 地址字段改为可选，支持仅基于 MAC 地址的封禁
+- **Blacklist ip\_address 可空**：黑名单 IP 地址字段改为可选，支持仅基于 MAC 地址的封禁
 - **空值保护**：增强各组件对空值/未定义值的容错处理
 - **依赖顺序启停**：按基础设施→应用→代理顺序启动，反向停止
 - **前端构建产物保护**：`dist_backup` 机制防止 Docker Volume 覆盖构建产物
@@ -656,16 +656,16 @@
 
 - 修复 DateRangeFilter onChange 不触发的问题
 - 修复 Blocked 页面 `Cannot read properties of null (reading 'toLowerCase')` 错误
-- 修复黑名单无法单独添加 MAC 地址（ip_address NOT NULL 约束）
+- 修复黑名单无法单独添加 MAC 地址（ip\_address NOT NULL 约束）
 - 修复 Docker 构建 TypeScript 编译错误（`NodeJS.Timeout`、`as const` 类型推断、Fragment 包裹）
 - 修复 PostgreSQL 健康检查 `tam_admin does not exist`（需指定 `-d tam_db`）
 - 修复 Redis 健康检查（需 `-a password` 参数）
 - 修复前端容器构建产物被 Volume 覆盖的问题
 - 修复 Nginx HTTPS 端口映射（内部 443，对外 8443）
 
----
+***
 
-## [1.0.0] - 2025-12
+## \[1.0.0] - 2025-12
 
 ### 初始实现
 
@@ -681,3 +681,4 @@
 - **HTTPS 支持**：Nginx 配置 SSL/TLS
 - **速率限制**：认证端点请求频率限制
 - **CORS 保护**：跨域请求安全配置
+
