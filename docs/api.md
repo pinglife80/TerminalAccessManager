@@ -1,6 +1,6 @@
 # TerminalAccessManager API 文档
 
-> 文档版本：v3.6.6 | 更新日期：2026-07-08
+> 文档版本：v3.6.13 | 更新日期：2026-07-14
 
 > 基于 MAC 地址和 IP 地址的网络终端准入管理平台
 
@@ -810,88 +810,7 @@ curl "https://<HOST_IP>:8443/api/v1/terminals/search?ip=192.168.1&compliance_sta
 
 ---
 
-### 3.3 POST /terminals/block/{ip_address}
-
-封锁 IP 地址，通过深信服 AF 防火墙 API 执行。
-
-- **认证要求**：需认证
-
-> **绑定验证**：封堵操作前会检查终端所属 ARP 数据源是否已绑定防火墙。若终端的 `source_tag` 未关联任何 `DataSourceBinding`，前端将显示防火墙选择器供用户手动指定目标防火墙，或显示"无绑定"错误提示。
-
-**请求参数**
-
-| 参数 | 位置 | 类型 | 必填 | 说明 |
-|------|------|------|------|------|
-| ip_address | Path | string | 是 | 要封锁的 IP 地址 |
-| mac_address | Query | string | 是 | 关联的 MAC 地址 |
-| block_time | Query | string | 否 | 封锁时长，默认 `30d`（如 30d/15d/7d/1h） |
-| firewall_tag | Query | string | 否 | 防火墙标签，指定路由到哪个防火墙 |
-| comments | Query | string | 否 | 封堵备注，写入 Terminal.comments 字段 |
-
-**成功响应** `200`
-
-```json
-{
-  "message": "IP 192.168.1.100 blocked successfully",
-  "success": true
-}
-```
-
-**错误响应**
-
-| 状态码 | 说明 |
-|--------|------|
-| 400 | 封锁失败（防火墙不可达等） |
-
-**用例**
-
-```bash
-curl -X POST "https://<HOST_IP>:8443/api/v1/terminals/block/192.168.1.100?mac_address=AA:BB:CC:DD:EE:FF&block_time=7d&firewall_tag=sangfor-af1" \
-  -H "Authorization: Bearer <access_token>"
-```
-
----
-
-### 3.4 POST /terminals/unblock/{ip_address}
-
-解封 IP 地址。
-
-- **认证要求**：需认证
-
-**请求参数**
-
-| 参数 | 位置 | 类型 | 必填 | 说明 |
-|------|------|------|------|------|
-| ip_address | Path | string | 是 | 要解封的 IP 地址 |
-| mac_address | Query | string | 否 | 关联的 MAC 地址 |
-| firewall_tag | Query | string | 否 | 防火墙标签 |
-| comments | Query | string | 否 | 解封备注，写入 Terminal.comments 字段 |
-
-**成功响应** `200`
-
-```json
-{
-  "message": "IP 192.168.1.100 unblocked successfully",
-  "success": true
-}
-```
-
-**错误响应**
-
-| 状态码 | 说明 |
-|--------|------|
-| 400 | 解封失败 |
-
-**用例**
-
-```bash
-curl -X POST "https://<HOST_IP>:8443/api/v1/terminals/unblock/192.168.1.100?firewall_tag=sangfor-af1" \
-  -H "Authorization: Bearer <access_token>"
-```
-
----
-
-### 3.5 GET /terminals/{terminal_id}
+### 3.3 GET /terminals/{terminal_id}
 
 获取终端详情。
 
@@ -1168,94 +1087,6 @@ curl "https://<HOST_IP>:8443/api/v1/blacklist/?search=192.168&start_date=2025-06
 
 ```bash
 curl "https://<HOST_IP>:8443/api/v1/blacklist/stats" \
-  -H "Authorization: Bearer <access_token>"
-```
-
----
-
-### 5.3 POST /blacklist/
-
-> **⚠️ 已废弃**: 此端点已废弃，请使用 `POST /terminals/block/{ip_address}` 代替。此端点将在未来版本中移除。
-
-添加黑名单条目，同时在深信服 AF 防火墙上执行封锁。IP 和 MAC 至少提供一项。
-
-- **认证要求**：需认证
-
-**请求体**
-
-| 字段 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| ip_address | string | 否 | IP 地址 |
-| mac_address | string | 否 | MAC 地址 |
-| reason | string | 否 | 封禁原因 |
-| block_time | string | 否 | 封锁时长，默认 `30d`（如 15d/7d/1h） |
-| firewall_tag | string | 否 | 防火墙标签，指定路由到哪个防火墙 |
-
-> ip_address 和 mac_address 至少提供一个。
-
-**成功响应** `201`
-
-```json
-{
-  "message": "Added to blacklist and blocked successfully",
-  "success": true
-}
-```
-
-**错误响应**
-
-| 状态码 | 说明 |
-|--------|------|
-| 400 | IP 和 MAC 均未提供；添加失败 |
-
-**用例**
-
-```bash
-curl -X POST https://<HOST_IP>:8443/api/v1/blacklist/ \
-  -H "Authorization: Bearer <access_token>" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "ip_address": "192.168.1.200",
-    "mac_address": "11:22:33:44:55:66",
-    "reason": "违规终端",
-    "block_time": "15d",
-    "firewall_tag": "sangfor-af1"
-  }'
-```
-
----
-
-### 5.4 DELETE /blacklist/{identifier}
-
-删除黑名单条目，同时在深信服 AF 防火墙上执行解封。
-
-- **认证要求**：需认证
-
-**请求参数**
-
-| 参数 | 位置 | 类型 | 必填 | 说明 |
-|------|------|------|------|------|
-| identifier | Path | string | 是 | MAC 地址或 IP 地址 |
-
-**成功响应** `200`
-
-```json
-{
-  "message": "Successfully unblocked terminal",
-  "success": true
-}
-```
-
-**错误响应**
-
-| 状态码 | 说明 |
-|--------|------|
-| 404 | 条目不存在 |
-
-**用例**
-
-```bash
-curl -X DELETE https://<HOST_IP>:8443/api/v1/blacklist/192.168.1.200 \
   -H "Authorization: Bearer <access_token>"
 ```
 

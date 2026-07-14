@@ -1,6 +1,6 @@
 # TerminalAccessManager 业务流程文档
 
-> 文档版本：v3.6.6 | 更新日期：2026-07-08
+> 文档版本：v3.6.13 | 更新日期：2026-07-14
 >
 > 本文档详细说明 TerminalAccessManager 的核心业务流程，包括数据采集、合规判定、封锁/解封的完整生命周期。
 
@@ -13,10 +13,10 @@
 3. [合规判定流程](#3-合规判定流程)
 4. [自动封锁流程](#4-自动封锁流程)
 5. [自动解封流程](#5-自动解封流程)
-6. [手动封锁/解封流程](#6-手动封锁解封流程)
-7. [黑名单管理流程](#7-黑名单管理流程)
-8. [状态机流转图](#8-状态机流转图)
-9. [关键参数说明](#9-关键参数说明)
+6. [黑名单管理流程](#6-黑名单管理流程)
+7. [状态机流转图](#7-状态机流转图)
+8. [关键参数说明](#8-关键参数说明)
+9. [事件触发点汇总](#9-事件触发点汇总)
 
 ---
 
@@ -334,42 +334,9 @@ await emit_terminal_compliant(ip_address, mac_address, source_tag)
 
 ---
 
-## 6. 手动封锁/解封流程
+## 6. 黑名单管理流程
 
-### 6.1 手动封锁流程
-
-```
-用户请求 → 验证权限 → 调用深信服API封锁 → 更新终端状态 → 创建黑名单记录 → 记录审计日志 → 发送通知事件
-```
-
-#### 关键代码位置
-
-`terminal_service.py` → `block_ip()`
-
-### 6.2 手动解封流程
-
-```
-用户请求 → 验证权限 → 调用深信服API解封 → 更新终端状态 → 更新黑名单记录（软删除） → 记录审计日志 → 发送通知事件
-```
-
-#### 关键代码位置
-
-`terminal_service.py` → `unblock_ip()` / `delete_from_blacklist()`
-
-### 6.3 与自动流程的区别
-
-| 对比项 | 自动流程 | 手动流程 |
-|--------|---------|---------|
-| 触发方式 | 合规判定自动触发 | 用户手动操作 |
-| `is_auto_blocked` | True | False |
-| `blocked_by` | "system" | 用户名 |
-| `unblocked_by` | "system" | 用户名 |
-
----
-
-## 7. 黑名单管理流程
-
-### 7.1 数据模型
+### 6.1 数据模型
 
 ```python
 class Blacklist(Base):
@@ -388,7 +355,7 @@ class Blacklist(Base):
     unblocked_by = Column(String(50), nullable=True)
 ```
 
-### 7.2 黑名单状态
+### 6.2 黑名单状态
 
 | 状态 | 条件 | 说明 |
 |------|------|------|
@@ -397,7 +364,7 @@ class Blacklist(Base):
 
 > **注意：** v3.6.6 统一了黑名单筛选逻辑，同时考虑 `auto_unblocked` 和 `unblocked_at` 两个字段，避免历史数据中 `auto_unblocked=True` 但 `unblocked_at IS NULL` 的记录被遗漏。
 
-### 7.3 清理流程
+### 6.3 清理流程
 
 定时任务定期清理过期的黑名单记录：
 
@@ -416,9 +383,9 @@ async def cleanup_expired_blacklist(self) -> int:
 
 ---
 
-## 8. 状态机流转图
+## 7. 状态机流转图
 
-### 8.1 终端状态机
+### 7.1 终端状态机
 
 ```
                     ┌──────────────────┐
@@ -442,7 +409,7 @@ async def cleanup_expired_blacklist(self) -> int:
                                              │
                               ┌──────────────┼──────────────┐
                               ▼              ▼              ▼
-                       手动解封         合规变更          封锁过期
+                       合规变更         合规变更          封锁过期
                               │              │              │
                               └──────────────┴──────────────┘
                                              ▼
@@ -452,7 +419,7 @@ async def cleanup_expired_blacklist(self) -> int:
                                     └─────────────┘
 ```
 
-### 8.2 合规状态流转
+### 7.2 合规状态流转
 
 | 当前状态 | 触发条件 | 新状态 |
 |---------|---------|--------|
@@ -466,9 +433,9 @@ async def cleanup_expired_blacklist(self) -> int:
 
 ---
 
-## 9. 关键参数说明
+## 8. 关键参数说明
 
-### 9.1 终端相关参数
+### 8.1 终端相关参数
 
 | 参数 | 类型 | 说明 |
 |------|------|------|
@@ -478,7 +445,7 @@ async def cleanup_expired_blacklist(self) -> int:
 | `firewall_tag` | string | 绑定的防火墙标签 |
 | `wl_match_type` | string | 白名单匹配类型：mac/ip/both |
 
-### 9.2 黑名单相关参数
+### 8.2 黑名单相关参数
 
 | 参数 | 类型 | 说明 |
 |------|------|------|
@@ -488,7 +455,7 @@ async def cleanup_expired_blacklist(self) -> int:
 | `unblocked_by` | string | 解封操作人 |
 | `expires_at` | datetime | 封锁过期时间 |
 
-### 9.3 合规判定相关参数
+### 8.3 合规判定相关参数
 
 | 参数 | 类型 | 说明 |
 |------|------|------|
@@ -497,9 +464,9 @@ async def cleanup_expired_blacklist(self) -> int:
 
 ---
 
-## 10. 事件触发点汇总
+## 9. 事件触发点汇总
 
-### 10.1 安全事件
+### 9.1 安全事件
 
 | 事件类型 | 触发场景 | 触发位置 |
 |---------|---------|---------|
@@ -512,7 +479,7 @@ async def cleanup_expired_blacklist(self) -> int:
 | USER_DELETED | 用户删除 | auth.py |
 | USER_UPDATED | 用户更新 | auth.py |
 
-### 10.2 终端事件
+### 9.2 终端事件
 
 | 事件类型 | 触发场景 | 触发位置 |
 |---------|---------|---------|
@@ -522,7 +489,7 @@ async def cleanup_expired_blacklist(self) -> int:
 | TERMINAL_NON_COMPLIANT | 终端变为不合规 | compliance_service.py |
 | TERMINAL_ONLINE | 新终端上线 | arp_collector_service.py |
 
-### 10.3 系统事件
+### 9.3 系统事件
 
 | 事件类型 | 触发场景 | 触发位置 |
 |---------|---------|---------|
@@ -531,7 +498,7 @@ async def cleanup_expired_blacklist(self) -> int:
 | BACKUP_COMPLETED | 备份完成 | backup_service.py |
 | BACKUP_FAILED | 备份失败 | backup_service.py |
 
-### 10.4 合规告警
+### 9.4 合规告警
 
 | 事件类型 | 触发场景 | 触发位置 |
 |---------|---------|---------|
@@ -541,7 +508,7 @@ async def cleanup_expired_blacklist(self) -> int:
 | BLOCK_THRESHOLD_EXCEEDED | 封锁阈值超限 | compliance_service.py |
 | POLICY_VIOLATION | 策略违规 | compliance_service.py |
 
-### 10.5 管理事件
+### 9.5 管理事件
 
 | 事件类型 | 触发场景 | 触发位置 |
 |---------|---------|---------|

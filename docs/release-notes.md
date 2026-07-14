@@ -1,10 +1,64 @@
 # 版本跟踪记录
 
-> 文档版本：v3.6.11 | 更新日期：2026-07-14
+> 文档版本：v3.6.13 | 更新日期：2026-07-14
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
+
+---
+
+## [v3.6.13] - 2026-07-14
+
+### 业务逻辑闭环优化
+
+#### 功能变更
+
+- **移除手动封锁/解封功能**
+  - 变更描述：系统核心业务逻辑闭环改为合规自动判断封锁和解封锁，移除所有手动操作入口
+  - 根因：手动操作可能导致状态不一致，违背合规自动管理原则
+  - 变更内容：
+    - 删除手动封锁 API 端点：`POST /terminals/block/{ip_address}`
+    - 删除手动解封 API 端点：`POST /terminals/unblock/{ip_address}`
+    - 删除黑名单手动添加端点：`POST /blacklist/`
+    - 删除黑名单手动删除端点：`DELETE /blacklist/{identifier}`
+    - 删除后端服务方法：`block_ip`, `unblock_ip`, `add_to_blacklist`, `delete_from_blacklist`
+  - 关联文件：`backend/app/api/v1/endpoints/terminals.py`, `backend/app/api/v1/endpoints/blacklist.py`, `backend/app/services/terminal_service.py`
+
+- **终端管理优化**
+  - 变更描述：优化终端管理页面操作权限，确保业务操作统一
+  - 变更内容：
+    - 合规终端（compliant）无任何操作按钮
+    - 白名单终端（bypass）无移出白名单操作，移除动作集中在白名单管理中
+    - 仅不合规（non_compliant）和未知（unknown）终端保留加白操作
+  - 关联文件：`frontend/src/pages/Terminals.tsx`
+
+- **黑名单管理优化**
+  - 变更描述：移除解封按钮和状态标签页，只显示当前被封锁的记录
+  - 变更内容：
+    - 移除解封按钮和删除确认模态框
+    - 移除状态标签页（Active/Unblocked），只显示当前被封锁的记录
+    - 封锁和解封的追溯通过完整的审计日志查询
+  - 关联文件：`frontend/src/pages/Blacklist.tsx`
+
+#### 代码变更清单
+
+| 文件 | 变更内容 | 类型 |
+|------|---------|------|
+| `backend/app/api/v1/endpoints/terminals.py` | 删除手动封锁/解封端点 | feat |
+| `backend/app/api/v1/endpoints/blacklist.py` | 删除手动添加/删除黑名单端点 | feat |
+| `backend/app/services/terminal_service.py` | 删除手动封锁/解封服务方法 | feat |
+| `frontend/src/pages/Terminals.tsx` | 优化终端操作权限逻辑 | feat |
+| `frontend/src/pages/Blacklist.tsx` | 移除解封按钮和状态标签页 | feat |
+| `docs/business-workflow.md` | 更新业务工作流文档 | docs |
+| `docs/api.md` | 更新 API 文档 | docs |
+
+#### 测试验证
+
+- API 端点验证：手动封锁/解封端点返回 404/405 错误
+- 前端构建验证：`./manage.sh -y update` 构建成功
+- 服务状态验证：`./manage.sh status` 所有服务正常
+- 业务流程验证：合规自动封锁/解封逻辑正常运行
 
 ---
 

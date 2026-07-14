@@ -1,11 +1,40 @@
 # 更新日志
 
-> 文档版本：v3.6.9  更新日期：2026-07-08
+> 文档版本：v3.6.13  更新日期：2026-07-14
 
 本文件记录 TerminalAccessManager 的所有重要变更。
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
+
+***
+
+## \[3.6.13] - 2026-07-14
+
+### 变更
+
+- **移除手动封锁/解封功能**：系统核心业务逻辑闭环改为合规自动判断封锁和解封锁
+  - 删除手动封锁 API 端点：`POST /terminals/block/{ip_address}`
+  - 删除手动解封 API 端点：`POST /terminals/unblock/{ip_address}`
+  - 删除黑名单手动添加端点：`POST /blacklist/`
+  - 删除黑名单手动删除端点：`DELETE /blacklist/{identifier}`
+  - 删除后端服务方法：`block_ip`, `unblock_ip`, `add_to_blacklist`, `delete_from_blacklist`
+
+- **终端管理优化**：
+  - 合规终端（compliant）无任何操作按钮
+  - 白名单终端（bypass）无移出白名单操作，移除动作集中在白名单管理中
+  - 仅不合规（non_compliant）和未知（unknown）终端保留加白操作
+
+- **黑名单管理优化**：
+  - 移除解封按钮和删除确认模态框
+  - 移除状态标签页（Active/Unblocked），只显示当前被封锁的记录
+  - 封锁和解封的追溯通过完整的审计日志查询
+
+### 文档更新
+
+- 更新业务工作流文档，移除手动封锁/解封流程章节
+- 更新 API 文档，移除已删除的 API 端点
+- 更新所有文档版本号至 v3.6.13
 
 ***
 

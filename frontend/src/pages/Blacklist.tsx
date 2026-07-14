@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Search, Trash2, AlertTriangle, Clock, Server, Download, Eye, Shield, RefreshCw, ChevronDown, Unlock } from 'lucide-react';
+import { Search, AlertTriangle, Clock, Server, Download, Eye, Shield, RefreshCw, ChevronDown, Unlock } from 'lucide-react';
 import { useBlacklist, useBlacklistStats, BlacklistEntry } from '@/hooks/useTerminalData';
 import { apiClient } from '@/lib/api';
 import { toast } from 'sonner';
@@ -26,13 +26,10 @@ const REFRESH_OPTIONS: { labelKey?: string; label: string; value: number }[] = [
 const Blacklist: React.FC = () => {
   const { t } = useTranslation();
   const [searchTerm, setSearchTerm] = useState('');
-  const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [showDetailsModal, setShowDetailsModal] = useState(false);
-  const [deleteEntry, setDeleteEntry] = useState<BlacklistEntry | null>(null);
   const [selectedEntry, setSelectedEntry] = useState<BlacklistEntry | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
-  const [isUnblocking, setIsUnblocking] = useState(false);
   const [filterCollapsed, setFilterCollapsed] = useState(false);
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
@@ -69,29 +66,6 @@ const Blacklist: React.FC = () => {
   const handlePageSizeChange = (size: number) => {
     setPageSize(size);
     setCurrentPage(1);
-  };
-
-  const handleRemoveBlacklist = (entry: BlacklistEntry) => {
-    setDeleteEntry(entry);
-    setShowDeleteModal(true);
-  };
-
-  const confirmUnblock = async () => {
-    if (!deleteEntry) return;
-
-    setIsUnblocking(true);
-    try {
-      const identifier = deleteEntry.mac_address || deleteEntry.ip_address;
-      await apiClient.delete(`${API_ENDPOINTS.BLACKLIST}${identifier}`);
-      toast.success(t('blacklist.unblockedSuccessfully'));
-      refetch();
-    } catch (error: unknown) {
-      toast.error(getErrorMessage(error, t('blacklist.failedToUnblock')));
-    } finally {
-      setIsUnblocking(false);
-      setShowDeleteModal(false);
-      setDeleteEntry(null);
-    }
   };
 
   const handleViewDetails = (entry: BlacklistEntry) => {
@@ -145,7 +119,7 @@ const Blacklist: React.FC = () => {
       <div className="mb-6 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div>
           <h1 className="text-2xl sm:text-3xl font-bold text-foreground">{t('blacklist.blockedTerminals')}</h1>
-          <p className="text-muted-foreground mt-1">{t('blacklist.manageBlocked')}
+          <p className="text-muted-foreground mt-1">{t('blacklist.manageBlocked')}</p>
         </div>
         <PrimaryButton
           icon={Download}
@@ -421,20 +395,10 @@ const Blacklist: React.FC = () => {
                       <ButtonGroup>
                         <IconButton
                           icon={Eye}
-                          variant="primary"
                           size="md"
                           title={t('terminal.viewDetails')}
                           onClick={() => handleViewDetails(item)}
                         />
-                        {!(item.auto_unblocked || item.unblocked_at) && (
-                          <IconButton
-                            icon={Trash2}
-                            variant="success"
-                            size="md"
-                            title={t('terminal.unblockTerminal')}
-                            onClick={() => handleRemoveBlacklist(item)}
-                          />
-                        )}
                       </ButtonGroup>
                     </td>
                   </tr>
@@ -455,59 +419,6 @@ const Blacklist: React.FC = () => {
           variant="bottom"
         />
       </div>
-
-      {/* Delete Confirmation Modal */}
-      <Modal isOpen={showDeleteModal && !!deleteEntry} onClose={() => { setShowDeleteModal(false); setDeleteEntry(null); }} title={t('blacklist.confirmUnblock')} size="sm">
-        <div className="flex items-center gap-4 mb-4">
-          <div className="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center">
-            <Trash2 className="h-6 w-6 text-green-600" />
-          </div>
-          <div>
-            <p className="text-sm text-muted-foreground">{t('blacklist.areYouSureUnblock')}</p>
-          </div>
-        </div>
-
-        <div className="bg-background rounded-lg p-4 mb-6">
-          <div className="space-y-2 text-sm">
-            {deleteEntry?.mac_address && (
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">{t('terminal.mac')}:</span>
-                <span className="font-mono text-foreground">{deleteEntry.mac_address}</span>
-              </div>
-            )}
-            {deleteEntry?.ip_address && (
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">{t('blacklist.ip')}:</span>
-                <span className="font-mono text-foreground">{deleteEntry.ip_address}</span>
-              </div>
-            )}
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">{t('blacklist.reason')}:</span>
-              <span className="text-foreground">{deleteEntry?.reason}</span>
-            </div>
-          </div>
-        </div>
-
-        <div className="flex gap-3">
-          <PrimaryButton
-            label="Cancel"
-            variant="secondary"
-            onClick={() => {
-              setShowDeleteModal(false);
-              setDeleteEntry(null);
-            }}
-            className="flex-1"
-          />
-          <PrimaryButton
-            icon={Trash2}
-            label={t('common.unblock')}
-            variant="success"
-            onClick={confirmUnblock}
-            loading={isUnblocking}
-            className="flex-1"
-          />
-        </div>
-      </Modal>
 
       {/* Details Modal */}
       <Modal isOpen={showDetailsModal && !!selectedEntry} onClose={() => { setShowDetailsModal(false); setSelectedEntry(null); }} title={t('blacklist.blockedTerminalDetails')} size="md">
@@ -598,19 +509,7 @@ const Blacklist: React.FC = () => {
             </div>
           </div>
 
-          {!(selectedEntry?.auto_unblocked || selectedEntry?.unblocked_at) && (
-            <PrimaryButton
-              icon={Trash2}
-              label={t('terminal.unblockTerminal')}
-              variant="success"
-              onClick={() => {
-                if (selectedEntry) handleRemoveBlacklist(selectedEntry);
-                setShowDetailsModal(false);
-                setSelectedEntry(null);
-              }}
-              className="w-full"
-            />
-          )}
+          
         </div>
       </Modal>
       </>
