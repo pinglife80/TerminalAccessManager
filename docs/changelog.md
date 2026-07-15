@@ -1,6 +1,6 @@
 # 更新日志
 
-> 文档版本：v3.6.14  更新日期：2026-07-15
+> 文档版本：v3.6.15  更新日期：2026-07-16
 
 本文件记录 TerminalAccessManager 的所有重要变更。
 
@@ -38,7 +38,36 @@
 
 ***
 
-## \[3.6.14] - 2026-07-15
+## [3.6.15] - 2026-07-16
+
+### 修复
+
+- **黑名单数据一致性修复**：修复黑名单管理页面与防火墙、Dashboard、终端管理统计数量不一致问题
+  - `get_blacklist`、`get_blacklist_count`、`get_blacklist_stats` 方法添加过期时间过滤
+  - 原因：黑名单管理页面未过滤已过期记录，导致显示数量偏多
+  - 关联文件：`backend/app/services/terminal_service.py`
+
+- **防火墙对账记录类型修复**：修复对账服务创建的记录被错误标记为手动封锁
+  - `_create_db_entries` 方法中 `is_auto_blocked` 从 `False` 改为 `True`
+  - `_get_db_active_blacklist` 方法添加过期时间过滤
+  - 关联文件：`backend/app/services/firewall_reconciliation_service.py`
+
+- **防火墙查询导入修复**：修复 `terminal_service.py` 中 `decrypt_config` 未导入导致的 NameError
+  - 关联文件：`backend/app/services/terminal_service.py`
+
+- **防火墙查询结果解析修复**：修复 `cli.py` 中防火墙查询结果解析逻辑
+  - 原代码 `result.get("data", [])` 修正为 `result.get("data", {}).get("items", [])`
+  - 关联文件：`backend/cli.py`
+
+### 文档更新
+
+- 更新 changelog.md 添加 v3.6.15 变更记录
+- 更新 release-notes.md 添加 v3.6.15 发布记录
+- 统一所有文档版本号至 v3.6.15
+
+***
+
+## [3.6.14] - 2026-07-15
 
 ### 修复
 

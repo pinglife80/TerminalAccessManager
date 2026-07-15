@@ -1671,7 +1671,7 @@ async def _scheduler_trigger(args):
                 if sangfor:
                     try:
                         result = await sangfor.get_blocked_ips()
-                        blocked_count = len(result.get("data", [])) if isinstance(result, dict) else 0
+                        blocked_count = len(result.get("data", {}).get("items", [])) if isinstance(result, dict) else 0
                         print(f"  {source.tag}: found {blocked_count} blocked IPs")
                         await sangfor.close()
                     except Exception as e:
