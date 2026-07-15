@@ -464,28 +464,34 @@ class ComplianceService:
                 continue
 
             # Block on each associated firewall (using pre-resolved services)
-            # Operations are queued to avoid exceeding firewall concurrent user limits
+            # Synchronous call: only update DB after confirming firewall success
+            fw_success_count = 0
             for fw_tag in firewall_tags:
                 svc = sangfor_services.get(fw_tag)
                 if not svc:
                     errors.append(
-                        f"Failed to block {entry.ip_address} on firewall '{fw_tag}'"
+                        f"Failed to block {entry.ip_address} on firewall '{fw_tag}': service not available"
                     )
                     continue
                 try:
-                    from app.services.sangfor_service import FirewallOperationType
-                    svc.enqueue_operation(
-                        FirewallOperationType.BLOCK,
-                        entry.ip_address,
+                    result = await svc.block_ip(
+                        [entry.ip_address],
                         source_tag=fw_tag,
                         reason=f"Auto-blocked: non-compliant (source={arp_source_tag})"
                     )
-                    logger.debug(f"Queued block operation for {entry.ip_address} on firewall '{fw_tag}'")
+                    if result.get("code") == 0:
+                        fw_success_count += 1
+                        logger.debug(f"Blocked {entry.ip_address} on firewall '{fw_tag}'")
+                    else:
+                        error_msg = result.get("message", "unknown error")
+                        errors.append(
+                            f"Failed to block {entry.ip_address} on firewall '{fw_tag}': {error_msg}"
+                        )
                 except Exception as e:
                     errors.append(
-                        f"Error queuing block for {entry.ip_address} on firewall '{fw_tag}': {str(e)}"
+                        f"Error blocking {entry.ip_address} on firewall '{fw_tag}': {str(e)}"
                     )
-            all_success = len(errors) == 0
+            all_success = fw_success_count == len(firewall_tags) and len(errors) == 0
 
             if all_success:
                 # Update MAC status
@@ -980,7 +986,7 @@ class ComplianceService:
         self, ip_address: str, firewall_tag: str, block_time: str = "30d",
         reason: str = "Auto-blocked: non-compliant"
     ) -> bool:
-        """Block an IP on the specified firewall via permanent blacklist (queued)"""
+        """Block an IP on the specified firewall via permanent blacklist (synchronous)"""
         try:
             stmt = select(DataSource).where(
                 (DataSource.tag == firewall_tag) & (DataSource.type == "sangfor")
@@ -1000,7 +1006,7 @@ class ComplianceService:
                 return False
 
             from app.core.crypto import decrypt_config
-            from app.services.sangfor_service import SangforService, FirewallOperationType
+            from app.services.sangfor_service import SangforService
             config = fw_source.config
             if config:
                 config = decrypt_config(config)
@@ -1013,18 +1019,26 @@ class ComplianceService:
                 ca_bundle=config.get("ca_bundle", ""),
             )
 
-            svc.enqueue_operation(FirewallOperationType.BLOCK, ip_address, firewall_tag, reason)
-            logger.info(f"Queued block operation for {ip_address} on firewall '{firewall_tag}'")
+            result = await svc.block_ip(
+                [ip_address],
+                source_tag=firewall_tag,
+                reason=reason,
+            )
+            success = result.get("code") == 0
+            if success:
+                logger.info(f"Blocked {ip_address} on firewall '{firewall_tag}'")
+            else:
+                logger.error(f"Failed to block {ip_address} on firewall '{firewall_tag}': {result.get('message', 'unknown error')}")
             await self.log_action("system", "firewall_block", "firewall", firewall_tag, {
-                "message": f"Blocked IP {ip_address} on firewall {firewall_tag}",
+                "message": f"Blocked IP {ip_address} on firewall {firewall_tag}" if success else f"Failed to block IP {ip_address} on firewall {firewall_tag}: {result.get('message', 'unknown error')}",
                 "ip_address": ip_address,
                 "firewall_tag": firewall_tag,
-                "success": True,
+                "success": success,
                 "reason": reason,
             }, ip_address="System")
-            return True
+            return success
         except Exception as e:
-            logger.error(f"Failed to queue block {ip_address} on firewall '{firewall_tag}': {str(e)}")
+            logger.error(f"Failed to block {ip_address} on firewall '{firewall_tag}': {str(e)}")
             await self.log_action("system", "firewall_block", "firewall", firewall_tag, {
                 "message": f"Failed to block IP {ip_address} on firewall {firewall_tag}: {str(e)}",
                 "ip_address": ip_address,
@@ -1035,7 +1049,7 @@ class ComplianceService:
             return False
 
     async def _unblock_on_firewall(self, ip_address: str, firewall_tag: str) -> bool:
-        """Unblock an IP on the specified firewall (queued)"""
+        """Unblock an IP on the specified firewall (synchronous)"""
         try:
             stmt = select(DataSource).where(
                 (DataSource.tag == firewall_tag) & (DataSource.type == "sangfor")
@@ -1055,7 +1069,7 @@ class ComplianceService:
                 return False
 
             from app.core.crypto import decrypt_config
-            from app.services.sangfor_service import SangforService, FirewallOperationType
+            from app.services.sangfor_service import SangforService
             config = fw_source.config
             if config:
                 config = decrypt_config(config)
@@ -1068,17 +1082,21 @@ class ComplianceService:
                 ca_bundle=config.get("ca_bundle", ""),
             )
 
-            svc.enqueue_operation(FirewallOperationType.UNBLOCK, ip_address)
-            logger.info(f"Queued unblock operation for {ip_address} on firewall '{firewall_tag}'")
+            result = await svc.unblock_ip([{"srcIP": ip_address}])
+            success = result.get("code") == 0
+            if success:
+                logger.info(f"Unblocked {ip_address} on firewall '{firewall_tag}'")
+            else:
+                logger.error(f"Failed to unblock {ip_address} on firewall '{firewall_tag}': {result.get('message', 'unknown error')}")
             await self.log_action("system", "firewall_unblock", "firewall", firewall_tag, {
-                "message": f"Unblocked IP {ip_address} on firewall {firewall_tag}",
+                "message": f"Unblocked IP {ip_address} on firewall {firewall_tag}" if success else f"Failed to unblock IP {ip_address} on firewall {firewall_tag}: {result.get('message', 'unknown error')}",
                 "ip_address": ip_address,
                 "firewall_tag": firewall_tag,
-                "success": True,
+                "success": success,
             }, ip_address="System")
-            return True
+            return success
         except Exception as e:
-            logger.error(f"Failed to queue unblock {ip_address} on firewall '{firewall_tag}': {str(e)}")
+            logger.error(f"Failed to unblock {ip_address} on firewall '{firewall_tag}': {str(e)}")
             await self.log_action("system", "firewall_unblock", "firewall", firewall_tag, {
                 "message": f"Failed to unblock IP {ip_address} on firewall {firewall_tag}: {str(e)}",
                 "ip_address": ip_address,
