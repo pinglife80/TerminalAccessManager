@@ -303,13 +303,15 @@ const ComplianceBaselinesTab = forwardRef<{ openAddModal: () => void }, Complian
   const [complianceLoading, setComplianceLoading] = useState(false);
   const [autoBlockLoading, setAutoBlockLoading] = useState(false);
   const [autoUnblockLoading, setAutoUnblockLoading] = useState(false);
+  const [forceCheck, setForceCheck] = useState(false);
+  const [showAutoBlockModal, setShowAutoBlockModal] = useState(false);
 
   const handleComplianceCheck = async () => {
     setComplianceLoading(true);
     try {
       const response = await apiClient.post(API_ENDPOINTS.COMPLIANCE_CHECK, {
         arp_source_tag: selectedTag || undefined,
-        force: false,
+        force: forceCheck,
       });
       const r = response.data;
       toast.success(t('compliance.checkComplete', {
@@ -324,9 +326,13 @@ const ComplianceBaselinesTab = forwardRef<{ openAddModal: () => void }, Complian
     }
   };
 
-  const handleAutoBlock = async () => {
+  const handleAutoBlockClick = () => {
     if (!selectedTag) { toast.warning(t('compliance.selectSourceTag')); return; }
-    if (!window.confirm(t('compliance.confirmAutoBlock'))) return;
+    setShowAutoBlockModal(true);
+  };
+
+  const handleAutoBlockConfirm = async () => {
+    setShowAutoBlockModal(false);
     setAutoBlockLoading(true);
     try {
       const response = await apiClient.post(API_ENDPOINTS.COMPLIANCE_AUTO_BLOCK, {
@@ -338,6 +344,9 @@ const ComplianceBaselinesTab = forwardRef<{ openAddModal: () => void }, Complian
       toast.success(t('compliance.autoBlockComplete', {
         total: r.total_non_compliant, blocked: r.blocked, skipped: r.skipped,
       }));
+      if (r.total_non_compliant === 0) {
+        toast.info(t('compliance.autoBlockNoAction'));
+      }
       if (r.errors?.length) toast.warning(t('compliance.partialErrors', { count: r.errors.length }));
       queryClient.invalidateQueries({ queryKey: ['terminals'] });
       queryClient.invalidateQueries({ queryKey: ['blacklist'] });
@@ -356,6 +365,9 @@ const ComplianceBaselinesTab = forwardRef<{ openAddModal: () => void }, Complian
       toast.success(t('compliance.autoUnblockComplete', {
         total: r.total_auto_blocked, unblocked: r.unblocked, skipped: r.skipped,
       }));
+      if (r.unblocked === 0 && r.skipped > 0) {
+        toast.info(t('compliance.autoUnblockNoAction'));
+      }
       if (r.errors?.length) toast.warning(t('compliance.partialErrors', { count: r.errors.length }));
       queryClient.invalidateQueries({ queryKey: ['terminals'] });
       queryClient.invalidateQueries({ queryKey: ['blacklist'] });
@@ -384,6 +396,15 @@ const ComplianceBaselinesTab = forwardRef<{ openAddModal: () => void }, Complian
               ))}
             </select>
           </div>
+          <label className="flex items-center gap-2 text-sm text-muted-foreground cursor-pointer pb-2">
+            <input
+              type="checkbox"
+              checked={forceCheck}
+              onChange={(e) => setForceCheck(e.target.checked)}
+              className="rounded border-input"
+            />
+            {t('compliance.forceRecheck')}
+          </label>
           <PrimaryButton
             icon={ShieldCheck}
             label={t('compliance.runCheck')}
@@ -394,7 +415,7 @@ const ComplianceBaselinesTab = forwardRef<{ openAddModal: () => void }, Complian
           <PrimaryButton
             icon={Ban}
             label={t('compliance.autoBlock')}
-            onClick={handleAutoBlock}
+            onClick={handleAutoBlockClick}
             loading={autoBlockLoading}
             variant="danger"
           />
@@ -407,6 +428,21 @@ const ComplianceBaselinesTab = forwardRef<{ openAddModal: () => void }, Complian
           />
         </div>
       </div>
+      {/* Auto Block confirmation modal */}
+      <Modal isOpen={showAutoBlockModal} onClose={() => setShowAutoBlockModal(false)} title={t('compliance.confirmAutoBlock')} size="sm">
+        <div className="space-y-4">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-red-100 rounded-full flex items-center justify-center">
+              <Ban className="h-5 w-5 text-red-600" />
+            </div>
+            <p className="text-sm text-muted-foreground">{t('compliance.autoBlockWarning')}</p>
+          </div>
+          <div className="flex justify-end gap-2">
+            <PrimaryButton label={t('common.cancel')} onClick={() => setShowAutoBlockModal(false)} variant="secondary" />
+            <PrimaryButton label={t('common.confirm')} onClick={handleAutoBlockConfirm} variant="danger" loading={autoBlockLoading} />
+          </div>
+        </div>
+      </Modal>
       {/* Table */}
       <div className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden">
         <div className="overflow-x-auto">

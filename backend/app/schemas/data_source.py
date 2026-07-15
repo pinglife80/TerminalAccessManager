@@ -121,6 +121,7 @@ class AutoBlockResult(BaseModel):
     skipped: int = 0
     errors: list[str] = []
     details: list[dict[str, Any]] | None = None
+    message: str | None = None
 
 
 class AutoUnblockResult(BaseModel):
@@ -130,6 +131,7 @@ class AutoUnblockResult(BaseModel):
     skipped: int = 0
     errors: list[str] = []
     details: list[dict[str, Any]] | None = None
+    message: str | None = None
 
 
 # ------------------------------------------------------------------

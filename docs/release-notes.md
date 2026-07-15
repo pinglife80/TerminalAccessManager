@@ -1,10 +1,48 @@
 # 版本跟踪记录
 
-> 文档版本：v3.6.15 | 更新日期：2026-07-16
+> 文档版本：v3.6.16 | 更新日期：2026-07-16
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
+
+---
+
+## [v3.6.16] - 2026-07-16
+
+### 合规基线管理按钮交互体验优化
+
+#### 变更内容
+
+- **Run Compliance Check 添加 Force Re-check 选项**
+  - 问题：前端硬编码 `force: false`，只检查 unknown 终端，但 ARP 采集时已自动处理所有终端
+  - 修复：添加 `forceCheck` 复选框 state，传递到 API 请求
+  - 关联文件：`frontend/src/components/datasources/ComplianceBaselinesTab.tsx`
+
+- **Auto Block 确认对话框优化**
+  - 问题：使用浏览器原生 `window.confirm`，与项目 UI 设计不一致
+  - 修复：用自定义 Modal 组件替换，拆分为 `handleAutoBlockClick`（打开 Modal）和 `handleAutoBlockConfirm`（确认执行）
+  - 关联文件：`frontend/src/components/datasources/ComplianceBaselinesTab.tsx`
+
+- **Auto Block / Auto Unblock 提示优化**
+  - 问题：返回0条操作时仅显示数字，用户不理解原因
+  - 修复：Auto Block 返回0条时 toast.info 提示"所有不合规终端已封锁，无需重复操作"
+  - 修复：Auto Unblock 返回0解封时 toast.info 提示"被封锁终端均未变为合规状态，暂无需要解封的终端"
+  - 关联文件：`frontend/src/components/datasources/ComplianceBaselinesTab.tsx`
+
+- **后端 message 字段补全**
+  - 问题：`AutoBlockResult` 和 `AutoUnblockResult` schema 缺失 message 字段
+  - 修复：两个 schema 添加 `message: str | None = None`；`auto_unblock_compliant` 方法返回 message
+  - 关联文件：`backend/app/schemas/data_source.py`、`backend/app/services/compliance_service.py`
+
+- **i18n 翻译补全**
+  - 新增4条翻译 key：`forceRecheck`、`autoBlockWarning`、`autoBlockNoAction`、`autoUnblockNoAction`
+  - 关联文件：`frontend/src/i18n/locales/{zh,en,ja}.ts`
+
+#### 提交记录
+
+- Commit: `fix(compliance): 优化合规基线管理按钮交互体验`
+- 版本号：v3.6.16 (Patch)
 
 ---
 
