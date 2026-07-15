@@ -1346,6 +1346,10 @@ const zh = {
     autoUnblockFailed: '自动解封失败',
     partialErrors: '{{count}} 项操作出现错误',
     sourceTagLabel: 'ARP 数据源',
+    forceRecheck: '强制重新检查',
+    autoBlockWarning: '将对不合规终端执行自动封禁（30天）。是否继续？',
+    autoBlockNoAction: '所有不合规终端已封锁，无需重复操作',
+    autoUnblockNoAction: '被封锁终端均未变为合规状态，暂无需要解封的终端',
   },
 };
 

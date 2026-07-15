@@ -1346,6 +1346,10 @@ const en = {
     autoUnblockFailed: 'Auto-unblock failed',
     partialErrors: '{{count}} operations had errors',
     sourceTagLabel: 'ARP Data Source',
+    forceRecheck: 'Force Re-check',
+    autoBlockWarning: 'This will auto-block non-compliant terminals for 30 days. Continue?',
+    autoBlockNoAction: 'All non-compliant terminals are already blocked',
+    autoUnblockNoAction: 'No blocked terminals have become compliant yet',
   },
 };
 

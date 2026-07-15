@@ -764,6 +764,7 @@ class ComplianceService:
             skipped=skipped,
             errors=errors,
             details=details if len(details) <= 100 else None,
+            message="All blocked terminals are still non-compliant" if unblocked == 0 and skipped > 0 else None,
         )
 
     # ------------------------------------------------------------------

@@ -1,6 +1,6 @@
 # 更新日志
 
-> 文档版本：v3.6.15  更新日期：2026-07-16
+> 文档版本：v3.6.16  更新日期：2026-07-16
 
 本文件记录 TerminalAccessManager 的所有重要变更。
 
@@ -35,6 +35,38 @@
 - 更新业务工作流文档，移除手动封锁/解封流程章节
 - 更新 API 文档，移除已删除的 API 端点
 - 更新所有文档版本号至 v3.6.13
+
+***
+
+## [3.6.16] - 2026-07-16
+
+### 修复
+
+- **合规检查 Force Re-check 选项**：Run Compliance Check 按钮添加强制重新检查复选框
+  - 原因：前端硬编码 `force: false`，只检查 unknown 终端，但 ARP 采集时已自动处理
+  - 变更：添加 `forceCheck` state，传递到 API 请求
+  - 关联文件：`frontend/src/components/datasources/ComplianceBaselinesTab.tsx`
+
+- **Auto Block 确认对话框优化**：用自定义 Modal 替换浏览器原生 window.confirm
+  - 原因：`window.confirm` 与项目 UI 设计不一致
+  - 变更：添加 `showAutoBlockModal` state，拆分为 `handleAutoBlockClick` 和 `handleAutoBlockConfirm`
+  - 关联文件：`frontend/src/components/datasources/ComplianceBaselinesTab.tsx`
+
+- **Auto Block / Auto Unblock 提示优化**：0条操作时添加 toast.info 说明原因
+  - 变更：Auto Block 返回0条时提示"所有不合规终端已封锁"
+  - 变更：Auto Unblock 返回0解封时提示"被封锁终端均未变为合规状态"
+  - 关联文件：`frontend/src/components/datasources/ComplianceBaselinesTab.tsx`
+
+### 新增
+
+- **后端 message 字段**：AutoBlockResult 和 AutoUnblockResult 添加 message 字段
+  - 原因：后端已返回 message 但 schema 缺失字段
+  - 变更：`auto_unblock_compliant` 方法返回 `message` 提示
+  - 关联文件：`backend/app/schemas/data_source.py`、`backend/app/services/compliance_service.py`
+
+- **i18n 翻译**：三语言添加4条合规相关翻译
+  - `forceRecheck`、`autoBlockWarning`、`autoBlockNoAction`、`autoUnblockNoAction`
+  - 关联文件：`frontend/src/i18n/locales/{zh,en,ja}.ts`
 
 ***
 

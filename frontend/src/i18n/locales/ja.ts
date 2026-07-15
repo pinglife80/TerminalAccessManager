@@ -1334,6 +1334,10 @@ const ja = {
     autoUnblockFailed: '自動ブロック解除失敗',
     partialErrors: '{{count}}件の操作でエラーが発生しました',
     sourceTagLabel: 'ARPデータソース',
+    forceRecheck: '強制再チェック',
+    autoBlockWarning: '非準拠の端末を30日間自動ブロックします。続行しますか？',
+    autoBlockNoAction: 'すべての非準拠端末は既にブロックされています',
+    autoUnblockNoAction: 'ブロックされた端末はまだ準拠状態になっていません',
   },
 };
 
