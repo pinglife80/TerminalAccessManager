@@ -1,6 +1,6 @@
 # TerminalAccessManager API 文档
 
-> 文档版本：v3.6.13 | 更新日期：2026-07-14
+> 文档版本：v3.6.14 | 更新日期：2026-07-15
 
 > 基于 MAC 地址和 IP 地址的网络终端准入管理平台
 
@@ -916,9 +916,16 @@ curl "https://<HOST_IP>:8443/api/v1/whitelist/?search=192.168&start_date=2025-06
 |------|------|------|------|
 | mac_address | string | 否 | MAC 地址 |
 | ip_address | string | 否 | 单 IP / CIDR / IP 范围（如 `192.168.1.1-192.168.1.50`） |
-| comments | string | 否 | 备注 |
+| comments | string | **是** | 备注（必填） |
+| match_type | string | 否 | 匹配类型：`mac_only`/`single_ip`/`both` |
 
 > mac_address 和 ip_address 至少提供一个。
+> match_type 可选，系统会根据提供的参数自动推断：
+> - 仅 MAC：`mac_only`
+> - 仅 IP：`single_ip`（含/32 CIDR）
+> - MAC + IP：`both`（双重匹配）
+> - CIDR（非/32）：`cidr`
+> - IP范围：`ip_range`
 
 **成功响应** `201`
 

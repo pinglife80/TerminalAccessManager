@@ -1,6 +1,6 @@
 # 更新日志
 
-> 文档版本：v3.6.13  更新日期：2026-07-14
+> 文档版本：v3.6.14  更新日期：2026-07-15
 
 本文件记录 TerminalAccessManager 的所有重要变更。
 
@@ -35,6 +35,60 @@
 - 更新业务工作流文档，移除手动封锁/解封流程章节
 - 更新 API 文档，移除已删除的 API 端点
 - 更新所有文档版本号至 v3.6.13
+
+***
+
+## \[3.6.14] - 2026-07-15
+
+### 修复
+
+- **白名单匹配类型逻辑**：修复添加白名单时 pattern_type 设置错误问题
+  - 当同时提供 MAC 和 IP 时，pattern_type 设置为 'both'（双重匹配）
+  - 仅提供 MAC 时，pattern_type 设置为 'mac_only'
+  - 仅提供 IP 时（包括不带掩码和/32 CIDR），pattern_type 设置为 'single_ip'
+  - CIDR 类型（非/32）设置为 'cidr'
+  - IP范围类型设置为 'ip_range'
+  - 关联文件：`backend/app/services/compliance_service.py`, `frontend/src/pages/Terminals.tsx`, `frontend/src/pages/Whitelist.tsx`
+
+- **白名单删除逻辑**：修复删除白名单时的500错误
+  - 支持多种IP格式删除（带/不带掩码）
+  - 修复重复条目导致的删除失败问题
+  - 添加数据库唯一约束防止重复条目
+  - 关联文件：`backend/app/services/terminal_service.py`, `backend/app/api/v1/endpoints/whitelist.py`
+
+- **白名单备注必填**：添加备注必填验证
+  - 前端：添加白名单时必填备注字段
+  - 后端：WhitelistCreate schema 中 comments 设置为必填
+  - 关联文件：`backend/app/schemas/terminal.py`, `frontend/src/pages/Terminals.tsx`, `frontend/src/pages/Whitelist.tsx`
+
+- **Firewall tag 业务逻辑**：修复 firewall_tag 状态不一致问题
+  - 只有 status='blocked' 的终端才保留 firewall_tag
+  - 终端状态变为非 blocked 时自动清除 firewall_tag
+  - 前端仅在 blocked 状态时显示 firewall_tag
+  - 关联文件：`backend/app/services/compliance_service.py`, `frontend/src/pages/Terminals.tsx`
+
+- **合规状态一致性**：修复 bypass 状态终端可能显示 blocked 的问题
+  - 当 compliance_status 变为 'bypass' 时，强制设置 status='unblocked'
+  - 确保白名单终端始终处于未封锁状态
+  - 关联文件：`backend/app/services/compliance_service.py`
+
+### 国际化
+
+- **白名单匹配类型翻译**：添加匹配类型选择器的三语言翻译
+  - 新增翻译键：matchTypeSelector, matchTypeMacOnly, matchTypeSingleIp, matchTypeBoth
+  - 关联文件：`frontend/src/i18n/locales/zh.ts`, `frontend/src/i18n/locales/en.ts`, `frontend/src/i18n/locales/ja.ts`
+
+- **备注必填翻译**：添加白名单备注必填提示翻译
+  - 新增翻译键：whitelistCommentRequired
+  - 关联文件：`frontend/src/i18n/locales/zh.ts`, `frontend/src/i18n/locales/en.ts`, `frontend/src/i18n/locales/ja.ts`
+
+### 文档更新
+
+- 更新 business-workflow.md 白名单匹配逻辑和 firewall_tag 逻辑
+- 更新 api.md 白名单API备注必填要求
+- 更新 user-guide.md 白名单操作说明
+- 更新 release-notes.md 添加 v3.6.14 发布记录
+- 统一所有文档版本号至 v3.6.14
 
 ***
 
