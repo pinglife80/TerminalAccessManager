@@ -1,10 +1,67 @@
 # 版本跟踪记录
 
-> 文档版本：v3.6.16 | 更新日期：2026-07-16
+> 文档版本：v3.6.17 | 更新日期：2026-07-16
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
+
+---
+
+## [v3.6.17] - 2026-07-16
+
+### 审计日志系统修复与优化
+
+#### 问题诊断
+
+- **审计日志爆炸增长（13万条/天）**
+  - 根因：ARP 采集服务在更新已存在终端时，强制将 `compliance_status` 重置为 `"unknown"`、`wl_match_type` 重置为 `None`
+  - 导致每次 ARP 采集（5分钟间隔）后合规检查都认为终端状态从 unknown 变为 compliant/bypass，产生大量无意义的 `compliance_status_changed` 日志
+  - 数据验证：131,854 条合规状态变更日志中，131,398 条（99.7%）的 old_compliance 为 `unknown`，真正的状态变更仅 456 条
+
+- **筛选下拉菜单与实际结果不匹配**
+  - 根因：前端 action 值与后端生成的 action 值不一致（如前端用 `add_whitelist`，后端实际为 `whitelist_create`）
+  - 前端分类体系缺少防火墙、合规基线等类别，无法正确归类部分日志
+
+- **Action 字段格式不统一**
+  - 混合使用不同命名规范（`block_terminal` vs `firewall_block` vs `add_whitelist`）
+  - 统一为 `snake_case` 格式和 `<noun>_<verb>` 命名模式
+
+#### 修复内容
+
+- **后端：ARP 采集服务修复**
+  - 移除已存在终端更新时对 `compliance_status` 和 `wl_match_type` 的强制重置
+  - 保留 `updated_at`、`source_tag`、`source` 等必要字段更新
+  - 关联文件：`backend/app/services/arp_collector_service.py`
+
+- **前端：审计日志筛选与展示全面优化**
+  - 重写 `ACTION_CATEGORIES`、`actionLabelKeys`、`ACTION_CATEGORY_MAP`，确保所有 action 值与后端完全一致
+  - 新增 `firewall`（防火墙）和 `baseline`（合规基线）分类
+  - 添加向后兼容的旧 action 名称映射（`block_ip`→`firewall_block`、`add_whitelist`→`whitelist_create` 等）
+  - 新增 `CATEGORY_BADGE_STYLES` 样式映射，完善各分类徽章样式
+  - 关联文件：`frontend/src/pages/AuditLogs.tsx`
+
+- **i18n：翻译补全**
+  - 新增 `firewall`、`baseline` 分类标签翻译
+  - 新增 `password_reset`、`recalculate_compliance` 等动作标签翻译
+  - 新增防火墙、合规基线等资源类型翻译
+  - 关联文件：`frontend/src/i18n/locales/{zh,en,ja}.ts`
+
+- **数据清理**
+  - 清理历史无效审计日志：删除所有 `old_compliance = 'unknown'` 的 `compliance_status_changed` 日志
+  - 清理效果：132,394 条 → 996 条，减少 99.2%
+
+#### 验证结果
+
+- 终端合规状态分布：bypass 510、compliant 312、non_compliant 147，无 unknown 状态
+- ARP 采集正常运行，不再重置终端合规状态
+- 所有 24 种 action 值均为 snake_case 格式，前后端一致
+- 前端筛选下拉菜单分类与实际日志数据匹配
+
+#### 提交记录
+
+- Commit: `fix(audit): 修复审计日志爆炸增长、筛选不匹配和action格式不一致问题`
+- 版本号：v3.6.17 (Patch)
 
 ---
 

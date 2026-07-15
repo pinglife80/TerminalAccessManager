@@ -22,22 +22,27 @@ const ACTION_CATEGORIES = [
   {
     key: 'auth',
     labelKey: 'auditLogs.categories.auth',
-    actions: ['login', 'login_failed', 'logout', 'token_refresh', 'change_password'],
+    actions: ['login', 'login_failed', 'logout', 'token_refresh', 'change_password', 'password_reset'],
   },
   {
-    key: 'terminal',
-    labelKey: 'auditLogs.categories.terminal',
-    actions: ['block_terminal', 'unblock_terminal', 'auto_block_terminal', 'auto_unblock_terminal'],
+    key: 'compliance',
+    labelKey: 'auditLogs.categories.compliance',
+    actions: ['compliance_status_changed', 'recalculate_compliance', 'auto_block_terminal', 'auto_unblock_terminal'],
+  },
+  {
+    key: 'firewall',
+    labelKey: 'auditLogs.categories.firewall',
+    actions: ['firewall_block', 'firewall_unblock'],
   },
   {
     key: 'whitelist',
     labelKey: 'auditLogs.categories.whitelist',
-    actions: ['add_whitelist', 'remove_whitelist'],
+    actions: ['whitelist_create', 'whitelist_update', 'whitelist_delete'],
   },
   {
     key: 'blacklist',
     labelKey: 'auditLogs.categories.blacklist',
-    actions: ['block_blacklist', 'unblock_blacklist', 'cleanup_expired_blacklist'],
+    actions: ['cleanup_expired_blacklist'],
   },
   {
     key: 'datasource',
@@ -47,7 +52,7 @@ const ACTION_CATEGORIES = [
   {
     key: 'user',
     labelKey: 'auditLogs.categories.user',
-    actions: ['create_user', 'update_user', 'delete_user', 'reset_password', 'unlock_user', 'change_role', 'assign_role'],
+    actions: ['create_user', 'update_user', 'delete_user', 'reset_password', 'unlock_user', 'lock_user', 'change_role', 'assign_role'],
   },
   {
     key: 'role',
@@ -55,32 +60,40 @@ const ACTION_CATEGORIES = [
     actions: ['create_role', 'update_role', 'delete_role'],
   },
   {
-    key: 'compliance',
-    labelKey: 'auditLogs.categories.compliance',
+    key: 'baseline',
+    labelKey: 'auditLogs.categories.baseline',
     actions: ['create_baseline', 'update_baseline', 'delete_baseline'],
   },
   {
     key: 'system',
     labelKey: 'auditLogs.categories.system',
-    actions: ['update_config', 'upload_branding', 'export_audit_logs'],
+    actions: ['update_config', 'save_email_config', 'test_email', 'upload_branding', 'export_audit_logs'],
   },
 ] as const;
 
 const actionLabelKeys: Record<string, string> = {
+  // auth
   login: 'auditLogs.actionLabels.login',
   login_failed: 'auditLogs.actionLabels.login_failed',
   logout: 'auditLogs.actionLabels.logout',
   token_refresh: 'auditLogs.actionLabels.token_refresh',
   change_password: 'auditLogs.actionLabels.change_password',
-  block_terminal: 'auditLogs.actionLabels.block_terminal',
-  unblock_terminal: 'auditLogs.actionLabels.unblock_terminal',
+  password_reset: 'auditLogs.actionLabels.password_reset',
+  // compliance
+  compliance_status_changed: 'auditLogs.actionLabels.compliance_status_changed',
+  recalculate_compliance: 'auditLogs.actionLabels.recalculate_compliance',
   auto_block_terminal: 'auditLogs.actionLabels.auto_block_terminal',
   auto_unblock_terminal: 'auditLogs.actionLabels.auto_unblock_terminal',
-  add_whitelist: 'auditLogs.actionLabels.add_whitelist',
-  remove_whitelist: 'auditLogs.actionLabels.remove_whitelist',
-  block_blacklist: 'auditLogs.actionLabels.block_blacklist',
-  unblock_blacklist: 'auditLogs.actionLabels.unblock_blacklist',
+  // firewall
+  firewall_block: 'auditLogs.actionLabels.firewall_block',
+  firewall_unblock: 'auditLogs.actionLabels.firewall_unblock',
+  // whitelist
+  whitelist_create: 'auditLogs.actionLabels.whitelist_create',
+  whitelist_update: 'auditLogs.actionLabels.whitelist_update',
+  whitelist_delete: 'auditLogs.actionLabels.whitelist_delete',
+  // blacklist
   cleanup_expired_blacklist: 'auditLogs.actionLabels.cleanup_expired_blacklist',
+  // datasource
   create_datasource: 'auditLogs.actionLabels.create_datasource',
   update_datasource: 'auditLogs.actionLabels.update_datasource',
   delete_datasource: 'auditLogs.actionLabels.delete_datasource',
@@ -88,27 +101,34 @@ const actionLabelKeys: Record<string, string> = {
   sync_datasource: 'auditLogs.actionLabels.sync_datasource',
   bind_datasource: 'auditLogs.actionLabels.bind_datasource',
   unbind_datasource: 'auditLogs.actionLabels.unbind_datasource',
+  // user
   create_user: 'auditLogs.actionLabels.create_user',
   update_user: 'auditLogs.actionLabels.update_user',
   delete_user: 'auditLogs.actionLabels.delete_user',
   reset_password: 'auditLogs.actionLabels.reset_password',
   unlock_user: 'auditLogs.actionLabels.unlock_user',
+  lock_user: 'auditLogs.actionLabels.lock_user',
   change_role: 'auditLogs.actionLabels.change_role',
   assign_role: 'auditLogs.actionLabels.assign_role',
+  // role
   create_role: 'auditLogs.actionLabels.create_role',
   update_role: 'auditLogs.actionLabels.update_role',
   delete_role: 'auditLogs.actionLabels.delete_role',
+  // baseline
   create_baseline: 'auditLogs.actionLabels.create_baseline',
   update_baseline: 'auditLogs.actionLabels.update_baseline',
   delete_baseline: 'auditLogs.actionLabels.delete_baseline',
+  // system
   update_config: 'auditLogs.actionLabels.update_config',
+  save_email_config: 'auditLogs.actionLabels.save_email_config',
+  test_email: 'auditLogs.actionLabels.test_email',
   upload_branding: 'auditLogs.actionLabels.upload_branding',
   export_audit_logs: 'auditLogs.actionLabels.export_audit_logs',
-  // Legacy action names (backward compatibility)
-  block_ip: 'auditLogs.actionLabels.block_terminal',
-  unblock_ip: 'auditLogs.actionLabels.unblock_terminal',
-  block: 'auditLogs.actionLabels.block_blacklist',
-  unblock: 'auditLogs.actionLabels.unblock_blacklist',
+  // Legacy action names (backward compatibility for historical records)
+  block_ip: 'auditLogs.actionLabels.firewall_block',
+  unblock_ip: 'auditLogs.actionLabels.firewall_unblock',
+  add_whitelist: 'auditLogs.actionLabels.whitelist_create',
+  remove_whitelist: 'auditLogs.actionLabels.whitelist_delete',
   auto_block: 'auditLogs.actionLabels.auto_block_terminal',
   auto_unblock: 'auditLogs.actionLabels.auto_unblock_terminal',
   cleanup_expired: 'auditLogs.actionLabels.cleanup_expired_blacklist',
@@ -116,20 +136,28 @@ const actionLabelKeys: Record<string, string> = {
 };
 
 const ACTION_CATEGORY_MAP: Record<string, string> = {
+  // auth
   login: 'auth',
   login_failed: 'auth',
   logout: 'auth',
   token_refresh: 'auth',
   change_password: 'auth',
-  block_terminal: 'terminal',
-  unblock_terminal: 'terminal',
-  auto_block_terminal: 'terminal',
-  auto_unblock_terminal: 'terminal',
-  add_whitelist: 'whitelist',
-  remove_whitelist: 'whitelist',
-  block_blacklist: 'blacklist',
-  unblock_blacklist: 'blacklist',
+  password_reset: 'auth',
+  // compliance
+  compliance_status_changed: 'compliance',
+  recalculate_compliance: 'compliance',
+  auto_block_terminal: 'compliance',
+  auto_unblock_terminal: 'compliance',
+  // firewall
+  firewall_block: 'firewall',
+  firewall_unblock: 'firewall',
+  // whitelist
+  whitelist_create: 'whitelist',
+  whitelist_update: 'whitelist',
+  whitelist_delete: 'whitelist',
+  // blacklist
   cleanup_expired_blacklist: 'blacklist',
+  // datasource
   create_datasource: 'datasource',
   update_datasource: 'datasource',
   delete_datasource: 'datasource',
@@ -137,42 +165,50 @@ const ACTION_CATEGORY_MAP: Record<string, string> = {
   sync_datasource: 'datasource',
   bind_datasource: 'datasource',
   unbind_datasource: 'datasource',
+  // user
   create_user: 'user',
   update_user: 'user',
   delete_user: 'user',
   reset_password: 'user',
   unlock_user: 'user',
+  lock_user: 'user',
   change_role: 'user',
   assign_role: 'user',
+  // role
   create_role: 'role',
   update_role: 'role',
   delete_role: 'role',
-  create_baseline: 'compliance',
-  update_baseline: 'compliance',
-  delete_baseline: 'compliance',
+  // baseline
+  create_baseline: 'baseline',
+  update_baseline: 'baseline',
+  delete_baseline: 'baseline',
+  // system
   update_config: 'system',
+  save_email_config: 'system',
+  test_email: 'system',
   upload_branding: 'system',
   export_audit_logs: 'system',
   // Legacy action names
-  block_ip: 'terminal',
-  unblock_ip: 'terminal',
-  block: 'blacklist',
-  unblock: 'blacklist',
-  auto_block: 'terminal',
-  auto_unblock: 'terminal',
+  block_ip: 'firewall',
+  unblock_ip: 'firewall',
+  add_whitelist: 'whitelist',
+  remove_whitelist: 'whitelist',
+  auto_block: 'compliance',
+  auto_unblock: 'compliance',
   cleanup_expired: 'blacklist',
   role_change: 'user',
 };
 
 const CATEGORY_BADGE_STYLES: Record<string, string> = {
   auth: 'bg-blue-100 text-blue-800',
-  terminal: 'bg-orange-100 text-orange-800',
+  compliance: 'bg-teal-100 text-teal-800',
+  firewall: 'bg-red-100 text-red-800',
   whitelist: 'bg-green-100 text-green-800',
   blacklist: 'bg-red-100 text-red-800',
   datasource: 'bg-purple-100 text-purple-800',
   user: 'bg-cyan-100 text-cyan-800',
   role: 'bg-indigo-100 text-indigo-800',
-  compliance: 'bg-teal-100 text-teal-800',
+  baseline: 'bg-amber-100 text-amber-800',
   system: 'bg-gray-100 text-gray-800',
 };
 
@@ -187,6 +223,8 @@ const getResourceDisplay = (log: AuditLogType, t: (key: string) => string) => {
     user: t('auditLogs.resourceTypes.user'),
     role: t('auditLogs.resourceTypes.role'),
     compliance: t('auditLogs.resourceTypes.compliance'),
+    firewall: t('auditLogs.resourceTypes.firewall'),
+    baseline: t('auditLogs.resourceTypes.baseline'),
     system: t('auditLogs.resourceTypes.system'),
   };
 
@@ -549,7 +587,7 @@ const AuditLogs: React.FC = () => {
         <div className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden">
           <div className="p-4 text-center">
             <div className="text-xl sm:text-2xl font-bold text-red-600">
-              {filteredLogs.filter((l) => ['login_failed', 'block_terminal', 'block_blacklist', 'auto_block_terminal'].includes(l.action)).length}
+              {filteredLogs.filter((l) => ['login_failed', 'firewall_block', 'auto_block_terminal', 'lock_user'].includes(l.action)).length}
             </div>
             <div className="text-xs sm:text-sm text-muted-foreground mt-1">{t('auditLogs.securityEvents')}</div>
           </div>

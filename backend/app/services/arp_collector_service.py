@@ -303,8 +303,6 @@ class ArpCollectorService:
                     existing.updated_at = datetime.now(UTC)
                     existing.source_tag = source_tag
                     existing.source = "arp"
-                    existing.compliance_status = "unknown"
-                    existing.wl_match_type = None
                     updated += 1
                 else:
                     # Create new entry
