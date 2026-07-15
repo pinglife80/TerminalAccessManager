@@ -19,6 +19,7 @@ from app.models.log import AuditLog
 from app.models.terminal import Terminal, TerminalStatus
 from app.models.whitelist import Whitelist
 from app.schemas.terminal import AuditLogQuery, BlacklistQuery, TerminalQuery, WhitelistQuery
+from app.core.crypto import decrypt_config
 from app.services.sangfor_service import SangforService
 
 
@@ -756,10 +757,16 @@ class TerminalService:
         Default shows only active (not unblocked) records."""
         conditions = []
 
-        # Status filtering: default to active only
+        from datetime import datetime, UTC
+
+        # Status filtering: default to active only (not unblocked and not expired)
         _active_filter = and_(
             Blacklist.auto_unblocked == False,
-            Blacklist.unblocked_at.is_(None)
+            Blacklist.unblocked_at.is_(None),
+            or_(
+                Blacklist.expires_at >= datetime.now(UTC),
+                Blacklist.expires_at.is_(None),
+            )
         )
         _unblocked_filter = or_(
             Blacklist.auto_unblocked == True,
@@ -811,10 +818,16 @@ class TerminalService:
         Default counts only active (not unblocked) records."""
         conditions = []
 
-        # Status filtering: default to active only
+        from datetime import datetime, UTC
+
+        # Status filtering: default to active only (not unblocked and not expired)
         _active_filter = and_(
             Blacklist.auto_unblocked == False,
-            Blacklist.unblocked_at.is_(None)
+            Blacklist.unblocked_at.is_(None),
+            or_(
+                Blacklist.expires_at >= datetime.now(UTC),
+                Blacklist.expires_at.is_(None),
+            )
         )
         _unblocked_filter = or_(
             Blacklist.auto_unblocked == True,
@@ -859,7 +872,11 @@ class TerminalService:
 
         base_filter = and_(
             Blacklist.auto_unblocked == False,
-            Blacklist.unblocked_at.is_(None)
+            Blacklist.unblocked_at.is_(None),
+            or_(
+                Blacklist.expires_at >= datetime.now(UTC),
+                Blacklist.expires_at.is_(None),
+            )
         )
 
         stmt = select(

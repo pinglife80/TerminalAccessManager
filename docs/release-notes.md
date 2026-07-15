@@ -1,10 +1,74 @@
 # 版本跟踪记录
 
-> 文档版本：v3.6.14 | 更新日期：2026-07-15
+> 文档版本：v3.6.15 | 更新日期：2026-07-16
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
+
+---
+
+## [v3.6.15] - 2026-07-16
+
+### 黑名单数据一致性修复
+
+#### 功能变更
+
+- **黑名单过期时间过滤修复**
+  - 变更描述：修复黑名单管理页面与防火墙、Dashboard、终端管理统计数量不一致问题
+  - 变更内容：
+    - `get_blacklist` 方法添加 `expires_at` 过滤条件
+    - `get_blacklist_count` 方法添加 `expires_at` 过滤条件
+    - `get_blacklist_stats` 方法添加 `expires_at` 过滤条件
+  - 根因：黑名单管理页面未过滤已过期记录，导致显示数量偏多（158 vs 146）
+  - 关联文件：`backend/app/services/terminal_service.py`
+
+- **防火墙对账记录类型修复**
+  - 变更描述：修复对账服务创建的记录被错误标记为手动封锁
+  - 变更内容：
+    - `_create_db_entries` 方法中 `is_auto_blocked` 从 `False` 改为 `True`
+    - `_get_db_active_blacklist` 方法添加 `expires_at` 过滤条件
+  - 根因：对账服务自动创建的记录应标记为自动封锁
+  - 关联文件：`backend/app/services/firewall_reconciliation_service.py`
+
+- **防火墙查询导入修复**
+  - 变更描述：修复 `terminal_service.py` 中 `decrypt_config` 未导入导致的 NameError
+  - 根因：`_get_sangfor_service_by_tag` 方法调用 `decrypt_config` 但未导入
+  - 关联文件：`backend/app/services/terminal_service.py`
+
+- **防火墙查询结果解析修复**
+  - 变更描述：修复 `cli.py` 中防火墙查询结果解析逻辑
+  - 变更内容：`result.get("data", [])` 修正为 `result.get("data", {}).get("items", [])`
+  - 根因：防火墙 API 返回格式为 `{"data": {"items": [...]}}`，原代码将 `data` 当作列表处理
+  - 关联文件：`backend/cli.py`
+
+#### 代码变更清单
+
+| 文件 | 变更内容 | 类型 |
+|------|---------|------|
+| `backend/app/services/terminal_service.py` | 添加 decrypt_config 导入、3个方法添加 expires_at 过滤 | fix |
+| `backend/app/services/firewall_reconciliation_service.py` | 添加 expires_at 过滤、is_auto_blocked 改为 True | fix |
+| `backend/cli.py` | 修复防火墙查询结果解析逻辑 | fix |
+
+#### 数据库变更
+
+无数据库迁移，仅数据修复：
+- 删除 12 条 reconciliation 来源的 Manual 类型冗余记录
+- 重新激活 1 条被误标为解封的黑名单记录（IP: 10.8.19.175）
+
+#### 测试验证
+
+- 数据库验证：活跃黑名单 147 条，与防火墙一致
+- 防火墙查询验证：`./manage.sh scheduler trigger firewall_query` 返回 147 条
+- Manual 类型记录：0 条
+
+#### 文档更新
+
+| 文件 | 更新内容 |
+|------|---------|
+| `docs/changelog.md` | 添加 v3.6.15 变更记录 |
+| `docs/release-notes.md` | 添加 v3.6.15 发布记录 |
+| `docs/git-workflow-guide.md` | 更新文档版本号 |
 
 ---
 

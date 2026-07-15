@@ -141,13 +141,19 @@ class FirewallReconciliationService:
 
     async def _get_db_active_blacklist(self) -> List[Tuple[str, str, str]]:
         """Get all active blacklist entries (ip_address, mac_address, firewall_tag)"""
+        from datetime import datetime, UTC
+
         stmt = select(
             Blacklist.ip_address,
             Blacklist.mac_address,
             Blacklist.firewall_tag
         ).where(
             (Blacklist.unblocked_at.is_(None)) &
-            (Blacklist.auto_unblocked == False)
+            (Blacklist.auto_unblocked == False) &
+            (or_(
+                Blacklist.expires_at >= datetime.now(UTC),
+                Blacklist.expires_at.is_(None),
+            ))
         )
         result = await self.db.execute(stmt)
         return result.all()
@@ -190,7 +196,7 @@ class FirewallReconciliationService:
                         blocked_at=datetime.now(UTC),
                         expires_at=datetime.now(UTC) + timedelta(days=30),
                         source_tag="reconciliation",
-                        is_auto_blocked=False,
+                        is_auto_blocked=True,
                         auto_unblocked=False,
                         reason="Reconciliation: IP blocked on firewall but not in database",
                     )
