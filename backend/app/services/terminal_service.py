@@ -161,6 +161,8 @@ class IPAddressParser:
         """Detect the pattern type of an IP input string"""
         ip_input = ip_input.strip()
         if '/' in ip_input:
+            if ip_input.endswith("/32"):
+                return "single_ip"
             return "cidr"
         elif '-' in ip_input:
             return "ip_range"
@@ -568,6 +570,10 @@ class TerminalService:
             if normalized_mac and not ip_address:
                 pattern_type = "mac_only"
 
+            # Both MAC and IP entry
+            if normalized_mac and ip_address:
+                pattern_type = "both"
+
             # Check for existing entry
             existing = None
             if normalized_mac and ip_pattern:
@@ -665,47 +671,45 @@ class TerminalService:
     async def delete_from_whitelist(self, identifier: str, username: str) -> bool:
         """Delete from whitelist by MAC address or IP pattern"""
         try:
-            whitelist_entry = None
-
             cleaned_identifier = identifier.replace('-', '').replace(':', '').replace('.', '').upper()
+            deleted_entries = []
 
             if '.' in identifier:
-                stmt = select(Whitelist).where(Whitelist.ip_pattern == identifier)
+                base_ip = identifier.split('/')[0]
+                stmt = select(Whitelist).where(
+                    ((Whitelist.ip_pattern == identifier) |
+                     (Whitelist.ip_pattern == base_ip) |
+                     (Whitelist.ip_pattern == f"{base_ip}/32")) &
+                    (Whitelist.pattern_type.in_(["single_ip", "cidr", "both", "ip_range"]))
+                )
                 result = await self.db.execute(stmt)
-                whitelist_entry = result.scalar_one_or_none()
+                entries = result.scalars().all()
+
+                if entries:
+                    for entry in entries:
+                        deleted_entries.append(entry)
+                        await self.db.delete(entry)
             elif len(cleaned_identifier) == 12 and cleaned_identifier.isalnum():
                 normalized_mac = _normalize_mac(identifier)
                 stmt = select(Whitelist).where(Whitelist.mac_address_normalized == normalized_mac)
                 result = await self.db.execute(stmt)
-                whitelist_entry = result.scalar_one_or_none()
+                entries = result.scalars().all()
+
+                if entries:
+                    for entry in entries:
+                        deleted_entries.append(entry)
+                        await self.db.delete(entry)
             else:
                 stmt = select(Whitelist).where(Whitelist.ip_pattern == identifier)
                 result = await self.db.execute(stmt)
-                whitelist_entry = result.scalar_one_or_none()
+                entries = result.scalars().all()
 
-            if not whitelist_entry and '.' not in identifier and len(cleaned_identifier) == 12 and cleaned_identifier.isalnum():
-                normalized_mac = _normalize_mac(identifier)
-                stmt = select(Whitelist).where(
-                    (Whitelist.mac_address_normalized == normalized_mac) &
-                    (Whitelist.ip_pattern.is_not(None))
-                )
-                result = await self.db.execute(stmt)
-                whitelist_entry = result.scalar_one_or_none()
+                if entries:
+                    for entry in entries:
+                        deleted_entries.append(entry)
+                        await self.db.delete(entry)
 
-            if not whitelist_entry:
-                stmt = select(Whitelist).where(
-                    (Whitelist.ip_pattern == identifier) &
-                    (Whitelist.mac_address_normalized.is_not(None))
-                )
-                result = await self.db.execute(stmt)
-                whitelist_entry = result.scalar_one_or_none()
-
-            if whitelist_entry:
-                mac_address = whitelist_entry.mac_address
-                ip_pattern = whitelist_entry.ip_pattern
-
-                await self.db.delete(whitelist_entry)
-
+            if deleted_entries:
                 try:
                     from app.services.compliance_service import ComplianceService
                     compliance_svc = ComplianceService(self.db)
@@ -715,22 +719,23 @@ class TerminalService:
                 except Exception as e:
                     logger.warning(f"Failed to recalculate compliance after whitelist delete: {e}")
 
-                log_details_parts = []
-                if whitelist_entry.mac_address:
-                    log_details_parts.append(f"MAC {whitelist_entry.mac_address}")
-                if whitelist_entry.ip_pattern:
-                    log_details_parts.append(f"IP {whitelist_entry.ip_pattern}")
+                for entry in deleted_entries:
+                    log_details_parts = []
+                    if entry.mac_address:
+                        log_details_parts.append(f"MAC {entry.mac_address}")
+                    if entry.ip_pattern:
+                        log_details_parts.append(f"IP {entry.ip_pattern}")
 
-                log_details = {
-                    "message": f"Deleted whitelist entry {whitelist_entry.id}",
-                    "deleted_mac_address": whitelist_entry.mac_address,
-                    "deleted_ip_pattern": whitelist_entry.ip_pattern,
-                    "deleted_pattern_type": whitelist_entry.pattern_type,
-                    "deleted_comments": whitelist_entry.comments,
-                }
+                    log_details = {
+                        "message": f"Deleted whitelist entry {entry.id}",
+                        "deleted_mac_address": entry.mac_address,
+                        "deleted_ip_pattern": entry.ip_pattern,
+                        "deleted_pattern_type": entry.pattern_type,
+                        "deleted_comments": entry.comments,
+                    }
 
-                resource_id = str(whitelist_entry.id)
-                await self.log_action(username, "whitelist_delete", "whitelist", resource_id, log_details)
+                    resource_id = str(entry.id)
+                    await self.log_action(username, "whitelist_delete", "whitelist", resource_id, log_details)
 
                 await self.db.commit()
                 return True

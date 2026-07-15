@@ -785,8 +785,10 @@ class ComplianceService:
         for entry in whitelist_data:
             # MAC-only whitelist entry: match by MAC only
             if entry.get("pattern_type") == "mac_only":
-                if entry.get("mac_address") and entry["mac_address"].upper() == normalized_mac:
-                    return {"match_type": "mac", "comments": entry.get("comments")}
+                if entry.get("mac_address"):
+                    entry_mac = entry["mac_address"].upper().replace(":", "").replace("-", "").replace(".", "")
+                    if entry_mac == normalized_mac:
+                        return {"match_type": "mac", "comments": entry.get("comments")}
                 continue
 
             # Check IP pattern match
@@ -797,7 +799,8 @@ class ComplianceService:
             # Check MAC match
             mac_match = False
             if entry.get("mac_address"):
-                mac_match = entry["mac_address"].upper() == normalized_mac
+                entry_mac = entry["mac_address"].upper().replace(":", "").replace("-", "").replace(".", "")
+                mac_match = entry_mac == normalized_mac
 
             # If both IP and MAC are specified, both must match
             # If only IP is specified, IP must match
@@ -825,6 +828,16 @@ class ComplianceService:
                 return target_ip in network
             elif pattern_type == "ip_range":
                 return self._ip_in_range(ip_address, ip_pattern)
+            elif pattern_type == "both":
+                if '/' in ip_pattern:
+                    if ip_pattern.endswith("/32"):
+                        return ip_address == ip_pattern[:-3]
+                    network = ipaddress.IPv4Network(ip_pattern, strict=False)
+                    return target_ip in network
+                elif '-' in ip_pattern:
+                    return self._ip_in_range(ip_address, ip_pattern)
+                else:
+                    return ip_address == ip_pattern
             else:
                 if '/' in ip_pattern:
                     network = ipaddress.IPv4Network(ip_pattern, strict=False)
@@ -1331,6 +1344,9 @@ class ComplianceService:
                 fw_tags = await self._get_bound_firewall_tags(terminal.source_tag)
                 if fw_tags:
                     terminal.firewall_tag = fw_tags[0] if len(fw_tags) == 1 else ",".join(fw_tags)
+
+        if terminal.status != "blocked":
+            terminal.firewall_tag = None
 
         return {"status_changed": status_changed, "new_compliance": new_compliance, "unblocked": unblocked}
 

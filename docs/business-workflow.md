@@ -1,6 +1,6 @@
 # TerminalAccessManager 业务流程文档
 
-> 文档版本：v3.6.13 | 更新日期：2026-07-14
+> 文档版本：v3.6.14 | 更新日期：2026-07-15
 >
 > 本文档详细说明 TerminalAccessManager 的核心业务流程，包括数据采集、合规判定、封锁/解封的完整生命周期。
 
@@ -153,17 +153,31 @@ else:
 
 白名单条目支持备注（comment）字段，用于记录添加原因或管理信息。备注信息会同步写入匹配终端的 `remarks` 字段，便于在终端列表中追溯白名单来源。
 
-#### 添加白名单
+### 3.7.1 白名单匹配类型
 
-添加白名单条目时可填写备注，系统会将备注信息写入所有匹配终端的 `remarks` 字段：
-- MAC 地址类型：匹配单个终端
-- IP 地址类型：匹配单个终端
-- CIDR 类型：匹配网段内所有终端
-- IP 范围类型：匹配范围内所有终端
+白名单支持以下匹配类型：
 
-#### 删除白名单
+| 类型 | 说明 | 匹配条件 |
+|------|------|---------|
+| `mac_only` | 仅MAC匹配 | 只提供MAC地址 |
+| `single_ip` | 单IP匹配 | 只提供单个IP（含/32 CIDR） |
+| `cidr` | CIDR匹配 | 提供CIDR网段（非/32） |
+| `ip_range` | IP范围匹配 | 提供IP范围（如 192.168.1.1-192.168.1.100） |
+| `both` | MAC+IP双重匹配 | 同时提供MAC和IP地址 |
 
-删除白名单条目时，系统会自动清除关联终端的备注信息，确保备注与白名单状态一致：
+### 3.7.2 添加白名单
+
+添加白名单条目时可填写备注（**必填**），系统会根据添加内容自动确定匹配类型：
+- 仅 MAC 地址：匹配类型为 `mac_only`，匹配单个终端
+- 仅 IP 地址（不含/32）：匹配类型为 `single_ip`，匹配单个终端
+- IP 地址带/32：匹配类型为 `single_ip`，匹配单个终端
+- CIDR 网段：匹配类型为 `cidr`，匹配网段内所有终端
+- IP 范围：匹配类型为 `ip_range`，匹配范围内所有终端
+- MAC + IP：匹配类型为 `both`，IP和MAC都必须匹配
+
+### 3.7.3 删除白名单
+
+删除白名单条目时，系统会自动清除关联终端的备注信息和 `wl_match_type`，确保备注与白名单状态一致：
 - 通过 `_remove_whitelist_comment` 方法实现
 - 支持 MAC/IP/CIDR/范围所有匹配类型的终端备注清除
 - 仅清除由该白名单条目写入的备注，不影响其他来源的备注信息
@@ -217,6 +231,7 @@ response = await svc.block_ip(
 # 更新终端状态
 entry.status = "blocked"
 entry.firewall_tag = firewall_tags[0] if len(firewall_tags) == 1 else ",".join(firewall_tags)
+# 注意：firewall_tag 仅在 status='blocked' 时设置
 
 # 创建黑名单记录
 blacklist_entry = Blacklist(
@@ -300,7 +315,7 @@ success = await self._unblock_on_firewall(ip_addr, fw_tag)
 ```python
 # 更新终端状态
 terminal.status = "unblocked"
-terminal.firewall_tag = None
+terminal.firewall_tag = None  # 状态变为非blocked时必须清除firewall_tag
 
 # 更新黑名单记录（软删除）
 bl_entry.unblocked_at = datetime.now(UTC)
