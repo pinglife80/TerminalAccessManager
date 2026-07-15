@@ -1,11 +1,45 @@
 # 更新日志
 
-> 文档版本：v3.6.16  更新日期：2026-07-16
+> 文档版本：v3.6.17  更新日期：2026-07-16
 
 本文件记录 TerminalAccessManager 的所有重要变更。
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
+
+***
+
+## [3.6.17] - 2026-07-16
+
+### 修复
+
+- **审计日志爆炸增长**：修复 ARP 采集服务重置终端 `compliance_status` 导致日志量异常问题
+  - 原因：每次 ARP 采集更新已存在终端时，强制将 `compliance_status` 重置为 `"unknown"`，导致合规检查认为状态发生变化
+  - 修复：移除 `arp_collector_service.py` 中 `_upsert_terminals` 对已存在终端的 `compliance_status` 和 `wl_match_type` 重置
+  - 效果：日志量从 13万条/天降至正常水平，减少 99.2% 的无效日志
+  - 关联文件：`backend/app/services/arp_collector_service.py`
+
+- **审计日志筛选不匹配**：修复前端筛选下拉菜单选项与实际日志数据不匹配问题
+  - 原因：前端 action 值与后端实际生成的值不一致（如 `add_whitelist` vs `whitelist_create`）
+  - 修复：重写 `actionLabelKeys`、`ACTION_CATEGORIES`、`ACTION_CATEGORY_MAP`，确保与后端完全对齐
+  - 关联文件：`frontend/src/pages/AuditLogs.tsx`
+
+### 优化
+
+- **审计日志 Action 命名统一**：统一为 `snake_case` 格式和 `<noun>_<verb>` 命名模式
+  - 新增向后兼容映射，确保历史日志仍能正确显示和筛选（`block_ip`→`firewall_block`、`add_whitelist`→`whitelist_create` 等）
+  - 新增 `firewall`（防火墙）和 `baseline`（合规基线）分类
+  - 关联文件：`frontend/src/pages/AuditLogs.tsx`
+
+### 国际化
+
+- **审计日志翻译补全**：三语言（中/英/日）新增分类标签、动作标签、资源类型翻译
+  - 关联文件：`frontend/src/i18n/locales/{zh,en,ja}.ts`
+
+### 文档
+
+- 更新 release-notes.md 添加 v3.6.17 发布记录
+- 统一所有文档版本号至 v3.6.17
 
 ***
 
