@@ -53,7 +53,7 @@ async def add_to_whitelist(
         result = await service.add_to_whitelist(
             mac_address=whitelist_data.mac_address,
             ip_address=whitelist_data.ip_address,
-            comments=whitelist_data.comments or "",
+            comments=whitelist_data.comments,
             username=current_user.username
         )
         return result
