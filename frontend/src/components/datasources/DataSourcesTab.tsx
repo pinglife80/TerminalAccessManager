@@ -562,7 +562,6 @@ const DataSourcesTab = forwardRef<{ openAddModal: () => void }, DataSourcesTabPr
             >
               <option value="arp_ssh">ARP SSH</option>
               <option value="arp_api">ARP API</option>
-              <option value="sangfor">Sangfor</option>
             </select>
           </div>
           <div>
@@ -641,7 +640,6 @@ const DataSourcesTab = forwardRef<{ openAddModal: () => void }, DataSourcesTabPr
             >
               <option value="arp_ssh">ARP SSH</option>
               <option value="arp_api">ARP API</option>
-              <option value="sangfor">Sangfor</option>
             </select>
           </div>
           <div>
