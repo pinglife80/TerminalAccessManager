@@ -106,9 +106,12 @@ const Terminals: React.FC = () => {
   const [wlAddTarget, setWlAddTarget] = useState<Terminal | null>(null);
   const [wlAddComment, setWlAddComment] = useState('');
 
-  // Confirmation dialogs - Whitelist Remove
+  // Confirmation dialogs - Remove from Whitelist
   const [showWlRemoveConfirm, setShowWlRemoveConfirm] = useState(false);
   const [wlRemoveTarget, setWlRemoveTarget] = useState<Terminal | null>(null);
+
+  // Whitelist add type selector
+  const [wlAddType, setWlAddType] = useState<'mac_only' | 'single_ip' | 'both'>('both');
 
   // Confirmation dialogs - Unblock
   const [showUnblockConfirm, setShowUnblockConfirm] = useState(false);
@@ -288,12 +291,20 @@ const Terminals: React.FC = () => {
 
   const confirmAddToWhitelist = async () => {
     if (!wlAddTarget) return;
+    if (!wlAddComment.trim()) {
+      toast.error(t('terminal.whitelistCommentRequired'));
+      return;
+    }
     setWhitelistId(wlAddTarget.id);
     try {
       const payload: Record<string, string> = {};
-      if (wlAddTarget.mac_address) payload['mac_address'] = wlAddTarget.mac_address;
-      if (wlAddTarget.ip_address) payload['ip_address'] = wlAddTarget.ip_address;
-      if (wlAddComment.trim()) payload['comments'] = wlAddComment.trim();
+      if (wlAddType !== 'single_ip' && wlAddTarget.mac_address) {
+        payload['mac_address'] = wlAddTarget.mac_address;
+      }
+      if (wlAddType !== 'mac_only' && wlAddTarget.ip_address) {
+        payload['ip_address'] = wlAddTarget.ip_address;
+      }
+      payload['comments'] = wlAddComment.trim();
       await apiClient.post(API_ENDPOINTS.WHITELIST, payload);
       toast.success(t('terminal.addedToWhitelist'));
       refetch();
@@ -304,6 +315,7 @@ const Terminals: React.FC = () => {
       setWhitelistId(null);
       setShowWlAddDialog(false);
       setWlAddTarget(null);
+      setWlAddType('both');
     }
   };
 
@@ -815,7 +827,7 @@ const Terminals: React.FC = () => {
                         </span>
                       </td>
                       <td className="px-4 sm:px-6 py-4 whitespace-nowrap text-sm text-muted-foreground">
-                        {mac.firewall_tag || '-'}
+                        {mac.status === 'blocked' ? (mac.firewall_tag || '-') : '-'}
                       </td>
                       <td className="px-4 sm:px-6 py-4 whitespace-nowrap">
                         <div className="flex items-center text-sm text-muted-foreground">
@@ -951,7 +963,7 @@ const Terminals: React.FC = () => {
                 <span className="text-foreground">{selectedTerminal.black_match_type.toUpperCase()}</span>
               </div>
               )}
-              {selectedTerminal?.firewall_tag && (
+              {selectedTerminal?.status === 'blocked' && selectedTerminal?.firewall_tag && (
               <div className="flex justify-between">
                 <span className="text-muted-foreground">{t('terminal.firewallTag')}</span>
                 <span className="text-foreground">{selectedTerminal.firewall_tag}</span>
@@ -1025,6 +1037,18 @@ const Terminals: React.FC = () => {
       <Modal isOpen={showWlAddDialog && !!wlAddTarget} onClose={() => { setShowWlAddDialog(false); setWlAddTarget(null); }} title={t('terminal.addToWhitelistWithComment')} size="sm">
         <div className="space-y-4">
           {renderTerminalInfo(wlAddTarget)}
+          <div>
+            <label className="text-sm text-muted-foreground block mb-1">{t('whitelist.matchTypeSelector')}</label>
+            <select
+              value={wlAddType}
+              onChange={(e) => setWlAddType(e.target.value as 'mac_only' | 'single_ip' | 'both')}
+              className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+            >
+              <option value="mac_only">{t('whitelist.matchTypeMacOnly')}</option>
+              <option value="single_ip">{t('whitelist.matchTypeSingleIp')}</option>
+              <option value="both">{t('whitelist.matchTypeBoth')}</option>
+            </select>
+          </div>
           <div>
             <label className="text-sm text-muted-foreground block mb-1">{t('terminal.whitelistCommentPlaceholder')}</label>
             <input

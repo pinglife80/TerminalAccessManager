@@ -373,6 +373,9 @@ const Whitelist: React.FC = () => {
                       {item.pattern_type === 'mac_only' && (
                         <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-muted text-foreground">{t('whitelist.macOnly')}</span>
                       )}
+                      {item.pattern_type === 'both' && (
+                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">{t('whitelist.both')}</span>
+                      )}
                       {!item.pattern_type && (
                         <span className="text-sm text-muted-foreground">-</span>
                       )}
@@ -610,9 +613,16 @@ const Whitelist: React.FC = () => {
                 </div>
               )}
               <div className="flex justify-between">
-                <span className="text-muted-foreground">{t('whitelist.patternType')}</span>
-                <span className="text-foreground capitalize">{selectedEntry.pattern_type?.replace('_', ' ') || '-'}</span>
-              </div>
+                  <span className="text-muted-foreground">{t('whitelist.patternType')}</span>
+                  <span className="text-foreground capitalize">
+                    {selectedEntry.pattern_type === 'single_ip' && t('whitelist.singleIp')}
+                    {selectedEntry.pattern_type === 'cidr' && t('whitelist.cidr')}
+                    {selectedEntry.pattern_type === 'ip_range' && t('whitelist.ipRange')}
+                    {selectedEntry.pattern_type === 'mac_only' && t('whitelist.macOnly')}
+                    {selectedEntry.pattern_type === 'both' && t('whitelist.both')}
+                    {!selectedEntry.pattern_type && '-'}
+                  </span>
+                </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">{t('whitelist.addedBy')}</span>
                 <span className="text-foreground">{selectedEntry.added_by}</span>
