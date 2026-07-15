@@ -1,11 +1,28 @@
 # 更新日志
 
-> 文档版本：v3.6.17  更新日期：2026-07-16
+> 文档版本：v3.6.18  更新日期：2026-07-16
 
 本文件记录 TerminalAccessManager 的所有重要变更。
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
+
+***
+
+## [3.6.18] - 2026-07-16
+
+### 修复
+
+- **防火墙封锁状态不一致**：修复终端在 Web 显示已封锁但防火墙上无数据的问题
+  - 原因：合规自动封锁（auto_block_non_compliant）使用异步队列（fire-and-forget）调用防火墙 API，入队成功即更新数据库状态为 blocked，但实际防火墙操作在后台执行，失败时不会回滚
+  - 修复：将 `auto_block_non_compliant`、`_block_on_firewall`、`_unblock_on_firewall` 全部改为同步调用防火墙 API，确认成功后再更新 Terminal 状态和创建 Blacklist 记录
+  - 影响：Terminal.status 现在准确反映防火墙实际封锁状态，避免误报和状态反复横跳
+  - 关联文件：`backend/app/services/compliance_service.py`
+
+### 数据修复建议
+
+- 升级后建议执行一次防火墙对账（Firewall Reconciliation），以修正历史数据中可能存在的不一致记录
+- 对账 API：`POST /api/v1/system/firewall-reconciliation`
 
 ***
 
@@ -38,8 +55,8 @@
 
 ### 文档
 
-- 更新 release-notes.md 添加 v3.6.17 发布记录
-- 统一所有文档版本号至 v3.6.17
+- 更新 release-notes.md 添加 v3.6.18 发布记录
+- 统一所有文档版本号至 v3.6.18
 
 ***
 

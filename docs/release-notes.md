@@ -1,6 +1,6 @@
 # 版本跟踪记录
 
-> 文档版本：v3.6.17 | 更新日期：2026-07-16
+> 文档版本：v3.6.18 | 更新日期：2026-07-16
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
@@ -8,7 +8,58 @@
 
 ---
 
-## [v3.6.17] - 2026-07-16
+## [v3.6.18] - 2026-07-16
+
+### 防火墙封锁状态一致性修复
+
+#### 问题描述
+
+- IP `10.8.12.206` 在 Web 终端列表中显示为"已被封锁"状态，但实际防火墙上没有该条封锁记录。
+
+- 数据库状态与防火墙实际状态脱节，存在安全误报风险。
+
+#### 根因分析
+
+合规自动封锁（`auto_block_non_compliant`）使用异步队列（fire-and-forget）调用防火墙 API：
+
+1. `enqueue_operation()` 将封锁操作放入 `asyncio.Queue`，立即返回
+2. 代码判断 `all_success = len(errors) == 0`（只检查入队是否成功）
+3. 入队成功就立即更新 Terminal.status = blocked、创建 Blacklist 记录
+4. 实际防火墙 API 调用在后台队列中异步执行
+5. 如果防火墙调用失败（网络问题、API 错误等），只打日志，不回滚数据库状态
+6. 导致 Web 显示已封锁但防火墙无数据
+
+受影响的函数：
+- `auto_block_non_compliant` - 合规自动封锁
+- `_block_on_firewall` - 单防火墙封锁
+- `_unblock_on_firewall` - 单防火墙解封
+
+#### 修复内容
+
+将以上三个函数全部改为同步调用防火墙 API，确认成功后再更新数据库：
+
+| 函数 | 修改前 | 修改后 |
+|------|-------|-------|
+| `auto_block_non_compliant` | 入队后立即更新 DB | 同步调用 block_ip，成功后更新 DB |
+| `_block_on_firewall` | 入队后返回 True | 同步调用 block_ip，返回实际结果 |
+| `_unblock_on_firewall` | 入队后返回 True | 同步调用 unblock_ip，返回实际结果 |
+
+#### 验证方法
+
+- 语法检查：python -m py_compile 验证通过
+- 生产环境建议升级后执行一次防火墙对账，修正历史不一致数据
+- 对账 API：POST /api/v1/system/firewall-reconciliation
+
+#### 发布信息
+
+- 版本号：v3.6.18
+- 前一版本：v3.6.18
+- 涉及模块：backend/app/services/compliance_service.py
+- 变更类型：修复 (fix)
+
+---
+
+## [v3.6.18] - 2026-07-16
 
 ### 审计日志系统修复与优化
 
@@ -61,7 +112,7 @@
 #### 提交记录
 
 - Commit: `fix(audit): 修复审计日志爆炸增长、筛选不匹配和action格式不一致问题`
-- 版本号：v3.6.17 (Patch)
+- 版本号：v3.6.18 (Patch)
 
 ---
 
