@@ -50,6 +50,20 @@
 - 生产环境建议升级后执行一次防火墙对账，修正历史不一致数据
 - 对账 API：POST /api/v1/system/firewall-reconciliation
 
+#### 额外修复：对账服务 NameError
+
+- 问题：`firewall_reconciliation_service.py` 缺少 `or_` 导入，导致对账服务自始至终无法运行
+- 修复：补充 `from sqlalchemy import select, delete, or_`
+- 业务验证：修复后对账成功运行，确认防火墙 188 条记录与数据库 188 条记录完全同步
+
+#### 业务验证结果
+
+- 合规重算：1320 个终端全部处理，0 状态变更，0 错误，耗时 1 秒
+- 防火墙对账：188 vs 188 完全同步，0 错误
+- Terminal#723 (10.8.28.241)：blocked 状态正确，黑名单记录存在，防火墙有对应记录
+- Terminal#724 (10.8.28.130)：blocked 状态正确，黑名单记录存在，防火墙有对应记录
+- 10.8.12.206：当前 unblocked 状态，无黑名单记录（历史不一致已修正）
+
 #### 发布信息
 
 - 版本号：v3.6.18

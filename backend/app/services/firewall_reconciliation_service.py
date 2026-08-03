@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Dict, List, Set, Tuple
 
 from loguru import logger
-from sqlalchemy import select, delete
+from sqlalchemy import select, delete, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.crypto import decrypt_config

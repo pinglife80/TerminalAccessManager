@@ -19,6 +19,12 @@
   - 影响：Terminal.status 现在准确反映防火墙实际封锁状态，避免误报和状态反复横跳
   - 关联文件：`backend/app/services/compliance_service.py`
 
+- **防火墙对账服务崩溃**：修复对账服务因缺少 `or_` 导入导致完全无法运行的问题
+  - 原因：`firewall_reconciliation_service.py` 第 12 行 `from sqlalchemy import select, delete` 漏导 `or_`，第 153 行使用 `or_()` 时抛出 `NameError`
+  - 修复：补充 `or_` 导入
+  - 影响：对账服务恢复正常，能够自动检测和修正数据库与防火墙之间的状态不一致
+  - 关联文件：`backend/app/services/firewall_reconciliation_service.py`
+
 ### 数据修复建议
 
 - 升级后建议执行一次防火墙对账（Firewall Reconciliation），以修正历史数据中可能存在的不一致记录
