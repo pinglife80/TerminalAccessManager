@@ -34,7 +34,8 @@ from app.schemas.data_source import (
 
 # Redis cache key patterns and TTLs
 IPGUARD_CACHE_PREFIX = "ipguard:"
-IPGUARD_CACHE_TTL = 600  # 10 minutes
+IPGUARD_CACHE_TTL = 900  # 15 minutes (1.5x sync interval to avoid expiry gap)
+IPGUARD_BACKUP_CACHE_PREFIX = "ipguard:backup:"
 WHITELIST_CACHE_KEY = "whitelist:all"
 WHITELIST_CACHE_TTL = 300  # 5 minutes
 
@@ -320,6 +321,10 @@ class ComplianceService:
                 IPGUARD_CACHE_TTL,
                 json.dumps(entries),
             )
+
+            # Write backup cache (no TTL) for fallback when sync fails
+            backup_key = f"{IPGUARD_BACKUP_CACHE_PREFIX}{source_tag}"
+            await redis.set(backup_key, json.dumps(entries))
 
             # Update sync status
             baseline.last_sync_status = "success"
@@ -973,9 +978,28 @@ class ComplianceService:
             except Exception as e:
                 logger.warning(f"Failed to sync IPGuard data for '{baseline.tag}': {str(e)}")
 
-            # If still no data, use empty list
+            # If still no data, try loading from backup cache
             if baseline.tag not in result_data:
-                result_data[baseline.tag] = []
+                backup_key = f"{IPGUARD_BACKUP_CACHE_PREFIX}{baseline.tag}"
+                try:
+                    redis = await _get_redis()
+                    backup = await redis.get(backup_key)
+                    if backup:
+                        data = json.loads(backup if isinstance(backup, str) else backup.decode())
+                        result_data[baseline.tag] = data
+                        logger.warning(
+                            f"IPGuard cache expired and sync failed for '{baseline.tag}', "
+                            f"using backup data ({len(data)} entries)"
+                        )
+                    else:
+                        logger.error(
+                            f"IPGuard data unavailable for '{baseline.tag}': "
+                            f"cache expired, sync failed, no backup. Skipping this source."
+                        )
+                except Exception as backup_err:
+                    logger.error(
+                        f"Failed to load backup IPGuard data for '{baseline.tag}': {backup_err}"
+                    )
 
         return result_data
 
@@ -1400,6 +1424,20 @@ class ComplianceService:
             ipguard_total = sum(len(v) for v in ipguard_data.values())
             logger.debug(f"Loaded {ipguard_total} IPGuard entries from {len(ipguard_data)} sources")
 
+            # If IPGuard data is completely unavailable, abort recalculation
+            # to prevent false non_compliant judgments
+            if ipguard_total == 0:
+                logger.warning(
+                    "Compliance recalculation skipped: IPGuard data unavailable. "
+                    "Terminal compliance statuses remain unchanged."
+                )
+                await _release_compliance_lock(lock_token)
+                return {
+                    "total": 0, "bypass": 0, "compliant": 0,
+                    "non_compliant": 0, "unchanged": 0, "unblocked": 0,
+                    "skipped": True, "reason": "ipguard_data_unavailable",
+                }
+
             stmt = select(Terminal)
             result = await self.db.execute(stmt)
             terminals = result.scalars().all()
@@ -1436,12 +1474,32 @@ class ComplianceService:
                         new_compliance = "bypass"
                         new_wl_match_type = wl_result.get("match_type")
                         wl_comments = wl_result.get("comments")
+                        terminal.non_compliant_confirm_count = 0
                     elif ig_match:
                         new_compliance = "compliant"
                         new_wl_match_type = None
                         wl_comments = None
+                        terminal.non_compliant_confirm_count = 0
                     else:
-                        new_compliance = "non_compliant"
+                        # IPGuard/whitelist both not matched
+                        if old_compliance in ("non_compliant", "unknown"):
+                            # Already non_compliant or new terminal → confirm immediately
+                            new_compliance = "non_compliant"
+                        else:
+                            # Was compliant/bypass → require confirmation cycles
+                            # to avoid false transitions from IPGuard data fluctuations
+                            confirm_threshold = await self._get_confirm_threshold()
+                            terminal.non_compliant_confirm_count += 1
+                            if terminal.non_compliant_confirm_count >= confirm_threshold:
+                                new_compliance = "non_compliant"
+                                terminal.non_compliant_confirm_count = 0
+                            else:
+                                # Keep original status, don't trigger block/unblock
+                                new_compliance = old_compliance
+                                logger.debug(
+                                    f"Terminal {ip_addr}/{mac_addr}: pending non_compliant confirmation "
+                                    f"({terminal.non_compliant_confirm_count}/{confirm_threshold})"
+                                )
                         new_wl_match_type = None
                         wl_comments = None
 
@@ -1557,6 +1615,22 @@ class ComplianceService:
             return await config_service.get("block_time", "30d")
         except Exception:
             return "30d"
+
+    async def _get_confirm_threshold(self) -> int:
+        """Get compliance transition confirm threshold from system config.
+
+        Number of consecutive non_compliant detections required before
+        changing a terminal from compliant/bypass to non_compliant.
+        Default is 2 (requires 2 consecutive sync cycles to confirm).
+        """
+        try:
+            from app.services.config_service import ConfigService
+            config_service = ConfigService(self.db)
+            value = await config_service.get("compliance_confirm_threshold", "2")
+            threshold = int(value)
+            return max(1, min(10, threshold))
+        except Exception:
+            return 2
 
     async def log_action(self, username: str, action: str, resource_type: str,
                          resource_id: str | None, details: dict,

@@ -339,6 +339,76 @@ async def scheduled_compliance_check():
                                         )
                         except Exception as e:
                             logger.error(f"Error in compliance check for {source.tag}: {type(e).__name__}: {e} [source=scheduler]")
+
+                        # Retry blocking for non_compliant + unblocked terminals
+                        try:
+                            retry_stmt = sa_select(Terminal).where(
+                                (Terminal.source_tag == source.tag) &
+                                (Terminal.compliance_status == "non_compliant") &
+                                (Terminal.status == "unblocked")
+                            )
+                            retry_r = await db.execute(retry_stmt)
+                            retry_terminals = retry_r.scalars().all()
+                            if retry_terminals:
+                                from app.models.blacklist import Blacklist
+                                import re
+                                from datetime import datetime as dt_cls, UTC as utc_cls, timedelta as td_cls
+
+                                block_time = await service._get_block_time()
+                                match = re.match(r'^(\d+)([dhm])$', block_time.lower())
+                                td = td_cls(days=30)
+                                if match:
+                                    value = int(match.group(1))
+                                    unit = match.group(2)
+                                    if unit == 'd':
+                                        td = td_cls(days=value)
+                                    elif unit == 'h':
+                                        td = td_cls(hours=value)
+                                    elif unit == 'm':
+                                        td = td_cls(minutes=value)
+
+                                retry_blocked = 0
+                                for terminal in retry_terminals:
+                                    ip_addr = terminal.ip_address or ""
+                                    mac_addr = terminal.mac_address or ""
+                                    fw_tags = await service._get_bound_firewall_tags(terminal.source_tag)
+                                    if not fw_tags:
+                                        continue
+                                    all_success = True
+                                    for fw_tag in fw_tags:
+                                        success = await service._block_on_firewall(
+                                            ip_addr, fw_tag,
+                                            reason="Auto-blocked: retry (compliance check)"
+                                        )
+                                        if not success:
+                                            all_success = False
+                                            logger.warning(f"Retry block failed for {ip_addr} on firewall '{fw_tag}' [source=scheduler]")
+                                    if all_success:
+                                        terminal.status = "blocked"
+                                        terminal.firewall_tag = fw_tags[0] if len(fw_tags) == 1 else ",".join(fw_tags)
+                                        mac_norm = mac_addr.replace('-', '').replace(':', '').replace('.', '').upper() if mac_addr else None
+                                        for fw_tag in fw_tags:
+                                            bl_entry = Blacklist(
+                                                ip_address=ip_addr,
+                                                mac_address=mac_addr,
+                                                mac_address_normalized=mac_norm,
+                                                reason="Auto-blocked: non-compliant (retry)",
+                                                blocked_by="system",
+                                                expires_at=dt_cls.now(utc_cls) + td,
+                                                source_tag=terminal.source_tag,
+                                                firewall_tag=fw_tag,
+                                                is_auto_blocked=True,
+                                                auto_unblocked=False,
+                                            )
+                                            db.add(bl_entry)
+                                        retry_blocked += 1
+                                        logger.info(f"Retry block succeeded for {ip_addr} on firewall(s) '{','.join(fw_tags)}' [source=scheduler]")
+
+                                if retry_blocked > 0:
+                                    await db.commit()
+                                    logger.info(f"Retry-blocked {retry_blocked} non-compliant unblocked terminals from {source.tag} [source=scheduler]")
+                        except Exception as re_err:
+                            logger.error(f"Error in retry-block for {source.tag}: {type(re_err).__name__}: {re_err} [source=scheduler]")
             finally:
                 await _release_task_lock("compliance_check")
         except Exception as e:
