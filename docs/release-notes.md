@@ -1,10 +1,76 @@
 # 版本跟踪记录
 
-> 文档版本：v3.7.0 | 更新日期：2026-08-03
+> 文档版本：v3.7.1 | 更新日期：2026-08-04
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
+
+---
+
+## [v3.7.1] - 2026-08-04
+
+### 前端桥接虚拟机场景修复与系统设置 500 错误修复
+
+#### 问题描述
+
+1. **桥接虚拟机场景状态显示错误**：终端列表中宿主机（10.8.14.100）因 MAC（C0-3C-59-01-9B-A9）在黑名单中被错误显示为 non_compliant，但实际 IP+MAC 组合在 IPGuard 中为 compliant。
+
+2. **系统设置 General 页面 500 错误**：admin 超管用户访问系统设置 General 页面时，前端报 500 内部错误，后端日志显示 `ValidationError`。
+
+#### 根因分析
+
+1. **前端覆盖逻辑错误**：`Terminals.tsx` 存在对 `compliance_status` 的二次覆盖逻辑：
+   ```javascript
+   // 修复前
+   let complianceStatus = mac.compliance_status || 'unknown';
+   if (blackMatchType && complianceStatus !== 'bypass' && complianceStatus !== 'non_compliant') {
+       complianceStatus = 'non_compliant'; // 错误覆盖
+   }
+   ```
+   桥接虚拟机场景下，虚拟机（10.8.14.32）被封堵后，MAC 被加入黑名单。前端发现宿主机（10.8.14.100）的 MAC 在黑名单中，强制将其 compliance_status 从 `compliant` 覆盖为 `non_compliant`。
+
+2. **ConfigCategory 枚举缺失**：v3.7.0 新增的 `compliance_confirm_threshold` 配置项存在两个问题：
+   - `category='compliance'` 不在 `ConfigCategory` 枚举值列表中
+   - `is_readonly=NULL` 但 schema 要求为 `bool` 类型
+   
+   `SystemConfigResponse.model_validate()` 校验失败，抛出 `ValidationError`，导致 settings 相关 API 全部返回 500。
+
+#### 修复内容
+
+| 项目 | 修改文件 | 说明 |
+|------|---------|------|
+| 前端覆盖逻辑移除 | `frontend/src/pages/Terminals.tsx` | 移除对 compliance_status 和 firewall_tag 的二次覆盖，直接使用后端返回值 |
+| 枚举扩展 | `system_config.py` (schemas) | 新增 `COMPLIANCE = "compliance"` |
+| Schema 新增 | `system_config.py` (schemas) | 新增 `ComplianceConfigResponse` |
+| 分组响应 | `system_config.py` (schemas) | `AllConfigsResponse` 新增 `compliance` 字段 |
+| 配置服务 | `config_service.py` | 导入新 Schema、seed defaults、get_all_grouped |
+| 数据修复 | `system_config` 表 | `UPDATE ... SET is_readonly = false WHERE is_readonly IS NULL` |
+
+#### 业务验证结果
+
+**桥接虚拟机场景验证**：
+- 宿主机 10.8.14.100：后端 compliant，前端显示 compliant ✅
+- 虚拟机 10.8.14.32：后端 non_compliant，前端显示 non_compliant ✅
+- 全量检查：1420 终端状态与后端一致
+- 桥接场景统计：20 个桥接场景终端状态正确
+
+**Settings API 验证**：
+- `GET /api/v1/settings/` → 200 OK，返回 compliance 分类
+- `GET /api/v1/settings/list` → 200 OK，`compliance_confirm_threshold` 正常显示
+
+**全量终端合规验证**：
+- 合规终端：372 个（全部在 IPGuard 中，全部未封堵）
+- 非合规终端：200 个（全部不在白名单和 IPGuard 中，全部已封堵）
+- 豁免终端：830 个（全部在白名单中，全部未封堵）
+- 非合规数 = 封堵数：200 = 200 ✅
+
+#### 发布信息
+
+- 版本号：v3.7.1
+- 前一版本：v3.7.0
+- 变更类型：修复 (fix)
+- 涉及模块：frontend/src/pages/Terminals.tsx、backend/app/schemas/system_config.py、backend/app/services/config_service.py
 
 ---
 
