@@ -192,35 +192,25 @@ const Terminals: React.FC = () => {
 
       // Determine blacklist info
       let blackMatchType: string | null = null;
-      let firewallTag: string | null = null;
 
       if (macInBlacklist && ipInBlacklist) {
         blackMatchType = 'both';
-        firewallTag = blackEntryMap.get(mac.mac_address?.toLowerCase())
-          ?? blackEntryMap.get(mac.ip_address)
-          ?? null;
       } else if (macInBlacklist) {
         blackMatchType = 'mac';
-        firewallTag = blackEntryMap.get(mac.mac_address?.toLowerCase()) ?? null;
       } else if (ipInBlacklist) {
         blackMatchType = 'ip';
-        firewallTag = blackEntryMap.get(mac.ip_address) ?? null;
       }
 
-      // Use backend compliance_status as the source of truth.
-      // Only override with blacklist if backend hasn't already determined
-      // the terminal is bypass (whitelist match) - the backend compliance
-      // recalculation already handles auto-unblock for bypass terminals.
-      let complianceStatus = mac.compliance_status || 'unknown';
-      if (blackMatchType && complianceStatus !== 'bypass' && complianceStatus !== 'non_compliant') {
-        complianceStatus = 'non_compliant';
-      }
+      // 后端 compliance_status 是合规判定的唯一数据源，前端不再做二次覆盖。
+      // 桥接虚拟机场景下同 MAC 不同 IP 的终端不应共享封堵状态，
+      // 防火墙封堵基于 IP 而非 MAC，前端黑名单 MAC 匹配会导致宿主机被误判。
+      const complianceStatus = mac.compliance_status || 'unknown';
 
       return {
         ...mac,
         compliance_status: complianceStatus,
         wl_match_type: mac.wl_match_type || null,
-        firewall_tag: firewallTag || mac.firewall_tag || null,
+        firewall_tag: mac.firewall_tag || null,
         black_match_type: blackMatchType,
       };
     });

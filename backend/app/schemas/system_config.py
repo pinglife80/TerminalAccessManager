@@ -21,6 +21,7 @@ class ConfigCategory(StrEnum):
     LOGGING = "logging"
     BRANDING = "branding"
     EMAIL = "email"
+    COMPLIANCE = "compliance"
 
 
 class SystemConfigBase(BaseModel):
@@ -138,6 +139,11 @@ class EmailConfigResponse(BaseModel):
     email_rate_limit: int
 
 
+class ComplianceConfigResponse(BaseModel):
+    """Compliance policy config values"""
+    compliance_confirm_threshold: int
+
+
 class AllConfigsResponse(BaseModel):
     """All config categories combined"""
     security: SecurityConfigResponse
@@ -147,6 +153,7 @@ class AllConfigsResponse(BaseModel):
     general: GeneralConfigResponse
     branding: BrandingConfigResponse
     email: EmailConfigResponse
+    compliance: ComplianceConfigResponse
 
 
 class ConfigUpdateRequest(BaseModel):

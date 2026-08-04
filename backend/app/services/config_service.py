@@ -21,6 +21,7 @@ from app.models.system_config import SystemConfig
 from app.schemas.system_config import (
     AllConfigsResponse,
     BrandingConfigResponse,
+    ComplianceConfigResponse,
     ConfigUpdateResult,
     ConfigValueType,
     EmailConfigResponse,
@@ -133,6 +134,10 @@ class ConfigService:
          "is_readonly": False},
         {"key": "scheduler_auto_unblock_interval", "value": "600", "category": "scheduler",
          "value_type": "int", "description": "Auto-unblock check interval in seconds (30-86400)",
+         "is_readonly": False},
+        # Compliance
+        {"key": "compliance_confirm_threshold", "value": "2", "category": "compliance",
+         "value_type": "int", "description": "Consecutive non-compliant detections before status flips (1-10)",
          "is_readonly": False},
         # Branding
         {"key": "app_name", "value": "Terminal Access Manager", "category": "branding",
@@ -494,6 +499,9 @@ class ConfigService:
                 email_from=_val("email_from", ""),
                 email_from_name=_val("email_from_name", "TAM System"),
                 email_rate_limit=_val("email_rate_limit", 10),
+            ),
+            compliance=ComplianceConfigResponse(
+                compliance_confirm_threshold=_val("compliance_confirm_threshold", 2),
             ),
         )
 
