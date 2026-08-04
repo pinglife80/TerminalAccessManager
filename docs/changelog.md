@@ -1,11 +1,48 @@
 # 更新日志
 
-> 文档版本：v3.6.18  更新日期：2026-07-16
+> 文档版本：v3.7.0  更新日期：2026-08-03
 
 本文件记录 TerminalAccessManager 的所有重要变更。
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
+
+***
+
+## [3.7.0] - 2026-08-03
+
+### 新增
+
+- **合规状态翻转确认机制**：compliant→non_compliant 状态变化不再立即生效，需连续 N 次同步确认后才正式变更
+  - 背景：IPGuard OCULAR3 的 `AGENT.AGT_IP_MAC_STR` 字段存在动态波动（DHCP 续租、agent 重连等），导致合规数据瞬时变化引发"合规振荡"（189 次/周期的 compliant→non_compliant 翻转）
+  - 方案：`recalculate_all_compliance` 中对 compliant/bypass→non_compliant 的翻转引入 `non_compliant_confirm_count` 计数器，达到配置阈值（默认 2 次）后才变更状态并触发封堵
+  - 首次发现的新终端（unknown→non_compliant）仍立即封堵，不受影响
+  - 新增配置项：`compliance_confirm_threshold`（默认 2，范围 1-10）
+  - 新增数据库字段：`terminals.non_compliant_confirm_count`
+  - 关联文件：`backend/app/services/compliance_service.py`、`backend/app/models/terminal.py`、`backend/alembic/versions/029_terminal_non_compliant_confirm_count.py`
+
+- **封堵失败重试机制**：`scheduled_compliance_check` 调度器增加对 `non_compliant + unblocked` 终端的封堵重试
+  - 背景：防火墙 API 调用失败后终端停留在 non_compliant+unblocked 状态，原有调度器只处理 unknown 终端，不会重试
+  - 方案：每 300 秒扫描一次 non_compliant+unblocked 终端，重新调用防火墙封堵 API
+  - 关联文件：`backend/app/main.py`
+
+### 优化
+
+- **IPGuard 缓存 TTL 修正**：缓存 TTL 从 600 秒调整为 900 秒（1.5 倍同步间隔），消除缓存过期与同步间隔之间的空窗期
+  - 关联文件：`backend/app/services/compliance_service.py`
+
+- **IPGuard 同步失败数据保护**：引入备份缓存机制
+  - 同步成功时额外写入无 TTL 的备份缓存 `ipguard:backup:{tag}`
+  - 同步失败且主缓存过期时，从备份缓存加载上次成功数据，避免空列表导致全部终端误判为 non_compliant
+  - IPGuard 数据完全不可用时中止合规重算，保持终端原有状态
+  - 关联文件：`backend/app/services/compliance_service.py`
+
+### 验证结果
+
+- 非合规未封堵终端数：6 → 0（重试机制修复）
+- 合规重算状态变化：1349 终端全部 unchanged（确认机制生效）
+- compliant→non_compliant 翻转：189 次/周期 → 0 次（重算路径）
+- 非合规终端数 = 封堵终端数：是
 
 ***
 

@@ -1,6 +1,6 @@
 # 终端准入管控平台 — 用户操作手册
 
-> 文档版本：v3.6.18  更新日期：2026-07-16
+> 文档版本：v3.7.0  更新日期：2026-08-03
 
 ---
 
@@ -678,6 +678,7 @@
 | 认证提供者 | LDAP/本地认证配置 |
 | 备份配置 | 备份策略、存储配置 |
 | 通知管理 | 通知渠道配置、日志查看 |
+| 合规配置 | 合规判定阈值配置 |
 | 用户管理 | 用户 CRUD、角色分配 |
 | 角色管理 | 角色 CRUD、权限配置 |
 
@@ -1098,6 +1099,53 @@ curl -X PUT https://<HOST_IP>:8443/api/v1/settings/lockout_duration_minutes \
 3. 测试成功后点击"保存"使配置生效
 
 > **安全提示**：SMTP 密码在数据库中以加密形式存储（ENC: 前缀），不会明文暴露。
+
+---
+
+### 11.7 合规配置
+
+合规配置用于调整合规判定引擎的行为参数，平衡判定灵敏度与系统稳定性。
+
+**访问路径**：系统设置 → 合规配置
+
+#### 11.7.1 可配置项
+
+| 配置项 | 配置键 | 类型 | 默认值 | 取值范围 | 说明 |
+|--------|--------|------|--------|---------|------|
+| 合规状态翻转确认阈值 | `compliance_confirm_threshold` | int | 2 | 1-10 | compliant/bypass → non_compliant 状态翻转需连续 N 次同步确认 |
+
+#### 11.7.2 翻转确认机制说明
+
+由于 IPGuard 基线数据中的 `AGENT.AGT_IP_MAC_STR` 字段会因终端 DHCP 续租、agent 重连等场景产生瞬时波动，直接采用单次同步结果判定合规状态会导致"合规振荡"（终端在 compliant 与 non_compliant 之间频繁翻转，引发防火墙反复封堵/解封）。
+
+为消除此现象，v3.7.0 引入翻转确认机制：
+
+- **首次发现的新终端**（unknown → non_compliant）：立即生效并触发封堵，不受阈值影响
+- **已合规终端转为不合规**（compliant/bypass → non_compliant）：需连续 N 次同步均判定为 non_compliant 后才正式变更状态并触发封堵
+- N 由 `compliance_confirm_threshold` 配置项控制，默认为 2
+
+> **配置建议**：
+> - 网络环境稳定、IPGuard 数据波动小：可设为 1（即时判定）
+> - 网络环境存在 DHCP 续租频繁、终端移动等波动：建议保持默认值 2
+> - IPGuard 数据同步极不稳定：可适当调高至 3-5，但过高会延迟真实不合规终端的封堵
+
+#### 11.7.3 配置方式
+
+通过 API 更新合规配置（需 `settings:write` 权限）：
+
+```bash
+# 查看当前配置
+curl https://<HOST_IP>:8443/api/v1/settings/compliance_confirm_threshold \
+  -H "Authorization: Bearer <token>"
+
+# 更新确认阈值为 3
+curl -X PUT https://<HOST_IP>:8443/api/v1/settings/compliance_confirm_threshold \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"value": 3}'
+```
+
+> ⚠️ **注意：** 调整确认阈值会影响合规判定的响应速度。阈值越高，真实不合规终端被封堵的延迟越大；阈值越低，越容易受 IPGuard 数据波动影响产生合规振荡。修改后请观察至少一个完整同步周期（默认 10 分钟）的合规状态变化情况。
 
 ---
 
