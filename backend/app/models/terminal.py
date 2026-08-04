@@ -35,6 +35,7 @@ class Terminal(Base):
     compliance_status = Column(String(20), default="unknown", index=True)  # compliant / bypass / non_compliant / unknown
     wl_match_type = Column(String(10), nullable=True)  # "mac" / "ip" / "both" / null (whitelist match type)
     firewall_tag = Column(String(50), nullable=True, index=True)  # Firewall tag from block operation
+    non_compliant_confirm_count = Column(Integer, default=0)  # Consecutive non_compliant detections during compliant→non_compliant transition
 
     # Composite index for efficient queries
     __table_args__ = (

@@ -1,10 +1,59 @@
 # 版本跟踪记录
 
-> 文档版本：v3.6.18 | 更新日期：2026-07-16
+> 文档版本：v3.7.0 | 更新日期：2026-08-03
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
+
+---
+
+## [v3.7.0] - 2026-08-03
+
+### 合规判定优化：消除合规振荡与封堵失败修复
+
+#### 问题描述
+
+- 非合规终端数（199）大于已封堵终端数（193），存在 6 个 non_compliant+unblocked 异常终端
+- 审计日志显示 compliant→non_compliant 状态翻转达 189 次，远超预期，导致防火墙频繁封堵/解封堵（合规振荡）
+
+#### 根因分析
+
+1. **合规振荡**：IPGuard OCULAR3 的 `AGENT.AGT_IP_MAC_STR` 字段记录 agent 当前上报的 IP+MAC 绑定关系，当终端 DHCP 续租或重连时该字段更新，导致 TAM 的 IP+MAC 精确匹配失败。每次 IPGuard 同步数据波动（1132~1139 条之间变化）都直接触发 compliant→non_compliant 翻转并立即封堵，下次同步恢复后又立即解封堵。
+2. **封堵失败无重试**：防火墙 API 调用失败后终端停留在 non_compliant+unblocked，`scheduled_compliance_check` 只查询 unknown 终端，不会重试已标记 non_compliant 的终端。
+3. **缓存 TTL 等于同步间隔**：IPGUARD_CACHE_TTL=600s 与同步间隔 600s 完全相等，同步执行期间缓存已过期。
+4. **同步失败返回空列表**：`_load_all_ipguard_cache` 同步失败时返回空列表 `[]`，导致所有终端被判定为 non_compliant。
+
+#### 修复内容
+
+| 改进项 | 修改文件 | 说明 |
+|--------|----------|------|
+| 翻转确认机制 | `compliance_service.py`、`terminal.py`、`029_terminal_non_compliant_confirm_count.py` | compliant→non_compliant 需连续 N 次同步确认（默认 2）后才变更状态 |
+| 封堵失败重试 | `main.py` | `scheduled_compliance_check` 增加 non_compliant+unblocked 终端封堵重试 |
+| 缓存 TTL 修正 | `compliance_service.py` | TTL 600s→900s（1.5 倍同步间隔） |
+| 同步失败数据保护 | `compliance_service.py` | 新增备份缓存；同步失败时从备份加载；数据完全不可用时中止重算 |
+| 配置项支持 | `system_config` 表 | 新增 `compliance_confirm_threshold` 配置项（默认 2，范围 1-10） |
+
+#### 数据库变更
+
+- 新增字段：`terminals.non_compliant_confirm_count`（INTEGER, NOT NULL, DEFAULT 0）
+- 迁移脚本：`backend/alembic/versions/029_terminal_non_compliant_confirm_count.py`
+
+#### 业务验证结果
+
+- 非合规未封堵终端数：6 → 0（重试机制修复全部异常终端）
+- 合规重算状态变化：1349 终端全部 unchanged（确认机制生效，0 次 compliant→non_compliant 翻转）
+- IPGuard 缓存 TTL：891 秒（接近 900，符合预期）
+- 备份缓存：已创建（EXISTS=1, TTL=-1 永久）
+- 健康检查：所有服务 healthy，DB/Redis 连接正常
+- 终端状态分布：bypass 779 + compliant 367 + non_compliant 203(blocked) = 1349，非合规数 = 封堵数
+
+#### 发布信息
+
+- 版本号：v3.7.0
+- 前一版本：v3.6.18
+- 变更类型：功能新增+优化 (feat+perf)
+- 涉及模块：backend/app/services/compliance_service.py、backend/app/main.py、backend/app/models/terminal.py、backend/alembic/versions/029_terminal_non_compliant_confirm_count.py
 
 ---
 
@@ -49,6 +98,20 @@
 - 语法检查：python -m py_compile 验证通过
 - 生产环境建议升级后执行一次防火墙对账，修正历史不一致数据
 - 对账 API：POST /api/v1/system/firewall-reconciliation
+
+#### 额外修复：对账服务 NameError
+
+- 问题：`firewall_reconciliation_service.py` 缺少 `or_` 导入，导致对账服务自始至终无法运行
+- 修复：补充 `from sqlalchemy import select, delete, or_`
+- 业务验证：修复后对账成功运行，确认防火墙 188 条记录与数据库 188 条记录完全同步
+
+#### 业务验证结果
+
+- 合规重算：1320 个终端全部处理，0 状态变更，0 错误，耗时 1 秒
+- 防火墙对账：188 vs 188 完全同步，0 错误
+- Terminal#723 (10.8.28.241)：blocked 状态正确，黑名单记录存在，防火墙有对应记录
+- Terminal#724 (10.8.28.130)：blocked 状态正确，黑名单记录存在，防火墙有对应记录
+- 10.8.12.206：当前 unblocked 状态，无黑名单记录（历史不一致已修正）
 
 #### 发布信息
 
