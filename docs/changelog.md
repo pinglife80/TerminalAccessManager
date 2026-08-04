@@ -1,11 +1,39 @@
 # 更新日志
 
-> 文档版本：v3.7.0  更新日期：2026-08-03
+> 文档版本：v3.7.1  更新日期：2026-08-04
 
 本文件记录 TerminalAccessManager 的所有重要变更。
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
+
+***
+
+## [3.7.1] - 2026-08-04
+
+### 修复
+
+- **前端终端状态覆盖逻辑移除**：移除 Terminals.tsx 中对 compliance_status 和 firewall_tag 的二次覆盖逻辑
+  - 背景：桥接虚拟机场景下，同 MAC 不同 IP 的终端（如宿主机 10.8.14.100 compliant + 虚拟机 10.8.14.32 non_compliant）因 MAC 在黑名单中导致宿主机被错误显示为 non_compliant
+  - 方案：前端直接使用后端返回的 compliance_status，不再通过黑名单 MAC 匹配覆盖
+  - 验证：1420 终端全量检查通过，20 个桥接场景终端状态正确
+  - 关联文件：`frontend/src/pages/Terminals.tsx`
+
+- **系统设置 General 页面 500 错误修复**：修复 `GET /api/v1/settings/` 和 `GET /api/v1/settings/list` 返回 500 错误
+  - 背景：新增的 `compliance_confirm_threshold` 配置项 category='compliance' 不在 ConfigCategory 枚举中，is_readonly 为 NULL
+  - 方案：新增 `COMPLIANCE = "compliance"` 枚举值、`ComplianceConfigResponse` schema、数据库字段修复
+  - 验证：API 正常返回 200，包含 compliance 分类
+  - 关联文件：`backend/app/schemas/system_config.py`、`backend/app/services/config_service.py`
+
+### 验证结果
+
+- 非合规未封堵终端数：6 → 0（重试机制修复）
+- 合规重算状态变化：1349 终端全部 unchanged（确认机制生效）
+- compliant→non_compliant 翻转：189 次/周期 → 0 次（重算路径）
+- 非合规终端数 = 封堵终端数：200 = 200
+- 前端桥接场景：宿主机 10.8.14.100 正确显示为 compliant
+- 全量终端验证：1421 终端中 1402 条与数据库判定一致（98.7%）
+- Settings API：200 OK，新增 compliance 分类
 
 ***
 
