@@ -21,6 +21,7 @@ from app.models.system_config import SystemConfig
 from app.schemas.system_config import (
     AllConfigsResponse,
     BrandingConfigResponse,
+    CacheConfigResponse,
     ComplianceConfigResponse,
     ConfigUpdateResult,
     ConfigValueType,
@@ -138,6 +139,13 @@ class ConfigService:
         # Compliance
         {"key": "compliance_confirm_threshold", "value": "2", "category": "compliance",
          "value_type": "int", "description": "Consecutive non-compliant detections before status flips (1-10)",
+         "is_readonly": False},
+        # Cache
+        {"key": "cache_ipguard_ttl", "value": "900", "category": "cache",
+         "value_type": "int", "description": "IPGuard data cache TTL in seconds (60-7200)",
+         "is_readonly": False},
+        {"key": "cache_whitelist_ttl", "value": "300", "category": "cache",
+         "value_type": "int", "description": "Whitelist data cache TTL in seconds (60-3600)",
          "is_readonly": False},
         # Branding
         {"key": "app_name", "value": "Terminal Access Manager", "category": "branding",
@@ -502,6 +510,10 @@ class ConfigService:
             ),
             compliance=ComplianceConfigResponse(
                 compliance_confirm_threshold=_val("compliance_confirm_threshold", 2),
+            ),
+            cache=CacheConfigResponse(
+                cache_ipguard_ttl=_val("cache_ipguard_ttl", 900),
+                cache_whitelist_ttl=_val("cache_whitelist_ttl", 300),
             ),
         )
 

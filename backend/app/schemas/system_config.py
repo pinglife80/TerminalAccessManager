@@ -22,6 +22,7 @@ class ConfigCategory(StrEnum):
     BRANDING = "branding"
     EMAIL = "email"
     COMPLIANCE = "compliance"
+    CACHE = "cache"
 
 
 class SystemConfigBase(BaseModel):
@@ -144,6 +145,12 @@ class ComplianceConfigResponse(BaseModel):
     compliance_confirm_threshold: int
 
 
+class CacheConfigResponse(BaseModel):
+    """Cache TTL config values (in seconds)"""
+    cache_ipguard_ttl: int
+    cache_whitelist_ttl: int
+
+
 class AllConfigsResponse(BaseModel):
     """All config categories combined"""
     security: SecurityConfigResponse
@@ -154,6 +161,7 @@ class AllConfigsResponse(BaseModel):
     branding: BrandingConfigResponse
     email: EmailConfigResponse
     compliance: ComplianceConfigResponse
+    cache: CacheConfigResponse
 
 
 class ConfigUpdateRequest(BaseModel):
