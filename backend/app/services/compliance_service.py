@@ -17,6 +17,7 @@ from datetime import datetime, timedelta, UTC
 
 from loguru import logger
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import func
 
@@ -31,6 +32,7 @@ from app.schemas.data_source import (
     AutoUnblockResult,
     ComplianceCheckResult,
 )
+from app.services.config_service import get_config_value
 
 # Redis cache key patterns and TTLs
 IPGUARD_CACHE_PREFIX = "ipguard:"
@@ -316,9 +318,10 @@ class ComplianceService:
             # Cache to Redis
             redis = await _get_redis()
             cache_key = f"{IPGUARD_CACHE_PREFIX}{source_tag}"
+            ipguard_ttl = await get_config_value("cache_ipguard_ttl", IPGUARD_CACHE_TTL)
             await redis.setex(
                 cache_key,
-                IPGUARD_CACHE_TTL,
+                ipguard_ttl,
                 json.dumps(entries),
             )
 
@@ -540,7 +543,13 @@ class ComplianceService:
                         is_auto_blocked=True,
                         auto_unblocked=False,
                     )
-                    self.db.add(blacklist_entry)
+                    try:
+                        self.db.add(blacklist_entry)
+                        await self.db.flush()
+                    except IntegrityError:
+                        await self.db.rollback()
+                        logger.warning(f"Duplicate blacklist entry for {entry.ip_address} MAC {entry.mac_address}, skipping")
+                        continue
 
                 blocked += 1
 
@@ -935,7 +944,8 @@ class ComplianceService:
         # Cache to Redis
         try:
             redis = await _get_redis()
-            await redis.setex(WHITELIST_CACHE_KEY, WHITELIST_CACHE_TTL, json.dumps(data))
+            whitelist_ttl = await get_config_value("cache_whitelist_ttl", WHITELIST_CACHE_TTL)
+            await redis.setex(WHITELIST_CACHE_KEY, whitelist_ttl, json.dumps(data))
         except Exception:
             pass
 
@@ -1169,6 +1179,7 @@ class ComplianceService:
         """
         status_changed = terminal.compliance_status != new_compliance
         unblocked = False
+        mac_norm = mac_addr.replace('-', '').replace(':', '').replace('.', '').upper() if mac_addr else None
 
         if new_compliance == "bypass":
             wl_comment_str = f"Whitelist: {wl_comments}" if wl_comments else None
@@ -1288,7 +1299,6 @@ class ComplianceService:
                             terminal.comments = f"{terminal.comments}; {unblock_comment}"
                         else:
                             terminal.comments = unblock_comment
-                        mac_norm = mac_addr.replace('-', '').replace(':', '').replace('.', '').upper() if mac_addr else None
                         
                         bl_stmt = select(Blacklist).where(
                             (Blacklist.ip_address == ip_addr) &
@@ -1313,22 +1323,46 @@ class ComplianceService:
                     terminal.firewall_tag = None
                     unblocked = True
 
-            if new_compliance == "non_compliant" and terminal.status != "blocked":
+            # Check if terminal needs (re-)block: non-compliant AND no active blacklist entry
+            # This handles the case where a terminal was blocked, became compliant (auto-unblocked),
+            # then became non-compliant again - the terminal status may still be "blocked" from
+            # the previous block, but the blacklist entry was auto-unblocked and needs recreation.
+            bl_active_stmt = select(Blacklist).where(
+                (Blacklist.ip_address == ip_addr) &
+                (Blacklist.mac_address_normalized == mac_norm) &
+                (Blacklist.auto_unblocked == False) &
+                (Blacklist.unblocked_at.is_(None))
+            )
+            bl_active_result = await self.db.execute(bl_active_stmt)
+            has_active_blacklist = bl_active_result.scalar_one_or_none() is not None
+
+            if new_compliance == "non_compliant" and not has_active_blacklist:
                 fw_tags = await self._get_bound_firewall_tags(terminal.source_tag)
                 if fw_tags:
+                    # Check if terminal is already blocked on all required firewalls
+                    # (handles re-block after auto-unblock: terminal may still be blocked on firewall)
+                    already_blocked = (
+                        terminal.status == "blocked" and
+                        terminal.firewall_tag is not None and
+                        all(fw in (terminal.firewall_tag or "").split(",") for fw in fw_tags)
+                    )
+                    
                     all_block_success = True
-                    for fw_tag in fw_tags:
-                        try:
-                            success = await self._block_on_firewall(
-                                ip_addr, fw_tag,
-                                reason="Auto-blocked: compliance recalculation"
-                            )
-                            if not success:
+                    if not already_blocked:
+                        for fw_tag in fw_tags:
+                            try:
+                                success = await self._block_on_firewall(
+                                    ip_addr, fw_tag,
+                                    reason="Auto-blocked: compliance recalculation"
+                                )
+                                if not success:
+                                    all_block_success = False
+                                    logger.warning(f"Failed to auto-block {ip_addr} on firewall '{fw_tag}'")
+                            except Exception as e:
                                 all_block_success = False
-                                logger.warning(f"Failed to auto-block {ip_addr} on firewall '{fw_tag}'")
-                        except Exception as e:
-                            all_block_success = False
-                            logger.warning(f"Error auto-blocking {ip_addr} on firewall '{fw_tag}': {e}")
+                                logger.warning(f"Error auto-blocking {ip_addr} on firewall '{fw_tag}': {e}")
+                    else:
+                        logger.info(f"Terminal {ip_addr} already blocked on firewall(s), recreating blacklist entry")
 
                     if all_block_success:
                         terminal.status = "blocked"
@@ -1352,7 +1386,6 @@ class ComplianceService:
                                 td = timedelta(hours=value)
                             elif unit == 'm':
                                 td = timedelta(minutes=value)
-                        mac_norm = mac_addr.replace('-', '').replace(':', '').replace('.', '').upper() if mac_addr else None
                         
                         # Check for existing blacklist entry (idempotency)
                         existing_bl_stmt = select(Blacklist).where(
@@ -1380,8 +1413,15 @@ class ComplianceService:
                                     is_auto_blocked=True,
                                     auto_unblocked=False,
                                 )
-                                self.db.add(bl_entry)
-                            logger.info(f"Auto-blocked {ip_addr} (now non_compliant) on firewall(s) '{fw_info}'")
+                                try:
+                                    self.db.add(bl_entry)
+                                    await self.db.flush()
+                                except IntegrityError:
+                                    await self.db.rollback()
+                                    logger.warning(f"Duplicate blacklist entry for {ip_addr} MAC {mac_addr} during recalculation, skipping")
+                                    break
+                            else:
+                                logger.info(f"Auto-blocked {ip_addr} (now non_compliant) on firewall(s) '{fw_info}'")
         else:
             if terminal.status == "blocked" and not terminal.firewall_tag:
                 fw_tags = await self._get_bound_firewall_tags(terminal.source_tag)

@@ -104,7 +104,7 @@ class BlacklistCreate(BlacklistBase):
 class BlacklistResponse(BlacklistBase):
     """Blacklist response schema"""
     id: int
-    blocked_at: datetime
+    blocked_at: datetime | None = None
     expires_at: datetime | None = None
     blocked_by: str
     source_tag: str | None = None
