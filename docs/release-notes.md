@@ -1,10 +1,56 @@
 # 版本跟踪记录
 
-> 文档版本：v3.7.1 | 更新日期：2026-08-04
+> 文档版本：v3.8.0 | 更新日期：2026-08-05
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
+
+---
+
+## [v3.8.0] - 2026-08-05
+
+### 缓存 TTL 可配置化与 Blacklist 数据一致性修复
+
+#### 问题描述
+
+1. **缓存 TTL 硬编码**：IPGuard 和白名单缓存有效期在 `compliance_service.py` 中硬编码为常量，无法通过系统设置动态调整。
+2. **Blacklist 重复记录**：黑名单管理显示数量（236）与实际防火墙封堵数量（235）不一致，根因为数据库索引非唯一、并发竞态条件、重封堵逻辑缺失。
+3. **BlacklistResponse 500 错误**：`blocked_at` 字段定义为非空 `datetime`，但数据库部分记录为 NULL，导致 API 返回 500。
+
+#### 根因分析
+
+1. **缓存 TTL 硬编码**：`IPGUARD_CACHE_TTL = 900` 和 `WHITELIST_CACHE_TTL = 300` 为模块级常量，无法通过配置中心动态调整。
+2. **Blacklist 重复记录**：
+   - `idx_blacklist_unique_active` 索引虽命名为 "unique"，但实际为普通索引
+   - `auto_block_non_compliant()` 和 `_apply_compliance_result()` 存在 check-then-act 竞态条件
+   - 终端已封堵但 blacklist 条目被解封后，重封堵逻辑基于 `terminal.status != "blocked"` 判断，跳过了需要重建 blacklist 条目的场景
+3. **BlacklistResponse 500**：`blocked_at: datetime`（非空）与数据库 NULL 值冲突。
+
+#### 修复内容
+
+| 项目 | 修改文件 | 说明 |
+|------|---------|------|
+| 缓存 TTL 可配置 | `system_config.py` (schemas) | 新增 `CacheConfigResponse`，扩展 `AllConfigsResponse` |
+| 缓存 TTL 可配置 | `config_service.py` | 新增 `cache_ipguard_ttl`/`cache_whitelist_ttl` 默认配置 |
+| 缓存 TTL 可配置 | `compliance_service.py` | 替换硬编码 TTL 为动态 `get_config_value()` 读取 |
+| 缓存 TTL UI | `GeneralSettings.tsx`、i18n | 新增缓存配置分组 UI 和多语言翻译 |
+| Blacklist 唯一索引 | `blacklist.py` | `idx_blacklist_unique_active` 改为 `unique=True` |
+| Blacklist 竞态修复 | `compliance_service.py` | `auto_block_non_compliant` 添加 `IntegrityError` 捕获和回滚 |
+| Blacklist 竞态修复 | `compliance_service.py` | `recalculate_all_compliance` 添加 `IntegrityError` 捕获和回滚 |
+| Blacklist 重封堵 | `compliance_service.py` | `_apply_compliance_result` 修复 `mac_norm` 未定义，重封堵判断改为基于 blacklist 活跃条目 |
+| Schema 修复 | `terminal.py` | `blocked_at: datetime` → `blocked_at: datetime \| None = None` |
+| 前端功能补全 | `SystemSettings.tsx`、`Notifications.tsx`、`constants.ts`、`LDAPImportModal.tsx` | 配置摘要、通知重试、LDAP 常量化 |
+| 数据库迁移 | `030_blacklist_unique_index.py` | 清理重复记录 + 创建唯一部分索引 |
+
+#### 验证结果
+
+- **Blacklist 数据一致性**：blacklist_active（200）= terminal_blocked（200）✅
+- **重复记录检查**：total_active（200）= unique_ip_mac（200）✅
+- **唯一索引**：`CREATE UNIQUE INDEX idx_blacklist_unique_active` ✅
+- **后端错误日志**：0 条 ERROR ✅
+- **Blacklist API**：正常返回，`blocked_at` 字段可空 ✅
+- **迁移脚本**：`029_terminal_non_compliant_confirm_count → 030_blacklist_unique_index` 成功执行 ✅
 
 ---
 

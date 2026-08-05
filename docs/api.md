@@ -1,6 +1,6 @@
 # TerminalAccessManager API 文档
 
-> 文档版本：v3.6.18 | 更新日期：2026-07-16
+> 文档版本：v3.8.0 | 更新日期：2026-08-05
 
 > 基于 MAC 地址和 IP 地址的网络终端准入管理平台
 
@@ -1038,7 +1038,7 @@ curl -X DELETE https://<HOST_IP>:8443/api/v1/whitelist/192.168.1.0/24 \
       "ip_address": "192.168.1.200",
       "mac_address": "11:22:33:44:55:66",
       "reason": "未合规终端",
-      "blocked_at": "2025-06-01T10:00:00Z",
+      "blocked_at": "2025-06-01T10:00:00Z (nullable)",
       "expires_at": "2025-07-01T10:00:00Z",
       "blocked_by": "admin",
       "source_tag": "switch-1f",
