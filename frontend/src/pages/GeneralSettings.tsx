@@ -47,6 +47,8 @@ const SECTION_FIELDS: Record<string, string[]> = {
     'scheduler_auto_unblock_interval',
   ],
   general: ['environment', 'debug', 'log_level'],
+  compliance: ['compliance_confirm_threshold'],
+  cache: ['cache_ipguard_ttl', 'cache_whitelist_ttl'],
 };
 
 /** Flatten AllConfigs grouped response into a key→string value map. */
@@ -56,6 +58,7 @@ function flattenConfigs(configs: AllConfigs | undefined): Record<string, string>
   const allGroups = [
     configs.security, configs.rate_limit, configs.network,
     configs.scheduler, configs.general, configs.branding,
+    configs.compliance, configs.cache,
   ];
   for (const group of allGroups) {
     if (!group) continue;
@@ -340,6 +343,28 @@ const GeneralSettings: React.FC = () => {
     }
   };
 
+  const handleFirewallReconciliation = async () => {
+    if (!window.confirm(t('generalSettings.firewallReconciliationConfirm'))) return;
+    setOperationLoading('reconcile');
+    try {
+      const res = await apiClient.post(API_ENDPOINTS.FIREWALL_RECONCILIATION);
+      const result = res.data;
+      toast.success(t('generalSettings.firewallReconciliationSuccess', {
+        firewallCount: result.firewall_ip_count || 0,
+        dbCount: result.db_entry_count || 0,
+        created: result.created_in_db || 0,
+        missingDb: result.missing_in_db?.length || 0,
+        missingFirewall: result.missing_in_firewall?.length || 0,
+      }));
+      queryClient.invalidateQueries({ queryKey: ['settings'] });
+      queryClient.invalidateQueries({ queryKey: ['settings-list'] });
+    } catch (err) {
+      toast.error(getErrorMessage(err));
+    } finally {
+      setOperationLoading(null);
+    }
+  };
+
   const setField = (key: string, value: string) => {
     setFormValues((prev) => ({ ...prev, [key]: value }));
   };
@@ -537,7 +562,39 @@ const GeneralSettings: React.FC = () => {
           </div>
         </SectionCard>
 
-        {/* 8. Operations */}
+        {/* 8. Compliance */}
+        <SectionCard
+          title={t('generalSettings.compliance')}
+          description={t('generalSettings.complianceDesc')}
+          icon={<Activity className="h-5 w-5" />}
+          onSave={() => handleSave('compliance')}
+          saving={savingSection === 'compliance'}
+          hasChanges={hasSectionChanges('compliance')}
+        >
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {SECTION_FIELDS.compliance.map((key) => (
+              <Field key={key} entry={entryMap[key]} value={formValues[key] ?? ''} onChange={(v) => setField(key, v)} />
+            ))}
+          </div>
+        </SectionCard>
+
+        {/* 9. Cache */}
+        <SectionCard
+          title={t('generalSettings.cache')}
+          description={t('generalSettings.cacheDesc')}
+          icon={<Database className="h-5 w-5" />}
+          onSave={() => handleSave('cache')}
+          saving={savingSection === 'cache'}
+          hasChanges={hasSectionChanges('cache')}
+        >
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {SECTION_FIELDS.cache.map((key) => (
+              <Field key={key} entry={entryMap[key]} value={formValues[key] ?? ''} onChange={(v) => setField(key, v)} />
+            ))}
+          </div>
+        </SectionCard>
+
+        {/* 10. Operations */}
         <SectionCard
           title={t('generalSettings.operations')}
           description={t('generalSettings.operationsDesc')}
@@ -557,6 +614,13 @@ const GeneralSettings: React.FC = () => {
               onClick={handleInvalidateCache}
               loading={operationLoading === 'invalidate'}
               variant="warning"
+            />
+            <PrimaryButton
+              icon={Shield}
+              label={t('generalSettings.firewallReconciliation')}
+              onClick={handleFirewallReconciliation}
+              loading={operationLoading === 'reconcile'}
+              variant="secondary"
             />
           </div>
         </SectionCard>
