@@ -88,7 +88,7 @@ const LDAPImportModal: React.FC<LDAPImportModalProps> = ({ isOpen, onClose, onIm
 
   const loadOus = async () => {
     try {
-      const response = await apiClient.get('/ldap/ous');
+      const response = await apiClient.get(API_ENDPOINTS.LDAP_OUS);
       setOus(response.data);
     } catch (err) {
     }
@@ -106,7 +106,7 @@ const LDAPImportModal: React.FC<LDAPImportModalProps> = ({ isOpen, onClose, onIm
         search_filter = data.searchFilter;
       }
 
-      const response = await apiClient.post('/ldap/search', {
+      const response = await apiClient.post(API_ENDPOINTS.LDAP_SEARCH, {
         search_base: data.searchBase || undefined,
         search_filter: search_filter || undefined,
         username: data.username || undefined,
@@ -126,7 +126,7 @@ const LDAPImportModal: React.FC<LDAPImportModalProps> = ({ isOpen, onClose, onIm
     if (users.length >= totalUsers) return;
     setIsLoading(true);
     try {
-      const response = await apiClient.post('/ldap/search', {
+      const response = await apiClient.post(API_ENDPOINTS.LDAP_SEARCH, {
         page_size: 50,
         page_number: pageNumber + 1,
       });
@@ -169,7 +169,7 @@ const LDAPImportModal: React.FC<LDAPImportModalProps> = ({ isOpen, onClose, onIm
   const confirmImport = async () => {
     setIsImporting(true);
     try {
-      const response = await apiClient.post('/ldap/import', {
+      const response = await apiClient.post(API_ENDPOINTS.LDAP_IMPORT, {
         user_dns: selectedUsers,
         role_ids: selectedRole ? [selectedRole] : [],
       });
