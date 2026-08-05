@@ -1,10 +1,38 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
-import { Settings, Key, HardDrive, Bell, Shield, Mail } from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
+import { Settings, Key, HardDrive, Bell, Shield, Mail, Info } from 'lucide-react';
+import { apiClient } from '@/lib/api';
+import { API_ENDPOINTS } from '@/lib/constants';
+import { CardSkeleton } from '@/components/Skeleton';
+
+interface SystemConfigInfo {
+  version: string;
+  environment: string;
+  debug: boolean;
+  log_level: string;
+  email_enabled: boolean;
+  metrics_enabled: boolean;
+}
+
+const ConfigItem: React.FC<{ label: string; value: React.ReactNode }> = ({ label, value }) => (
+  <div className="flex flex-col gap-1 p-3 rounded-lg bg-muted/50">
+    <span className="text-xs text-muted-foreground">{label}</span>
+    <span className="text-sm font-medium text-foreground">{value}</span>
+  </div>
+);
 
 const SystemSettings: React.FC = () => {
   const { t } = useTranslation();
+
+  const { data: systemConfig, isLoading: configLoading } = useQuery<SystemConfigInfo>({
+    queryKey: ['system-config'],
+    queryFn: async () => {
+      const res = await apiClient.get(API_ENDPOINTS.SYSTEM_CONFIG);
+      return res.data;
+    },
+  });
 
   const configCards = [
     {
@@ -104,6 +132,28 @@ const SystemSettings: React.FC = () => {
               </Link>
             ))}
           </div>
+        </div>
+
+        {/* System Config Summary */}
+        <div className="bg-card rounded-xl border border-border p-6 mt-6">
+          <h2 className="text-lg font-semibold text-foreground mb-4 flex items-center gap-2">
+            <Info className="h-5 w-5 text-primary-600" />
+            {t('systemSettings.systemConfig')}
+          </h2>
+          {configLoading ? (
+            <CardSkeleton />
+          ) : systemConfig ? (
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+              <ConfigItem label={t('systemSettings.version')} value={systemConfig.version} />
+              <ConfigItem label={t('systemSettings.environment')} value={systemConfig.environment} />
+              <ConfigItem label={t('systemSettings.debugMode')} value={systemConfig.debug ? t('systemSettings.enabled') : t('systemSettings.disabled')} />
+              <ConfigItem label={t('systemSettings.logLevel')} value={systemConfig.log_level} />
+              <ConfigItem label={t('systemSettings.emailService')} value={systemConfig.email_enabled ? t('systemSettings.enabled') : t('systemSettings.disabled')} />
+              <ConfigItem label={t('systemSettings.metricsService')} value={systemConfig.metrics_enabled ? t('systemSettings.enabled') : t('systemSettings.disabled')} />
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">{t('systemSettings.configUnavailable')}</p>
+          )}
         </div>
       </div>
     </div>

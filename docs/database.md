@@ -1,6 +1,6 @@
 # TerminalAccessManager 数据库设计文档
 
-> 文档版本：v3.6.18  更新日期：2026-07-16
+> 文档版本：v3.8.0  更新日期：2026-08-05
 
 ## 1. 概述
 
@@ -313,7 +313,7 @@ docker-compose.yml 中 PostgreSQL 的 `command` 参数列表如下：
 | ip_address | VARCHAR(45) | INDEX | NULL | 被阻断的 IP 地址 |
 | mac_address | VARCHAR(17) | INDEX | NULL | 被阻断的 MAC 地址 |
 | reason | TEXT | | NULL | 阻断原因 |
-| blocked_at | TIMESTAMP WITH TZ | | utcnow | 阻断时间 |
+| blocked_at | TIMESTAMP WITH TZ | | utcnow | 阻断时间（可空） |
 | expires_at | TIMESTAMP WITH TZ | | NULL | 过期时间（NULL 表示永久） |
 | blocked_by | VARCHAR(50) | NOT NULL | — | 执行阻断的用户名 |
 | source_tag | VARCHAR(50) | INDEX | NULL | ARP 数据源标签 |
@@ -335,6 +335,7 @@ docker-compose.yml 中 PostgreSQL 的 `command` 参数列表如下：
 | idx_blacklist_blocked_at | SINGLE | blocked_at |
 | idx_blacklist_expires_at | SINGLE | expires_at |
 | idx_blacklist_mac_normalized | SINGLE | mac_address_normalized | MAC 标准化列索引 |
+| idx_blacklist_unique_active | UNIQUE PARTIAL | (ip_address, mac_address_normalized) WHERE unblocked_at IS NULL AND auto_unblocked = FALSE | 唯一部分索引，防止活跃黑名单记录重复 |
 
 ---
 

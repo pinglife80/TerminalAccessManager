@@ -1,13 +1,14 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useForm } from 'react-hook-form';
 import { useTranslation } from 'react-i18next';
+import { useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '@/lib/api';
 import { API_ENDPOINTS } from '@/lib/constants';
 import { getErrorMessage, formatDateTime } from '@/lib/utils';
 import {
   Bell, Plus, Edit2, Trash2, CheckCircle, AlertCircle, TestTube, Save, X,
   Mail, Link2, MessageCircle, FileText, ChevronDown, Send, XCircle,
-  LayoutTemplate, Shield, BarChart3, Archive,
+  LayoutTemplate, Shield, BarChart3, Archive, RefreshCw,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { PrimaryButton } from '@/components/Button';
@@ -91,6 +92,7 @@ const STATUS_BADGE_COLORS: Record<string, string> = {
 
 const Notifications: React.FC = () => {
   const { t } = useTranslation();
+  const queryClient = useQueryClient();
 
   const [channels, setChannels] = useState<NotificationChannel[]>([]);
   const [loading, setLoading] = useState(true);
@@ -370,6 +372,16 @@ const Notifications: React.FC = () => {
       await apiClient.delete(`${API_ENDPOINTS.NOTIFICATION_LOGS}/${logId}`);
       toast.success('Log deleted successfully');
       setLogPage(1);
+    } catch (err) {
+      toast.error(getErrorMessage(err));
+    }
+  };
+
+  const handleRetryLog = async (logId: number) => {
+    try {
+      await apiClient.post(API_ENDPOINTS.NOTIFICATION_LOGS_RETRY.replace('{{id}}', String(logId)));
+      toast.success(t('notificationLogs.retrySuccess'));
+      queryClient.invalidateQueries({ queryKey: ['notification-logs'] });
     } catch (err) {
       toast.error(getErrorMessage(err));
     }
@@ -773,6 +785,15 @@ const Notifications: React.FC = () => {
                           <td className="py-2 px-3 text-red-600 dark:text-red-400 text-xs max-w-[200px] truncate" title={log.error_message || ''}>{log.error_message || '-'}</td>
                           <td className="py-2 px-3">
                             <div className="flex items-center gap-1">
+                              {log.status === 'failed' && (
+                                <button
+                                  onClick={() => handleRetryLog(log.id)}
+                                  className="p-1.5 text-muted-foreground hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded transition-colors"
+                                  title={t('notificationLogs.retry')}
+                                >
+                                  <RefreshCw className="h-3.5 w-3.5" />
+                                </button>
+                              )}
                               <button
                                 onClick={() => handleArchiveLog(log.id)}
                                 className="p-1.5 text-muted-foreground hover:text-yellow-600 hover:bg-yellow-50 dark:hover:bg-yellow-900/20 rounded transition-colors"

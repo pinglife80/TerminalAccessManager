@@ -348,6 +348,15 @@ export interface EmailConfig {
   email_rate_limit: number;
 }
 
+export interface ComplianceConfig {
+  compliance_confirm_threshold: number;
+}
+
+export interface CacheConfig {
+  cache_ipguard_ttl: number;
+  cache_whitelist_ttl: number;
+}
+
 export interface AllConfigs {
   security: SecurityConfig;
   rate_limit: RateLimitConfig;
@@ -356,6 +365,8 @@ export interface AllConfigs {
   general: GeneralConfig;
   branding: BrandingConfig;
   email: EmailConfig;
+  compliance: ComplianceConfig;
+  cache: CacheConfig;
 }
 
 export interface ConfigEntry {

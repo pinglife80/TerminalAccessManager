@@ -41,6 +41,7 @@ export const API_ENDPOINTS = {
   STATS: '/stats/',
   SYSTEM_STATUS: '/system/status',
   SYSTEM_CONFIG: '/system/config',
+  FIREWALL_RECONCILIATION: '/system/firewall-reconciliation',
   TERMINALS_SEARCH: '/terminals/search',
   TERMINALS_LIST: '/terminals/',
   TERMINALS_UNBLOCK: '/terminals/unblock/',
@@ -106,6 +107,9 @@ export const API_ENDPOINTS = {
   SETTINGS_SEED: '/settings/seed',
   SETTINGS_INVALIDATE_CACHE: '/settings/invalidate-cache',
   SETTINGS_UPLOAD: '/settings/upload',
+  LDAP_OUS: '/ldap/ous',
+  LDAP_SEARCH: '/ldap/search',
+  LDAP_IMPORT: '/ldap/import',
 };
 
 export const PAGE_SIZE_OPTIONS = [10, 20, 50, 100];

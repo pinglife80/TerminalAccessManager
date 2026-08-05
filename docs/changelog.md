@@ -1,11 +1,45 @@
 # 更新日志
 
-> 文档版本：v3.7.1  更新日期：2026-08-04
+> 文档版本：v3.8.0  更新日期：2026-08-05
 
 本文件记录 TerminalAccessManager 的所有重要变更。
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
+
+***
+
+## [3.8.0] - 2026-08-05
+
+### 新增
+
+- **缓存 TTL 可配置化**：IPGuard 和白名单缓存有效期从硬编码改为系统配置项
+  - 新增配置项 `cache_ipguard_ttl`（默认 900s，范围 60-7200）
+  - 新增配置项 `cache_whitelist_ttl`（默认 300s，范围 60-3600）
+  - 系统设置 General 页面新增「缓存配置」分组
+  - 关联文件：`system_config.py`、`config_service.py`、`compliance_service.py`、`GeneralSettings.tsx`、`useTerminalData.ts`、i18n
+
+- **前端功能补全**：
+  - 系统设置页面新增配置摘要展示
+  - 通知日志页面新增重试功能
+  - LDAP API 路径常量化
+
+### 修复
+
+- **Blacklist 重复记录问题**：修复黑名单管理显示数量与实际封堵数量不一致的 bug
+  - 根因：数据库 `idx_blacklist_unique_active` 索引非唯一、并发竞态条件、重封堵逻辑缺失
+  - 修复：索引改为唯一部分索引、代码添加 `IntegrityError` 捕获和回滚、重封堵判断改为基于 blacklist 活跃条目
+  - 验证：blacklist_active 与 terminal_blocked 数量完全一致（200=200）
+  - 关联文件：`blacklist.py`、`compliance_service.py`
+
+- **BlacklistResponse Schema 修复**：`blocked_at` 字段改为可空，修复 NULL 记录导致的 500 错误
+  - 关联文件：`terminal.py`
+
+### 数据库变更
+
+- 新建 `030_blacklist_unique_index.py` 迁移脚本
+- 清理 2 条重复 blacklist 记录
+- 创建唯一部分索引 `idx_blacklist_unique_active`
 
 ***
 
