@@ -438,6 +438,121 @@ async def scheduled_auto_unblock():
             logger.error(f"Error in scheduled auto-unblock task: {type(e).__name__}: {e} [source=scheduler]")
 
 
+async def scheduled_backup():
+    """Background task to periodically run backup if enabled.
+
+    Parses the cron schedule from backup_config (e.g., "8 18 * * *" = 18:08 daily)
+    and only runs backup when current time matches the schedule.
+    Polls every 60 seconds to check if it's time to run.
+    """
+    last_backup_key = "notify:last_backup_run"
+    poll_interval = 60  # Check every 60 seconds
+
+    while True:
+        try:
+            await asyncio.sleep(poll_interval)
+            if await _is_task_paused("backup"):
+                continue
+            if not await _acquire_task_lock("backup"):
+                continue
+            try:
+                async with async_session_factory() as db:
+                    from app.services.backup_service import BackupService
+                    service = BackupService(db=db)
+                    config = await service.load_config()
+                    if not config.enabled:
+                        continue
+
+                    # Parse cron schedule and check if current time matches
+                    if not _should_run_backup_now(config.schedule):
+                        continue
+
+                    # Avoid duplicate runs within the same minute window
+                    from app.core.security import get_redis_client
+                    from app.core.timezone import now as _now_tz
+                    redis = await get_redis_client()
+                    last_run = await redis.get(last_backup_key)
+                    now_str = _now_tz().strftime("%Y-%m-%d %H:%M")
+                    if last_run and last_run.decode() == now_str:
+                        continue
+
+                    await redis.setex(last_backup_key, 120, now_str)
+
+                    logger.info(f"Scheduled backup starting (cron='{config.schedule}') [source=scheduler]")
+                    job = await service.run_backup("full")
+
+                    # Write to audit log so frontend can see backup history
+                    from app.services.terminal_service import TerminalService
+                    ts = TerminalService(db)
+                    await ts.log_action(
+                        "system", "scheduled_backup", "backup", str(job.id),
+                        {
+                            "status": job.status,
+                            "file_path": job.file_path,
+                            "file_size": job.file_size,
+                            "backup_type": "full",
+                            "error_message": job.error_message,
+                        },
+                        ip_address="System",
+                        resource_name=job.file_path,
+                    )
+                    await db.commit()
+
+                    if job.status == "completed":
+                        logger.info(f"Scheduled backup completed: {job.file_path} ({job.file_size} bytes) [source=scheduler]")
+                    else:
+                        logger.error(f"Scheduled backup failed: {job.error_message} [source=scheduler]")
+            finally:
+                await _release_task_lock("backup")
+        except Exception as e:
+            logger.error(f"Error in scheduled backup task: {type(e).__name__}: {e} [source=scheduler]")
+
+
+def _should_run_backup_now(cron_expr: str) -> bool:
+    """Check if current time matches the cron schedule.
+
+    Supports basic cron format: "minute hour day month dayofweek"
+    Each field can be: * (any), a number, or comma-separated numbers.
+    """
+    from app.core.timezone import now as _now
+    import re
+
+    try:
+        parts = cron_expr.strip().split()
+        if len(parts) != 5:
+            return False
+
+        minute_str, hour_str, day_str, month_str, dow_str = parts
+        current = _now()
+
+        def match_field(field_str: str, current_val: int) -> bool:
+            if field_str == "*":
+                return True
+            for part in field_str.split(","):
+                part = part.strip()
+                if part == "*":
+                    return True
+                if "/" in part:
+                    base, step = part.split("/", 1)
+                    if base == "*" or base == "0":
+                        if current_val % int(step) == 0:
+                            return True
+                else:
+                    if int(part) == current_val:
+                        return True
+            return False
+
+        return (
+            match_field(minute_str, current.minute) and
+            match_field(hour_str, current.hour) and
+            match_field(day_str, current.day) and
+            match_field(month_str, current.month) and
+            match_field(dow_str, current.weekday())
+        )
+    except Exception:
+        return False
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan events"""
@@ -511,6 +626,7 @@ async def lifespan(app: FastAPI):
     auto_unblock_task = asyncio.create_task(scheduled_auto_unblock())
     log_cleanup_task = asyncio.create_task(cleanup_expired_logs())
     firewall_reconciliation_task = asyncio.create_task(firewall_reconciliation())
+    backup_task = asyncio.create_task(scheduled_backup())
     logger.info("All background scheduler tasks started")
 
     yield
@@ -523,9 +639,9 @@ async def lifespan(app: FastAPI):
     logger.info("Notification workers stopped")
 
     # Cancel background tasks and wait for them to finish
-    for task in [cleanup_task, arp_collection_task, ipguard_sync_task, compliance_check_task, auto_unblock_task, log_cleanup_task, firewall_reconciliation_task]:
+    for task in [cleanup_task, arp_collection_task, ipguard_sync_task, compliance_check_task, auto_unblock_task, log_cleanup_task, firewall_reconciliation_task, backup_task]:
         task.cancel()
-    await asyncio.gather(*[cleanup_task, arp_collection_task, ipguard_sync_task, compliance_check_task, auto_unblock_task, log_cleanup_task, firewall_reconciliation_task], return_exceptions=True)
+    await asyncio.gather(*[cleanup_task, arp_collection_task, ipguard_sync_task, compliance_check_task, auto_unblock_task, log_cleanup_task, firewall_reconciliation_task, backup_task], return_exceptions=True)
     logger.info("Background tasks cancelled")
 
     # Close Redis connections

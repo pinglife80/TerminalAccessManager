@@ -170,7 +170,7 @@ async def get_whitelist_backups(
                     "storage": "local",
                 })
 
-    backups.sort(key=lambda x: x.get("created_at") or datetime.min, reverse=True)
+    backups.sort(key=lambda x: (x.get("created_at") or datetime.min).replace(tzinfo=None) if hasattr(x.get("created_at") or datetime.min, 'replace') else datetime.min, reverse=True)
     return BackupListResponse(backups=backups)
 
 
@@ -274,7 +274,7 @@ async def list_backups(
         remote_backups = await backup_service.list_remote_backups()
         backups.extend(remote_backups)
 
-    backups.sort(key=lambda x: x.get("created_at") or datetime.min, reverse=True)
+    backups.sort(key=lambda x: (x.get("created_at") or datetime.min).replace(tzinfo=None) if hasattr(x.get("created_at") or datetime.min, 'replace') else datetime.min, reverse=True)
 
     return BackupListResponse(backups=backups)
 

@@ -44,7 +44,7 @@ const SECTION_FIELDS: Record<string, string[]> = {
   scheduler: [
     'scheduler_arp_collection_interval', 'scheduler_ipguard_sync_interval',
     'scheduler_firewall_query_interval', 'scheduler_compliance_check_interval',
-    'scheduler_auto_unblock_interval',
+    'scheduler_auto_unblock_interval', 'scheduler_backup_interval',
   ],
   general: ['environment', 'debug', 'log_level'],
   compliance: ['compliance_confirm_threshold'],

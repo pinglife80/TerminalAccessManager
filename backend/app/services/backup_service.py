@@ -14,7 +14,7 @@ import tempfile
 import time
 import zipfile
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 import paramiko
@@ -774,7 +774,7 @@ class BackupService:
                 ftp.cwd(remote_path)
 
             remote_filename = os.path.basename(local_path)
-            remote_file_path = f"{remote_path}/{remote_filename}"
+            remote_file_path = f"{remote_path.rstrip('/')}/{remote_filename}"
 
             with open(local_path, "rb") as f:
                 ftp.storbinary(f"STOR {remote_filename}", f)
@@ -985,9 +985,12 @@ class BackupService:
                         file_size = ftp.size(filename)
                         mtime_str = ftp.voidcmd(f"MDTM {filename}")[4:].strip()
                         mtime_dt = datetime.strptime(mtime_str, "%Y%m%d%H%M%S")
+                        # FTP MDTM returns UTC time; convert to local timezone (UTC+8)
+                        from app.core.timezone import get_timezone
+                        mtime_dt = mtime_dt.replace(tzinfo=timezone.utc).astimezone(get_timezone())
                         backups.append({
                             "filename": filename,
-                            "file_path": f"{remote_path}/{filename}",
+                            "file_path": f"{remote_path.rstrip('/')}/{filename}",
                             "file_size": file_size,
                             "created_at": mtime_dt,
                             "storage": "remote",
@@ -995,7 +998,7 @@ class BackupService:
                     except Exception:
                         backups.append({
                             "filename": filename,
-                            "file_path": f"{remote_path}/{filename}",
+                            "file_path": f"{remote_path.rstrip('/')}/{filename}",
                             "file_size": None,
                             "created_at": None,
                             "storage": "remote",

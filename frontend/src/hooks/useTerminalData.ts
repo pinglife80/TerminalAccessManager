@@ -313,6 +313,7 @@ export interface SchedulerConfig {
   scheduler_firewall_query_interval: number;
   scheduler_compliance_check_interval: number;
   scheduler_auto_unblock_interval: number;
+  scheduler_backup_interval: number;
 }
 
 export interface GeneralConfig {

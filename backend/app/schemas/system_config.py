@@ -120,6 +120,7 @@ class SchedulerConfigResponse(BaseModel):
     scheduler_firewall_query_interval: int
     scheduler_compliance_check_interval: int
     scheduler_auto_unblock_interval: int
+    scheduler_backup_interval: int
 
 
 class EmailConfigResponse(BaseModel):
