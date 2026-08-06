@@ -1,6 +1,6 @@
 # TerminalAccessManager - 运维操作手册
 
-> 文档版本：v3.9.0  更新日期：2026-08-05
+> 文档版本：v3.10.0  更新日期：2026-08-06
 
 ## 目录
 
@@ -714,3 +714,23 @@ ls -lht backups/
 | 定时任务正常 | `./manage.sh scheduler status` | 所有任务 RUNNING |
 | 数据库版本 | `./manage.sh shell db -c "SELECT version_num FROM alembic_version;"` | 最新版本号 |
 | 数据完整性 | `./manage.sh shell db -c "SELECT count(*) FROM terminals;"` | 终端数量正常 |
+
+---
+
+## 6. v3.10.0 变更记录
+
+### 6.1 备份恢复操作变更
+
+> v3.10.0 变更：
+> - 备份恢复新增白名单恢复和日志恢复步骤
+> - 系统配置 DB 恢复使用 begin_nested() 逐表事务保护
+> - 远程备份过期自动清理（SFTP/FTP）
+
+### 6.2 告警阈值配置
+
+> v3.10.0 变更：
+> - 新增「告警阈值配置」分区，可在系统设置中自定义：
+>   - 合规率告警阈值（默认 80%）
+>   - 合规率危险比例（默认 50%）
+>   - 封锁数量告警阈值（默认 50）
+>   - 离线检测倍数（默认 3）

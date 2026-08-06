@@ -1,6 +1,6 @@
 # TerminalAccessManager 业务流程文档
 
-> 文档版本：v3.9.0  更新日期：2026-08-05
+> 文档版本：v3.10.0  更新日期：2026-08-06
 >
 > 本文档详细说明 TerminalAccessManager 的核心业务流程，包括数据采集、合规判定、封锁/解封的完整生命周期。
 
@@ -612,3 +612,20 @@ async def cleanup_expired_blacklist(self) -> int:
 | CONFIG_CHANGED | 配置变更 | settings.py |
 | ROLE_CHANGED | 角色变更 | roles.py |
 | PERMISSION_CHANGED | 权限变更 | roles.py |
+
+---
+
+## 10. v3.10.0 变更记录
+
+### 10.1 备份工作流变更
+
+> v3.10.0 变更：
+> - 备份工作流：白名单备份受 backup_whitelist 选项控制
+> - 备份工作流：远程存储过期备份自动清理
+
+### 10.2 合规率告警变更
+
+> v3.10.0 变更：
+> - 合规率告警：阈值从硬编码 0.8 改为系统配置项（默认 80%）
+> - 合规率告警：危险比例从硬编码 0.5 改为系统配置项（默认 50%）
+> - 合规率告警：修复量纲不一致 bug（0-100 vs 0-1）

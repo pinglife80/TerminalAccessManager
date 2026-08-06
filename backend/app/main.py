@@ -330,12 +330,14 @@ async def scheduled_compliance_check():
                                         # Emit compliance rate alert when non-compliant terminals are found.
                                         # fire-and-forget: emit_event logs errors internally and never raises.
                                         from app.services.event_emitter import emit_compliance_alert
+                                        from app.services.config_service import get_config_value
                                         total_checked = result.compliant + result.bypass + result.non_compliant
                                         rate = (result.compliant / total_checked * 100) if total_checked > 0 else 100.0
+                                        alert_threshold = float(await get_config_value("alert_compliance_rate_threshold", 80))
                                         await emit_compliance_alert(
                                             compliance_rate=rate,
                                             non_compliant_count=result.non_compliant,
-                                            threshold=0.8,
+                                            threshold=alert_threshold,
                                         )
                         except Exception as e:
                             logger.error(f"Error in compliance check for {source.tag}: {type(e).__name__}: {e} [source=scheduler]")
@@ -491,7 +493,14 @@ async def scheduled_backup():
                             "file_path": job.file_path,
                             "file_size": job.file_size,
                             "backup_type": "full",
+                            "checksum": job.checksum,
                             "error_message": job.error_message,
+                            "options": {
+                                "database": config.backup_database,
+                                "config": config.backup_config,
+                                "whitelist": config.backup_whitelist,
+                                "logs": config.backup_logs,
+                            }
                         },
                         ip_address="System",
                         resource_name=job.file_path,

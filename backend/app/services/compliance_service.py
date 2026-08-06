@@ -586,8 +586,9 @@ class ComplianceService:
 
         if not dry_run and blocked > 0:
             from app.services.event_emitter import emit_block_threshold_exceeded
+            from app.services.config_service import get_config_value
 
-            block_threshold = 50
+            block_threshold = await get_config_value("alert_block_count_threshold", 50)
             if blocked > block_threshold:
                 await emit_block_threshold_exceeded(block_threshold, blocked)
 

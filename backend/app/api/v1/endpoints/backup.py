@@ -99,12 +99,28 @@ async def run_backup(
     current_user: User = Depends(require_permission("backup:write")),
 ):
     """Run a manual backup"""
+    config = await backup_service.load_config()
+    if not config.enabled:
+        raise HTTPException(status_code=400, detail="Backup is disabled")
     job = await backup_service.run_backup(backup_type=backup_type)
     ts = TerminalService(db)
     await ts.log_action(
         current_user.username, "run_backup", "backup",
         str(job.id),
-        {"status": job.status, "file_path": job.file_path, "file_size": job.file_size, "backup_type": backup_type},
+        {
+            "status": job.status,
+            "file_path": job.file_path,
+            "file_size": job.file_size,
+            "backup_type": backup_type,
+            "checksum": job.checksum,
+            "error_message": job.error_message,
+            "options": {
+                "database": config.backup_database,
+                "config": config.backup_config,
+                "whitelist": config.backup_whitelist,
+                "logs": config.backup_logs,
+            }
+        },
         ip_address=get_client_ip(request),
         resource_name=job.file_path,
     )
@@ -128,6 +144,9 @@ async def create_whitelist_backup(
     current_user: User = Depends(require_permission("backup:write")),
 ):
     """Create a whitelist-only backup"""
+    config = await backup_service.load_config()
+    if not config.enabled:
+        raise HTTPException(status_code=400, detail="Backup is disabled")
     job = await backup_service.run_backup(backup_type="whitelist")
     ts = TerminalService(db)
     await ts.log_action(

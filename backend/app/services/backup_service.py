@@ -208,9 +208,10 @@ class BackupService:
                             backup_files.append(branding_path)
 
                 if backup_type == "full" or backup_type == "whitelist":
-                    whitelist_path = await self.backup_whitelist(temp_dir)
-                    if whitelist_path:
-                        backup_files.append(whitelist_path)
+                    if self.config.backup_whitelist:
+                        whitelist_path = await self.backup_whitelist(temp_dir)
+                        if whitelist_path:
+                            backup_files.append(whitelist_path)
 
                 if backup_type == "full" or backup_type == "logs":
                     if self.config.backup_logs:
@@ -257,10 +258,7 @@ class BackupService:
         backup_path = os.path.join(temp_dir, "database.sql")
 
         if not hasattr(settings, 'POSTGRES_SERVER') or not settings.POSTGRES_SERVER:
-            logger.warning("PostgreSQL not configured, skipping database backup")
-            with open(backup_path, "w") as f:
-                f.write("-- PostgreSQL not configured\n")
-            return backup_path
+            raise Exception("PostgreSQL not configured, cannot backup database")
 
         # Build pg_dump command
         cmd = [
@@ -311,6 +309,8 @@ class BackupService:
         config_files = [
             "docker-compose.yml",
             "manage.sh",
+            "nginx.conf",
+            "alembic.ini",
         ]
         for file in config_files:
             found = False
@@ -469,7 +469,7 @@ class BackupService:
             return ""
 
     async def _restore_system_config_db(self, temp_dir: str) -> bool:
-        """Restore system configuration to database tables"""
+        """Restore system configuration to database tables with transaction protection"""
         config_file = os.path.join(temp_dir, "config", "system_config.json")
         if not os.path.exists(config_file):
             logger.warning("system_config.json not found in backup, skipping")
@@ -483,78 +483,53 @@ class BackupService:
             with open(config_file, "r", encoding="utf-8") as f:
                 config_data = json.load(f)
 
-            if "system_config" in config_data:
-                await self.db.execute(SystemConfig.__table__.delete())
-                for item in config_data["system_config"]:
-                    self.db.add(SystemConfig(**item))
+            restore_sections = [
+                ("system_config", SystemConfig, lambda item: SystemConfig(**item)),
+                ("notification_channels", NotificationChannel, lambda item: NotificationChannel(
+                    name=item["name"], type=item["type"], config=item["config"],
+                    enabled=item["enabled"], events=item["events"],
+                    description=item.get("description"),
+                )),
+                ("notification_rules", NotificationRule, lambda item: NotificationRule(
+                    name=item["name"], event_type=item["event_type"],
+                    channel_name=item["channel_name"], enabled=item["enabled"],
+                    priority=item.get("priority", 100), description=item.get("description"),
+                    suppress_enabled=item.get("suppress_enabled", False),
+                    suppress_window=item.get("suppress_window", 300),
+                    escalate_enabled=item.get("escalate_enabled", False),
+                    escalate_threshold=item.get("escalate_threshold", 5),
+                    escalate_window=item.get("escalate_window", 3600),
+                    escalate_severity=item.get("escalate_severity", "error"),
+                )),
+                ("notification_templates", NotificationTemplate, lambda item: NotificationTemplate(
+                    name=item["name"], event_type=item["event_type"],
+                    channel_type=item["channel_type"], subject=item.get("subject"),
+                    body=item.get("body"), is_default=item.get("is_default", False),
+                )),
+                ("auth_providers", AuthConfig, lambda item: AuthConfig(
+                    name=item["name"], provider_type=item["provider_type"],
+                    config=item["config"], enabled=item["enabled"],
+                    priority=item.get("priority", 100),
+                )),
+                ("datasource", DataSource, lambda item: DataSource(
+                    name=item["name"], type=item["type"],
+                    config=item["config"], enabled=item["enabled"],
+                )),
+            ]
 
-            if "notification_channels" in config_data:
-                await self.db.execute(NotificationChannel.__table__.delete())
-                for item in config_data["notification_channels"]:
-                    obj = NotificationChannel(
-                        name=item["name"],
-                        type=item["type"],
-                        config=item["config"],
-                        enabled=item["enabled"],
-                        events=item["events"],
-                        description=item.get("description"),
-                    )
-                    self.db.add(obj)
-
-            if "notification_rules" in config_data:
-                await self.db.execute(NotificationRule.__table__.delete())
-                for item in config_data["notification_rules"]:
-                    obj = NotificationRule(
-                        name=item["name"],
-                        event_type=item["event_type"],
-                        channel_name=item["channel_name"],
-                        enabled=item["enabled"],
-                        priority=item.get("priority", 100),
-                        description=item.get("description"),
-                        suppress_enabled=item.get("suppress_enabled", False),
-                        suppress_window=item.get("suppress_window", 300),
-                        escalate_enabled=item.get("escalate_enabled", False),
-                        escalate_threshold=item.get("escalate_threshold", 5),
-                        escalate_window=item.get("escalate_window", 3600),
-                        escalate_severity=item.get("escalate_severity", "error"),
-                    )
-                    self.db.add(obj)
-
-            if "notification_templates" in config_data:
-                await self.db.execute(NotificationTemplate.__table__.delete())
-                for item in config_data["notification_templates"]:
-                    obj = NotificationTemplate(
-                        name=item["name"],
-                        event_type=item["event_type"],
-                        channel_type=item["channel_type"],
-                        subject=item.get("subject"),
-                        body=item.get("body"),
-                        is_default=item.get("is_default", False),
-                    )
-                    self.db.add(obj)
-
-            if "auth_providers" in config_data:
-                await self.db.execute(AuthConfig.__table__.delete())
-                for item in config_data["auth_providers"]:
-                    obj = AuthConfig(
-                        name=item["name"],
-                        provider_type=item["provider_type"],
-                        config=item["config"],
-                        enabled=item["enabled"],
-                        priority=item.get("priority", 100),
-                    )
-                    self.db.add(obj)
-
-            if "datasource" in config_data:
-                await self.db.execute(DataSource.__table__.delete())
-                for item in config_data["datasource"]:
-                    obj = DataSource(
-                        name=item["name"],
-                        type=item["type"],
-                        config=item["config"],
-                        enabled=item["enabled"],
-                    )
-                    self.db.add(obj)
+            for section, model, factory in restore_sections:
+                if section not in config_data:
+                    continue
+                savepoint = await self.db.begin_nested()
+                try:
+                    await self.db.execute(model.__table__.delete())
+                    for item in config_data[section]:
+                        self.db.add(factory(item))
+                    await savepoint.commit()
+                except Exception as e:
+                    await savepoint.rollback()
+                    logger.error(f"Failed to restore {section}: {e}")
+                    raise
 
             await self.db.commit()
             logger.info("System config restoration completed")
@@ -711,6 +686,89 @@ class BackupService:
             logger.error(f"Failed to restore whitelist: {e}")
             return False
 
+    async def _restore_whitelist_from_zip(self, zip_path: str) -> bool:
+        """Extract nested whitelist.zip and restore its contents"""
+        if self.db is None:
+            logger.warning("No database session available, skipping whitelist restore")
+            return False
+        try:
+            with tempfile.TemporaryDirectory() as whitelist_temp:
+                with zipfile.ZipFile(zip_path, "r") as zipf:
+                    zipf.extractall(whitelist_temp)
+
+                whitelist_file = os.path.join(whitelist_temp, "whitelist", "whitelist.json")
+                if not os.path.exists(whitelist_file):
+                    whitelist_file = os.path.join(whitelist_temp, "whitelist.json")
+
+                if not os.path.exists(whitelist_file):
+                    logger.warning("whitelist.json not found in nested archive")
+                    return False
+
+                return await self._restore_whitelist_from_json(whitelist_file)
+        except Exception as e:
+            logger.error(f"Failed to restore whitelist from zip: {e}")
+            return False
+
+    async def _restore_whitelist_from_json(self, json_path: str) -> bool:
+        """Restore whitelist from an already-extracted JSON file"""
+        if self.db is None:
+            return False
+        try:
+            with open(json_path, "r", encoding="utf-8") as f:
+                whitelist_data = json.load(f)
+
+            await self.db.execute(Whitelist.__table__.delete())
+            for item in whitelist_data:
+                obj = Whitelist(
+                    mac_address=item.get("mac_address"),
+                    mac_address_normalized=item.get("mac_address_normalized"),
+                    ip_pattern=item.get("ip_pattern"),
+                    pattern_type=item.get("pattern_type", "single_ip"),
+                    comments=item.get("comments"),
+                    added_by=item.get("added_by", "system"),
+                )
+                self.db.add(obj)
+
+            await self.db.commit()
+            logger.info("Whitelist restored from JSON")
+
+            try:
+                from app.services.compliance_service import recalculate_all_compliance
+                await recalculate_all_compliance(self.db)
+                logger.info("Compliance recalculation triggered after whitelist restore")
+            except Exception as e:
+                logger.error(f"Failed to trigger compliance recalculation: {e}")
+
+            return True
+        except Exception as e:
+            await self.db.rollback()
+            logger.error(f"Failed to restore whitelist from JSON: {e}")
+            return False
+
+    async def _restore_logs_from_zip(self, zip_path: str) -> bool:
+        """Restore logs from nested logs.zip archive"""
+        try:
+            log_dir = "/var/log/tam"
+            if not os.path.isdir(log_dir):
+                log_dir = "./logs"
+            os.makedirs(log_dir, exist_ok=True)
+
+            with tempfile.TemporaryDirectory() as logs_temp:
+                with zipfile.ZipFile(zip_path, "r") as zipf:
+                    zipf.extractall(logs_temp)
+
+                for root, _dirs, files in os.walk(logs_temp):
+                    for file in files:
+                        src = os.path.join(root, file)
+                        dst = os.path.join(log_dir, file)
+                        shutil.copy2(src, dst)
+
+            logger.info(f"Logs restored to {log_dir}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to restore logs: {e}")
+            return False
+
     async def _create_archive(self, temp_dir: str, files: list, backup_type: str = "full") -> str:
         """Create a single archive from backup files"""
         def _create_archive_sync():
@@ -837,9 +895,27 @@ class BackupService:
                     file_age = now - os.path.getmtime(file_path)
                     if file_age > retention_seconds:
                         os.remove(file_path)
-                        logger.info(f"Removed old backup: {filename}")
+                        logger.info(f"Removed old local backup: {filename}")
 
         await asyncio.to_thread(_cleanup_sync)
+
+        if self.config.storage_type != "local":
+            try:
+                remote_backups = await self.list_remote_backups()
+                retention_seconds = self.config.retention_days * 24 * 60 * 60
+                now = time.time()
+                for rb in remote_backups:
+                    filename = rb.get("filename", "")
+                    created_at = rb.get("created_at")
+                    if created_at and hasattr(created_at, "timestamp"):
+                        file_age = now - created_at.timestamp()
+                    else:
+                        continue
+                    if file_age > retention_seconds:
+                        await self.delete_from_remote(filename)
+                        logger.info(f"Removed old remote backup: {filename}")
+            except Exception as e:
+                logger.error(f"Remote backup cleanup failed: {e}")
 
     def generate_backup_filename(self) -> str:
         """Generate a unique backup filename"""
@@ -906,6 +982,25 @@ class BackupService:
                 await self._restore_system_config_db(temp_dir)
 
                 await self._restore_branding(temp_dir)
+
+                # Restore whitelist from nested whitelist.zip
+                whitelist_zip = os.path.join(temp_dir, "whitelist.zip")
+                if os.path.exists(whitelist_zip):
+                    await self._restore_whitelist_from_zip(whitelist_zip)
+
+                # Extract config files for reference
+                config_zip = os.path.join(temp_dir, "config.zip")
+                if os.path.exists(config_zip):
+                    config_extract_dir = os.path.join(self.backup_dir, "_restored_config")
+                    os.makedirs(config_extract_dir, exist_ok=True)
+                    with zipfile.ZipFile(config_zip, "r") as zipf:
+                        zipf.extractall(config_extract_dir)
+                    logger.info(f"Config files extracted to {config_extract_dir} for reference")
+
+                # Restore logs from nested logs.zip
+                logs_zip = os.path.join(temp_dir, "logs.zip")
+                if os.path.exists(logs_zip):
+                    await self._restore_logs_from_zip(logs_zip)
 
                 logger.info("Backup restoration completed")
                 return True

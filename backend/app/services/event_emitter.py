@@ -277,8 +277,13 @@ async def emit_compliance_alert(
     non_compliant_count: int,
     threshold: float,
 ) -> list[Any]:
-    """Emit compliance alert event"""
-    is_critical = compliance_rate < threshold * 0.5
+    """Emit compliance alert event.
+
+    All parameters use 0-100 scale (percentage).
+    """
+    from app.services.config_service import get_config_value
+    critical_ratio = float(await get_config_value("alert_compliance_critical_ratio", 50))
+    is_critical = compliance_rate < threshold * critical_ratio / 100
     event_type = (
         "alert.compliance_rate_critical" if is_critical else "alert.compliance_rate_low"
     )
@@ -289,7 +294,7 @@ async def emit_compliance_alert(
         data={
             "compliance_rate": f"{compliance_rate:.1f}%",
             "non_compliant_count": non_compliant_count,
-            "threshold": f"{threshold * 100:.0f}%",
+            "threshold": f"{threshold:.0f}%",
         },
         source="scheduler",
         severity=severity,

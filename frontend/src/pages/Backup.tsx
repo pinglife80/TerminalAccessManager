@@ -109,8 +109,8 @@ const Backup: React.FC = () => {
       storage_config: {},
       backup_database: true,
       backup_config: true,
+      backup_whitelist: true,
       backup_logs: false,
-      encrypt_backup: true,
     },
   });
 
@@ -489,10 +489,6 @@ const Backup: React.FC = () => {
                   <label className="flex items-center gap-2 text-sm text-muted-foreground">
                     <input {...register('backup_logs')} type="checkbox" className="rounded border-border" />
                     {t('backup.backupLogs')}
-                  </label>
-                  <label className="flex items-center gap-2 text-sm text-muted-foreground">
-                    <input {...register('encrypt_backup')} type="checkbox" className="rounded border-border" />
-                    {t('backup.encryptBackup')}
                   </label>
                 </div>
 

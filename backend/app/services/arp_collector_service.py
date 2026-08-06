@@ -412,7 +412,8 @@ class ArpCollectorService:
             try:
                 from app.services.config_service import get_config_value
                 interval = await get_config_value("scheduler_arp_collection_interval", 300)
-                offline_threshold_seconds = interval * 3
+                offline_multiplier = await get_config_value("alert_offline_threshold_multiplier", 3)
+                offline_threshold_seconds = interval * offline_multiplier
             except Exception:
                 pass
 
