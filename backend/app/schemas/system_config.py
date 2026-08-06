@@ -23,6 +23,7 @@ class ConfigCategory(StrEnum):
     EMAIL = "email"
     COMPLIANCE = "compliance"
     CACHE = "cache"
+    ALERT = "alert"
 
 
 class SystemConfigBase(BaseModel):
@@ -152,6 +153,14 @@ class CacheConfigResponse(BaseModel):
     cache_whitelist_ttl: int
 
 
+class AlertConfigResponse(BaseModel):
+    """Alert threshold config values for notification events"""
+    alert_compliance_rate_threshold: int
+    alert_compliance_critical_ratio: int
+    alert_block_count_threshold: int
+    alert_offline_threshold_multiplier: int
+
+
 class AllConfigsResponse(BaseModel):
     """All config categories combined"""
     security: SecurityConfigResponse
@@ -163,6 +172,7 @@ class AllConfigsResponse(BaseModel):
     email: EmailConfigResponse
     compliance: ComplianceConfigResponse
     cache: CacheConfigResponse
+    alert: AlertConfigResponse
 
 
 class ConfigUpdateRequest(BaseModel):

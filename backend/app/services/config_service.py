@@ -20,6 +20,7 @@ from app.core.config import settings
 from app.models.system_config import SystemConfig
 from app.schemas.system_config import (
     AllConfigsResponse,
+    AlertConfigResponse,
     BrandingConfigResponse,
     CacheConfigResponse,
     ComplianceConfigResponse,
@@ -214,6 +215,19 @@ class ConfigService:
          "is_readonly": False},
         {"key": "email_rate_limit", "value": "10", "category": "email",
          "value_type": "int", "description": "Maximum emails sent per minute",
+         "is_readonly": False},
+        # Alert thresholds
+        {"key": "alert_compliance_rate_threshold", "value": "80", "category": "alert",
+         "value_type": "int", "description": "Compliance rate alert threshold in percent (trigger when below)",
+         "is_readonly": False},
+        {"key": "alert_compliance_critical_ratio", "value": "50", "category": "alert",
+         "value_type": "int", "description": "Critical ratio in percent of threshold (trigger severe alert when compliance rate below threshold x ratio)",
+         "is_readonly": False},
+        {"key": "alert_block_count_threshold", "value": "50", "category": "alert",
+         "value_type": "int", "description": "Block count alert threshold (trigger when single auto-block exceeds this count)",
+         "is_readonly": False},
+        {"key": "alert_offline_threshold_multiplier", "value": "3", "category": "alert",
+         "value_type": "int", "description": "Offline detection multiplier (ARP interval x this = offline threshold seconds)",
          "is_readonly": False},
     ]
 
@@ -518,6 +532,12 @@ class ConfigService:
             cache=CacheConfigResponse(
                 cache_ipguard_ttl=_val("cache_ipguard_ttl", 900),
                 cache_whitelist_ttl=_val("cache_whitelist_ttl", 300),
+            ),
+            alert=AlertConfigResponse(
+                alert_compliance_rate_threshold=_val("alert_compliance_rate_threshold", 80),
+                alert_compliance_critical_ratio=_val("alert_compliance_critical_ratio", 50),
+                alert_block_count_threshold=_val("alert_block_count_threshold", 50),
+                alert_offline_threshold_multiplier=_val("alert_offline_threshold_multiplier", 3),
             ),
         )
 

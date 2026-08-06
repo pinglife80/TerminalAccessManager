@@ -1,11 +1,47 @@
 # 更新日志
 
-> 文档版本：v3.9.0  更新日期：2026-08-05
+> 文档版本：v3.10.0  更新日期：2026-08-06
 
 本文件记录 TerminalAccessManager 的所有重要变更。
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
+
+***
+
+## [3.10.0] - 2026-08-06
+
+### 新增
+
+- **告警阈值前端可配置化**：4 个硬编码阈值参数提取为系统配置项
+  - 新增 `alert` 配置分类和 `AlertConfigResponse` 模型
+  - 合规率告警阈值（`alert_compliance_rate_threshold`，默认 80%）
+  - 合规率危险比例（`alert_compliance_critical_ratio`，默认 50%）
+  - 封锁数量告警阈值（`alert_block_count_threshold`，默认 50）
+  - 离线检测倍数（`alert_offline_threshold_multiplier`，默认 3）
+  - 系统设置 General 页面新增「告警阈值配置」分区
+  - 关联文件：`system_config.py`、`config_service.py`、`main.py`、`event_emitter.py`、`compliance_service.py`、`arp_collector_service.py`、`GeneralSettings.tsx`、`useTerminalData.ts`、`en.ts`、`ja.ts`、`zh.ts`
+
+- **备份恢复增强**：新增白名单恢复、配置文件解包、日志恢复
+  - `_restore_whitelist_from_zip()` / `_restore_whitelist_from_json()` / `_restore_logs_from_zip()`
+  - 系统配置 DB 恢复使用 `begin_nested()` 逐表事务保护
+
+- **远程备份过期清理**：SFTP/FTP 远程存储中的过期备份自动清理
+
+### 修复
+
+- **备份选项不生效**：手动备份端点未加载用户保存的配置，导致备份选项（数据库/配置/白名单/日志）被忽略
+  - `POST /api/v1/backup/run` 和 `POST /api/v1/backup/whitelist` 端点添加 `load_config()` 调用
+  - 白名单备份添加 `if self.config.backup_whitelist:` 条件检查
+
+- **合规率告警量纲 bug**：`emit_compliance_alert()` 中 `compliance_rate`（0-100）与 `threshold`（0-1）量纲不一致，导致 `is_critical` 判断永远为 False
+  - 统一使用 0-100 百分比量纲
+
+- **备份配置文件不完整**：`_backup_config()` 未包含 `nginx.conf` 和 `alembic.ini`
+
+- **PostgreSQL 未配置时静默成功**：`_backup_database()` 在 PostgreSQL 未配置时返回成功而非报错
+
+- **Backup.tsx 默认值缺失**：`defaultValues` 中 `backup_whitelist` 为 `undefined`，导致初始渲染异常
 
 ***
 

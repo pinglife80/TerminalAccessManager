@@ -353,6 +353,13 @@ export interface ComplianceConfig {
   compliance_confirm_threshold: number;
 }
 
+export interface AlertConfig {
+  alert_compliance_rate_threshold: number;
+  alert_compliance_critical_ratio: number;
+  alert_block_count_threshold: number;
+  alert_offline_threshold_multiplier: number;
+}
+
 export interface CacheConfig {
   cache_ipguard_ttl: number;
   cache_whitelist_ttl: number;
@@ -368,6 +375,7 @@ export interface AllConfigs {
   email: EmailConfig;
   compliance: ComplianceConfig;
   cache: CacheConfig;
+  alert: AlertConfig;
 }
 
 export interface ConfigEntry {

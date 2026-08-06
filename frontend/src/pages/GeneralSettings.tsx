@@ -9,7 +9,7 @@ import { PrimaryButton } from '@/components/Button';
 import {
   Activity, Image as ImageIcon, Shield, Gauge, Network, Clock,
   Settings as SettingsIcon, Wrench, Save, Upload, Database, Trash2,
-  Loader2,
+  Loader2, AlertTriangle,
 } from 'lucide-react';
 import { useSettings, useSettingsList, type AllConfigs, type ConfigEntry } from '@/hooks/useTerminalData';
 import { useBrandingStore } from '@/store/branding';
@@ -49,6 +49,10 @@ const SECTION_FIELDS: Record<string, string[]> = {
   general: ['environment', 'debug', 'log_level'],
   compliance: ['compliance_confirm_threshold'],
   cache: ['cache_ipguard_ttl', 'cache_whitelist_ttl'],
+  alert: [
+    'alert_compliance_rate_threshold', 'alert_compliance_critical_ratio',
+    'alert_block_count_threshold', 'alert_offline_threshold_multiplier',
+  ],
 };
 
 /** Flatten AllConfigs grouped response into a key→string value map. */
@@ -58,7 +62,7 @@ function flattenConfigs(configs: AllConfigs | undefined): Record<string, string>
   const allGroups = [
     configs.security, configs.rate_limit, configs.network,
     configs.scheduler, configs.general, configs.branding,
-    configs.compliance, configs.cache,
+    configs.compliance, configs.cache, configs.alert,
   ];
   for (const group of allGroups) {
     if (!group) continue;
@@ -594,7 +598,23 @@ const GeneralSettings: React.FC = () => {
           </div>
         </SectionCard>
 
-        {/* 10. Operations */}
+        {/* 10. Alert Thresholds */}
+        <SectionCard
+          title={t('generalSettings.alert')}
+          description={t('generalSettings.alertDesc')}
+          icon={<AlertTriangle className="h-5 w-5" />}
+          onSave={() => handleSave('alert')}
+          saving={savingSection === 'alert'}
+          hasChanges={hasSectionChanges('alert')}
+        >
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {SECTION_FIELDS.alert.map((key) => (
+              <Field key={key} entry={entryMap[key]} value={formValues[key] ?? ''} onChange={(v) => setField(key, v)} />
+            ))}
+          </div>
+        </SectionCard>
+
+        {/* 11. Operations */}
         <SectionCard
           title={t('generalSettings.operations')}
           description={t('generalSettings.operationsDesc')}

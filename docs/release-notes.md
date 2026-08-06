@@ -1,10 +1,72 @@
 # 版本跟踪记录
 
-> 文档版本：v3.9.0 | 更新日期：2026-08-05
+> 文档版本：v3.10.0 | 更新日期：2026-08-06
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
+
+---
+
+## [v3.10.0] - 2026-08-06
+
+### 备份管理完备性修复与告警阈值配置化
+
+#### 问题描述
+
+1. **备份选项不生效**：手动备份端点（`POST /api/v1/backup/run`、`POST /api/v1/backup/whitelist`）未加载用户保存的备份配置，导致数据库备份、配置备份、白名单备份、日志备份等选项被忽略，始终执行全量备份。
+2. **白名单备份不受选项控制**：`run_backup()` 中白名单备份无条件执行，未检查 `self.config.backup_whitelist` 选项。
+3. **备份配置文件不完整**：`_backup_config()` 未包含 `nginx.conf` 和 `alembic.ini`。
+4. **系统配置 DB 恢复无事务保护**：`_restore_system_config_db()` 在恢复过程中若某张表失败，已恢复的表无法回滚，导致数据不一致。
+5. **远程备份无过期清理**：`_cleanup_old_backups()` 仅清理本地过期备份，SFTP/FTP 远程存储中的过期备份不会被清理。
+6. **恢复功能不完整**：`restore_backup()` 未恢复白名单数据和日志文件。
+7. **PostgreSQL 未配置时静默成功**：`_backup_database()` 在 PostgreSQL 未配置时返回成功而非报错。
+8. **Backup.tsx 默认值缺失**：`defaultValues` 中 `backup_whitelist` 为 `undefined`，导致初始渲染异常。
+9. **告警阈值硬编码**：4 个告警阈值参数（合规率阈值 0.8、危险比例 0.5、封锁数量 50、离线倍数 3）散布在后端代码中，无法通过前端配置。
+10. **合规率告警量纲 bug**：`emit_compliance_alert()` 中 `compliance_rate`（0-100）与 `threshold`（0-1）量纲不一致，导致 `is_critical` 判断永远为 False，严重告警从未触发。
+
+#### 根因分析
+
+1. **备份选项不生效**：手动备份端点直接创建 `BackupService` 实例，未调用 `load_config()` 加载用户保存的配置，使用的是默认配置（所有选项为 True）。
+2. **白名单备份不受控制**：`run_backup()` 中数据库、配置、日志备份均有 `if self.config.backup_xxx:` 条件检查，唯独白名单备份遗漏。
+3. **量纲 bug**：`main.py` 传入 `threshold=0.8`（0-1 量纲），但 `compliance_rate` 为 0-100 量纲（如 80.0），比较 `80.0 < 0.8 * 0.5 = 0.4` 永远为 False。
+
+#### 修复内容
+
+| 项目 | 修改文件 | 说明 |
+|------|---------|------|
+| 手动备份加载配置 | `backup.py` | `POST /backup/run` 和 `POST /backup/whitelist` 端点添加 `load_config()` 调用 |
+| 白名单备份条件检查 | `backup_service.py` | `run_backup()` 中白名单备份添加 `if self.config.backup_whitelist:` 条件 |
+| 配置文件备份扩展 | `backup_service.py` | `_backup_config()` 新增 `nginx.conf`、`alembic.ini` |
+| 系统配置DB恢复事务保护 | `backup_service.py` | `_restore_system_config_db()` 使用 `begin_nested()` 逐表事务保护 |
+| 远程备份清理 | `backup_service.py` | `_cleanup_old_backups()` 新增 SFTP/FTP 远程过期备份清理逻辑 |
+| 白名单恢复 | `backup_service.py` | 新增 `_restore_whitelist_from_zip()` 和 `_restore_whitelist_from_json()` |
+| 日志恢复 | `backup_service.py` | 新增 `_restore_logs_from_zip()` |
+| PostgreSQL 报错 | `backup_service.py` | `_backup_database()` 未配置时抛出异常而非静默成功 |
+| 备份审计日志增强 | `backup.py`、`main.py` | 审计日志新增 `checksum`、`options` 字段 |
+| Backup.tsx 修复 | `Backup.tsx` | `defaultValues` 补全 `backup_whitelist: true`；移除 `encrypt_backup` UI |
+| 告警阈值配置化 | `system_config.py`、`config_service.py` | 新增 `ALERT` 分类、`AlertConfigResponse` 模型、4 条默认配置 |
+| 合规率阈值从配置读取 | `main.py` | `threshold=0.8` → `get_config_value("alert_compliance_rate_threshold", 80)` |
+| 危险比例从配置读取 | `event_emitter.py` | `threshold * 0.5` → `threshold * get_config_value("alert_compliance_critical_ratio", 50) / 100` |
+| 封锁阈值从配置读取 | `compliance_service.py` | `block_threshold = 50` → `get_config_value("alert_block_count_threshold", 50)` |
+| 离线倍数从配置读取 | `arp_collector_service.py` | `interval * 3` → `interval * get_config_value("alert_offline_threshold_multiplier", 3)` |
+| 量纲 bug 修复 | `event_emitter.py` | 统一使用 0-100 百分比量纲 |
+| 前端告警阈值配置 | `GeneralSettings.tsx`、`useTerminalData.ts` | 新增「告警阈值配置」分区、`AlertConfig` 接口 |
+| i18n 标签 | `zh.ts`、`en.ts`、`ja.ts` | 4 组告警阈值标签（中/英/日） |
+
+#### 验证结果
+
+- Python 语法检查（6 个后端文件）：全部通过 ✅
+- VS Code 诊断（5 个前端文件）：零错误 ✅
+- 备份选项配置化验证：关闭白名单备份 → 手动备份 → 备份内容不含白名单 ✅
+- 告警阈值配置化验证：系统设置页面显示「告警阈值配置」分区，4 个可编辑字段 ✅
+
+#### 发布信息
+
+- 版本号：v3.10.0
+- 前一版本：v3.9.0
+- 变更类型：功能新增 + 修复 (feat + fix)
+- 涉及模块：backup_service.py, backup.py, main.py, event_emitter.py, compliance_service.py, arp_collector_service.py, system_config.py, config_service.py, GeneralSettings.tsx, useTerminalData.ts, Backup.tsx, zh.ts, en.ts, ja.ts
 
 ---
 
