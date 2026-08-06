@@ -1,6 +1,6 @@
 # TerminalAccessManager 系统架构设计文档
 
-> 文档版本：v3.8.0 | 更新日期：2026-08-05
+> 文档版本：v3.9.0  更新日期：2026-08-05
 
 ## 1. 系统概述
 
@@ -338,7 +338,7 @@ Status 描述的是终端在网络层的实际封堵情况，Compliance 描述�
 
 ## 5. 定时任务架构
 
-系统通过 `asyncio.create_task` + `while True` + `asyncio.sleep` 实现 5 个后台定时任务，在 FastAPI lifespan 中启动：
+系统通过 `asyncio.create_task` + `while True` + `asyncio.sleep` 实现 6 个后台定时任务，在 FastAPI lifespan 中启动：
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -349,6 +349,7 @@ Status 描述的是终端在网络层的实际封堵情况，Compliance 描述�
 │  asyncio.create_task(scheduled_ipguard_sync())        ──→ Task 3   │
 │  asyncio.create_task(scheduled_compliance_check())    ──→ Task 4   │
 │  asyncio.create_task(scheduled_auto_unblock())        ──→ Task 5   │
+│  asyncio.create_task(scheduled_backup())              ──→ Task 6   │
 │                                                                     │
 │  Shutdown: task.cancel() for all tasks                              │
 └─────────────────────────────────────────────────────────────────────┘
@@ -361,6 +362,7 @@ Status 描述的是终端在网络层的实际封堵情况，Compliance 描述�
 | 合规基准数据同步 | `scheduler_ipguard_sync_interval` | 600s | 遍历所有启用的合规基准数据源，同步基准数据到 Redis；同步完成后自动触发合规重算 |
 | 合规检查 | `scheduler_compliance_check_interval` | 300s | 遍历所有 ARP 源中 `compliance_status=unknown` 的记录，执行批量合规判定；发现 `non_compliant` 终端后自动触发封堵 |
 | 自动解封 | `scheduler_auto_unblock_interval` | 600s | 检查已自动封禁的终端，若恢复合规则调用防火墙解封 |
+| 定时备份 | `scheduler_backup_interval` | 3600s | 按 cron 表达式解析 schedule 配置，执行数据库+配置+日志备份；基于 Redis key 去重防止重复执行 |
 
 **调度方式特点：**
 
@@ -632,7 +634,7 @@ WHERE mac_address_normalized ILIKE 'AABBCCDDEEFF%'
 | **security** | max_login_attempts, lockout_duration_minutes, captcha_threshold, allow_registration, access_token_expire_minutes, refresh_token_expire_days | 是 |
 | **rate_limit** | rate_limit_per_minute, auth_rate_limit_per_minute | 是 |
 | **network** | sangfor_enabled, sangfor_base_url, switch_enabled, switch_host, ipguard_enabled, ipguard_host | 是 |
-| **scheduler** | scheduler_arp_collection_interval, scheduler_ipguard_sync_interval, scheduler_firewall_query_interval, scheduler_compliance_check_interval, scheduler_auto_unblock_interval | 是 |
+| **scheduler** | scheduler_arp_collection_interval, scheduler_ipguard_sync_interval, scheduler_firewall_query_interval, scheduler_compliance_check_interval, scheduler_auto_unblock_interval, scheduler_backup_interval | 是 |
 | **general** | environment, debug, log_level | environment/debug 只读 |
 | **branding** | app_name, app_short_name, app_subtitle, login_heading, login_subheading, login_footer_text, login_bg_url, favicon_url, footer_copyright, footer_icp_number, footer_icp_url | 是 |
 | **backup** | backup_retain_count | 是 |
@@ -1024,20 +1026,29 @@ YYYY-MM-DD HH:mm:ss.SSS ZZ | LEVEL | request_id | 模块:函数:行号 - 消息
 
 ### 19.1 架构设计
 
-系统采用事件总线架构实现多渠道通知，支持异步事件发布和订阅：
+系统采用直发式通知架构，业务模块直接通过 NotificationService 发射事件到 Redis Queue，Worker 异步消费并分发到各通知渠道：
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │                      事件通知服务                                    │
 │                                                                     │
 │  ┌─────────────┐    ┌──────────────┐    ┌─────────────────────┐    │
-│  │ 事件发布者    │    │  事件总线     │    │   通知渠道          │    │
-│  │ (业务模块)   │───→│ Notification │───→│                     │    │
-│  │             │    │   Bus        │    │  Email (SMTP)       │    │
-│  └─────────────┘    └──────────────┘    │  DingTalk (Webhook) │    │
-│                                         │  WeCom (Webhook)    │    │
-│                                         │  Generic Webhook    │    │
-│                                         └─────────────────────┘    │
+│  │ 业务模块     │    │Notification  │    │   通知渠道          │    │
+│  │ (Compliance │───→│ Service.emit │───→│                     │    │
+│  │  Terminal等) │    │              │    │  Email (SMTP)       │    │
+│  └─────────────┘    └──────┬───────┘    │  DingTalk (Webhook) │    │
+│                             │            │  WeCom (Webhook)    │    │
+│                             ▼            │  Generic Webhook    │    │
+│                   ┌──────────────────┐   └─────────────────────┘    │
+│                   │  Redis Queue     │                              │
+│                   │ notify:queue:main│                              │
+│                   └────────┬─────────┘                              │
+│                            │                                        │
+│                            ▼                                        │
+│                   ┌──────────────────┐                              │
+│                   │  Worker Pipeline │                              │
+│                   │  (事件处理+分发)  │                              │
+│                   └──────────────────┘                              │
 │                                                                     │
 │  ┌─────────────────────────────────────────────────────────────┐    │
 │  │                 通知日志 (notification_logs)                │    │
@@ -1046,6 +1057,8 @@ YYYY-MM-DD HH:mm:ss.SSS ZZ | LEVEL | request_id | 模块:函数:行号 - 消息
 │  └─────────────────────────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────────────────────────┘
 ```
+
+> **v3.9.0 架构变更**：移除 NotificationAggregator 优先级聚合路径，改为业务模块 → NotificationService.emit → Redis Queue → Worker 的直发式管道。实时事件（REALTIME_EVENT_TYPES）跳过队列直接同步发送。
 
 ### 19.2 支持的事件类型
 
@@ -1058,6 +1071,10 @@ YYYY-MM-DD HH:mm:ss.SSS ZZ | LEVEL | request_id | 模块:函数:行号 - 消息
 | `login_failed` | 用户登录失败 |
 | `backup_completed` | 备份完成 |
 | `config_changed` | 配置变更 |
+| `terminal.offline` | 终端离线 |
+| `alert.auto_block_triggered` | 自动封锁触发告警 |
+
+> **实时事件机制**：`REALTIME_EVENT_TYPES` 集合定义了需要立即发送的事件类型（如 `alert.auto_block_triggered`），通过 `is_realtime_event()` 函数判断。实时事件跳过 Redis Queue 直接同步发送，确保告警时效性。
 
 ### 19.3 通知渠道接口
 
@@ -1080,6 +1097,9 @@ class NotificationChannel(ABC):
 - **渠道隔离**：单个渠道失败不影响其他渠道
 - **重试机制**：失败通知自动重试
 - **日志追踪**：完整记录每条通知的发送状态和错误信息
+- **实时事件直发（REALTIME_EVENT_TYPES）**：关键告警事件跳过队列直接同步发送，确保时效性
+- **事件覆盖率监控（event_coverage）**：统计已定义事件类型与实际发射次数的比率，用于识别未使用的事件
+- **模块级单例替代 ContextVar**：NotificationService 使用模块级单例实例，简化调用链路
 
 ---
 

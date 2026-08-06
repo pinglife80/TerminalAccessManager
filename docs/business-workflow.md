@@ -1,6 +1,6 @@
 # TerminalAccessManager 业务流程文档
 
-> 文档版本：v3.7.0 | 更新日期：2026-08-03
+> 文档版本：v3.9.0  更新日期：2026-08-05
 >
 > 本文档详细说明 TerminalAccessManager 的核心业务流程，包括数据采集、合规判定、封锁/解封的完整生命周期。
 
@@ -310,6 +310,9 @@ await emit_policy_violation(policy_name, terminal_ip, details)
 # 封锁数量超过阈值时发送告警
 if blocked > block_threshold:
     await emit_block_threshold_exceeded(block_threshold, blocked)
+
+# v3.9.0: 发射自动封锁触发告警事件
+await emit_auto_block_triggered(blocked, arp_source_tag, terminal_list)
 ```
 
 ### 4.4 关键参数
@@ -579,6 +582,7 @@ async def cleanup_expired_blacklist(self) -> int:
 | TERMINAL_COMPLIANT | 终端变为合规 | compliance_service.py |
 | TERMINAL_NON_COMPLIANT | 终端变为不合规 | compliance_service.py |
 | TERMINAL_ONLINE | 新终端上线 | arp_collector_service.py |
+| TERMINAL_OFFLINE | 终端离线 | arp_collector_service.py |
 
 ### 9.3 系统事件
 
@@ -598,6 +602,8 @@ async def cleanup_expired_blacklist(self) -> int:
 | COMPLIANCE_RATE_LOW | 合规率低 | main.py |
 | BLOCK_THRESHOLD_EXCEEDED | 封锁阈值超限 | compliance_service.py |
 | POLICY_VIOLATION | 策略违规 | compliance_service.py |
+
+> **v3.9.0 变更**：`AUTO_BLOCK_TRIGGERED` 事件在此版本中正式发射，之前版本虽有定义但未实际触发。
 
 ### 9.5 管理事件
 

@@ -1,6 +1,6 @@
 # manage.sh 命令行操作手册
 
-> 文档版本：v3.6.18  更新日期：2026-07-16
+> 文档版本：v3.9.0  更新日期：2026-08-05
 
 TerminalAccessManager (TAM) 统一管理脚本，用于项目全生命周期管理。
 
@@ -916,6 +916,7 @@ cp .env .env.backup             # 备份配置文件
 | `firewall_query` | 防火墙黑名单查询 |
 | `compliance_check` | 合规检查 |
 | `auto_unblock` | 自动解封 |
+| `scheduled_backup` | 定时备份（cron 表达式调度） |
 
 #### 4.7.2 scheduler pause — 暂停任务
 
@@ -964,7 +965,10 @@ cp .env .env.backup             # 备份配置文件
 **修改间隔：**
 ```bash
 ./manage.sh config set scheduler_arp_collection_interval 600   # 修改 ARP 采集间隔为 10 分钟
+./manage.sh config set scheduler_backup_interval 3600          # 修改定时备份间隔为 1 小时
 ```
+
+**可用间隔配置键：** `scheduler_arp_collection_interval`、`scheduler_ipguard_sync_interval`、`scheduler_compliance_check_interval`、`scheduler_auto_unblock_interval`、`scheduler_firewall_query_interval`、`scheduler_backup_interval`
 
 **间隔范围：** 30 秒 ~ 86400 秒（1 天）
 

@@ -1,6 +1,6 @@
 # TerminalAccessManager 后端实现文档
 
-> 文档版本：v3.8.0 | 更新日期：2026-08-05
+> 文档版本：v3.9.0  更新日期：2026-08-05
 
 ## 1. 概述
 
@@ -122,7 +122,7 @@ app = FastAPI(
 
 | 阶段 | 操作 |
 |------|------|
-| Startup | 初始化数据库 (`init_db`) → 种子默认配置 (`seed_defaults`) → 自动迁移审计日志旧 action 值 → 自动迁移 system_config 旧品牌值 → 启动 5 个后台定时任务 |
+| Startup | 初始化数据库 (`init_db`) → 种子默认配置 (`seed_defaults`) → 自动迁移审计日志旧 action 值 → 自动迁移 system_config 旧品牌值 → 启动 6 个后台定时任务 |
 | Shutdown | 取消所有后台任务 → 关闭 Redis 连接 (`close_redis_client`) |
 
 #### 启动时自动迁移
@@ -144,7 +144,7 @@ app = FastAPI(
 
 #### 后台定时任务
 
-5 个 `asyncio.create_task` 启动的协程：
+6 个 `asyncio.create_task` 启动的协程：
 
 | 任务函数 | 说明 |
 |----------|------|
@@ -153,6 +153,7 @@ app = FastAPI(
 | `scheduled_ipguard_sync` | 定时同步 IPGuard 基线数据 |
 | `scheduled_compliance_check` | 定时合规检查 |
 | `scheduled_auto_unblock` | 定时自动解封 |
+| `scheduled_backup` | 定时备份（cron 表达式解析，60s 轮询检查，Redis 去重键 `scheduler:backup:running`，审计 action `scheduled_backup`） |
 
 #### _get_scheduler_interval 辅助函数
 
@@ -850,6 +851,7 @@ def _normalize_mac_raw(mac: str) -> str:
 4. 使用 `decrypt_config(config)` 解密防火墙配置后再调用封锁 API。
 5. 创建 `Blacklist` 记录（`is_auto_blocked=True`），每个防火墙一条。
 6. 支持 `dry_run` 模式（仅模拟，不实际封锁）。
+7. **v3.9.0 新增**：对每个被封锁的终端发射 `alert.auto_block_triggered` 事件（通过 `emit_auto_block_triggered()`），携带 `ip_address`、`mac_address`、`reason` 字段，触发通知渠道告警。
 
 #### 自动解封
 
@@ -948,6 +950,16 @@ def _normalize_mac_raw(mac: str) -> str:
 - 查找所有启用的 ARP 数据源（`arp_ssh` + `arp_api`）。
 - 使用 `decrypt_config(source.config)` 解密配置后再执行采集。
 - 依次执行采集（SSH 或 API）。
+
+#### 终端离线检测（v3.9.0 新增）
+
+`run_scheduled_collection()` 采集完成后，对每个 ARP 数据源执行终端在线/离线检测：
+
+1. 获取该数据源下所有终端的 IP 集合（`seen_ips`）。
+2. 遍历所有终端的 `updated_at`（`last_seen`）时间戳，计算与当前时间的差值。
+3. 若 `(now - last_seen) > offline_threshold_seconds`（默认 300s），判定为离线。
+4. 对每个新发现的离线终端发射 `terminal.offline` 事件（通过 `emit_terminal_offline()`），携带 `ip_address`、`mac_address` 字段。
+5. 仅检测"新离线"终端，已离线终端不重复触发事件。
 
 ---
 
@@ -1150,6 +1162,62 @@ API 响应中 IP 字段名兼容以下写法：
 
 ---
 
+### 4.8 通知服务
+
+#### event_emitter (services/event_emitter.py)
+
+事件发射模块，提供应用内统一的事件发布接口。
+
+**v3.9.0 重构说明：**
+
+- **移除 NotificationAggregator 优先路径**：原先存在的 `NotificationAggregator` 会聚合所有事件并吞掉单个事件的即时通知，现已移除此路径，事件直接通过 `NotificationService.emit()` → Redis Queue → Worker Pipeline 实时投递。
+- **改用模块级单例替代 ContextVar**：`_notification_service_instance` 使用模块级全局变量存储 NotificationService 引用。ContextVar 在 uvicorn 请求任务和 lifespan 协程间无法正确传播，导致事件静默丢失；模块级单例在同一进程内所有协程共享，配合 NotificationService 的短生命周期 AsyncSession 作用域保证线程安全。
+- **新增便捷发射函数**：为常见事件类型提供语义化的便捷函数，调用方无需记忆 event_type 字符串：
+
+| 便捷函数 | 事件类型 | 严重级别 |
+|----------|---------|---------|
+| `emit_terminal_blocked()` | `terminal.blocked` | warning |
+| `emit_terminal_unblocked()` | `terminal.unblocked` | info |
+| `emit_terminal_offline()` | `terminal.offline` | warning |
+| `emit_terminal_online()` | `terminal.online` | info |
+| `emit_login_failed()` | `security.login_failed` | warning |
+| `emit_login_success()` | `security.login_success` | info |
+| `emit_auto_block_triggered()` | `alert.auto_block_triggered` | warning |
+| `emit_auto_unblock_triggered()` | `alert.auto_unblock_triggered` | info |
+| `emit_backup_completed()` | `system.backup_completed` | info |
+| `emit_backup_failed()` | `system.backup_failed` | error |
+| `emit_compliance_alert()` | `alert.compliance_rate_critical` / `alert.compliance_rate_low` | error / warning |
+| `emit_config_changed()` | `admin.config_changed` | info |
+| ... 等 20+ 个便捷函数 | | |
+
+#### NotificationService (services/notification_service.py)
+
+通知服务核心类，管理通知渠道、事件发布和通知日志。
+
+**`_get_event_coverage()` 方法（v3.9.0 新增）：**
+
+对比系统定义的事件类型（`EVENT_METADATA`）与实际已发射的事件类型，识别从未被触发过的事件，用于前端通知监控面板的事件覆盖率展示。
+
+**`get_statistics()` 方法（v3.9.0 更新）：**
+
+返回统计结果中新增 `event_coverage` 字段，包含：
+
+| 字段 | 说明 |
+|------|------|
+| `defined_types` | 系统定义的事件类型总数 |
+| `emitted_types` | 实际已发射的事件类型数 |
+| `never_emitted` | 从未被触发过的事件类型列表 |
+
+#### NotificationWorkers (services/notification_workers.py)
+
+异步通知投递 Worker，通过 Redis 队列实现 fire-and-forget 的异步通知递送。
+
+**`_deliver_notification` 升级规则中断逻辑修复（v3.9.0）：**
+
+修复升级规则（escalation rule）的中断判定逻辑：当事件满足升级条件（`check_escalation` 返回 True）时，将事件严重级别提升至 `escalate_severity` 并标记 `event.data["escalated"] = True`，后续投递时已升级的事件会绕过抑制规则（bypass_suppression），确保升级后的关键告警不受抑制窗口限制，必定送达。
+
+---
+
 ## 5. 定时任务
 
 | # | 函数名 | 配置项 | 默认间隔 | Fallback | 业务逻辑 |
@@ -1159,6 +1227,7 @@ API 响应中 IP 字段名兼容以下写法：
 | 3 | `scheduled_ipguard_sync` | `scheduler_ipguard_sync_interval` | 600s | 600s | 查找所有启用的合规基准数据源，逐个调用 `sync_compliance_baseline_data` 同步基线数据到 Redis |
 | 4 | `scheduled_compliance_check` | `scheduler_compliance_check_interval` | 300s | 300s | 查找所有启用的 ARP 数据源，对每个来源下 `compliance_status="unknown"` 的条目执行批量合规检查，更新合规状态 |
 | 5 | `scheduled_auto_unblock` | `scheduler_auto_unblock_interval` | 600s | 600s | 调用 `auto_unblock_compliant`，对已合规的自动封锁终端执行解封 |
+| 6 | `scheduled_backup` | `scheduler_backup_interval` | 3600s | 3600s | 解析备份配置的 cron 表达式，60s 轮询检查是否到执行时间；通过 Redis 去重键 `scheduler:backup:running` 防止重复执行；执行后写入审计日志（action `scheduled_backup`） |
 
 所有任务共同特征：
 

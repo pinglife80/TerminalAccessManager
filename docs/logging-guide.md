@@ -1,6 +1,6 @@
 # TerminalAccessManager 日志说明文档
 
-> 文档版本：v3.6.18  更新日期：2026-07-16
+> 文档版本：v3.9.0  更新日期：2026-08-05
 > **适用范围**：后端应用日志、前端运行时日志、审计日志、Docker 容器日志、Nginx 日志、PostgreSQL 日志、运维脚本日志
 
 ---
@@ -313,6 +313,8 @@ volumes:
 | ERROR | `Error in scheduled compliance check task: {Type}: {e} [source=scheduler]` | 合规检查任务异常 |
 | INFO | `Auto-unblocked {count} compliant terminals` | 自动解封完成 |
 | ERROR | `Error in scheduled auto-unblock task: {Type}: {e} [source=scheduler]` | 自动解封任务异常 |
+| INFO | `Scheduled backup completed: {filename}, size={size} [source=scheduler]` | 定时备份完成 |
+| ERROR | `Error in scheduled backup task: {Type}: {e} [source=scheduler]` | 定时备份任务异常 |
 | INFO | `Starting Terminal Network Access Manager...` | 应用启动 |
 | INFO | `Database initialized` | 数据库初始化完成 |
 | INFO | `Seeded {count} default system configs` | 系统配置初始化 |
@@ -626,7 +628,7 @@ API 端点 → TerminalService.log_action() → audit_logs 表 → 前端审计�
 | `update_notification_rule` | notification | PUT /notifications/rules/{id} | 更新通知规则 |
 | `delete_notification_rule` | notification | DELETE /notifications/rules/{id} | 删除通知规则 |
 
-#### 备份管理（5项）
+#### 备份管理（6项）
 
 | 操作类型 | 资源类型 | 触发端点 | 说明 |
 |---------|---------|---------|------|
@@ -635,6 +637,7 @@ API 端点 → TerminalService.log_action() → audit_logs 表 → 前端审计�
 | `restore_backup` | backup | POST /backup/restore/{filename} | 恢复备份 |
 | `download_backup` | backup | GET /backup/download/{filename} | 下载备份文件 |
 | `update_backup_config` | backup | PUT /backup/config | 更新备份配置 |
+| `scheduled_backup` | backup | 内部定时任务 | 定时触发自动备份 |
 
 #### 认证提供商（4项）
 
@@ -655,7 +658,7 @@ API 端点 → TerminalService.log_action() → audit_logs 表 → 前端审计�
 | `test_email` | system | POST /settings/email/test | 测试邮件配置 |
 | `save_email_config` | system | PUT /settings/update | 保存邮件配置 |
 
-**共计 55 项审计操作类型**。
+**共计 56 项审计操作类型**。
 
 ### 4.3 审计日志字段说明
 

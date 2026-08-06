@@ -1,6 +1,6 @@
 # TerminalAccessManager API 文档
 
-> 文档版本：v3.8.0 | 更新日期：2026-08-05
+> 文档版本：v3.9.0  更新日期：2026-08-05
 
 > 基于 MAC 地址和 IP 地址的网络终端准入管理平台
 
@@ -2397,7 +2397,8 @@ curl https://<HOST_IP>:8443/api/v1/settings/branding
     "scheduler_ipguard_sync_interval": 600,
     "scheduler_firewall_query_interval": 300,
     "scheduler_compliance_check_interval": 300,
-    "scheduler_auto_unblock_interval": 600
+    "scheduler_auto_unblock_interval": 600,
+    "scheduler_backup_interval": 3600
   },
   "general": {
     "environment": "production",
@@ -3628,7 +3629,13 @@ GET /api/v1/notifications/stats
       "failed": 2,
       "success_rate": 99.0
     }
-  ]
+  ],
+  "event_coverage": {
+    "defined_count": 35,
+    "emitted_count": 4,
+    "coverage_rate": 0.114,
+    "unemitted_types": ["admin.config_changed", "..."]
+  }
 }
 ```
 
@@ -3636,6 +3643,7 @@ GET /api/v1/notifications/stats
 - 统计数据基于 notification_logs 表实时聚合查询
 - avg_latency_ms 为成功发送的平均耗时
 - pending_retry 为 status=pending_retry 的记录数
+- event_coverage 基于 REALTIME_EVENT_TYPES 集合和 event_coverage 统计表计算，coverage_rate = emitted_count / defined_count，反映事件类型的实际使用覆盖率
 
 ---
 
@@ -3935,7 +3943,7 @@ PUT /api/v1/backup/config
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | enabled | boolean | 否 | 是否启用自动备份 |
-| schedule | string | 否 | 备份计划（hourly/daily/weekly/monthly） |
+| schedule | string | 否 | 备份计划，支持 cron 表达式（如 `0 2 * * *`）或预设值（hourly/daily/weekly/monthly） |
 | retention_days | int | 否 | 保留天数（1-365） |
 | storage_type | string | 否 | 存储类型（local/ftp） |
 | storage_config | object | 否 | 存储配置 |
@@ -3994,6 +4002,11 @@ PUT /api/v1/backup/config
 | daily | 每天凌晨2:00执行 |
 | weekly | 每周日凌晨2:00执行 |
 | monthly | 每月1日凌晨2:00执行 |
+
+> **v3.9.0 调度机制说明**：
+> - `schedule` 字段现在支持 cron 表达式解析（如 `0 2 * * *`），由 cron 表达式解析器统一处理
+> - `scheduled_backup` 任务每 60 秒轮询一次，匹配 cron 表达式判断是否到达执行时间
+> - 基于 Redis key（`backup:last_run:{schedule}`）实现去重，防止同一时间窗口内重复执行
 
 ### 16.3 执行手动备份
 

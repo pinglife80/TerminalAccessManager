@@ -1,6 +1,6 @@
 # TerminalAccessManager 数据库设计文档
 
-> 文档版本：v3.8.0  更新日期：2026-08-05
+> 文档版本：v3.9.0  更新日期：2026-08-05
 
 ## 1. 概述
 
@@ -955,7 +955,7 @@ docker-compose.yml 中 PostgreSQL 的 `command` 参数列表如下：
 - `manage.sh scheduler pause <task>` 写入该键
 - `manage.sh scheduler resume <task>` 删除该键
 - `_is_task_paused()` 函数在定时任务循环中检查该键，值为 `"paused"` 时跳过当轮执行
-- 可用任务名：`arp_collection`、`ipguard_sync`、`firewall_query`、`compliance_check`、`auto_unblock`
+- 可用任务名：`arp_collection`、`ipguard_sync`、`firewall_query`、`compliance_check`、`auto_unblock`、`scheduled_backup`
 
 ### 5.9 Redis fail-open 降级策略
 

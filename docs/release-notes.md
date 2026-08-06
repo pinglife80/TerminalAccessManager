@@ -1,10 +1,68 @@
 # 版本跟踪记录
 
-> 文档版本：v3.8.0 | 更新日期：2026-08-05
+> 文档版本：v3.9.0 | 更新日期：2026-08-05
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
+
+---
+
+## [v3.9.0] - 2026-08-05
+
+### 通知系统重构与定时备份 cron 调度
+
+#### 问题描述
+
+1. **通知管道黑洞**：`emit_event()` 优先将事件投递到 `NotificationAggregator`，导致 Worker 管道被绕过，所有事件（terminal.blocked、system.error 等）均被吞噬，通知功能完全失效。
+2. **定时备份缺失**：`main.py` 的 `lifespan()` 中未注册 `scheduled_backup` 任务，即使备份配置已启用且设置了 cron 表达式，定时备份也从未执行。
+3. **备份时间戳/路径错误**：远端备份时间戳少 8 小时（UTC→本地时区未转换），备份路径出现双斜杠（如 `/TAM//backup_full_20260805_181522.zip`）。
+4. **事件类型字符串不匹配**：`system.error`、`system.warning`、`system.alert` 三个事件类型字符串与 `EventType` 枚举值不一致。
+5. **备份列表排序 TypeError**：本地备份 `created_at`（无时区）与远端备份 `created_at`（有时区）无法比较。
+6. **通知统计缺失 event_coverage**：统计 API 未返回事件覆盖率数据。
+
+#### 根因分析
+
+1. **通知管道黑洞**：`event_emitter.py` 的 `emit_event()` 方法优先检查 `NotificationAggregator.should_aggregate()`，若通过则直接投递到聚合器并返回，导致 Worker 管道（Redis Queue → Worker Pipeline）完全被绕过。
+2. **定时备份缺失**：`main.py` 的 `lifespan()` 中仅注册了 5 个定时任务（scheduled_compliance_check、scheduled_ipguard_sync、scheduled_arp_collection、scheduled_firewall_sync、scheduled_notification_cleanup），遗漏了 `scheduled_backup`。
+3. **备份时间戳/路径**：FTP MDTM 命令返回 UTC 时间，未调用 `astimezone(get_timezone())` 转换；`remote_path` 尾部斜杠未在拼接前去除。
+
+#### 修复内容
+
+| 项目 | 修改文件 | 说明 |
+|------|---------|------|
+| 通知管道黑洞修复 | `event_emitter.py` | 移除 `NotificationAggregator` 优先路径，直接调用 `NotificationService.emit()` |
+| 事件类型字符串修正 | `event_emitter.py` | 修正 `system.error`、`system.warning`、`system.alert` 三个事件类型 |
+| 实时事件分类 | `event_types.py` | 新增 `REALTIME_EVENT_TYPES` 集合和 `is_realtime_event()` 函数 |
+| 事件覆盖率监控 | `notification_service.py` | 新增 `_get_event_coverage()` 方法，`get_statistics()` 返回 `event_coverage` |
+| 自动封堵事件发射 | `compliance_service.py` | `auto_block_non_compliant` 新增 `emit_auto_block_triggered` 调用 |
+| 终端离线检测 | `arp_collector_service.py` | 基于 `last_seen` 时间戳检测离线终端，发射 `TERMINAL_OFFLINE` 事件 |
+| 定时备份 cron 调度 | `main.py` | 重写 `scheduled_backup()` 函数，支持 cron 表达式解析 |
+| cron 匹配器 | `main.py` | 新增 `_should_run_backup_now()` 函数，支持 `*`、逗号、步长值 |
+| Redis 去重 | `main.py` | 使用 Redis 键 `notify:last_backup_run` 防止同一分钟内重复执行 |
+| 备份审计日志 | `main.py` | 定时备份结果写入 `audit_logs` 表，action=`scheduled_backup` |
+| FTP 时间戳修复 | `backup_service.py` | UTC 时间转换为本地时区 (UTC+8) |
+| FTP 路径修复 | `backup_service.py` | 使用 `remote_path.rstrip('/')` 去除尾部斜杠 |
+| 备份排序修复 | `backup.py` | 统一 datetime 对象为无时区进行比较 |
+| 备份轮询间隔配置 | `system_config.py`、`config_service.py` | 新增 `scheduler_backup_interval` 配置项 |
+| 前端配置项 | `useTerminalData.ts`、`GeneralSettings.tsx` | 新增 `scheduler_backup_interval` 类型定义和前端配置项 |
+
+#### 验证结果
+
+- **通知管道**：触发 terminal.blocked 事件，notification_logs 表正确产生记录 ✅
+- **事件字符串**：订阅 system.error 事件，触发后正确收到通知 ✅
+- **cron 调度**：设置 schedule 为 `* * * * *`，60 秒内触发备份 ✅
+- **FTP 时间戳**：`/api/v1/backup/list` 返回远端备份时间戳为本地时间（+08:00） ✅
+- **FTP 路径**：`file_path` 为 `/TAM/backup_xxx.zip`（无双斜杠） ✅
+- **审计日志**：`audit_logs` 表有 `scheduled_backup` 记录 ✅
+- **事件覆盖率**：`/api/v1/notifications/statistics` 返回 `event_coverage` 字段 ✅
+
+#### 发布信息
+
+- 版本号：v3.9.0
+- 前一版本：v3.8.0
+- 变更类型：修复 + 功能新增 (fix + feat)
+- 涉及模块：event_emitter.py, notification_service.py, main.py, backup_service.py, compliance_service.py, arp_collector_service.py
 
 ---
 

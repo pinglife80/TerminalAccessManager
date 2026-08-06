@@ -1,6 +1,6 @@
 # 数据源全生命周期技术文档
 
-> 文档版本：v3.6.18 | 更新日期：2026-07-16
+> 文档版本：v3.9.0  更新日期：2026-08-05
 
 本文档详细描述 TerminalAccessManager 系统中数据源从配置、采集、解析、合规判定到自动处置的完整生命周期，涵盖架构设计、数据格式、输入输出规范和定时调度机制。
 
@@ -789,7 +789,13 @@ ComplianceService.auto_block_non_compliant(arp_source_tag, block_time="30d")
     │      │       expires_at = now + block_time
     │      └── 封堵失败: 标记为 skipped，不创建 Blacklist 记录
     │
-    └── 4. 返回 AutoBlockResult
+    ├── 4. 发射通知事件（v3.9.0 新增）
+    │      对每个被成功封堵的终端：
+    │      └── emit_auto_block_triggered(ip_address, mac_address, reason)
+    │          事件类型: alert.auto_block_triggered
+    │          触发通知渠道告警（邮件/钉钉/飞书等）
+    │
+    └── 5. 返回 AutoBlockResult
 ```
 
 ### 8.3 封堵时长格式
@@ -948,7 +954,7 @@ ComplianceService.auto_unblock_compliant()
 
 ### 10.1 调度任务列表
 
-应用启动时（`lifespan` 函数），创建 5 个后台 asyncio Task：
+应用启动时（`lifespan` 函数），创建 6 个后台 asyncio Task：
 
 | 任务名 | 函数 | 默认间隔 | 配置键 | 说明 |
 |--------|------|---------|--------|------|
@@ -957,6 +963,7 @@ ComplianceService.auto_unblock_compliant()
 | 合规检查 | `scheduled_compliance_check()` | 300s (5min) | `scheduler_compliance_check_interval` | 查找 compliance_status="unknown" 的终端，执行合规判定 |
 | 自动解封 | `scheduled_auto_unblock()` | 600s (10min) | `scheduler_auto_unblock_interval` | 检查自动封堵记录，合规的自动解封 |
 | 黑名单清理 | `cleanup_expired_blacklist()` | 3600s (1h) | `scheduler_firewall_query_interval` | 清理过期的黑名单记录 |
+| 定时备份 | `scheduled_backup()` | 3600s (1h) | `scheduler_backup_interval` | cron 表达式调度，60s 轮询检查，Redis 去重键防止重复执行 |
 
 ### 10.2 调度控制机制
 

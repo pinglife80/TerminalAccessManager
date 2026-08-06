@@ -1,6 +1,6 @@
 # TerminalAccessManager - 运维操作手册
 
-> 文档版本：v3.6.18  更新日期：2026-07-16
+> 文档版本：v3.9.0  更新日期：2026-08-05
 
 ## 目录
 
@@ -482,6 +482,7 @@ Task                          Interval    Status
   Firewall Blacklist Query     10m         PAUSED
   Compliance Check             15m         RUNNING
   Auto Unblock                 30m         RUNNING
+  Scheduled Backup             cron        RUNNING
 ```
 
 ### 3.2 调整执行间隔
@@ -496,6 +497,7 @@ Task                          Interval    Status
 ./manage.sh config set scheduler_firewall_query_interval 300       # 5 分钟
 ./manage.sh config set scheduler_auto_unblock_interval 3600        # 1 小时
 ./manage.sh config set scheduler_ipguard_sync_interval 1800        # 30 分钟
+./manage.sh config set scheduler_backup_interval 3600             # 1 小时
 ```
 
 > 修改间隔后无需重启，下次任务循环自动生效。
