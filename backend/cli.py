@@ -181,6 +181,7 @@ async def _list_users():
     from sqlalchemy import select
     from app.core.database import async_session_maker
     from app.models.user import User
+    from app.core.security import get_redis_client
 
     async with async_session_maker() as db:
         result = await db.execute(
@@ -192,10 +193,26 @@ async def _list_users():
             print("No users found")
             return
 
+        # Fetch lock status from Redis in batch
+        lock_info: dict[str, dict] = {}
+        try:
+            redis_client = await get_redis_client()
+            for u in users:
+                lock_key = f"login_lock:{u.username}"
+                ttl = await redis_client.ttl(lock_key)
+                lock_info[u.username] = {
+                    "is_locked": ttl > 0,
+                    "lock_remaining_seconds": ttl if ttl > 0 else None,
+                }
+        except Exception:
+            # Redis unavailable — treat all as unlocked
+            lock_info = {}
+
         print(f"{'ID':<5} {'Username':<20} {'Email':<30} {'Active':<8} {'Superuser':<10} {'Locked':<8}")
         print("-" * 85)
         for u in users:
-            locked = "Yes" if u.locked_until and u.locked_until > datetime.now(timezone.utc) else "No"
+            is_locked = lock_info.get(u.username, {}).get("is_locked", False)
+            locked = "Yes" if is_locked else "No"
             print(f"{u.id:<5} {u.username:<20} {u.email or 'N/A':<30} {'Yes' if u.is_active else 'No':<8} {'Yes' if u.is_superuser else 'No':<10} {locked:<8}")
 
 
@@ -209,6 +226,7 @@ async def _unlock_user(username: str):
     from sqlalchemy import select
     from app.core.database import async_session_maker
     from app.models.user import User
+    from app.core.security import reset_login_attempts
 
     async with async_session_maker() as db:
         result = await db.execute(select(User).where(User.username == username))
@@ -218,8 +236,10 @@ async def _unlock_user(username: str):
             print(_red(f"✗ User '{username}' not found"))
             return False
 
-        user.failed_login_attempts = 0
-        user.locked_until = None
+        # Reset Redis lock/attempts keys (actual lock state lives there)
+        await reset_login_attempts(username)
+
+        # Ensure user stays active (in case admin manually set inactive)
         user.is_active = True
         await db.commit()
 
@@ -249,11 +269,11 @@ async def _list_roles():
             print("No roles found. Run 'python cli.py setup' to seed default roles.")
             return
 
-        print(f"{'ID':<5} {'Name':<20} {'Display Name':<25} {'Description':<40} {'Built-in':<10}")
-        print("-" * 105)
+        print(f"{'ID':<5} {'Name':<20} {'Built-in':<10} {'Description':<60}")
+        print("-" * 95)
         for r in roles:
-            builtin = "Yes" if r.is_builtin else "No"
-            print(f"{r.id:<5} {r.name:<20} {r.display_name or 'N/A':<25} {(r.description or 'N/A')[:40]:<40} {builtin:<10}")
+            builtin = "Yes" if r.is_default else "No"
+            print(f"{r.id:<5} {r.name:<20} {builtin:<10} {(r.description or 'N/A')[:60]:<60}")
 
 
 def cmd_role_list(args):
@@ -1682,12 +1702,140 @@ async def _scheduler_trigger(args):
 
         elif task == "compliance_check":
             service = ComplianceService(db)
-            print("  Running compliance check...")
-            result = await service.batch_check_compliance()
-            print(f"  Total: {result.total_checked}, Compliant: {result.compliant}, "
-                  f"Bypass: {result.bypass}, Non-compliant: {result.non_compliant}, Unknown: {result.unknown}")
-            if result.message:
-                print(f"  {result.message}")
+            from app.services.data_source_service import DataSourceService
+            ds_service = DataSourceService(db)
+            sources = await ds_service.list_data_sources(type="arp_ssh", enabled=True)
+            sources2 = await ds_service.list_data_sources(type="arp_api", enabled=True)
+            all_arp_sources = sources + sources2
+            if not all_arp_sources:
+                print(_yellow("No enabled ARP data sources found"))
+                return
+
+            total_checked_all = 0
+            compliant_all = 0
+            bypass_all = 0
+            non_compliant_all = 0
+            unknown_all = 0
+
+            from app.models.terminal import Terminal
+            for source in all_arp_sources:
+                stmt = select(Terminal).where(
+                    (Terminal.source_tag == source.tag) &
+                    (Terminal.compliance_status == "unknown")
+                )
+                r = await db.execute(stmt)
+                unchecked = r.scalars().all()
+                if not unchecked:
+                    print(f"  {source.tag}: No unchecked terminals")
+                    continue
+
+                check_entries = [
+                    {"ip_address": e.ip_address, "mac_address": e.mac_address, "source_tag": e.source_tag}
+                    for e in unchecked
+                ]
+                print(f"  {source.tag}: checking {len(check_entries)} terminals...")
+                result = await service.batch_check_compliance(check_entries)
+
+                # Build lookup map
+                result_lookup: dict[str, dict] = {}
+                if result.details:
+                    for item in result.details.get("bypass", []):
+                        result_lookup[item.get("ip_address")] = {
+                            "compliance_status": "bypass",
+                            "wl_match_type": item.get("wl_match_type"),
+                            "wl_comments": item.get("wl_comments"),
+                        }
+                    for item in result.details.get("compliant", []):
+                        result_lookup[item.get("ip_address")] = {
+                            "compliance_status": "compliant",
+                            "wl_match_type": None,
+                            "wl_comments": None,
+                        }
+                    for item in result.details.get("non_compliant", []):
+                        result_lookup[item.get("ip_address")] = {
+                            "compliance_status": "non_compliant",
+                            "wl_match_type": None,
+                            "wl_comments": None,
+                        }
+
+                # Apply results
+                for entry in unchecked:
+                    res = result_lookup.get(entry.ip_address)
+                    if res:
+                        await service._apply_compliance_result(
+                            entry,
+                            res["compliance_status"],
+                            res["wl_match_type"],
+                            res["wl_comments"],
+                            entry.ip_address or "",
+                            entry.mac_address or "",
+                        )
+
+                await db.commit()
+
+                # Aggregate
+                total_checked_all += (result.compliant + result.bypass + result.non_compliant + result.unknown)
+                compliant_all += result.compliant
+                bypass_all += result.bypass
+                non_compliant_all += result.non_compliant
+                unknown_all += result.unknown
+
+                # Auto-block non-compliant
+                if result.non_compliant > 0:
+                    try:
+                        block_result = await service.auto_block_non_compliant(source.tag)
+                        if hasattr(block_result, "blocked") and block_result.blocked > 0:
+                            print(f"    Auto-blocked {block_result.blocked} non-compliant terminals")
+                    except Exception as be:
+                        print(f"    Auto-block error: {type(be).__name__}: {be}")
+
+                # Emit compliance alert
+                checked = result.compliant + result.bypass + result.non_compliant + result.unknown
+                effective_compliant = result.compliant + result.bypass
+                rate = (effective_compliant / checked * 100) if checked > 0 else 100.0
+                from app.services.event_emitter import emit_compliance_alert
+                from app.services.config_service import get_config_value
+                alert_threshold = float(await get_config_value("alert_compliance_rate_threshold", 80))
+                await emit_compliance_alert(
+                    compliance_rate=rate,
+                    non_compliant_count=result.non_compliant,
+                    threshold=alert_threshold,
+                    compliant_count=result.compliant,
+                    bypass_count=result.bypass,
+                    total_checked=checked,
+                )
+
+                print(f"  {source.tag}: {result.compliant} compliant, {result.bypass} bypass, {result.non_compliant} non-compliant, {result.unknown} unknown (rate {rate:.1f}%)")
+
+            # ========== Global compliance alert (based on DB stats) ==========
+            try:
+                from app.services.terminal_service import TerminalService
+                t_service = TerminalService(db)
+                stats = await t_service.get_stats()
+                db_compliant = int(stats.get("compliant", 0))
+                db_bypass = int(stats.get("bypass", 0))
+                db_non_compliant = int(stats.get("non_compliant", 0))
+                db_unknown = int(stats.get("unknown", 0))
+                checked = db_compliant + db_bypass + db_non_compliant + db_unknown
+                effective_compliant = db_compliant + db_bypass
+                global_rate = (effective_compliant / checked * 100) if checked > 0 else 100.0
+                from app.services.event_emitter import emit_compliance_alert
+                from app.services.config_service import get_config_value
+                alert_threshold = float(await get_config_value("alert_compliance_rate_threshold", 80))
+                await emit_compliance_alert(
+                    compliance_rate=global_rate,
+                    non_compliant_count=db_non_compliant,
+                    threshold=alert_threshold,
+                    compliant_count=db_compliant,
+                    bypass_count=db_bypass,
+                    total_checked=checked,
+                )
+                print(f"  Overall DB stats: total={checked}, compliant={db_compliant}, bypass={db_bypass}, non_compliant={db_non_compliant}, unknown={db_unknown}")
+                print(f"  Overall compliance rate: {global_rate:.1f}% (threshold {alert_threshold:.0f}%)")
+            except Exception as alert_err:
+                print(f"  Warning: failed to emit global compliance alert: {type(alert_err).__name__}: {alert_err}")
+
+            print(f"  Total (this run): checked={total_checked_all}, compliant={compliant_all}, bypass={bypass_all}, non-compliant={non_compliant_all}, unknown={unknown_all}")
             print(_green("Compliance check completed"))
 
         elif task == "auto_unblock":

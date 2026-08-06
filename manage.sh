@@ -147,7 +147,7 @@ log_banner()  {
 ###############################################################################
 save_state() {
     local key="$1"
-    local value="$2"
+    local value="${2:-}"
     mkdir -p "${STATE_DIR}"
     if [ -f "${STATE_FILE}" ] && grep -q "^${key}=" "${STATE_FILE}" 2>/dev/null; then
         sed -i "s|^${key}=.*|${key}=${value}|" "${STATE_FILE}"
@@ -480,7 +480,7 @@ get_env() {
 # Set an env variable in .env
 set_env() {
     local key="$1"
-    local value="$2"
+    local value="${2:-}"
 
     if grep -q "^${key}=" "${ENV_FILE}" 2>/dev/null; then
         sed -i "s|^${key}=.*|${key}=${value}|" "${ENV_FILE}"
@@ -528,7 +528,7 @@ auto_backup() {
 # Usage: interactive_backup <label> <operation_description>
 interactive_backup() {
     local label="$1"
-    local description="$2"
+    local description="${2:-}"
 
     echo -e "${CYAN}${BOLD}Backup Recommendation:${NC}"
     echo -e "  Operation: ${description}"
@@ -603,7 +603,7 @@ cmd_version() {
         cmd_version_check
         return
     elif [ "$subcommand" = "bump" ]; then
-        cmd_version_bump "$2"
+        cmd_version_bump "${2:-}"
         return
     fi
 
@@ -653,17 +653,22 @@ cmd_version_check() {
     local base_version="${VERSION}"
     local all_ok="true"
 
-    local files=(
-        "VERSION"
+    # Files that need manual sync (non-dynamic)
+    local static_files=(
         "frontend/package.json"
-        ".env"
-        ".env.example"
-        "docker-compose.yml"
-        "manage.sh"
-        "frontend/vite.config.ts"
+        "frontend/package-lock.json"
     )
 
-    for file in "${files[@]}"; do
+    # Files that read VERSION dynamically — no manual sync needed
+    local dynamic_files=(
+        "docker-compose.yml"
+        "frontend/vite.config.ts"
+        "manage.sh"
+        "frontend/Dockerfile"
+    )
+
+    # Check static files
+    for file in "${static_files[@]}"; do
         local file_path="${SCRIPT_DIR}/${file}"
         local found_version=""
 
@@ -674,23 +679,11 @@ cmd_version_check() {
         fi
 
         case "${file}" in
-            "VERSION")
-                found_version=$(cat "${file_path}" 2>/dev/null | tr -d '[:space:]')
-                ;;
             "frontend/package.json")
-                found_version=$(grep '"version"' "${file_path}" 2>/dev/null | sed 's/.*"version": "\([^"]*\)".*/\1/' | tr -d '[:space:]')
+                found_version=$(grep -m1 '"version"' "${file_path}" 2>/dev/null | sed 's/.*"version": "\([^"]*\)".*/\1/' | tr -d '[:space:]')
                 ;;
-            ".env" | ".env.example")
-                found_version=$(grep '^VERSION=' "${file_path}" 2>/dev/null | cut -d'=' -f2 | tr -d '[:space:]')
-                ;;
-            "docker-compose.yml")
-                found_version=$(grep 'VERSION:' "${file_path}" 2>/dev/null | sed 's/.*-\([0-9]*\.[0-9]*\.[0-9]*\).*/\1/' | tr -d '[:space:]')
-                ;;
-            "manage.sh")
-                found_version=$(grep 'echo "3.6.' "${file_path}" 2>/dev/null | head -1 | sed 's/.*echo "\([0-9]*\.[0-9]*\.[0-9]*\)".*/\1/' | tr -d '[:space:]')
-                ;;
-            "frontend/vite.config.ts")
-                found_version=$(grep "return '" "${file_path}" 2>/dev/null | sed 's/.*return '\''\([0-9]*\.[0-9]*\.[0-9]*\)'\''.*/\1/' | tr -d '[:space:]')
+            "frontend/package-lock.json")
+                found_version=$(grep -m1 '"version"' "${file_path}" 2>/dev/null | sed 's/.*"version": "\([^"]*\)".*/\1/' | tr -d '[:space:]')
                 ;;
         esac
 
@@ -701,6 +694,17 @@ cmd_version_check() {
         else
             echo -e "  ${RED}✗${NC} ${file}: ${RED}${found_version}${NC} (expected ${base_version})"
             all_ok="false"
+        fi
+    done
+
+    # Show dynamic files (read VERSION at runtime/build time)
+    echo ""
+    echo -e "  ${DIM}Dynamically sourced from VERSION (no manual sync needed):${NC}"
+    for file in "${dynamic_files[@]}"; do
+        if [ -f "${SCRIPT_DIR}/${file}" ]; then
+            echo -e "  ${GREEN}✓${NC} ${file}: ${DIM}reads VERSION at runtime${NC}"
+        else
+            echo -e "  ${YELLOW}?${NC} ${file}: ${DIM}not found${NC}"
         fi
     done
 
@@ -733,35 +737,35 @@ cmd_version_bump() {
     echo -e "${CYAN}${BOLD}Bumping version to ${new_version}${NC}"
     echo ""
 
-    echo -e "  ${GREEN}✓${NC} VERSION"
+    # 1. Write to VERSION file — the single source of truth
     echo "${new_version}" > "${SCRIPT_DIR}/VERSION"
+    echo -e "  ${GREEN}✓${NC} VERSION (source of truth)"
 
-    echo -e "  ${GREEN}✓${NC} frontend/package.json"
-    sed -i.bak "s/\"version\": \"[0-9]*\.[0-9]*\.[0-9]*\"/\"version\": \"${new_version}\"/" "${SCRIPT_DIR}/frontend/package.json"
-    rm -f "${SCRIPT_DIR}/frontend/package.json.bak"
+    # 2. Read back from VERSION to confirm and use as sync source
+    local synced_version
+    synced_version=$(cat "${SCRIPT_DIR}/VERSION" | tr -d '[:space:]')
 
-    echo -e "  ${GREEN}✓${NC} .env"
-    sed -i.bak "s/^VERSION=[0-9]*\.[0-9]*\.[0-9]*$/VERSION=${new_version}/" "${SCRIPT_DIR}/.env" 2>/dev/null || true
-    rm -f "${SCRIPT_DIR}/.env.bak" 2>/dev/null || true
+    # 3. Sync frontend/package.json FROM VERSION
+    if [ -f "${SCRIPT_DIR}/frontend/package.json" ]; then
+        sed -i "s/\"version\": \"[0-9]*\.[0-9]*\.[0-9]*\"/\"version\": \"${synced_version}\"/" "${SCRIPT_DIR}/frontend/package.json"
+        echo -e "  ${GREEN}✓${NC} frontend/package.json"
+    else
+        echo -e "  ${YELLOW}?${NC} frontend/package.json: ${DIM}not found, skipping${NC}"
+    fi
 
-    echo -e "  ${GREEN}✓${NC} .env.example"
-    sed -i.bak "s/^VERSION=[0-9]*\.[0-9]*\.[0-9]*$/VERSION=${new_version}/" "${SCRIPT_DIR}/.env.example"
-    rm -f "${SCRIPT_DIR}/.env.example.bak"
+    # 4. Sync frontend/package-lock.json top-level version FROM VERSION
+    if [ -f "${SCRIPT_DIR}/frontend/package-lock.json" ]; then
+        sed -i "1,5s/\"version\": \"[0-9]*\.[0-9]*\.[0-9]*\"/\"version\": \"${synced_version}\"/" "${SCRIPT_DIR}/frontend/package-lock.json"
+        echo -e "  ${GREEN}✓${NC} frontend/package-lock.json"
+    else
+        echo -e "  ${YELLOW}?${NC} frontend/package-lock.json: ${DIM}not found, skipping${NC}"
+    fi
 
-    echo -e "  ${GREEN}✓${NC} docker-compose.yml"
-    sed -i.bak "s/:-[0-9]*\.[0-9]*\.[0-9]*\"/:-${new_version}\"/" "${SCRIPT_DIR}/docker-compose.yml"
-    rm -f "${SCRIPT_DIR}/docker-compose.yml.bak"
-
-    echo -e "  ${GREEN}✓${NC} manage.sh"
-    sed -i.bak "s/echo \"[0-9]*\.[0-9]*\.[0-9]*\"/echo \"${new_version}\"/" "${SCRIPT_DIR}/manage.sh"
-    rm -f "${SCRIPT_DIR}/manage.sh.bak"
-
-    echo -e "  ${GREEN}✓${NC} frontend/vite.config.ts"
-    sed -i.bak "s/return '[0-9]*\.[0-9]*\.[0-9]*'/return '${new_version}'/" "${SCRIPT_DIR}/frontend/vite.config.ts"
-    rm -f "${SCRIPT_DIR}/frontend/vite.config.ts.bak"
+    # Note: docker-compose.yml, vite.config.ts, manage.sh, Dockerfile
+    # read VERSION dynamically at runtime/build time — no sync needed.
 
     echo ""
-    echo -e "${GREEN}${BOLD}✓ Version bumped successfully to ${new_version}!${NC}"
+    echo -e "${GREEN}${BOLD}✓ Version bumped successfully to ${synced_version}!${NC}"
     echo ""
     echo -e "Next steps:"
     echo -e "  1. ${CYAN}./manage.sh version check${NC} — Verify all versions are consistent"
@@ -1460,11 +1464,11 @@ cmd_health() {
     http_code=$(curl -sk -o /dev/null -w "%{http_code}" https://localhost:8443/ 2>/dev/null || echo "000")
     if [ "$http_code" = "200" ]; then
         log_success "HTTPS accessible (200 OK)"
-    elif [ "$http_code" = "000" ]; then
-        log_error "HTTPS not reachable (connection refused)"
-        issues=$((issues + 1))
+    elif curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/ 2>/dev/null | grep -q "200"; then
+        log_success "HTTP accessible (http://localhost:8080, 200 OK)"
     else
-        log_warn "HTTPS returned status ${http_code}"
+        log_error "Web UI not reachable (tried HTTPS:8443 and HTTP:8080)"
+        issues=$((issues + 1))
     fi
 
     # 7. SSL Certificate
@@ -2078,6 +2082,8 @@ cmd_upgrade() {
         local http_ok=false
         if curl -sk -o /dev/null -w "%{http_code}" https://localhost:8443/ 2>/dev/null | grep -q "200"; then
             http_ok=true
+        elif curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/ 2>/dev/null | grep -q "200"; then
+            http_ok=true
         fi
         if ${http_ok}; then
             log_success "Web interface accessible"
@@ -2585,8 +2591,11 @@ cmd_ssl() {
 # Command: config
 ###############################################################################
 
-# API base URL (use internal network when inside container context)
-_API_BASE_URL="https://localhost:8443/api/v1"
+# API base URL for CLI operations (configurable via CLI_API_BASE_URL in .env)
+# Default matches the nginx HTTP port exposed on the host
+_api_base_url() {
+    echo "${CLI_API_BASE_URL:-http://localhost:8080/api/v1}"
+}
 
 # Get admin token by logging in
 _config_get_admin_token() {
@@ -2597,7 +2606,7 @@ _config_get_admin_token() {
     fi
 
     local response
-    response=$(curl -sk -X POST "${_API_BASE_URL}/auth/login" \
+    response=$(curl -sk -X POST "$(_api_base_url)/auth/login" \
         -H "Content-Type: application/x-www-form-urlencoded" \
         -d "username=admin&password=${admin_password}" 2>/dev/null)
 
@@ -2665,7 +2674,7 @@ _config_list() {
     token=$(_config_get_admin_token) || return 1
 
     local response
-    response=$(curl -sk -X GET "${_API_BASE_URL}/settings/" \
+    response=$(curl -sk -X GET "$(_api_base_url)/settings/" \
         -H "Authorization: Bearer ${token}" 2>/dev/null)
 
     if [ -z "$response" ]; then
@@ -2749,7 +2758,7 @@ _config_get() {
     token=$(_config_get_admin_token) || return 1
 
     local response
-    response=$(curl -sk -X GET "${_API_BASE_URL}/settings/" \
+    response=$(curl -sk -X GET "$(_api_base_url)/settings/" \
         -H "Authorization: Bearer ${token}" 2>/dev/null)
 
     if [ -z "$response" ]; then
@@ -2842,7 +2851,7 @@ _config_set() {
     token=$(_config_get_admin_token) || return 1
 
     local response
-    response=$(curl -sk -X PUT "${_API_BASE_URL}/settings/update" \
+    response=$(curl -sk -X PUT "$(_api_base_url)/settings/update" \
         -H "Authorization: Bearer ${token}" \
         -H "Content-Type: application/json" \
         -d "[{\"key\":\"${key}\",\"value\":\"${value}\"}]" 2>/dev/null)
@@ -2894,7 +2903,7 @@ _config_branding() {
 
     # Fetch current branding (public endpoint, no auth needed)
     local branding_response
-    branding_response=$(curl -sk -X GET "${_API_BASE_URL}/settings/branding" 2>/dev/null)
+    branding_response=$(curl -sk -X GET "$(_api_base_url)/settings/branding" 2>/dev/null)
 
     if [ -z "$branding_response" ]; then
         log_error "Failed to fetch branding configuration"
@@ -2975,7 +2984,7 @@ except:
     token=$(_config_get_admin_token) || return 1
 
     local response
-    response=$(curl -sk -X PUT "${_API_BASE_URL}/settings/update" \
+    response=$(curl -sk -X PUT "$(_api_base_url)/settings/update" \
         -H "Authorization: Bearer ${token}" \
         -H "Content-Type: application/json" \
         -d "[{\"key\":\"${key}\",\"value\":\"${value}\"}]" 2>/dev/null)
@@ -3025,7 +3034,7 @@ _config_upload() {
     log_info "Uploading ${purpose}: ${file}..."
 
     local response
-    response=$(curl -sk -X POST "${_API_BASE_URL}/settings/upload?purpose=${purpose}" \
+    response=$(curl -sk -X POST "$(_api_base_url)/settings/upload?purpose=${purpose}" \
         -H "Authorization: Bearer ${token}" \
         -F "file=@${file}" 2>/dev/null)
 
@@ -3505,7 +3514,7 @@ cmd_scheduler() {
             token=$(_config_get_admin_token) 2>/dev/null || true
 
             local intervals_response
-            intervals_response=$(curl -sk -X GET "${_API_BASE_URL}/settings/" \
+            intervals_response=$(curl -sk -X GET "$(_api_base_url)/settings/" \
                 -H "Authorization: Bearer ${token}" 2>/dev/null)
 
             # Display each task
@@ -3633,7 +3642,7 @@ except:
             token=$(_config_get_admin_token) 2>/dev/null || true
 
             local response
-            response=$(curl -sk -X GET "${_API_BASE_URL}/settings/" \
+            response=$(curl -sk -X GET "$(_api_base_url)/settings/" \
                 -H "Authorization: Bearer ${token}" 2>/dev/null)
 
             echo "$response" | python3 -c "
