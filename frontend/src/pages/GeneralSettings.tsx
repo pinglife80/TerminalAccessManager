@@ -112,6 +112,15 @@ const SectionCard: React.FC<SectionCardProps> = ({ title, description, icon, chi
   );
 };
 
+// Config key → i18n description key mapping
+const FIELD_DESC_I18N_KEYS: Record<string, string> = {
+  'compliance_confirm_threshold': 'generalSettings.compliance_confirm_thresholdDesc',
+  'alert_compliance_rate_threshold': 'generalSettings.alert_compliance_rate_thresholdDesc',
+  'alert_compliance_critical_ratio': 'generalSettings.alert_compliance_critical_ratioDesc',
+  'alert_block_count_threshold': 'generalSettings.alert_block_count_thresholdDesc',
+  'alert_offline_threshold_multiplier': 'generalSettings.alert_offline_threshold_multiplierDesc',
+};
+
 // ==================== Field renderer ====================
 
 interface FieldProps {
@@ -125,6 +134,9 @@ const Field: React.FC<FieldProps> = ({ entry, value, onChange }) => {
   if (!entry) return null;
   const readonly = entry.is_readonly;
   const baseClass = 'w-full px-3 py-2 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:opacity-60 disabled:cursor-not-allowed';
+
+  const descI18nKey = FIELD_DESC_I18N_KEYS[entry.key];
+  const displayDesc = descI18nKey ? t(descI18nKey) : entry.description;
 
   let input: React.ReactNode;
   if (entry.value_type === 'bool') {
@@ -165,7 +177,7 @@ const Field: React.FC<FieldProps> = ({ entry, value, onChange }) => {
         value={value}
         onChange={(e) => onChange(e.target.value)}
         disabled={readonly}
-        placeholder={entry.description || ''}
+        placeholder={displayDesc || ''}
         className={baseClass}
       />
     );
@@ -178,7 +190,7 @@ const Field: React.FC<FieldProps> = ({ entry, value, onChange }) => {
         {readonly && <span className="ml-2 text-xs text-muted-foreground">({t('generalSettings.readonly')})</span>}
       </label>
       {input}
-      {entry.description && <p className="mt-1 text-xs text-muted-foreground">{entry.description}</p>}
+      {displayDesc && <p className="mt-1 text-xs text-muted-foreground">{displayDesc}</p>}
     </div>
   );
 };

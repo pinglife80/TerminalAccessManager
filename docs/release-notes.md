@@ -1,10 +1,99 @@
 # 版本跟踪记录
 
-> 文档版本：v3.10.0 | 更新日期：2026-08-06
+> 文档版本：v3.10.1 | 更新日期：2026-08-06
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
+
+---
+
+## [v3.10.1] - 2026-08-06
+
+### CLI 工具修复与合规率告警修正
+
+#### 问题描述
+
+1. **CLI 用户命令属性错误**：`user list` 命令报 `AttributeError: 'User' object has no attribute 'locked_until'`；`user unlock` 尝试修改不存在的 `failed_login_attempts`、`locked_until` 字段
+2. **CLI 角色命令属性错误**：`role list` 命令报 `AttributeError: 'Role' object has no attribute 'is_builtin'` 和 `display_name`
+3. **scheduler trigger compliance_check 参数缺失**：`batch_check_compliance()` 调用未传入 `entries` 参数导致 `TypeError`
+4. **合规率计算公式错误**：原公式排除了 bypass（白名单旁路）和 unknown 终端，导致合规率被严重低估
+5. **合规率告警数据源错误**：告警基于 per-source 本次检查结果（可能只有 32 个新终端），而非 DB 全局统计
+6. **合规率告警阈值守卫缺失**：合规率达标（≥ 80%）时仍触发告警
+7. **Shell 脚本未绑定变量错误**：`manage.sh` 中 4 处 `$2` 在 `set -u` 模式下报 `unbound variable`
+8. **manage.sh 版本管理不统一**：`version bump/check` 命令同步文件过多、逻辑冗余
+9. **manage.sh API 地址硬编码**：`scheduler status` 硬编码 `https://localhost:8443`
+10. **合规设置参数描述未国际化**：GeneralSettings 页面 5 个配置项描述使用硬编码中文
+
+#### 根因分析
+
+1. **User/Role 模型字段变更**：User 模型移除了 `locked_until`、`failed_login_attempts` 字段，账户锁定状态迁移至 Redis；Role 模型 `is_builtin` 改为 `is_default`，`display_name` 改为 `name`
+2. **合规率公式设计缺陷**：原实现未考虑 bypass 终端作为有效合规的一部分，且告警仅基于本次检查结果而非全局统计
+3. **Shell 脚本安全编程问题**：`set -u` 模式下直接使用 `$2` 而无默认值保护
+4. **版本管理缺少统一入口**：版本同步逻辑分散，缺少标准化流程
+
+#### 修复内容
+
+| 项目 | 修改文件 | 说明 |
+|------|---------|------|
+| `user list` Redis 锁查询 | `cli.py` | 批量查询 Redis `login_lock:{username}` TTL |
+| `user unlock` Redis 清除 | `cli.py` | 调用 `reset_login_attempts()` 清除 Redis key |
+| `role list` 字段修正 | `cli.py` | `is_builtin` → `is_default`，`display_name` → `name` |
+| compliance_check 流程重写 | `cli.py` | 完整实现：数据源查找→unchecked 遍历→批量 check→结果应用→auto-block→全局告警 |
+| 合规率公式修正 | `main.py` | `rate = (compliant + bypass) / total_checked` |
+| 告警数据源修正 | `main.py` | 使用 `TerminalService.get_stats()` DB 全局统计 |
+| 删除重复告警 | `main.py` | 移除 for 循环内 per-source 告警 |
+| 阈值守卫 | `event_emitter.py` | `rate >= threshold` 时静默，不发告警 |
+| 告警数据增强 | `event_emitter.py` | 新增 `total_checked`、`compliant_count`、`bypass_count` 字段 |
+| Shell 变量修复 | `manage.sh` | 4 处 `$2` → `${2:-}` |
+| 版本管理重写 | `manage.sh` | 仅同步必要文件（VERSION → package.json） |
+| API URL 动态化 | `manage.sh`、`.env.example` | `_API_BASE_URL` 改为函数，支持 `CLI_API_BASE_URL` 覆盖 |
+| 参数描述 i18n | `GeneralSettings.tsx` | `FIELD_DESC_I18N_KEYS` 映射表 |
+| Dockerfile 版本同步 | `Dockerfile` | 构建时 sed 从 VERSION 同步 package.json |
+
+#### 验证结果
+
+| 验证项 | 预期结果 | 实际结果 |
+|--------|---------|---------|
+| `./manage.sh user list` | 正常显示用户列表及锁定状态 | ✅ 5 个用户，锁定状态从 Redis 查询 |
+| `./manage.sh role list` | 正常显示角色列表 | ✅ 5 个角色，字段名正确 |
+| `./manage.sh scheduler trigger compliance_check` | 完整执行合规检查流程 | ✅ 显示 DB 全局统计 |
+| 合规率公式 | `(compliant+bypass)/total` | ✅ `(329+954)/1515 = 84.7%` |
+| 阈值守卫 | rate ≥ 80% 时静默 | ✅ 84.7% 时无告警 |
+| 告警数据增强 | 包含 total/compliant/bypass | ✅ 字段齐全 |
+
+#### 提交信息
+
+```
+fix: CLI tool errors and compliance alert formula (v3.10.1)
+
+- fix(cli.py): replace u.locked_until with Redis lock query in _list_users
+- fix(cli.py): use reset_login_attempts() instead of removing locked_until field
+- fix(cli.py): r.is_builtin -> r.is_default, r.display_name -> r.name in _list_roles
+- fix(cli.py): implement compliance_check trigger with proper entries parameter
+- fix(main.py): correct compliance rate formula - include bypass+unknown in denominator
+- fix(main.py): remove duplicate per-source alert, use global DB stats only
+- fix(event_emitter.py): add threshold guard, extended data fields
+- fix(manage.sh): ${2:-} for unbound variable errors in 4 functions
+- fix(manage.sh): rewrite version bump/check to sync only necessary files
+- fix(manage.sh): _API_BASE_URL as function, support CLI_API_BASE_URL override
+- fix(GeneralSettings.tsx): add FIELD_DESC_I18N_KEYS for compliance settings
+- fix(Dockerfile): add sed command to sync VERSION -> package.json
+```
+
+#### 变更统计
+
+- **修改文件**：10 个
+- **新增行**：+307
+- **删除行**：-98
+
+#### 风险评估
+
+| 风险项 | 等级 | 缓解措施 |
+|--------|------|----------|
+| 合规率告警逻辑变更 | 低 | 已验证公式正确性；阈值守卫确保合规率达标时不告警 |
+| CLI 工具行为变更 | 低 | 仅修复错误行为，不引入新功能；向后兼容 |
+| 版本同步流程 | 低 | Dockerfile 已配置自动同步；`manage.sh version bump` 手动同步 |
 
 ---
 

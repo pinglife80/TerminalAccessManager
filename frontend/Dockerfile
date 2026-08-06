@@ -10,6 +10,9 @@ COPY VERSION ./VERSION
 
 COPY frontend/package*.json ./
 
+# Sync version from VERSION file to package.json (ensures consistency)
+RUN sed -i "s/\"version\": \"[0-9]*\.[0-9]*\.[0-9]*\"/\"version\": \"$(cat VERSION | tr -d '[:space:]')\"/" package.json
+
 RUN npm ci --network-timeout=100000 || \
     npm install --network-timeout=100000 || \
     npm install --registry https://registry.npmmirror.com

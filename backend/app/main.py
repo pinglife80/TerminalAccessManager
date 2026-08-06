@@ -326,19 +326,6 @@ async def scheduled_compliance_check():
                                                 logger.info(f"Auto-blocked {block_result.blocked} non-compliant terminals from {source.tag} [source=scheduler]")
                                         except Exception as be:
                                             logger.error(f"Error auto-blocking for {source.tag}: {type(be).__name__}: {be} [source=scheduler]")
-
-                                        # Emit compliance rate alert when non-compliant terminals are found.
-                                        # fire-and-forget: emit_event logs errors internally and never raises.
-                                        from app.services.event_emitter import emit_compliance_alert
-                                        from app.services.config_service import get_config_value
-                                        total_checked = result.compliant + result.bypass + result.non_compliant
-                                        rate = (result.compliant / total_checked * 100) if total_checked > 0 else 100.0
-                                        alert_threshold = float(await get_config_value("alert_compliance_rate_threshold", 80))
-                                        await emit_compliance_alert(
-                                            compliance_rate=rate,
-                                            non_compliant_count=result.non_compliant,
-                                            threshold=alert_threshold,
-                                        )
                         except Exception as e:
                             logger.error(f"Error in compliance check for {source.tag}: {type(e).__name__}: {e} [source=scheduler]")
 
@@ -411,10 +398,43 @@ async def scheduled_compliance_check():
                                     logger.info(f"Retry-blocked {retry_blocked} non-compliant unblocked terminals from {source.tag} [source=scheduler]")
                         except Exception as re_err:
                             logger.error(f"Error in retry-block for {source.tag}: {type(re_err).__name__}: {re_err} [source=scheduler]")
+
+                    # ========== Global compliance alert (based on DB stats, not per-source unchecked) ==========
+                    try:
+                        from app.services.terminal_service import TerminalService
+                        t_service = TerminalService(db)
+                        stats = await t_service.get_stats()
+                        db_compliant = int(stats.get("compliant", 0))
+                        db_bypass = int(stats.get("bypass", 0))
+                        db_non_compliant = int(stats.get("non_compliant", 0))
+                        db_unknown = int(stats.get("unknown", 0))
+                        checked = db_compliant + db_bypass + db_non_compliant + db_unknown
+                        effective_compliant = db_compliant + db_bypass
+                        rate = (effective_compliant / checked * 100) if checked > 0 else 100.0
+                        alert_threshold = float(await get_config_value("alert_compliance_rate_threshold", 80))
+                        logger.info(
+                            f"Overall compliance stats: total_checked={checked}, compliant={db_compliant}, "
+                            f"bypass={db_bypass}, non_compliant={db_non_compliant}, unknown={db_unknown}, rate={rate:.1f}% "
+                            f"[source=scheduler]"
+                        )
+                        await emit_compliance_alert(
+                            compliance_rate=rate,
+                            non_compliant_count=db_non_compliant,
+                            threshold=alert_threshold,
+                            compliant_count=db_compliant,
+                            bypass_count=db_bypass,
+                            total_checked=checked,
+                        )
+                    except Exception as alert_err:
+                        logger.error(f"Error emitting overall compliance alert: {type(alert_err).__name__}: {alert_err} [source=scheduler]")
             finally:
                 await _release_task_lock("compliance_check")
         except Exception as e:
             logger.error(f"Error in scheduled compliance check task: {type(e).__name__}: {e} [source=scheduler]")
+            try:
+                await _release_task_lock("compliance_check")
+            except Exception:
+                pass
 
 
 async def scheduled_auto_unblock():

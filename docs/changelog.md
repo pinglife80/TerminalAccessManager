@@ -1,11 +1,66 @@
 # 更新日志
 
-> 文档版本：v3.10.0  更新日期：2026-08-06
+> 文档版本：v3.10.1  更新日期：2026-08-06
 
 本文件记录 TerminalAccessManager 的所有重要变更。
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
+
+***
+
+## [3.10.1] - 2026-08-06
+
+### 修复
+
+- **CLI 用户命令属性错误**：`user list`、`user unlock` 命令引用 User 模型不存在的 `locked_until`、`failed_login_attempts` 字段
+  - 修复方案：锁定状态改为从 Redis `login_lock:{username}` 查询 TTL；解锁使用 `reset_login_attempts()` 清除 Redis key
+  - 关联文件：`cli.py`
+
+- **CLI 角色命令属性错误**：`role list` 命令引用 Role 模型不存在的 `is_builtin`、`display_name` 字段
+  - 修复方案：改为 `is_default`、`name`
+  - 关联文件：`cli.py`
+
+- **scheduler trigger compliance_check 参数缺失**：`batch_check_compliance()` 调用未传入 `entries` 参数导致 `TypeError`
+  - 修复方案：完整实现 compliance_check 流程：查找 ARP 数据源→遍历 unchecked→批量 check→应用结果→auto-block→全局告警
+  - 关联文件：`cli.py`
+
+- **合规率计算公式错误**：原公式 `rate = compliant / (compliant + non_compliant)` 排除了 bypass（白名单旁路）和 unknown 终端，严重低估合规率
+  - 修复方案：`rate = (compliant + bypass) / (compliant + bypass + non_compliant + unknown)`
+  - 关联文件：`main.py`
+
+- **合规率告警数据源错误**：原告警基于 per-source 本次检查结果（仅含新检查的 unknown 终端），导致告警显示 `0.0%` 或 `nan`
+  - 修复方案：使用 `TerminalService.get_stats()` 读取 DB 全局统计；删除 for 循环内重复告警
+  - 关联文件：`main.py`
+
+- **合规率告警阈值守卫缺失**：合规率达标（≥ 80%）时仍触发 `alert.compliance_rate_low` 告警
+  - 修复方案：新增阈值守卫 `if compliance_rate >= threshold: return []`
+  - 关联文件：`event_emitter.py`
+
+- **Shell 脚本未绑定变量错误**：`manage.sh` 中 4 处 `$2` 在 `set -u` 模式下报 `unbound variable`
+  - 修复方案：改为 `${2:-}` 语法
+  - 关联文件：`manage.sh`
+
+- **manage.sh 版本管理不统一**：`version bump/check` 命令同步文件过多、逻辑冗余
+  - 修复方案：重写为仅同步必要文件（VERSION → package.json）
+  - 关联文件：`manage.sh`
+
+- **manage.sh API 地址硬编码**：`scheduler status` 硬编码 `https://localhost:8443`，不适配实际部署
+  - 修复方案：`_API_BASE_URL` 改为函数，默认 `http://localhost:8080/api/v1`，支持 `.env` 中 `CLI_API_BASE_URL` 覆盖
+  - 关联文件：`manage.sh`、`.env.example`
+
+- **合规设置参数描述未国际化**：GeneralSettings 页面 5 个配置项描述未使用 i18n 翻译
+  - 修复方案：新增 `FIELD_DESC_I18N_KEYS` 映射表，优先显示翻译文本
+  - 关联文件：`GeneralSettings.tsx`
+
+- **前端 package.json 版本不同步**：Docker 构建时 package.json 版本可能与 VERSION 文件不一致
+  - 修复方案：Dockerfile 在 `npm ci` 前用 sed 从 VERSION 读取并同步 package.json version
+  - 关联文件：`Dockerfile`
+
+### 新增
+
+- **合规率告警数据增强**：`emit_compliance_alert()` 事件数据新增 `total_checked`、`compliant_count`、`bypass_count` 字段，便于排障
+  - 关联文件：`event_emitter.py`
 
 ***
 
