@@ -136,6 +136,9 @@ class ConfigService:
         {"key": "scheduler_auto_unblock_interval", "value": "600", "category": "scheduler",
          "value_type": "int", "description": "Auto-unblock check interval in seconds (30-86400)",
          "is_readonly": False},
+        {"key": "scheduler_backup_interval", "value": "3600", "category": "scheduler",
+         "value_type": "int", "description": "Backup execution interval in seconds (30-86400)",
+         "is_readonly": False},
         # Compliance
         {"key": "compliance_confirm_threshold", "value": "2", "category": "compliance",
          "value_type": "int", "description": "Consecutive non-compliant detections before status flips (1-10)",
@@ -477,6 +480,7 @@ class ConfigService:
                 scheduler_firewall_query_interval=_val("scheduler_firewall_query_interval", 300),
                 scheduler_compliance_check_interval=_val("scheduler_compliance_check_interval", 300),
                 scheduler_auto_unblock_interval=_val("scheduler_auto_unblock_interval", 600),
+                scheduler_backup_interval=_val("scheduler_backup_interval", 3600),
             ),
             general=GeneralConfigResponse(
                 environment=_val("environment", "development"),

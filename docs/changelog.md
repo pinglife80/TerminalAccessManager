@@ -1,11 +1,71 @@
 # 更新日志
 
-> 文档版本：v3.8.0  更新日期：2026-08-05
+> 文档版本：v3.9.0  更新日期：2026-08-05
 
 本文件记录 TerminalAccessManager 的所有重要变更。
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
+
+***
+
+## [3.9.0] - 2026-08-05
+
+### 新增
+
+- **scheduler_backup_interval 配置项**：定时备份任务轮询间隔从硬编码改为系统配置项
+  - 新增配置项 `scheduler_backup_interval`（默认 3600s，范围 60-86400）
+  - 系统设置 General 页面「调度器配置」分组新增该项
+  - 关联文件：`system_config.py`、`config_service.py`、`useTerminalData.ts`、`GeneralSettings.tsx`
+
+- **通知系统架构优化**：
+  - 事件覆盖率监控：统计 API 新增 `event_coverage` 字段
+  - 终端离线检测：ARP 采集中检测离线终端并发射 `terminal.offline` 事件
+  - 实时事件类型集合：`REALTIME_EVENT_TYPES` 区分实时/聚合事件
+  - `alert.auto_block_triggered` 事件发射：合规自动封堵时触发通知
+
+- **定时备份 cron 调度**：定时备份按 `backup_config.schedule` 指定的 cron 表达式执行
+  - 重写 `scheduled_backup()` 函数，支持 cron 表达式解析
+  - 新增 `_should_run_backup_now()` 函数匹配 cron 表达式
+  - 使用 Redis 去重防止同一分钟内重复执行
+  - 定时备份结果写入 audit_logs 表
+
+### 修复
+
+- **通知管道黑洞**：`emit_event()` 移除聚合器优先路径，恢复 Worker 管道
+  - 根因：`emit_event()` 优先将事件投递到 `NotificationAggregator`，导致 Worker 管道被绕过，所有事件被吞噬
+  - 修复：直接调用 `NotificationService.emit()`，事件走 Redis Queue → Worker 管道
+  - 关联文件：`event_emitter.py`
+
+- **事件类型字符串不匹配**：修复 `system.error`、`system.warning`、`system.alert` 三个事件类型字符串
+  - 根因：`emit_system_error()` 等函数传入的事件类型字符串与 `EventType` 枚举值不一致
+  - 修复：修正事件类型字符串匹配枚举值
+  - 关联文件：`event_emitter.py`
+
+- **定时备份未执行**：`main.py` 中 `scheduled_backup` 任务未注册到调度器
+  - 根因：`lifespan()` 中未创建 `scheduled_backup` 任务
+  - 修复：在 `lifespan()` 中注册 `scheduled_backup` 任务
+  - 关联文件：`main.py`
+
+- **FTP 备份时间戳时区错误**：远端备份文件时间戳少 8 小时
+  - 根因：FTP MDTM 返回 UTC 时间，未转换为本地时区 (UTC+8)
+  - 修复：将 UTC 时间转换为本地时区
+  - 关联文件：`backup_service.py`
+
+- **FTP 备份路径双斜杠**：备份路径出现 `/TAM//backup_xxx.zip`
+  - 根因：`remote_path` 尾部有斜杠，拼接时产生双斜杠
+  - 修复：使用 `remote_path.rstrip('/')` 去除尾部斜杠
+  - 关联文件：`backup_service.py`
+
+- **备份列表排序 TypeError**：本地备份 `created_at` 无时区，远端备份 `created_at` 有时区，无法比较
+  - 修复：统一将 datetime 对象转换为无时区对象进行比较
+  - 关联文件：`backup.py`
+
+### 变更
+
+- `emit_event` 重构为直接发射链路：业务模块 → NotificationService.emit → Redis Queue → Worker
+- 通知服务改用模块级单例替代 ContextVar
+- 升级规则 break 逻辑修正
 
 ***
 

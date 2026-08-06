@@ -1,6 +1,6 @@
 # TerminalAccessManager - 部署与运维手册
 
-> 文档版本：v3.6.18  更新日期：2026-07-16
+> 文档版本：v3.9.0  更新日期：2026-08-05
 
 ## 目录
 
@@ -628,7 +628,7 @@ Deployment:
 ./manage.sh scheduler intervals
 ```
 
-可用任务名：`arp_collection`、`ipguard_sync`、`firewall_query`、`compliance_check`、`auto_unblock`。
+可用任务名：`arp_collection`、`ipguard_sync`、`firewall_query`、`compliance_check`、`auto_unblock`、`scheduled_backup`。
 
 #### `config [key] [value]`
 

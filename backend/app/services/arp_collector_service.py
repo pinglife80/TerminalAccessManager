@@ -276,6 +276,7 @@ class ArpCollectorService:
         added = 0
         updated = 0
         errors = []
+        seen_ips: set[str] = set()
 
         for entry in entries:
             ip_addr = entry.get("ip_address", "").strip()
@@ -283,6 +284,8 @@ class ArpCollectorService:
 
             if not ip_addr or not mac_addr:
                 continue
+
+            seen_ips.add(ip_addr)
 
             # Normalize MAC address
             mac_normalized = self._normalize_mac(mac_addr)
@@ -395,6 +398,48 @@ class ArpCollectorService:
         except Exception as e:
             logger.error(f"Compliance check failed for source '{source_tag}': {str(e)}")
             errors.append(f"Compliance check failed: {str(e)}")
+
+        # Terminal online/offline detection (based on last-seen timestamp)
+        try:
+            from app.core.timezone import now_utc
+            from app.services.event_emitter import emit_terminal_offline
+
+            all_stmt = select(Terminal).where(Terminal.source_tag == source_tag)
+            all_result = await self.db.execute(all_stmt)
+            all_terminals = all_result.scalars().all()
+
+            offline_threshold_seconds = 300
+            try:
+                from app.services.config_service import get_config_value
+                interval = await get_config_value("scheduler_arp_collection_interval", 300)
+                offline_threshold_seconds = interval * 3
+            except Exception:
+                pass
+
+            now_ts = now_utc().timestamp()
+            newly_offline = 0
+
+            for terminal in all_terminals:
+                if terminal.ip_address not in seen_ips and terminal.updated_at:
+                    last_seen = terminal.updated_at.timestamp() if terminal.updated_at.tzinfo else terminal.updated_at.replace(tzinfo=None).timestamp()
+                    if (now_ts - last_seen) > offline_threshold_seconds:
+                        newly_offline += 1
+                        try:
+                            await emit_terminal_offline(
+                                ip_address=terminal.ip_address,
+                                mac_address=terminal.mac_address or "",
+                            )
+                        except Exception:
+                            pass
+
+            if newly_offline > 0:
+                logger.info(
+                    f"Offline detection for '{source_tag}': "
+                    f"{newly_offline} terminals offline"
+                )
+
+        except Exception as e:
+            logger.error(f"Offline detection failed for '{source_tag}': {str(e)}")
 
         return SyncResult(
             success=True,

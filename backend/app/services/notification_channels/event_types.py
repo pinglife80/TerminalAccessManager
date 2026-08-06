@@ -307,3 +307,26 @@ CHANNEL_METADATA = {
         "config_fields": ["webhook_url"],
     },
 }
+
+# Events that must be delivered immediately (not subject to aggregation delay)
+REALTIME_EVENT_TYPES: set[str] = {
+    EventType.TERMINAL_BLOCKED,
+    EventType.TERMINAL_UNBLOCKED,
+    EventType.LOGIN_LOCKED,
+    EventType.DATASOURCE_SYNC_FAILED,
+    EventType.FIREWALL_CONNECTION_LOST,
+    EventType.FIREWALL_CONNECTION_RESTORED,
+    EventType.BACKUP_FAILED,
+    EventType.SYSTEM_ERROR,
+    EventType.SYSTEM_ALERT,
+    EventType.COMPLIANCE_RATE_CRITICAL,
+    EventType.AUTO_BLOCK_TRIGGERED,
+    EventType.AUTO_UNBLOCK_TRIGGERED,
+    EventType.BLOCK_THRESHOLD_EXCEEDED,
+    EventType.POLICY_VIOLATION,
+}
+
+
+def is_realtime_event(event_type: str) -> bool:
+    """Check if an event type requires immediate delivery (no aggregation)."""
+    return event_type in REALTIME_EVENT_TYPES
