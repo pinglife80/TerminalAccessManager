@@ -275,7 +275,6 @@ class NotificationWorkers:
                         f"(threshold {rule.escalate_threshold} reached)"
                     )
                 break
-
         notification_logger = self._get_logger()
 
         for channel_name in subscribed_channels:

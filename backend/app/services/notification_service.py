@@ -555,6 +555,7 @@ class NotificationService:
             },
             "by_channel": by_channel,
             "by_event": by_event,
+            "event_coverage": await self._get_event_coverage(by_event),
         }
 
     async def retry_failed_notification(self, log_id: int) -> bool:
@@ -592,6 +593,31 @@ class NotificationService:
             except Exception as e:
                 logger.error(f"Failed to queue manual retry for log {log_id}: {e}")
                 return False
+
+    async def _get_event_coverage(self, by_event: list[dict]) -> dict:
+        """Compare defined event types vs actually emitted event types."""
+        from app.services.notification_channels.event_types import EVENT_METADATA
+
+        emitted_types = {item["event_type"] for item in by_event}
+        defined_types = set(EVENT_METADATA.keys())
+
+        never_emitted = []
+        for et in sorted(defined_types):
+            if et not in emitted_types:
+                meta = EVENT_METADATA.get(et, {})
+                never_emitted.append({
+                    "event_type": et,
+                    "name": meta.get("name", et),
+                    "category": meta.get("category", "unknown"),
+                    "severity": meta.get("severity", "info"),
+                })
+
+        return {
+            "total_defined": len(defined_types),
+            "total_emitted": len(emitted_types & defined_types),
+            "coverage_rate": round(len(emitted_types & defined_types) / len(defined_types) * 100, 1) if defined_types else 0.0,
+            "never_emitted": never_emitted,
+        }
 
     async def retry_all_failed(self) -> int:
         """Retry all currently failed notifications. Returns count retried."""

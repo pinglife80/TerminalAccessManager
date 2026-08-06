@@ -563,12 +563,17 @@ class ComplianceService:
                 # Emit terminal.blocked event for notification dispatch.
                 # emit_event is fire-and-forget (errors are logged, not raised),
                 # so this cannot break the auto-block flow.
-                from app.services.event_emitter import emit_terminal_blocked
+                from app.services.event_emitter import emit_terminal_blocked, emit_auto_block_triggered
                 await emit_terminal_blocked(
                     ip_address=entry.ip_address,
                     mac_address=entry.mac_address or "",
                     reason=f"Auto-blocked: non-compliant (source={arp_source_tag})",
                     blocked_by="system",
+                )
+                await emit_auto_block_triggered(
+                    ip_address=entry.ip_address,
+                    mac_address=entry.mac_address or "",
+                    reason=f"Non-compliant (source={arp_source_tag})",
                 )
             else:
                 skipped += 1
