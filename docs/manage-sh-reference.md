@@ -407,7 +407,7 @@ cp .env .env.backup             # 备份配置文件
 
 #### 备份位置对比
 
-| 维度 | `tam-uploads` Docker Volume | 项目根目录 `backups/` |
+| 维度 | `backend-data` Docker Volume | 项目根目录 `backups/` |
 |------|-----------------------------|----------------------|
 | **存储位置** | Docker named volume（容器内部） | 宿主机文件系统 |
 | **挂载路径** | `/app/uploads/backups/` | `<项目根>/backups/` |
@@ -417,7 +417,7 @@ cp .env .env.backup             # 备份配置文件
 
 #### 备份内容对比
 
-**`tam-uploads` Volume 备份（后端服务）**
+**`backend-data` Volume 备份（后端服务）**
 
 - ✅ 数据库备份（`pg_dump` 自定义格式）
 - ✅ 配置文件备份（`docker-compose.yml`, `manage.sh`）
@@ -481,7 +481,7 @@ cp .env .env.backup             # 备份配置文件
 │   │  • 包含数据库+配置+日志                              │          │
 │   │  • 支持加密/远程存储                                 │          │
 │   │  • → 输出到 /app/uploads/backups/                   │          │
-│   │      (即 tam-uploads volume)                        │          │
+│   │      (即 backend-data volume)                      │          │
 │   └─────────────────────────────────────────────────────┘          │
 │                                                                     │
 │   ├── CLI 命令 ──────────────────────────┐                         │
@@ -1106,8 +1106,7 @@ dc [docker_compose_args]
 
 | `ENVIRONMENT` 值 | 自动加载的 Compose 文件 |
 |-------------------|------------------------|
-| `development` | `docker-compose.dev.yml` |
-| `production` | `docker-compose.prod.yml` |
+| 所有模式 | `docker-compose.yml` |
 | 未设置 / 其他 | `docker-compose.yml`（默认） |
 
 > **说明：** `dc()` 函数读取 `.env` 文件中的 `ENVIRONMENT` 变量，自动选择对应的 compose 文件。用户无需手动通过 `-f` 参数指定 compose 文件，直接使用 `dc up -d`、`dc ps` 等命令即可。

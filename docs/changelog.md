@@ -1,11 +1,71 @@
 # 更新日志
 
-> 文档版本：v3.10.1  更新日期：2026-08-06
+> 文档版本：v3.10.2  更新日期：2026-08-07
 
 本文件记录 TerminalAccessManager 的所有重要变更。
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
+
+***
+
+## [3.10.2] - 2026-08-06
+
+### 修复
+
+- **CRITICAL — admin 密码硬编码为 Admin123**：生产模式向导收集的 `ADMIN_PASSWORD` 只写入 `.env`，从未注入 backend 容器也从未被 `cli.py setup` 读取，导致部署后管理员密码永远是公开已知的 `Admin123`
+  - 修复方案：
+    1. `docker-compose.yml` backend environment 中新增 `ADMIN_PASSWORD` 和 `ENVIRONMENT` 注入
+    2. `cli.py` `_create_admin_user()` 优先从 `ADMIN_PASSWORD` env var 取密码；生产模式无强密码时明确告警；创建成功的密码输出按生产模式脱敏
+  - 关联文件：[docker-compose.yml](file:///home/dada/Codespace/TraeCN/TerminalAccessManager/docker-compose.yml#L103-L106)、[cli.py](file:///home/dada/Codespace/TraeCN/TerminalAccessManager/backend/cli.py#L49-L106)
+
+- **HIGH — backend 加固冲突**：`docker-compose.prod.yml` 为 backend 同时声明 `tmpfs: /app/uploads` 和基础 compose 的 `volume: tam-uploads:/app/uploads`，目标路径重叠属于 Docker Compose 未定义行为（要么丢持久化，要么加固失效）
+  - 修复方案：移除生产加固 `tmpfs` 中 `/app/uploads`，仅保留 `tmpfs: [/tmp]`；上传目录由命名卷正确持久化
+  - 关联文件：[docker-compose.prod.yml](file:///home/dada/Codespace/TraeCN/TerminalAccessManager/docker-compose.prod.yml#L22-L25)
+
+### 改进
+
+- **上传目录绝对路径统一**：`config.py` `UPLOAD_DIR` 从相对路径 `./uploads` 改为绝对路径 `/app/uploads`；`backup_service.py` 移除 `getattr(settings, 'UPLOAD_DIR', '/app/uploads')` 的不一致兜底，直接读取 `settings.UPLOAD_DIR`
+  - 关联文件：[config.py](file:///home/dada/Codespace/TraeCN/TerminalAccessManager/backend/app/core/config.py#L87)、[backup_service.py](file:///home/dada/Codespace/TraeCN/TerminalAccessManager/backend/app/services/backup_service.py#L547-L548)、[backup_service.py](file:///home/dada/Codespace/TraeCN/TerminalAccessManager/backend/app/services/backup_service.py#L575-L576)
+
+- **setup 提示上下文感知**：`cli.py setup` 完成后按 `ENVIRONMENT` / 容器检测动态打印 Next steps（容器内：提示 Nginx 入口；外部裸机：保留原提示）
+  - 关联文件：[cli.py](file:///home/dada/Codespace/TraeCN/TerminalAccessManager/backend/cli.py#L135-L157)
+
+- **deploy setup DB 权威探测**：manage.sh deploy 第 6/6 步不再只看本地 state 文件来判断是否跳过 setup；新增 DB 侧 `users:admin` 真实存在性探测，避免 `postgres_data` 被清空后 state 残留导致永远跳过初始化、无法登录
+  - 关联文件：[manage.sh](file:///home/dada/Codespace/TraeCN/TerminalAccessManager/manage.sh#L925-L974)
+
+- **部署验证按模式选择顺序**：dev 模式先验证 HTTP 8080（tam.dev.conf 无 SSL）；prod 模式先验证 HTTPS 8443 → fallback HTTP 8080 301 redirect，消除不必要的 curl 失败/等待
+  - 关联文件：[manage.sh](file:///home/dada/Codespace/TraeCN/TerminalAccessManager/manage.sh#L991-L1023)
+
+- **端口全面变量化**：新增 `TAM_NGINX_PORT`、`TAM_NGINX_SSL_PORT`、`TAM_BACKEND_PORT` 环境变量，`.env` 一处配置全链路生效（Nginx listen、upstream backend_api、backend uvicorn --port、healthcheck、manage.sh curl 检测）
+  - 关联文件：docker-compose.yml、nginx/etc/conf.d/tam.conf.template、nginx/docker-entrypoint.sh、backend/Dockerfile、manage.sh、.env.example
+
+- **Nginx 配置架构重构**：删除静态 `tam.conf` / `tam.dev.conf`，统一为 `tam.conf.template` + `envsubst` 动态生成；消除 dev/prod 双配置文件的维护负担
+  - 关联文件：nginx/etc/conf.d/tam.conf.template、nginx/docker-entrypoint.sh
+
+- **容器安全加固移除**：内网部署环境下 `cap_drop:ALL`、`read_only:true`、`no-new-privileges` 等加固措施导致权限冲突（nginx bind 80 失败、backend 卷写入失败），全面移除；删除 `docker-compose.dev.yml` 和 `docker-compose.prod.yml` 覆盖文件，dev/prod 差异仅由 `.env` 中 `ENVIRONMENT` 变量控制
+  - 关联文件：docker-compose.yml、docker-compose.dev.yml(删除)、docker-compose.prod.yml(删除)
+
+- **COMPOSE_PROJECT_NAME 统一**：`.env` 中新增 `COMPOSE_PROJECT_NAME=tam`，消除 `terminalaccessmanager-*` 冗余前缀资源
+  - 关联文件：.env.example、manage.sh
+
+- **Docker 卷重命名**：`tam-uploads`→`backend-data`、`tam-logs`→`backend-logs`，消除 `tam_tam-*` 冗余前缀，名称准确反映业务语义
+  - 关联文件：docker-compose.yml
+
+- **env 全量传递**：docker-compose.yml backend.environment 从 16 项扩充为 43 项，覆盖 Settings 类全部可配置字段；healthcheck 从硬编码 `localhost:8000` 改为容器内 `os.environ.get('BACKEND_PORT')` 动态读取
+  - 关联文件：docker-compose.yml
+
+- **备份服务连接修复**：backup_service.py 优先从 `DATABASE_URL` 正则解析连接参数，fallback 到 `DB_*` 字段；backend Dockerfile 新增 `postgresql-client` 提供 `pg_dump`；备份清理逻辑新增零字节文件删除
+  - 关联文件：backend/app/services/backup_service.py、backend/Dockerfile
+
+- **日志格式修复**：loguru JSON 格式化模板中 `{}` 未转义导致 `KeyError: '"timestamp"'`，改为 `{{}}` 转义
+  - 关联文件：backend/app/core/logging_config.py
+
+- **缺失导入修复**：main.py 新增 `get_config_value` 和 `emit_compliance_alert` 导入，修复 v3.10.1 引入的 NameError
+  - 关联文件：backend/app/main.py
+
+- **构建产物清理**：backend/.dockerignore 和 backend/.gitignore 新增，排除 `uploads/backups/`、`backups/`、`*.zip`、`uploads/`，防止运行时文件打包进镜像
+  - 关联文件：backend/.dockerignore、backend/.gitignore
 
 ***
 

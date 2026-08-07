@@ -89,7 +89,10 @@ def _json_format(record) -> str:
         if key != "request_id":
             log_data[key] = value
 
-    return json.dumps(log_data) + "\n"
+    result = json.dumps(log_data) + "\n"
+    # Escape braces: loguru's format_map interprets { } as placeholders.
+    # Doubling them ({{ }}) makes format_map output literal { }.
+    return result.replace("{", "{{").replace("}", "}}")
 
 
 def setup_logging() -> None:

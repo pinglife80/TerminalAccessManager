@@ -218,10 +218,10 @@ TAM 系统采用多层日志架构，覆盖从基础设施到业务逻辑的完�
 ```yaml
 backend:
   volumes:
-    - tam-logs:/var/log/tam
+    - backend-logs:/var/log/tam
 
 volumes:
-  tam-logs:
+  backend-logs:
 ```
 
 ### 2.5 日志轮转与保留

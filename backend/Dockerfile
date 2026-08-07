@@ -18,7 +18,7 @@ FROM python:3.11-alpine
 WORKDIR /app
 
 # Install only runtime dependencies
-RUN apk add --no-cache libpq curl freetds unixodbc libstdc++ libffi openssl
+RUN apk add --no-cache libpq curl freetds unixodbc libstdc++ libffi openssl postgresql-client
 
 # Configure FreeTDS ODBC driver
 RUN echo "[FreeTDS]" >> /etc/odbcinst.ini && \
@@ -41,12 +41,14 @@ COPY . .
 RUN chown -R app:app /app
 USER app
 
-# Expose port
+# Use ENV for configurable port (default: 8000)
+ENV BACKEND_PORT=8000
+
 EXPOSE 8000
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
+    CMD curl -f http://localhost:${BACKEND_PORT}/health || exit 1
 
-# Run application
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Run application (shell form to allow variable expansion)
+CMD exec uvicorn app.main:app --host 0.0.0.0 --port ${BACKEND_PORT}

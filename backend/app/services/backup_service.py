@@ -257,23 +257,79 @@ class BackupService:
         """Backup PostgreSQL database using pg_dump"""
         backup_path = os.path.join(temp_dir, "database.sql")
 
-        if not hasattr(settings, 'POSTGRES_SERVER') or not settings.POSTGRES_SERVER:
-            raise Exception("PostgreSQL not configured, cannot backup database")
+        # Resolve DB connection params for pg_dump.
+        # Priority (highest → lowest):
+        #   1. DATABASE_URL — the canonical way docker-compose / production injects it
+        #      (postgresql+asyncpg://user:pass@host:port/dbname)
+        #   2. POSTGRES_* explicit settings (legacy overrides)
+        #   3. DB_HOST / DB_PORT / DB_USER / DB_NAME / DB_PASSWORD (local-dev defaults,
+        #      but DB_HOST has a default 'localhost' in config.py, so only used when
+        #      neither DATABASE_URL nor POSTGRES_* yields a usable host)
+        import re
+        import urllib.parse
+
+        db_host = ""
+        db_port = 5432
+        db_user = ""
+        db_name = ""
+        db_password = ""
+
+        # --- Attempt 1: parse DATABASE_URL ---
+        url = getattr(settings, 'DATABASE_URL', '') or ''
+        if url:
+            # Handle both standard and async dialects: postgresql:// and postgresql+asyncpg://
+            parsed = re.match(
+                r'postgresql(?:\+\w+)?://([^:]+):(.+?)@([^:/]+)(?::(\d+))?/([^?]+)',
+                url
+            )
+            if parsed:
+                db_user = urllib.parse.unquote(parsed.group(1))
+                db_password = urllib.parse.unquote(parsed.group(2))
+                db_host = parsed.group(3)
+                db_port = int(parsed.group(4) or '5432')
+                db_name = parsed.group(5)
+
+        # --- Attempt 2/3: explicit POSTGRES_* or DB_* fields as fallback ---
+        if not db_host:
+            pg_server = getattr(settings, 'POSTGRES_SERVER', '') or ''
+            db_host = pg_server or (getattr(settings, 'DB_HOST', '') or '')
+
+            # Only use fallback values when DATABASE_URL was not parsed
+            if not db_user:
+                db_user = (getattr(settings, 'POSTGRES_USER', '')
+                           or getattr(settings, 'DB_USER', '') or '')
+            if not db_name:
+                db_name = (getattr(settings, 'POSTGRES_DB', '')
+                           or getattr(settings, 'DB_NAME', '') or '')
+            if not db_password:
+                db_password = (getattr(settings, 'POSTGRES_PASSWORD', '')
+                               or getattr(settings, 'DB_PASSWORD', '') or '')
+            # For port, fall back to POSTGRES_PORT > DB_PORT > 5432
+            if getattr(settings, 'POSTGRES_PORT', 0):
+                db_port = int(settings.POSTGRES_PORT)
+            elif getattr(settings, 'DB_PORT', 0):
+                db_port = int(settings.DB_PORT)
+
+        if not db_host:
+            raise Exception(
+                "PostgreSQL not configured, cannot backup database "
+                "(no usable DATABASE_URL, POSTGRES_*, or DB_* settings)"
+            )
 
         # Build pg_dump command
         cmd = [
             "pg_dump",
-            "-h", settings.POSTGRES_SERVER,
-            "-p", str(settings.POSTGRES_PORT),
-            "-U", settings.POSTGRES_USER,
-            "-d", settings.POSTGRES_DB,
+            "-h", db_host,
+            "-p", str(db_port),
+            "-U", db_user,
+            "-d", db_name,
             "-f", backup_path,
             "-F", "c",  # Custom format
         ]
 
         # Set PGPASSWORD environment variable
         env = os.environ.copy()
-        env["PGPASSWORD"] = settings.POSTGRES_PASSWORD
+        env["PGPASSWORD"] = db_password
 
         # Execute pg_dump
         process = await asyncio.create_subprocess_exec(
@@ -544,7 +600,7 @@ class BackupService:
         branding_path = os.path.join(temp_dir, "branding")
         os.makedirs(branding_path, exist_ok=True)
 
-        upload_dir = getattr(settings, 'UPLOAD_DIR', '/app/uploads')
+        upload_dir = settings.UPLOAD_DIR
         branding_dir = os.path.join(upload_dir, "branding")
 
         if os.path.isdir(branding_dir):
@@ -572,7 +628,7 @@ class BackupService:
             logger.warning("branding.zip not found in backup, skipping")
             return False
 
-        upload_dir = getattr(settings, 'UPLOAD_DIR', '/app/uploads')
+        upload_dir = settings.UPLOAD_DIR
         branding_dir = os.path.join(upload_dir, "branding")
         os.makedirs(branding_dir, exist_ok=True)
 
@@ -892,8 +948,13 @@ class BackupService:
             for filename in os.listdir(self.backup_dir):
                 file_path = os.path.join(self.backup_dir, filename)
                 if os.path.isfile(file_path):
+                    file_size = os.path.getsize(file_path)
                     file_age = now - os.path.getmtime(file_path)
-                    if file_age > retention_seconds:
+                    # Remove zero-byte or invalid backups regardless of age
+                    if file_size == 0:
+                        os.remove(file_path)
+                        logger.info(f"Removed empty backup file: {filename}")
+                    elif file_age > retention_seconds:
                         os.remove(file_path)
                         logger.info(f"Removed old local backup: {filename}")
 

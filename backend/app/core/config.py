@@ -84,7 +84,7 @@ class Settings(BaseSettings):
     PROMETHEUS_ENABLED: bool = False
 
     # Upload
-    UPLOAD_DIR: str = "./uploads"
+    UPLOAD_DIR: str = "/app/uploads"
 
     # Email Configuration
     EMAIL_HOST: str | None = None

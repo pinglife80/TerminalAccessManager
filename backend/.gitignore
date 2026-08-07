@@ -1,0 +1,21 @@
+# Runtime generated files
+uploads/backups/
+backups/
+*.zip
+# Upload directory - runtime data only
+uploads/
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+# Environment
+.env
+.env.*
+# IDE
+.vscode/
+.idea/
+# OS
+.DS_Store
+Thumbs.db
