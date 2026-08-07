@@ -48,11 +48,27 @@ def _blue(msg):
 # ---------------------------------------------------------------------------
 async def _create_admin_user():
     """Create initial admin user."""
+    import os
     from sqlalchemy import select
     from app.core.database import async_session_maker
     from app.core.security import hash_password
     from app.models.user import User
     from app.models.role import Role, UserRole
+
+    # Resolve password from environment (manage.sh production wizard writes ADMIN_PASSWORD)
+    environment = os.environ.get("ENVIRONMENT", "development").lower()
+    env_pw = os.environ.get("ADMIN_PASSWORD", "") or os.environ.get("INITIAL_ADMIN_PASSWORD", "")
+    is_production = environment in ("production", "prod")
+
+    if env_pw and env_pw.strip():
+        password = env_pw.strip()
+        password_label = "ADMIN_PASSWORD"
+    else:
+        if is_production:
+            print(_yellow("⚠  WARNING: ADMIN_PASSWORD not set in production environment!"))
+            print(_yellow("   Falling back to 'Admin123'. CHANGE THIS PASSWORD IMMEDIATELY after login."))
+        password = "Admin123"
+        password_label = "default"
 
     async with async_session_maker() as db:
         result = await db.execute(select(User).where(User.username == "admin"))
@@ -62,7 +78,7 @@ async def _create_admin_user():
             admin = User(
                 username="admin",
                 email="admin@example.com",
-                hashed_password=hash_password("Admin123"),
+                hashed_password=hash_password(password),
                 is_active=True,
                 is_superuser=True,
             )
@@ -78,9 +94,16 @@ async def _create_admin_user():
             await db.commit()
             print(_green("✓ Admin user created successfully!"))
             print("  Username: admin")
-            print("  Password: Admin123 (CHANGE THIS IMMEDIATELY!)")
+            if not is_production:
+                print(f"  Password: {password}{' (CHANGE THIS IMMEDIATELY!)' if password_label == 'default' else ''}")
+            else:
+                # In production, mask the actual password if it came from env
+                if password_label == "default":
+                    print("  Password: Admin123 (CHANGE THIS IMMEDIATELY — using insecure default!)")
+                else:
+                    print("  Password: [as set in ADMIN_PASSWORD env var] — CHANGE AFTER FIRST LOGIN")
         else:
-            print("ℹ Admin user already exists")
+            print(_blue("ℹ Admin user already exists"))
 
 
 async def _run_setup():
@@ -113,9 +136,23 @@ async def _run_setup():
     print("Setup complete!")
     print("=" * 60)
     print()
+
+    import os as _os
+    _environment = _os.environ.get("ENVIRONMENT", "development").lower()
+    _in_container = _os.path.exists("/.dockerenv") or _os.environ.get("CONTAINER", "")
+    _is_docker = _in_container or _environment in ("production", "prod")
+
     print("Next steps:")
-    print("1. Start the application: docker-compose up -d")
-    print("2. Access the API docs: http://localhost:8000/api/v1/docs")
+    if _is_docker:
+        print("1. Containers are already running — no need to start again")
+        print("2. Access Web UI via Nginx:")
+        if _environment in ("production", "prod"):
+            print("     HTTPS: https://<server-ip>:8443  (HTTP :8080 redirects to HTTPS)")
+        else:
+            print("     HTTP : http://<server-ip>:8080")
+    else:
+        print("1. Start the application: docker-compose up -d")
+        print("2. Access the API docs: http://localhost:8000/api/v1/docs")
     print("3. Login with admin credentials and change the password")
     print()
 

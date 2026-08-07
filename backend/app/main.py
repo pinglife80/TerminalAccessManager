@@ -14,6 +14,8 @@ from app.core.config import settings
 from app.core.database import async_session_factory, init_db
 from app.core.logging_config import setup_logging
 from app.core.security import close_redis_client
+from app.services.config_service import get_config_value
+from app.services.event_emitter import emit_compliance_alert
 from app.middleware.error_handler import (
     http_exception_handler,
     unhandled_exception_handler,

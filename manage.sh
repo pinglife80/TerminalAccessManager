@@ -79,7 +79,7 @@ else
     exit 1
 fi
 
-# Docker Compose project name (derived from directory name)
+# Docker Compose project name (also set in .env as COMPOSE_PROJECT_NAME)
 readonly COMPOSE_PROJECT_NAME="tam"
 
 # Colors
@@ -270,17 +270,7 @@ release_lock() {
 
 # Run docker compose with .env loaded and VERSION injected from VERSION file
 dc() {
-    local compose_files="-f ${SCRIPT_DIR}/docker-compose.yml"
-    if [ "${ENVIRONMENT}" = "production" ] || [ "${ENVIRONMENT}" = "prod" ]; then
-        if [ -f "${SCRIPT_DIR}/docker-compose.prod.yml" ]; then
-            compose_files="${compose_files} -f ${SCRIPT_DIR}/docker-compose.prod.yml"
-        fi
-    elif [ "${ENVIRONMENT}" = "development" ] || [ "${ENVIRONMENT}" = "dev" ]; then
-        if [ -f "${SCRIPT_DIR}/docker-compose.dev.yml" ]; then
-            compose_files="${compose_files} -f ${SCRIPT_DIR}/docker-compose.dev.yml"
-        fi
-    fi
-    (export VERSION="${VERSION}" && docker compose -p "${COMPOSE_PROJECT_NAME}" --env-file "${ENV_FILE}" ${compose_files} "$@")
+    (export VERSION="${VERSION}" && docker compose -p "${COMPOSE_PROJECT_NAME}" --env-file "${ENV_FILE}" -f ${SCRIPT_DIR}/docker-compose.yml "$@")
 }
 
 # Ensure .env file exists and load environment variables (idempotent — never overwrites existing)
@@ -475,6 +465,19 @@ check_db_connection() {
 get_env() {
     local key="$1"
     grep "^${key}=" "${ENV_FILE}" 2>/dev/null | cut -d'=' -f2- || echo ""
+}
+
+# Get configured ports from .env (with defaults)
+_get_nginx_port() {
+    get_env "TAM_NGINX_PORT" || echo "8080"
+}
+
+_get_nginx_ssl_port() {
+    get_env "TAM_NGINX_SSL_PORT" || echo "8443"
+}
+
+_get_backend_port() {
+    get_env "TAM_BACKEND_PORT" || echo "8000"
 }
 
 # Set an env variable in .env
@@ -925,8 +928,44 @@ cmd_deploy() {
     # ─── Step 7: Initialize Database ─────────────────────────────────────
     log_step "Step 6/6: Initializing Database"
 
-    if is_initialized; then
-        log_info "Database already initialized (skipping)"
+    # DB-side admin check (authoritative) — avoids false skips when state file
+    # exists but postgres_data volume was wiped (ISSUE-5)
+    local db_has_admin=false
+    if dc exec -T backend python -c "
+import asyncio, sys
+from sqlalchemy import text
+from app.core.database import async_session_maker
+async def _chk():
+    try:
+        async with async_session_maker() as db:
+            r = await db.execute(text(\"SELECT 1 FROM users WHERE username='admin' LIMIT 1\"))
+            return r.scalar_one_or_none() is not None
+    except Exception:
+        return False
+    finally:
+        try:
+            from app.core.database import engine
+            await engine.dispose()
+        except Exception:
+            pass
+found = asyncio.run(_chk())
+sys.exit(0 if found else 1)
+" 2>/dev/null; then
+        db_has_admin=true
+    fi
+
+    if ${db_has_admin}; then
+        log_info "Database already contains admin user (skipping setup, verified in DB)"
+        save_state 'db_initialized' 'true'
+    elif is_initialized && ! ${db_has_admin}; then
+        log_warn "State file says initialized but DB has no admin — forcing setup"
+        if dc exec -T backend python cli.py setup 2>&1; then
+            save_state 'db_initialized' 'true'
+            log_success "Database initialized (forced)"
+        else
+            log_warn "Database init had warnings (may already be initialized)"
+            save_state 'db_initialized' 'true'
+        fi
     else
         if dc exec -T backend python cli.py setup 2>&1; then
             save_state 'db_initialized' 'true'
@@ -958,12 +997,32 @@ cmd_deploy() {
     echo ""
 
     local http_ok=false
-    if curl -sk -o /dev/null -w "%{http_code}" https://localhost:8443/ 2>/dev/null | grep -q "200"; then
-        log_success "HTTPS: https://localhost:8443 (200 OK)"
-        http_ok=true
-    elif curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/ 2>/dev/null | grep -q "200\|301"; then
-        log_success "HTTP:  http://localhost:8080 (200 OK)"
-        http_ok=true
+    local deploy_mode
+    deploy_mode="$(get_state 'deploy_mode' || echo "$mode")"
+
+    if [ "$deploy_mode" = "dev" ]; then
+        # Dev mode: nginx listens HTTP only (no SSL) — check HTTP first
+        local nginx_http_port
+        nginx_http_port=$(_get_nginx_port)
+        if curl --connect-timeout 3 --max-time 5 -s -o /dev/null -w "%{http_code}" "http://localhost:${nginx_http_port}/" 2>/dev/null | grep -q "200"; then
+            log_success "HTTP:  http://localhost:${nginx_http_port} (200 OK)"
+            http_ok=true
+        elif curl --connect-timeout 3 --max-time 5 -sk -o /dev/null -w "%{http_code}" "https://localhost:${nginx_http_port}/" 2>/dev/null | grep -q "200"; then
+            log_success "HTTPS: https://localhost:${nginx_http_port} (200 OK)"
+            http_ok=true
+        fi
+    else
+        # Prod mode: nginx HTTP redirects to HTTPS — prefer HTTPS check
+        local nginx_http_port nginx_https_port
+        nginx_http_port=$(_get_nginx_port)
+        nginx_https_port=$(_get_nginx_ssl_port)
+        if curl --connect-timeout 3 --max-time 5 -sk -o /dev/null -w "%{http_code}" "https://localhost:${nginx_https_port}/" 2>/dev/null | grep -q "200"; then
+            log_success "HTTPS: https://localhost:${nginx_https_port} (200 OK)"
+            http_ok=true
+        elif curl --connect-timeout 3 --max-time 5 -s -o /dev/null -w "%{http_code}" "http://localhost:${nginx_http_port}/" 2>/dev/null | grep -q "200\|301"; then
+            log_success "HTTP:  http://localhost:${nginx_http_port} (200/301 OK)"
+            http_ok=true
+        fi
     fi
 
     if [ "$http_ok" = false ]; then
@@ -977,8 +1036,8 @@ cmd_deploy() {
     echo -e "${GREEN}${BOLD}║            Deployment Complete!                        ║${NC}"
     echo -e "${GREEN}${BOLD}╚═══════════════════════════════════════════════════════╝${NC}"
     echo ""
-    echo -e "  ${CYAN}HTTPS:${NC}  https://localhost:8443"
-    echo -e "  ${CYAN}HTTP:${NC}   http://localhost:8080 (redirects to HTTPS)"
+    echo -e "  ${CYAN}HTTPS:${NC}  https://localhost:$(_get_nginx_ssl_port)"
+    echo -e "  ${CYAN}HTTP:${NC}   http://localhost:$(_get_nginx_port) (redirects to HTTPS)"
     echo ""
 
     if [ "$mode" = "dev" ]; then
@@ -1343,10 +1402,13 @@ cmd_status() {
     # Web access
     echo ""
     echo -e "${BOLD}Web Access:${NC}"
-    if curl -sk -o /dev/null -w "%{http_code}" https://localhost:8443/ 2>/dev/null | grep -q "200"; then
-        echo -e "  ${GREEN}●${NC} https://localhost:8443 (200 OK)"
-    elif curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/ 2>/dev/null | grep -q "200"; then
-        echo -e "  ${GREEN}●${NC} http://localhost:8080 (200 OK)"
+    local nginx_http_port nginx_https_port
+    nginx_http_port=$(_get_nginx_port)
+    nginx_https_port=$(_get_nginx_ssl_port)
+    if curl --connect-timeout 3 --max-time 5 -sk -o /dev/null -w "%{http_code}" "https://localhost:${nginx_https_port}/" 2>/dev/null | grep -q "200"; then
+        echo -e "  ${GREEN}●${NC} https://localhost:${nginx_https_port} (200 OK)"
+    elif curl --connect-timeout 3 --max-time 5 -s -o /dev/null -w "%{http_code}" "http://localhost:${nginx_http_port}/" 2>/dev/null | grep -q "200"; then
+        echo -e "  ${GREEN}●${NC} http://localhost:${nginx_http_port} (200 OK)"
     else
         echo -e "  ${YELLOW}●${NC} Web UI not accessible"
     fi
@@ -1460,14 +1522,16 @@ cmd_health() {
     # 6. Web UI
     echo ""
     echo -e "${BOLD}6. Web UI${NC}"
-    local http_code
-    http_code=$(curl -sk -o /dev/null -w "%{http_code}" https://localhost:8443/ 2>/dev/null || echo "000")
+    local http_code nginx_http_port nginx_https_port
+    nginx_http_port=$(_get_nginx_port)
+    nginx_https_port=$(_get_nginx_ssl_port)
+    http_code=$(curl --connect-timeout 3 --max-time 5 -sk -o /dev/null -w "%{http_code}" "https://localhost:${nginx_https_port}/" 2>/dev/null || echo "000")
     if [ "$http_code" = "200" ]; then
         log_success "HTTPS accessible (200 OK)"
-    elif curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/ 2>/dev/null | grep -q "200"; then
-        log_success "HTTP accessible (http://localhost:8080, 200 OK)"
+    elif curl --connect-timeout 3 --max-time 5 -s -o /dev/null -w "%{http_code}" "http://localhost:${nginx_http_port}/" 2>/dev/null | grep -q "200"; then
+        log_success "HTTP accessible (http://localhost:${nginx_http_port}, 200 OK)"
     else
-        log_error "Web UI not reachable (tried HTTPS:8443 and HTTP:8080)"
+        log_error "Web UI not reachable (tried HTTPS:${nginx_https_port} and HTTP:${nginx_http_port})"
         issues=$((issues + 1))
     fi
 
@@ -2080,9 +2144,12 @@ cmd_upgrade() {
 
     if services_running; then
         local http_ok=false
-        if curl -sk -o /dev/null -w "%{http_code}" https://localhost:8443/ 2>/dev/null | grep -q "200"; then
+        local nginx_http_port nginx_https_port
+        nginx_http_port=$(_get_nginx_port)
+        nginx_https_port=$(_get_nginx_ssl_port)
+        if curl --connect-timeout 3 --max-time 5 -sk -o /dev/null -w "%{http_code}" "https://localhost:${nginx_https_port}/" 2>/dev/null | grep -q "200"; then
             http_ok=true
-        elif curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/ 2>/dev/null | grep -q "200"; then
+        elif curl --connect-timeout 3 --max-time 5 -s -o /dev/null -w "%{http_code}" "http://localhost:${nginx_http_port}/" 2>/dev/null | grep -q "200"; then
             http_ok=true
         fi
         if ${http_ok}; then
@@ -2594,7 +2661,24 @@ cmd_ssl() {
 # API base URL for CLI operations (configurable via CLI_API_BASE_URL in .env)
 # Default matches the nginx HTTP port exposed on the host
 _api_base_url() {
-    echo "${CLI_API_BASE_URL:-http://localhost:8080/api/v1}"
+    #优先使用 HTTPS 端口（生产模式），如果 HTTPS 不可用则降级到 HTTP
+    local ssl_port http_port
+    ssl_port=$(_get_nginx_ssl_port)
+    http_port=$(_get_nginx_port)
+
+    # 如果用户显式设置了 CLI_API_BASE_URL，则直接使用
+    if [ -n "${CLI_API_BASE_URL:-}" ]; then
+        echo "${CLI_API_BASE_URL}"
+        return
+    fi
+
+    # 尝试 HTTPS 连接
+    if curl -sk --connect-timeout 2 "https://localhost:${ssl_port}/health" >/dev/null 2>&1; then
+        echo "https://localhost:${ssl_port}/api/v1"
+    else
+        # 降级到 HTTP
+        echo "http://localhost:${http_port}/api/v1"
+    fi
 }
 
 # Get admin token by logging in
@@ -3967,8 +4051,10 @@ main() {
     # Always cd to script directory
     cd "${SCRIPT_DIR}"
 
-    # Ensure environment is loaded
-    ensure_env
+    # Ensure environment is loaded (skip for deploy — it manages .env itself)
+    if [ "$command" != "deploy" ]; then
+        ensure_env
+    fi
 
     # Log command execution
     _log_to_file "CMD" "Command: $command $*"

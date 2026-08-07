@@ -545,9 +545,7 @@ Status 描述的是终端在网络层的实际封堵情况，Compliance 描述�
 
 | 措施 | 说明 |
 |------|------|
-| `cap_drop: [ALL]` | 5 个服务统一移除所有 Linux capabilities |
 | `cap_add: [NET_BIND_SERVICE]` | nginx 需要绑定 80/443 低位端口 |
-| `security_opt: no-new-privileges:true` | 所有服务禁止权限提升 |
 
 ---
 

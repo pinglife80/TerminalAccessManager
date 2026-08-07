@@ -130,20 +130,20 @@ manage.sh（3,094 行）提供 30+ 命令，覆盖完整运维生命周期：
 |------|:----:|------|
 | 镜像构建 | 8.0 | 后端多阶段构建 + Alpine + 非 root；前端单阶段构建，体积偏大 |
 | 资源限制 | 9.0 | 5 个服务均配置 memory/cpus 限制 |
-| 安全加固 | 9.0 | 全部 no-new-privileges，backend/nginx read_only + tmpfs |
+| 安全加固 | 7.0 | 内网部署，非 root 用户 + 网络隔离 + 资源限制 |
 | 健康检查 | 7.0 | postgres/redis 有 healthcheck，nginx/backend 缺少 |
 | 网络隔离 | 8.5 | 自定义 bridge 网络，postgres/redis 未暴露端口 |
 | 环境变量 | 9.0 | `:?` 必填语法 + manage.sh `_check_required_env` |
 
 **容器配置详情：**
 
-| 服务 | 内存/CPU | 安全选项 | 重启策略 |
-|------|---------|---------|---------|
-| postgres | 1G/1CPU | no-new-privileges | ❌ 未配置 |
-| redis | 256M/0.25CPU | no-new-privileges | ❌ 未配置 |
-| backend | 512M/0.5CPU | no-new-privileges + read_only | unless-stopped |
-| frontend | 512M/0.5CPU | no-new-privileges | "no"（构建容器） |
-| nginx | 128M/0.25CPU | no-new-privileges + read_only | unless-stopped |
+| 服务 | 内存/CPU | 重启策略 |
+|------|---------|---------|
+| postgres | 1G/1CPU | ❌ 未配置 |
+| redis | 256M/0.25CPU | ❌ 未配置 |
+| backend | 512M/0.5CPU | unless-stopped |
+| frontend | 512M/0.5CPU | "no"（构建容器） |
+| nginx | 128M/0.25CPU | unless-stopped |
 
 ### 3.2 Nginx 配置
 
@@ -173,7 +173,7 @@ manage.sh（3,094 行）提供 30+ 命令，覆盖完整运维生命周期：
 | 风险 | 严重程度 | 说明 |
 |------|:-------:|------|
 | postgres/redis 无 restart 策略 | 中 | 容器异常退出后不会自动重启 |
-| ~~缺少 docker-compose.prod.yml~~ | ~~中~~ | ~~已创建：docker-compose.prod.yml，含安全加固配置~~ |
+| ~~缺少 docker-compose.prod.yml~~ | ~~中~~ | ~~已删除：单一 docker-compose.yml + ENVIRONMENT 变量控制 dev/prod 差异~~ |
 | SSL 证书缺失时 nginx 启动失败 | 中 | 应增加证书存在性检查 |
 | frontend Dockerfile 单阶段构建 | 低 | 镜像体积偏大，含 node_modules 和源码 |
 
@@ -295,7 +295,7 @@ manage.sh `upgrade` 命令实现完整的安全升级流程：
 | 加密 | Fernet + ENC: 前缀 + 独立 ENCRYPTION_KEY + bcrypt | ★★★★☆ |
 | 限流 | Redis 滑动窗口 + Nginx 双层限流 + Redis 故障降级 | ★★★★★ |
 | 安全头 | HSTS/CSP/X-Frame/Permissions-Policy/Server 隐藏 | ★★★★☆ |
-| Docker | no-new-privileges + read_only + tmpfs + 资源限制 + 网络隔离 | ★★★★☆ |
+| Docker | 非 root 用户 + 网络隔离 + 资源限制 | ★★★★☆ |
 | 文件上传 | 扩展名白名单 + content_type 校验 + UUID 重命名 + SVG 禁止 | ★★★★☆ |
 | CORS | 通配符自动降级 + 指定域名 credentials | ★★★★☆ |
 | 防注入 | _escape_like + 参数化查询 | ★★★★☆ |
@@ -304,19 +304,19 @@ manage.sh `upgrade` 命令实现完整的安全升级流程：
 
 #### Docker 安全加固策略说明
 
-v3.2.0 对 docker-compose.yml 中的生产加固项采用了注释化策略：
+内网部署环境下不启用容器安全加固（cap_drop/read_only/no-new-privileges），避免权限冲突导致服务启动失败：
 
-| 加固项 | 默认状态 | 说明 |
-|--------|:--------:|------|
-| `security_opt: no-new-privileges` | ✅ 启用 | 所有服务默认启用 |
-| `cap_drop: [ALL]` | 💬 注释 | 标注 `# Production hardening`，生产环境取消注释即可启用 |
-| `read_only: true` | 💬 注释 | 标注 `# Production hardening`，生产环境取消注释即可启用 |
-| `tmpfs` 临时目录 | 💬 注释 | 配合 read_only 使用，生产环境取消注释即可启用 |
+| 加固项 | 状态 | 说明 |
+|--------|:----:|------|
+| `security_opt: no-new-privileges` | ❌ 已移除 | 内网部署，避免权限冲突 |
+| `cap_drop: [ALL]` | ❌ 已移除 | 内网部署，避免 nginx bind 失败 |
+| `read_only: true` | ❌ 已移除 | 内网部署，避免 backend 卷写入失败 |
+| `tmpfs` 临时目录 | ❌ 已移除 | 配合 read_only 使用，一并移除 |
 
 **策略说明：**
-- 开发环境直接运行，无需额外配置，降低开发调试门槛
-- 生产环境部署时取消注释即可恢复全部安全措施，加固项均标注 `# Production hardening` 便于识别
-- 此策略不影响安全评分，因为生产环境部署时取消注释即可恢复全部安全措施，且 `no-new-privileges` 已默认启用
+- 内网部署环境下，容器安全加固（cap_drop/read_only/no-new-privileges）会导致 nginx bind 80 失败、backend 卷写入失败等问题，已全面移除
+- 仍保留非 root 用户、网络隔离、资源限制等基础安全措施
+- dev/prod 差异仅由 `.env` 中 `ENVIRONMENT` 变量控制，不再使用 docker-compose override 文件
 
 ### 6.2 安全风险清单（修复后）
 
@@ -334,7 +334,7 @@ v3.2.0 对 docker-compose.yml 中的生产加固项采用了注释化策略：
 |------|:-------:|------|
 | 旧版无 type 字段 Token 仍被接受 | 低 | 建议设置过渡期后强制验证 |
 | CSP `unsafe-inline` | 中 | Tailwind CSS 需要，削弱 XSS 防护 |
-| ~~容器未 `cap_drop: [ALL]` 和非 root~~ | ~~中~~ | ~~已修复：docker-compose.prod.yml 已配置 cap_drop:ALL~~ |
+| ~~容器未 `cap_drop: [ALL]` 和非 root~~ | ~~中~~ | ~~已移除：内网部署不启用 cap_drop，避免权限冲突~~ |
 | sessionStorage Token 可被 XSS 读取 | 低 | 管理类系统可接受，建议 v4.0 改 httpOnly cookie |
 | Redis 无 TLS 连接 | 低 | 容器内网络通信，可考虑启用 |
 | 验证码用 `random` 而非 `secrets` | 低 | 场景不需要密码学安全随机数 |
@@ -588,7 +588,7 @@ v3.7.0 针对合规判定稳定性引入三项改进：翻转确认机制、封�
 | ~~后端 lint/格式化配置~~ | ~~High~~ | ~~已创建：backend/pyproject.toml (ruff)~~ |
 | ~~pytest.ini~~ | ~~Medium~~ | ~~已配置：backend/pyproject.toml [tool.pytest.ini_options]~~ |
 | **pre-commit 配置** | Medium | 无法在提交前自动检查 |
-| ~~docker-compose.prod.yml~~ | ~~Medium~~ | ~~已创建：docker-compose.prod.yml，含 no-new-privileges、cap_drop:ALL、read_only 安全加固~~ |
+| ~~docker-compose.prod.yml~~ | ~~Medium~~ | ~~已删除：单一 docker-compose.yml + ENVIRONMENT 变量控制 dev/prod 差异~~ |
 
 ### 10.4 测试覆盖
 
@@ -667,7 +667,7 @@ v3.7.0 针对合规判定稳定性引入三项改进：翻转确认机制、封�
 | 11 | 缺少日志聚合方案 | 维护 | 中 | 高 | v3.5 | 待修复 |
 | 12 | 缺少告警系统 | 维护 | 中 | 高 | v3.5 | 待修复 |
 | 13 | audit_logs 无分区策略 | 扩展 | 中 | 中 | v3.5 | 待修复 |
-| 14 | ~~容器未 cap_drop: [ALL]~~ | 安全 | ~~中~~ | 低 | v3.1 | ✅ 已修复 |
+| 14 | ~~容器未 cap_drop: [ALL]~~ | 安全 | ~~中~~ | 低 | v3.1 | 已移除（内网部署） |
 | 15 | 前端 Dockerfile 单阶段构建 | 部署 | 低 | 低 | v3.5 | 待修复 |
 
 ### 12.2 风险分布
@@ -701,13 +701,13 @@ v3.7.0 针对合规判定稳定性引入三项改进：翻转确认机制、封�
 | 1 | 添加 LICENSE 文件 | 法律合规 | ✅ 已完成 |
 | 2 | postgres/redis 添加 restart: unless-stopped | 容器自动恢复 | ✅ 已完成 |
 | 3 | 全局异常处理中间件 | 统一错误响应格式 | ✅ 已完成 |
-| 4 | 容器 cap_drop: [ALL] | 安全加固 | ✅ 已完成 |
+| 4 | 容器 cap_drop: [ALL] | 安全加固 | 已移除（内网部署） |
 
 ### 13.2.1 P0-P3 生产就绪改进完成记录（v3.3.0）
 
 | 优先级 | 编号 | 改进项 | 完成内容 | 状态 |
 |:------:|:----:|--------|---------|:----:|
-| P0 | P0-1 | 容器安全加固 | docker-compose.prod.yml 创建，含 no-new-privileges、cap_drop:ALL、read_only 安全加固 | ✅ 已完成 |
+| P0 | P0-1 | 容器安全加固 | docker-compose.prod.yml 创建，含 no-new-privileges、cap_drop:ALL、read_only 安全加固 | 已移除（内网部署） |
 | P0 | P0-2 | Docker 健康检查 | 为 nginx/backend 服务添加 healthcheck 配置 | ✅ 已完成 |
 | P1 | P1-1 | 核心服务单元测试 | 新增 test_compliance_service.py，22 个测试用例，后端用例数 63→85 | ✅ 已完成 |
 | P1 | P1-2 | 深信服 API 指数退避重试 | sangfor_service 调用添加 exponential backoff retry 机制 | ✅ 已完成 |

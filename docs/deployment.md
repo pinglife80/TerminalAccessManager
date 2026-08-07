@@ -26,12 +26,13 @@
 
 **端口占用：**
 
-| 端口 | 用途 |
-|------|------|
-| 8080 | HTTP（自动重定向到 HTTPS） |
-| 8443 | HTTPS（Web 管理界面） |
+| 端口变量 | 默认值 | 用途 |
+|---------|--------|------|
+| `TAM_NGINX_PORT` | 8080 | HTTP（自动重定向到 HTTPS） |
+| `TAM_NGINX_SSL_PORT` | 8443 | HTTPS（Web 管理界面） |
+| `TAM_BACKEND_PORT` | 8000 | Backend 内部端口（不对外暴露） |
 
-> 其他服务端口（PostgreSQL 5432、Redis 6379、Backend 8000）不对外暴露，仅通过 Nginx 代理访问。
+> 所有端口均可在 `.env` 中配置。其他服务端口（PostgreSQL 5432、Redis 6379）不对外暴露，仅通过 Nginx 代理访问。
 
 ---
 
@@ -132,28 +133,15 @@ vim .env                          # 编辑配置
 
 | 层级 | 文件 | 用途 |
 |------|------|------|
-| 基础层 | `docker-compose.yml` | 共享配置，定义所有服务的基础定义 |
-| 开发覆盖层 | `docker-compose.dev.yml` | 开发环境覆盖，加载 `tam.dev.conf`，使用 HTTP，宽松的速率限制 |
-| 生产覆盖层 | `docker-compose.prod.yml` | 生产环境覆盖，安全加固（`no-new-privileges`、`cap_drop:ALL`、`read_only`） |
+| 基础配置 | `docker-compose.yml` | 唯一 Docker Compose 配置文件，dev/prod 差异由 `.env` 中 `ENVIRONMENT` 变量控制 |
 
 **自动选择机制：**
 
 `manage.sh` 中的 `dc()` 函数会根据 `ENVIRONMENT` 变量自动选择正确的覆盖文件：
 
-- `ENVIRONMENT=development` → 使用 `docker compose -f docker-compose.yml -f docker-compose.dev.yml`
-- `ENVIRONMENT=production` → 使用 `docker compose -f docker-compose.yml -f docker-compose.prod.yml`
+- 所有模式统一使用 `docker compose -f docker-compose.yml`，通过 `.env` 中 `ENVIRONMENT` 变量区分开发/生产模式
 
-**生产覆盖层安全加固项：**
-
-| 措施 | 适用服务 | 说明 |
-|------|---------|------|
-| `security_opt: no-new-privileges:true` | 所有服务 | 禁止容器内提权 |
-| `cap_drop: [ALL]` | 所有 5 个服务 | 移除所有 Linux capabilities，最小权限原则 |
-| `cap_add: [NET_BIND_SERVICE]` | nginx | 需要绑定 80/443 低位端口 |
-| `read_only: true` | backend、nginx | 文件系统只读，防止运行时篡改 |
-| `restart: unless-stopped` | postgres、redis | 容器异常退出后自动重启 |
-
-> 开发环境直接使用 `docker-compose.dev.yml` 覆盖，无需手动配置安全加固项。
+> 内网部署环境下不启用容器安全加固（cap_drop/read_only/no-new-privileges），避免权限冲突导致服务启动失败。
 
 ### 3.6 PostgreSQL 时区配置
 
@@ -170,12 +158,7 @@ docker-compose.yml 中 PostgreSQL 服务的 `command` 新增了以下时区参�
 
 开发与生产环境使用不同的 Nginx 配置文件，通过 Docker Compose 覆盖层自动加载：
 
-| 配置项 | 开发环境 (`tam.dev.conf`) | 生产环境 (`tam.conf`) |
-|--------|--------------------------|----------------------|
-| 协议 | HTTP | HTTPS（含 HTTP→HTTPS 重定向） |
-| 监听端口 | 8080 | 8443（HTTPS）+ 8080（HTTP 重定向） |
-| API 速率限制 | 120r/m | 60r/m |
-| 认证速率限制 | 30r/m | 10r/m |
+| 配置文件 | `tam.conf.template` + envsubst 动态生成 |
 
 > 开发环境使用 HTTP 协议和宽松的速率限制，方便调试和测试。生产环境强制 HTTPS 并收紧速率限制，确保安全性。
 
@@ -903,13 +886,13 @@ ss -tlnp | grep -E '8080|8443'
 
 ### 端口映射
 
-| 对外端口 | 容器端口 | 服务 | 说明 |
+| 对外端口变量 | 容器端口 | 服务 | 说明 |
 |---------|---------|------|------|
-| 8080 | 80 | Nginx | HTTP（重定向到 HTTPS） |
-| 8443 | 443 | Nginx | HTTPS |
+| `TAM_NGINX_PORT`（默认 8080） | 80 | Nginx | HTTP（重定向到 HTTPS） |
+| `TAM_NGINX_SSL_PORT`（默认 8443） | 443 | Nginx | HTTPS |
 | - | 5432 | PostgreSQL | 仅内部网络 |
 | - | 6379 | Redis | 仅内部网络 |
-| - | 8000 | Backend | 仅内部网络 |
+| `TAM_BACKEND_PORT`（默认 8000） | `TAM_BACKEND_PORT` | Backend | 仅内部网络 |
 
 ### 数据卷
 

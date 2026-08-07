@@ -1,10 +1,176 @@
 # 版本跟踪记录
 
-> 文档版本：v3.10.1 | 更新日期：2026-08-06
+> 文档版本：v3.10.2 | 更新日期：2026-08-07
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
+
+---
+
+## [v3.10.2] - 2026-08-06
+
+### 生产模式部署可行性审查修复包
+
+#### 背景
+
+审查目标：`manage.sh deploy --prod` 在生产环境下能否完整端到端运行？
+
+审查方法：manage.sh/docker-compose/cli.py/backup_service 等关键路径的静态深度审查 + 两个独立子代理交叉验证。
+
+**总体评估（修复前）：❌ 生产模式部署不可行，存在 1 CRITICAL + 1 HIGH 严重问题。**
+
+---
+
+#### 问题清单与修复
+
+##### CRITICAL. admin 密码永远硬编码为 Admin123
+
+| 项目 | 说明 |
+|------|------|
+| 影响 | 生产向导让用户设置的 ADMIN_PASSWORD 仅写入 .env，但 backend 容器从未注入该变量，cli.py setup 也从未读取环境变量，创建 admin 时固定使用 hash_password("Admin123") |
+| 后果 | 部署后 Web 登录密码永远是公开已知弱密码；管理工具部署摘要显示 `admin / [password you set]` 严重误导 |
+| 修复 | 1) docker-compose.yml backend environment 新增 `ADMIN_PASSWORD` + `ENVIRONMENT` 注入；2) cli.py _create_admin_user 优先读 env；生产模式无强密码显式告警；生产模式密码输出脱敏 |
+| 验证者共识 | 2/2 一致，severity=critical |
+
+##### HIGH. backend 加固 tmpfs 与 uploads 命名卷路径冲突
+
+| 项目 | 说明 |
+|------|------|
+| 影响 | docker-compose.prod.yml 同时声明 `tmpfs: [/tmp, /app/uploads]` 与基础 compose 的 `volume: tam-uploads:/app/uploads`，目标路径重叠在 Docker Compose 合并语义中属于未定义行为 |
+| 后果 | 两种可能性：① tmpfs 优先 → 备份/branding/uploads 容器重启即丢失（数据灾难）；② 命名卷优先 → read_only 加固对上传目录失效（形同虚设） |
+| 修复 | 从 docker-compose.prod.yml 的 backend tmpfs 中删除 `/app/uploads`，仅保留 `/tmp`；`tam-uploads:/app/uploads` 命名卷 + `tam-logs:/var/log/tam` 正常持久化 |
+| 验证者共识 | 2/2 一致，severity=high |
+
+##### MEDIUM. UPLOAD_DIR 相对路径与硬编码绝对路径混用
+
+| 项目 | 说明 |
+|------|------|
+| 影响 | config.py `UPLOAD_DIR="./uploads"` 依赖 WORKDIR；backup_service.py 在三处混用 `settings.UPLOAD_DIR` 和 `getattr(..., '/app/uploads')` |
+| 后果 | 一旦 WORKDIR 或启动 cwd 变化，相对路径解析出错；不同模块解析到不同路径导致上传/备份数据散落 |
+| 修复 | config.py 改为 `/app/uploads`；backup_service 两处 `getattr` fallback 移除，统一直接读 settings |
+| 验证者共识 | 2/2 一致，severity=medium |
+
+##### MEDIUM. setup 提示与实际 manage.sh deploy 场景不一致
+
+| 项目 | 说明 |
+|------|------|
+| 影响 | setup 完成后提示 "1. docker-compose up -d"，但 manage.sh deploy 在执行 setup 前已经 `dc up -d --build` 启动容器；提示 "2. localhost:8000/api/v1/docs" 仅在开发者机器场景正确 |
+| 后果 | 生产用户看到错误指引，困惑下一步 |
+| 修复 | 读取 `ENVIRONMENT` + 检测 `/.dockerenv`；容器场景提示 "Containers are already running" 并按 dev/prod 分别给出 HTTP:8080 / HTTPS:8443 的 Nginx 入口；裸机场景保留原提示 |
+| 验证者共识 | 2/2 一致，severity=medium |
+
+##### MEDIUM. is_initialized 仅看 state 文件，不检查 DB 实际状态
+
+| 项目 | 说明 |
+|------|------|
+| 影响 | `is_initialized()` 只读取本地 state 文件 `db_initialized=true`，不查询 DB 中 admin 用户是否真实存在 |
+| 后果 | 用户删除 postgres_data（DB 重置）但保留 .tam_state/state.env → 重新 deploy 直接跳过 setup → DB 完全空、无 admin 账号、无法登录 |
+| 修复 | deploy Step 6/6 前新增 DB 侧 Python 探测：SELECT 1 FROM users WHERE username='admin' LIMIT 1。查得到 admin = 真·已初始化；查不到但 state 文件显示已初始化 = 警告并强制重跑 setup |
+| 验证者共识 | 2/2 一致，severity=medium |
+
+##### LOW. 部署验证 HTTP/HTTPS 顺序不区分部署模式
+
+| 项目 | 说明 |
+|------|------|
+| 影响 | Dev 模式（tam.dev.conf 只监听 HTTP 8080）每次部署验证先超时 1 次 HTTPS 8443，再 fallback HTTP 通过，无意义等待和日志噪音 |
+| 修复 | 按 `get_state deploy_mode` 分支：dev 先 HTTP，prod 先 HTTPS → fallback HTTP 301 |
+| 验证者共识 | 2/2 一致，severity=low |
+
+---
+
+#### 修改文件
+
+| 文件 | 变更类型 | 行数（估算） |
+|------|----------|------------|
+| docker-compose.yml | backend env 注入 ADMIN_PASSWORD + ENVIRONMENT | +2 行 |
+| docker-compose.prod.yml | 删除 backend tmpfs 中的 /app/uploads | -1 行 |
+| backend/cli.py | _create_admin_user 读 env；setup 输出按上下文感知 | +~55 / -~15 行 |
+| backend/app/core/config.py | UPLOAD_DIR 改为 /app/uploads | ±1 行 |
+| backend/app/services/backup_service.py | 2 处 getattr fallback 移除 | -4 / +2 行 |
+| manage.sh | DB 探测 admin；验证顺序按 mode | +~40 / -~8 行 |
+| docs/changelog.md | 新增 [3.10.2] 版本块 | +~30 行 |
+| docs/release-notes.md | 新增 [v3.10.2] 版本块 | +~90 行 |
+| VERSION + frontend/package*.json | 3.10.1 → 3.10.2 | +3 处更新 |
+
+---
+
+#### 验证结果
+
+| 验证项 | 结果 |
+|--------|------|
+| Python 语法检查 (cli.py / config.py / backup_service.py) | ✅ 通过 |
+| Bash 语法检查 (manage.sh bash -n) | ✅ 通过 |
+| Docker Compose 合并验证 (yml + prod.yml) | ✅ 通过 |
+| VS Code 诊断 (GetDiagnostics) | ✅ 无错误 |
+| version bump 同步 package.json / package-lock | ✅ 一致 3.10.2 |
+
+---
+
+#### 风险评估
+
+| 风险 | 缓解措施 |
+|------|----------|
+| admin 密码 env 注入在已有部署中 ADMIN_PASSWORD 未设置时回退 Admin123 | cli.py _create_admin_user 对 ENVIRONMENT=production + password==Admin123 情况给出醒目的黄字 WARNING 提示首次登录立刻修改 |
+| 删除 /app/uploads tmpfs 后有人担心加固变弱 | read_only 根文件系统 + 精确的可写 volume 白名单才是容器最佳实践（CIS Docker Benchmark 也推荐 named volume 而非 tmpfs 用于需要持久化的应用数据），加固实际更严谨而非变弱 |
+| UPLOAD_DIR 从相对改为绝对路径可能影响开发者本地裸机 | 如果本机不跑 /app，env 注入 `UPLOAD_DIR=./uploads` 可覆盖；pydantic Settings 支持 env var 覆盖 |
+
+---
+
+#### 端口变量化与架构简化
+
+##### 端口全面变量化
+
+| 项目 | 说明 |
+|------|------|
+| 背景 | Nginx/Backend 端口在配置文件中硬编码，改 `.env` 端口无效 |
+| 修复 | 新增 `TAM_NGINX_PORT`/`TAM_NGINX_SSL_PORT`/`TAM_BACKEND_PORT`，通过 envsubst 动态注入 Nginx 配置；backend Dockerfile 使用 `BACKEND_PORT` env；manage.sh 端口检测函数化 |
+| 影响 | `.env` 一处改端口，全链路生效 |
+
+##### Nginx 配置架构重构
+
+| 项目 | 说明 |
+|------|------|
+| 背景 | tam.conf / tam.dev.conf 双配置文件 + sed 替换端口，脆弱且易失效 |
+| 修复 | 统一为 `tam.conf.template` + `envsubst`，仅替换 3 个变量不破坏 nginx 原生变量 |
+| 删除 | tam.conf、tam.dev.conf |
+
+##### 容器安全加固移除 + override 文件删除
+
+| 项目 | 说明 |
+|------|------|
+| 背景 | 内网环境下 `cap_drop:ALL`/`read_only`/`no-new-privileges` 导致 nginx bind 失败、backend 卷写入失败 |
+| 修复 | 全面移除安全加固配置；删除 docker-compose.dev.yml 和 docker-compose.prod.yml |
+| dev/prod 差异 | 仅由 `.env` 中 `ENVIRONMENT` 变量控制（API 文档可见性、日志格式、启动校验严格度） |
+
+##### Docker 卷重命名
+
+| 项目 | 说明 |
+|------|------|
+| 背景 | 卷名 `tam-uploads`/`tam-logs` 加项目前缀后变成 `tam_tam-*`，冗余且语义不准确 |
+| 修复 | 改为 `backend-data`/`backend-logs`，最终 Docker 卷名 `tam_backend-data`/`tam_backend-logs` |
+
+##### env 全量传递 + healthcheck 修复
+
+| 项目 | 说明 |
+|------|------|
+| 背景 | docker-compose.yml backend.environment 仅传 16 项，`.env` 中改 LOCKOUT_DURATION、LOG_LEVEL 等变量无效；healthcheck 硬编码 8000，自定义端口后服务被标记 unhealthy |
+| 修复 | environment 扩充为 43 项覆盖全部 Settings 字段；healthcheck 改为容器内 `os.environ.get('BACKEND_PORT')` 动态读取 |
+
+##### 备份服务修复
+
+| 项目 | 说明 |
+|------|------|
+| 背景 | 三次连续备份失败：①POSTGRES_* 字段不存在 ②缺 pg_dump ③DB_HOST=localhost 覆盖 DATABASE_URL |
+| 修复 | backup_service.py 优先从 DATABASE_URL 正则解析；Dockerfile 新增 postgresql-client；清理逻辑新增零字节文件删除 |
+
+##### 日志/导入/构建修复
+
+| 项目 | 说明 |
+|------|------|
+| loguru JSON 模板 | `{}` 未转义 → `{{}}` 转义 |
+| main.py 导入 | 新增 get_config_value / emit_compliance_alert 导入 |
+| .dockerignore/.gitignore | 排除 backups/uploads/zip 防止打包进镜像 |
 
 ---
 
