@@ -338,6 +338,15 @@ class NotificationWorkers:
                         event_type, channel_name, rule.suppress_window
                     )
                 await notification_logger.log_sent(event, channel_name, result)
+            elif result and result.error_code == "AUTH_ERROR":
+                # Auth errors are permanent — don't retry, just log
+                logger.warning(
+                    f"Skipping retry for {channel_name}: SMTP auth failed. "
+                    f"Fix email credentials in Settings -> Email Settings."
+                )
+                await notification_logger.log_failed(
+                    event, channel_name, result, retry_count
+                )
             else:
                 if retry_count < MAX_RETRIES:
                     await self._schedule_retry(

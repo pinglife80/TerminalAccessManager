@@ -47,6 +47,18 @@ class InterceptHandler(logging.Handler):
         )
 
 
+def _patcher(record) -> None:
+    """Sanitize dynamic fields to prevent loguru colorizer errors.
+
+    Python uses '<module>' as the function name for module-level code.
+    Loguru's colorizer interprets '<module>' as a color directive tag
+    and raises ValueError. Replace angle brackets with square brackets.
+    """
+    fn = record.get("function")
+    if fn and isinstance(fn, str) and "<" in fn:
+        record["function"] = fn.replace("<", "[").replace(">", "]")
+
+
 def _log_format(record) -> str:
     """Dynamic format function that injects request_id from ContextVar.
 
@@ -116,6 +128,10 @@ def setup_logging() -> None:
 
     # Remove default loguru handler
     logger.remove()
+
+    # Register patcher to sanitize dynamic fields (e.g. '<module>' function
+    # name) before colorizing, preventing loguru ValueError.
+    logger.configure(patcher=_patcher)
 
     # Determine log format based on environment
     use_json = settings.ENVIRONMENT == "production"

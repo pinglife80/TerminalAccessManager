@@ -463,6 +463,28 @@ docker compose -p tam exec backend curl -sk -o /dev/null -w "%{http_code}" <SANG
   ./manage.sh -y redis flush
   ```
 
+### 2.9 通知发送失败（SMTP 认证错误）
+
+**故障现象：**
+- 通知日志中出现 "AUTH_ERROR: SMTP authentication failed"
+- 通知 worker 日志 "Skipping retry for email: SMTP auth failed. Fix email credentials in Settings -> Email Settings."
+- 邮件通知全部失败，其他渠道（钉钉/企业微信）正常
+
+**可能原因：**
+1. SMTP 用户名/密码错误
+2. QQ/163 等邮箱使用了账户密码而非授权码（授权码需在邮箱网页端设置中生成）
+3. 邮箱账户被禁用或锁定
+
+**排查步骤：**
+1. 进入 系统设置 → 邮件设置，确认 SMTP 主机/端口/用户名/密码配置正确
+2. 使用"测试连接"功能验证 SMTP 配置
+3. 如使用 QQ/163 邮箱，确认填写的是授权码而非登录密码
+4. 检查邮箱账户是否被锁定或禁用
+
+**修复方式：**
+- 更新正确的 SMTP 凭证并保存
+- 系统会自动跳过认证错误通知的重试，无需手动清理重试队列
+
 ---
 
 ## 3. 定时任务管理

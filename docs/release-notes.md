@@ -1,10 +1,49 @@
 # 版本跟踪记录
 
-> 文档版本：v3.10.3 | 更新日期：2026-08-10
+> 文档版本：v3.10.4 | 更新日期：2026-08-10
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
+
+---
+
+## [v3.10.4] - 2026-08-10
+
+### 后端日志与通知错误修复包
+
+#### 背景
+
+v3.10.3 发布后发现两个后端日志错误：
+1. Loguru 在模块级代码触发日志时抛出 ValueError（`<module>` 被解析为颜色指令）
+2. 通知 worker 对 SMTP 认证错误执行无意义重试，日志刷屏
+
+#### 修改文件
+
+| 文件 | 变更类型 | 说明 |
+|------|----------|------|
+| backend/app/core/logging_config.py | 新增 | `_patcher()` 函数 + `logger.configure(patcher=...)` 注册 |
+| backend/app/services/email_service.py | 修改 | 新增 `SMTPAuthenticationError` 捕获 + `AUTH_ERROR:` 标记；`import smtplib` 移至模块级 |
+| backend/app/services/notification_channels/email_channel.py | 修改 | 检测 `AUTH_ERROR:` 前缀，设置 `error_code="AUTH_ERROR"` |
+| backend/app/services/notification_workers.py | 修改 | `_deliver_notification()` 检测 `AUTH_ERROR` 跳过重试 |
+| backend/app/services/config_service.py | 修改 | `email_password` 配置描述修正 |
+| docs/changelog.md | 更新 | 新增 [3.10.4] 版本块 |
+| docs/release-notes.md | 更新 | 新增 [v3.10.4] 版本块 |
+| docs/logging-guide.md | 更新 | 补充 `_patcher` 机制说明 |
+| docs/user-guide.md | 更新 | 修正 SMTP 密码"加密存储"误导描述 |
+| docs/operations-runbook.md | 更新 | 新增通知 SMTP 认证错误排查条目 |
+| docs/deployment.md | 更新 | 文档版本号 |
+| docs/branding.md | 更新 | 文档版本号 |
+| docs/production-readiness-assessment.md | 更新 | 文档版本号 + 跟踪表 |
+| VERSION | 更新 | 3.10.3 → 3.10.4 |
+| frontend/package.json | 更新 | 3.10.3 → 3.10.4 |
+| frontend/package-lock.json | 更新 | 3.10.3 → 3.10.4 |
+
+#### 验证
+
+- 模块级日志（如 "Prometheus metrics enabled..."）正常输出 `[module]` 而非 `<module>`，无 ValueError
+- SMTP 认证失败时通知 worker 跳过重试，日志输出 "Skipping retry for email: SMTP auth failed"
+- 瞬时错误（网络超时等）仍正常触发重试机制
 
 ---
 

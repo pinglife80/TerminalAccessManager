@@ -253,7 +253,13 @@ class EmailChannel(NotificationChannelBase):
                     sent_count += 1
                 except Exception as single_err:
                     last_error = str(single_err)
-                    logger.error(f"Failed to send email to {recipient}: {single_err}")
+                    if "AUTH_ERROR:" in last_error:
+                        logger.error(
+                            f"SMTP auth failed for {recipient}: check SMTP "
+                            f"credentials in Email Settings"
+                        )
+                    else:
+                        logger.error(f"Failed to send email to {recipient}: {single_err}")
 
             if sent_count > 0:
                 logger.info(f"Email notification sent to {sent_count}/{len(email_recipients)} recipients: {email_subject}")
@@ -264,12 +270,13 @@ class EmailChannel(NotificationChannelBase):
                     event_id=event.id if event else None,
                     recipient=", ".join(email_recipients[:sent_count]),
                 )
+            error_code = "AUTH_ERROR" if (last_error and "AUTH_ERROR:" in last_error) else "SEND_ERROR"
             return NotificationResult(
                 success=False,
                 message=f"Send failed: {last_error or 'unknown error'}",
                 channel=self.channel_type,
                 event_id=event.id if event else None,
-                error_code="SEND_ERROR",
+                error_code=error_code,
             )
 
         except Exception as e:

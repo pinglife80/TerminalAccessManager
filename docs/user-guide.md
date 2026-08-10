@@ -1089,7 +1089,7 @@ curl -X PUT https://<HOST_IP>:8443/api/v1/settings/lockout_duration_minutes \
 | SMTP 主机 | SMTP 服务器地址（如 smtp.example.com） | 是 |
 | SMTP 端口 | SMTP 服务器端口（常用 25/465/587） | 是 |
 | 用户名 | SMTP 认证用户名 | 否 |
-| 密码 | SMTP 认证密码（加密存储） | 否 |
+| 密码 | SMTP 认证密码（QQ/163 邮箱请使用授权码） | 否 |
 | 发件人邮箱 | 邮件发件人地址 | 是 |
 | 发件人名称 | 邮件发件人显示名称 | 否 |
 | 启用 STARTTLS | 是否使用 STARTTLS 加密 | 否 |
@@ -1101,7 +1101,7 @@ curl -X PUT https://<HOST_IP>:8443/api/v1/settings/lockout_duration_minutes \
 2. 点击"测试连接"按钮，输入收件人邮箱验证配置正确性
 3. 测试成功后点击"保存"使配置生效
 
-> **安全提示**：SMTP 密码在数据库中以加密形式存储（ENC: 前缀），不会明文暴露。
+> **提示**：QQ/163 等邮箱服务商需使用授权码而非账户密码。SMTP 密码以明文存储于系统配置表，请确保数据库访问权限受控。
 
 ---
 

@@ -106,6 +106,8 @@ TAM 系统采用多层日志架构，覆盖从基础设施到业务逻辑的完�
 
 **标准库拦截**：通过 `InterceptHandler` 将 `logging.getLogger(__name__)` 调用统一转发到 loguru，确保所有模块日志格式一致。
 
+**Colorizer 安全处理**：Python 模块级代码的函数名为 `<module>`，loguru colorizer 会将其解析为颜色指令标签导致 `ValueError`。`logging_config.py` 通过 `logger.configure(patcher=_patcher)` 注册补丁函数，在格式化前将 `<module>` 替换为 `[module]`，确保控制台彩色输出安全。
+
 **环境变量**：
 
 | 变量 | 默认值 | 说明 |

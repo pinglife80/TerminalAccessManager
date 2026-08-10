@@ -205,7 +205,7 @@ class ConfigService:
          "value_type": "string", "description": "SMTP authentication username",
          "is_readonly": False},
         {"key": "email_password", "value": "", "category": "email",
-         "value_type": "string", "description": "SMTP authentication password (stored encrypted in DB)",
+         "value_type": "string", "description": "SMTP authentication password (use authorization code/授权码 for QQ/163)",
          "is_readonly": False},
         {"key": "email_from", "value": "", "category": "email",
          "value_type": "string", "description": "Sender email address",

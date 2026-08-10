@@ -10,6 +10,7 @@ Provides:
 """
 
 import random
+import smtplib
 import string
 from datetime import UTC, datetime
 from pathlib import Path
@@ -394,6 +395,13 @@ class EmailSender:
         except httpx.HTTPStatusError as e:
             logger.error(f"Email sending failed (HTTP {e.response.status_code}): {e}")
             raise EmailSendError(f"Failed to send email: HTTP {e.response.status_code}")
+        except smtplib.SMTPAuthenticationError as e:
+            logger.error(f"SMTP authentication failed: {e}")
+            raise EmailSendError(
+                f"AUTH_ERROR: SMTP authentication failed - check username/password "
+                f"or use authorization code (授权码) for Chinese email providers. "
+                f"Server response: {e}"
+            )
         except Exception as e:
             logger.error(f"Email sending failed: {type(e).__name__}: {e}")
             raise EmailSendError(f"Failed to send email: {str(e)}")
@@ -407,7 +415,6 @@ class EmailSender:
     ) -> None:
         """Send email via direct SMTP connection"""
         import asyncio
-        import smtplib
         from email.mime.multipart import MIMEMultipart
         from email.mime.text import MIMEText
         from email.utils import formataddr
