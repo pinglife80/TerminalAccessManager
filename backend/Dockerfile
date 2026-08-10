@@ -39,6 +39,15 @@ COPY . .
 
 # Set ownership
 RUN chown -R app:app /app
+
+# Pre-create volume mount points with correct ownership.
+# Docker named volumes copy content+perms from image ONLY on first mount,
+# so we must ensure these dirs exist and are owned by app:app BEFORE USER directive.
+RUN mkdir -p /var/log/tam && \
+    mkdir -p /app/uploads/backups && \
+    mkdir -p /app/uploads/branding && \
+    chown -R app:app /var/log/tam /app/uploads
+
 USER app
 
 # Use ENV for configurable port (default: 8000)

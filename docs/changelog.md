@@ -1,11 +1,30 @@
 # 更新日志
 
-> 文档版本：v3.10.2  更新日期：2026-08-07
+> 文档版本：v3.10.3  更新日期：2026-08-10
 
 本文件记录 TerminalAccessManager 的所有重要变更。
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
+
+***
+
+## [3.10.3] - 2026-08-10
+
+### 修复
+
+- **品牌资源加载 403**：Nginx `/uploads/` location 中的 `valid_referers` 检查在 `server_name _` 配置下无法匹配生产环境 IP 访问的 Referer，导致品牌背景图和 favicon 加载返回 403
+  - 修复方案：移除 `valid_referers` + `if ($invalid_referer)` 检查块；品牌资源文件名使用 UUID 生成不可猜测，无需 Referer 访问控制
+  - 关联文件：nginx/etc/conf.d/tam.conf.template
+
+- **容器 volume 挂载权限**：取消容器安全加固后，Docker named volume 首次挂载以 root:root 创建挂载点目录，app 用户（非 root）无法写入 `/var/log/tam` 和 `/app/uploads`
+  - 修复方案：backend/Dockerfile 在 `USER app` 前预创建 `/var/log/tam`、`/app/uploads/backups`、`/app/uploads/branding` 并设置 `app:app` 所有者；nginx/docker-entrypoint.sh 补充 tmpfs 目录 `chown nginx:nginx`
+  - 关联文件：backend/Dockerfile、nginx/docker-entrypoint.sh
+
+### 改进
+
+- **清理安全加固残留配置**：删除 docker-compose.yml 中 4 处 `Production hardening` 注释块和 postgres/backend 冗余 tmpfs（取消 read_only 后不再需要）
+  - 关联文件：docker-compose.yml
 
 ***
 
