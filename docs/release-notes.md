@@ -1,10 +1,46 @@
 # 版本跟踪记录
 
-> 文档版本：v3.10.2 | 更新日期：2026-08-07
+> 文档版本：v3.10.3 | 更新日期：2026-08-10
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
+
+---
+
+## [v3.10.3] - 2026-08-10
+
+### 权限修复与品牌资源 403 修复包
+
+#### 背景
+
+v3.10.2 取消容器安全加固后，遗留两类问题：
+1. Docker named volume 首次挂载以 root:root 创建目录，app 用户无法写入日志和上传目录
+2. Nginx `/uploads/` 的 `valid_referers` 检查在 `server_name _` 下无法匹配 IP 访问，品牌资源加载 403
+
+#### 修改文件
+
+| 文件 | 变更类型 | 说明 |
+|------|----------|------|
+| backend/Dockerfile | 新增 | 预创建 /var/log/tam、/app/uploads/backups、/app/uploads/branding + chown app:app |
+| docker-compose.yml | 删除 | 4 处安全加固注释块 + postgres/backend 冗余 tmpfs |
+| nginx/docker-entrypoint.sh | 新增 | tmpfs 目录 chown nginx:nginx 权限调整 |
+| nginx/etc/conf.d/tam.conf.template | 删除 | valid_referers 检查块 |
+| docs/changelog.md | 更新 | 新增 [3.10.3] 版本块 |
+| docs/release-notes.md | 更新 | 新增 [v3.10.3] 版本块 |
+| docs/production-readiness-assessment.md | 更新 | 文档版本跟踪表 |
+| docs/deployment.md | 更新 | 文档版本号 |
+| docs/branding.md | 更新 | 文档版本号 |
+| VERSION | 更新 | 3.10.2 → 3.10.3 |
+| frontend/package.json | 更新 | 3.10.2 → 3.10.3 |
+| frontend/package-lock.json | 更新 | 3.10.2 → 3.10.3 |
+
+#### 验证
+
+- backend 容器内 /var/log/tam/app.log 正常写入，所有者 app:app
+- /app/uploads/backups/ 和 /app/uploads/branding/ 目录可写
+- Nginx 启动无 Permission denied 错误
+- 浏览器通过 IP 访问登录页，品牌背景图和 favicon 加载 200 OK
 
 ---
 
