@@ -1,11 +1,30 @@
 # 更新日志
 
-> 文档版本：v3.10.3  更新日期：2026-08-10
+> 文档版本：v3.10.4  更新日期：2026-08-10
 
 本文件记录 TerminalAccessManager 的所有重要变更。
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
+
+***
+
+## [3.10.4] - 2026-08-10
+
+### 修复
+
+- **Loguru 控制台日志 ValueError**：模块级代码（如 `main.py` 的 Prometheus 初始化）触发日志时，`{function}` 字段值为 `<module>`，loguru colorizer 将其解析为颜色指令标签并抛出 `ValueError: Tag '<module>' interpreted as a color directive`
+  - 修复方案：新增 `_patcher()` 函数，通过 `logger.configure(patcher=...)` 在格式化前将 `<module>` 中的尖括号替换为方括号 `[module]`
+  - 关联文件：backend/app/core/logging_config.py
+
+- **通知 worker SMTP 认证错误无脑重试**：邮件通知发送失败时，SMTP 认证错误（"invalid username-password pair or user is disabled"）被统一包装为 `EmailSendError`，通知 worker 无法区分认证失败与瞬时错误，对永久性认证错误执行无意义的指数退避重试（3 次，最多 40 秒），浪费资源并刷屏日志
+  - 修复方案：`EmailSender.send()` 新增 `smtplib.SMTPAuthenticationError` 专门捕获，标记 `AUTH_ERROR:` 前缀；`EmailChannel` 传播 `error_code="AUTH_ERROR"`；`NotificationWorkers._deliver_notification()` 检测到 `AUTH_ERROR` 跳过重试，直接记录失败并输出引导用户检查 SMTP 凭证的警告
+  - 关联文件：backend/app/services/email_service.py、backend/app/services/notification_channels/email_channel.py、backend/app/services/notification_workers.py
+
+### 改进
+
+- **邮件密码配置描述修正**：`email_password` 系统配置项描述从"stored encrypted in DB"改为"use authorization code/授权码 for QQ/163"，消除误导（密码实际以明文存储于 system_config 表）
+  - 关联文件：backend/app/services/config_service.py
 
 ***
 
