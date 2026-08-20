@@ -749,6 +749,508 @@ class TerminalService:
             raise
 
     # ------------------------------------------------------------------
+    # Whitelist Import
+    # ------------------------------------------------------------------
+
+    async def import_whitelist_csv(
+        self,
+        file_content: str,
+        mode: str = "skip",
+        validate_only: bool = False,
+        username: str = "",
+    ) -> dict:
+        """Import whitelist entries from CSV content.
+
+        Args:
+            file_content: Raw CSV text content
+            mode: 'skip' (skip duplicates) or 'overwrite' (update existing)
+            validate_only: If True, only validate without writing to DB
+            username: Operator username for audit logging
+
+        Returns:
+            dict with success_count, skipped_count, failed_count, errors, mode, total_processed
+        """
+        import csv
+        import io
+
+        from sqlalchemy.exc import IntegrityError
+
+        result = {
+            "success_count": 0,
+            "skipped_count": 0,
+            "failed_count": 0,
+            "errors": [],
+            "mode": mode,
+            "total_processed": 0,
+        }
+
+        if mode not in ("skip", "overwrite"):
+            mode = "skip"
+            result["mode"] = mode
+
+        MAX_ROWS = 10000
+        reader = csv.DictReader(io.StringIO(file_content))
+
+        if not reader.fieldnames:
+            result["errors"].append({
+                "row": 0,
+                "reason": "CSV file has no header row",
+                "data": {},
+            })
+            return result
+
+        row_num = 1
+        processed = 0
+
+        for row in reader:
+            row_num += 1
+            if processed >= MAX_ROWS:
+                result["errors"].append({
+                    "row": row_num,
+                    "reason": f"Maximum import limit ({MAX_ROWS} rows) exceeded, remaining rows skipped",
+                    "data": {},
+                })
+                result["failed_count"] += 1
+                break
+
+            raw_row = {k.strip().lower(): v.strip() for k, v in row.items() if k}
+
+            mac_raw = raw_row.get("mac address", raw_row.get("mac", "")).strip()
+            ip_raw = raw_row.get("ip pattern", raw_row.get("ip", "")).strip()
+            comments = raw_row.get("comments", "").strip()
+
+            if not mac_raw and not ip_raw:
+                result["failed_count"] += 1
+                result["errors"].append({
+                    "row": row_num,
+                    "reason": "MAC Address and IP Pattern cannot both be empty",
+                    "data": raw_row,
+                })
+                continue
+
+            normalized_mac = None
+            if mac_raw:
+                normalized_mac = _normalize_mac(mac_raw)
+                if not self._validate_mac_format(mac_raw):
+                    result["failed_count"] += 1
+                    result["errors"].append({
+                        "row": row_num,
+                        "reason": f"Invalid MAC address format: '{mac_raw}'",
+                        "data": raw_row,
+                    })
+                    continue
+
+            ip_pattern = None
+            if ip_raw:
+                ip_pattern = ip_raw
+                if not self._validate_ip_pattern(ip_raw):
+                    result["failed_count"] += 1
+                    result["errors"].append({
+                        "row": row_num,
+                        "reason": f"Invalid IP pattern: '{ip_raw}'",
+                        "data": raw_row,
+                    })
+                    continue
+
+            if not comments:
+                comments = "Imported from CSV"
+
+            if validate_only:
+                result["total_processed"] += 1
+                result["success_count"] += 1
+                processed += 1
+                continue
+
+            try:
+                pattern_type = self._determine_pattern_type(normalized_mac, ip_pattern)
+
+                existing = await self._find_existing_whitelist(normalized_mac, ip_pattern)
+
+                if existing:
+                    if mode == "skip":
+                        result["skipped_count"] += 1
+                        result["total_processed"] += 1
+                        processed += 1
+                        continue
+                    elif mode == "overwrite":
+                        async with self.db.begin_nested() as nested:
+                            existing.comments = comments
+                            await nested.commit()
+                        result["success_count"] += 1
+                        result["total_processed"] += 1
+                        processed += 1
+                        continue
+
+                async with self.db.begin_nested() as nested:
+                    entry = Whitelist(
+                        mac_address=normalized_mac,
+                        mac_address_normalized=_normalize_mac(normalized_mac) if normalized_mac else None,
+                        ip_pattern=ip_pattern,
+                        pattern_type=pattern_type,
+                        comments=comments,
+                        added_by=username or "import",
+                    )
+                    self.db.add(entry)
+                    await nested.commit()
+
+                result["success_count"] += 1
+                result["total_processed"] += 1
+                processed += 1
+
+            except IntegrityError as e:
+                result["failed_count"] += 1
+                result["errors"].append({
+                    "row": row_num,
+                    "reason": f"Database constraint violation: {str(e)}",
+                    "data": raw_row,
+                })
+            except Exception as e:
+                result["failed_count"] += 1
+                result["errors"].append({
+                    "row": row_num,
+                    "reason": str(e),
+                    "data": raw_row,
+                })
+
+        if not validate_only and result["success_count"] > 0:
+            try:
+                from app.services.compliance_service import ComplianceService
+                compliance_svc = ComplianceService(self.db)
+                await compliance_svc.invalidate_whitelist_cache()
+                await compliance_svc.recalculate_all_compliance()
+            except Exception as e:
+                logger.warning(f"Failed to recalculate compliance after import: {e}")
+
+            log_details = {
+                "message": f"Imported {result['success_count']} whitelist entries from CSV",
+                "mode": mode,
+                "success_count": result["success_count"],
+                "skipped_count": result["skipped_count"],
+                "failed_count": result["failed_count"],
+                "total_processed": result["total_processed"],
+            }
+            await self.log_action(username, "whitelist_import", "whitelist", "bulk_import", log_details)
+
+            await self.db.commit()
+
+        return result
+
+    async def import_whitelist_from_backup(
+        self,
+        file_bytes: bytes,
+        ext: str,
+        mode: str = "skip",
+        validate_only: bool = False,
+        username: str = "",
+    ) -> dict:
+        """Import whitelist entries from a backup file (ZIP or JSON format).
+
+        Args:
+            file_bytes: Raw file bytes
+            ext: File extension ('.zip' or '.json')
+            mode: 'skip' (skip duplicates) or 'overwrite' (update existing)
+            validate_only: If True, only validate without writing to DB
+            username: Operator username for audit logging
+
+        Returns:
+            dict with success_count, skipped_count, failed_count, errors, mode, total_processed
+        """
+        import tempfile
+        import zipfile
+
+        result = {
+            "success_count": 0,
+            "skipped_count": 0,
+            "failed_count": 0,
+            "errors": [],
+            "mode": mode,
+            "total_processed": 0,
+        }
+
+        if mode not in ("skip", "overwrite"):
+            mode = "skip"
+            result["mode"] = mode
+
+        whitelist_data = None
+
+        if ext == ".json":
+            try:
+                text = file_bytes.decode("utf-8-sig")
+                whitelist_data = json.loads(text)
+            except json.JSONDecodeError as e:
+                result["errors"].append({
+                    "row": 0,
+                    "reason": f"Invalid JSON format: {str(e)}",
+                    "data": {},
+                })
+                result["failed_count"] = 1
+                return result
+
+        elif ext == ".zip":
+            try:
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    import io as _io
+                    zip_buffer = _io.BytesIO(file_bytes)
+                    with zipfile.ZipFile(zip_buffer, "r") as zipf:
+                        zipf.extractall(temp_dir)
+
+                    whitelist_file = os.path.join(temp_dir, "whitelist", "whitelist.json")
+                    if not os.path.exists(whitelist_file):
+                        whitelist_file = os.path.join(temp_dir, "whitelist.json")
+
+                    if not os.path.exists(whitelist_file):
+                        result["errors"].append({
+                            "row": 0,
+                            "reason": "No whitelist.json found in backup ZIP file",
+                            "data": {},
+                        })
+                        result["failed_count"] = 1
+                        return result
+
+                    with open(whitelist_file, "r", encoding="utf-8") as f:
+                        whitelist_data = json.load(f)
+            except zipfile.BadZipFile:
+                result["errors"].append({
+                    "row": 0,
+                    "reason": "Invalid ZIP file format",
+                    "data": {},
+                })
+                result["failed_count"] = 1
+                return result
+            except Exception as e:
+                result["errors"].append({
+                    "row": 0,
+                    "reason": f"Failed to extract ZIP: {str(e)}",
+                    "data": {},
+                })
+                result["failed_count"] = 1
+                return result
+
+        if not isinstance(whitelist_data, list):
+            result["errors"].append({
+                "row": 0,
+                "reason": "Invalid whitelist data format: expected a JSON array",
+                "data": {},
+            })
+            result["failed_count"] = 1
+            return result
+
+        MAX_ROWS = 10000
+        row_num = 1
+
+        for item in whitelist_data:
+            row_num += 1
+            if result.get("total_processed", 0) >= MAX_ROWS:
+                result["errors"].append({
+                    "row": row_num,
+                    "reason": f"Maximum import limit ({MAX_ROWS} rows) exceeded",
+                    "data": {},
+                })
+                result["failed_count"] += 1
+                break
+
+            raw_row = item if isinstance(item, dict) else {}
+
+            mac_raw = (raw_row.get("mac_address", raw_row.get("mac", "")) or "").strip()
+            ip_raw = (raw_row.get("ip_pattern", raw_row.get("ip", "")) or "").strip()
+            comments = (raw_row.get("comments", "") or "").strip()
+
+            if not mac_raw and not ip_raw:
+                result["failed_count"] += 1
+                result["errors"].append({
+                    "row": row_num,
+                    "reason": "MAC Address and IP Pattern cannot both be empty",
+                    "data": raw_row,
+                })
+                continue
+
+            normalized_mac = None
+            if mac_raw:
+                normalized_mac = _normalize_mac(mac_raw)
+                if not self._validate_mac_format(mac_raw):
+                    result["failed_count"] += 1
+                    result["errors"].append({
+                        "row": row_num,
+                        "reason": f"Invalid MAC address format: '{mac_raw}'",
+                        "data": raw_row,
+                    })
+                    continue
+
+            ip_pattern = None
+            if ip_raw:
+                ip_pattern = ip_raw
+                if not self._validate_ip_pattern(ip_raw):
+                    result["failed_count"] += 1
+                    result["errors"].append({
+                        "row": row_num,
+                        "reason": f"Invalid IP pattern: '{ip_raw}'",
+                        "data": raw_row,
+                    })
+                    continue
+
+            if not comments:
+                comments = "Imported from backup"
+
+            if validate_only:
+                result["total_processed"] = result.get("total_processed", 0) + 1
+                result["success_count"] = result.get("success_count", 0) + 1
+                continue
+
+            try:
+                pattern_type = self._determine_pattern_type(normalized_mac, ip_pattern)
+
+                existing = await self._find_existing_whitelist(normalized_mac, ip_pattern)
+
+                if existing:
+                    if mode == "skip":
+                        result["skipped_count"] += 1
+                        result["total_processed"] = result.get("total_processed", 0) + 1
+                        continue
+                    elif mode == "overwrite":
+                        async with self.db.begin_nested() as nested:
+                            existing.comments = comments
+                            await nested.commit()
+                        result["success_count"] += 1
+                        result["total_processed"] = result.get("total_processed", 0) + 1
+                        continue
+
+                async with self.db.begin_nested() as nested:
+                    entry = Whitelist(
+                        mac_address=normalized_mac,
+                        mac_address_normalized=_normalize_mac(normalized_mac) if normalized_mac else None,
+                        ip_pattern=ip_pattern,
+                        pattern_type=pattern_type,
+                        comments=comments,
+                        added_by=username or "import",
+                    )
+                    self.db.add(entry)
+                    await nested.commit()
+
+                result["success_count"] += 1
+                result["total_processed"] = result.get("total_processed", 0) + 1
+
+            except Exception as e:
+                result["failed_count"] += 1
+                result["errors"].append({
+                    "row": row_num,
+                    "reason": str(e),
+                    "data": raw_row,
+                })
+
+        if not validate_only and result["success_count"] > 0:
+            try:
+                from app.services.compliance_service import ComplianceService
+                compliance_svc = ComplianceService(self.db)
+                await compliance_svc.invalidate_whitelist_cache()
+                await compliance_svc.recalculate_all_compliance()
+            except Exception as e:
+                logger.warning(f"Failed to recalculate compliance after backup import: {e}")
+
+            log_details = {
+                "message": f"Imported {result['success_count']} whitelist entries from backup",
+                "mode": mode,
+                "success_count": result["success_count"],
+                "skipped_count": result["skipped_count"],
+                "failed_count": result["failed_count"],
+                "total_processed": result["total_processed"],
+            }
+            await self.log_action(username, "whitelist_import", "whitelist", "bulk_import", log_details)
+
+            await self.db.commit()
+
+        return result
+
+    def _validate_mac_format(self, mac: str) -> bool:
+        """Validate MAC address format"""
+        import re
+        pattern = r'^([0-9A-Fa-f]{2}[:.-]){5}[0-9A-Fa-f]{2}$'
+        return bool(re.match(pattern, mac))
+
+    def _validate_ip_pattern(self, ip_str: str) -> bool:
+        """Validate IP/CIDR/range pattern"""
+        import ipaddress
+        import re
+        try:
+            if '-' in ip_str:
+                range_match = re.match(r'^(\d+\.\d+\.\d+)\.(\d+)-(\d+)$', ip_str)
+                if range_match:
+                    prefix = range_match.group(1)
+                    start = int(range_match.group(2))
+                    end = int(range_match.group(3))
+                    if start > end:
+                        return False
+                    if end > 255:
+                        return False
+                    ipaddress.ip_address(f"{prefix}.{start}")
+                    return True
+                cidr_range_match = re.match(r'^(.+)/(\d+)$', ip_str)
+                if cidr_range_match:
+                    range_part = cidr_range_match.group(1)
+                    subnet_bits = int(cidr_range_match.group(2))
+                    if subnet_bits < 0 or subnet_bits > 32:
+                        return False
+                    inner_match = re.match(r'^(\d+\.\d+\.\d+)\.(\d+)-(\d+)$', range_part)
+                    if inner_match:
+                        prefix = inner_match.group(1)
+                        start = int(inner_match.group(2))
+                        end = int(inner_match.group(3))
+                        if start > end or end > 255:
+                            return False
+                        ipaddress.ip_network(f"{prefix}.0/{subnet_bits}", strict=False)
+                        return True
+                    return False
+                return False
+            elif '/' in ip_str:
+                ipaddress.ip_network(ip_str, strict=False)
+                return True
+            else:
+                ipaddress.ip_address(ip_str)
+                return True
+        except (ValueError, TypeError):
+            return False
+        return False
+
+    def _determine_pattern_type(self, normalized_mac: str | None, ip_pattern: str | None) -> str:
+        """Determine pattern type from MAC and IP"""
+        if normalized_mac and ip_pattern:
+            return "both"
+        elif normalized_mac:
+            return "mac_only"
+        elif ip_pattern:
+            if '/' in ip_pattern:
+                return "cidr"
+            elif '-' in ip_pattern:
+                return "ip_range"
+            else:
+                return "single_ip"
+        return "mac_only"
+
+    async def _find_existing_whitelist(
+        self, normalized_mac: str | None, ip_pattern: str | None
+    ) -> Whitelist | None:
+        """Find an existing whitelist entry matching the given MAC and/or IP"""
+        if normalized_mac and ip_pattern:
+            stmt = select(Whitelist).where(
+                (Whitelist.mac_address == normalized_mac) &
+                (Whitelist.ip_pattern == ip_pattern)
+            )
+        elif normalized_mac:
+            stmt = select(Whitelist).where(
+                (Whitelist.mac_address == normalized_mac) &
+                (Whitelist.ip_pattern.is_(None))
+            )
+        elif ip_pattern:
+            stmt = select(Whitelist).where(
+                (Whitelist.ip_pattern == ip_pattern) &
+                (Whitelist.mac_address.is_(None))
+            )
+        else:
+            return None
+
+        result = await self.db.execute(stmt)
+        return result.scalar_one_or_none()
+
+    # ------------------------------------------------------------------
     # Blacklist
     # ------------------------------------------------------------------
     async def get_blacklist(self, query: BlacklistQuery | None = None,
