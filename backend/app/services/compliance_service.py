@@ -124,13 +124,14 @@ class ComplianceService:
 
         # 2. Check scope conditions (strategy selection)
         scope_data = await self._load_scope_cache()
-        use_ip_only = self._check_in_scope(scope_data, ip_address, mac_address)
+        use_ip_only = self._check_terminal_in_arp_scope(scope_data, ip_address, mac_address)
+        ipguard_mac_prefixes = self._extract_ipguard_mac_prefixes(scope_data)
 
         # 3. Check IPGuard baseline (with scope-determined strategy)
         if use_ip_only:
             ipguard_match = await self._check_ipguard_ip_only(ip_address)
         else:
-            ipguard_match = await self._check_ipguard(ip_address, mac_address)
+            ipguard_match = await self._check_ipguard(ip_address, mac_address, ipguard_mac_prefixes)
 
         if ipguard_match:
             matched_sources.append("ipguard")
@@ -165,6 +166,7 @@ class ComplianceService:
         whitelist_data = await self._load_whitelist_cache()
         scope_data = await self._load_scope_cache()
         ipguard_data = await self._load_all_ipguard_cache()
+        ipguard_mac_prefixes = self._extract_ipguard_mac_prefixes(scope_data)
 
         compliant_list = []
         non_compliant_list = []
@@ -178,13 +180,13 @@ class ComplianceService:
             wl_result = self._match_whitelist_in_memory(whitelist_data, ip_addr, mac_addr)
 
             # Check scope conditions (strategy selection)
-            use_ip_only = self._check_in_scope(scope_data, ip_addr, mac_addr)
+            use_ip_only = self._check_terminal_in_arp_scope(scope_data, ip_addr, mac_addr)
 
             # Check IPGuard (with scope-determined strategy)
             if use_ip_only:
                 ig_match = self._match_ipguard_ip_only_in_memory(ipguard_data, ip_addr)
             else:
-                ig_match = self._match_ipguard_in_memory(ipguard_data, ip_addr, mac_addr)
+                ig_match = self._match_ipguard_in_memory(ipguard_data, ip_addr, mac_addr, ipguard_mac_prefixes)
 
             if wl_result:
                 entry["compliance_status"] = "bypass"
@@ -661,14 +663,19 @@ class ComplianceService:
         whitelist_data = await self._load_whitelist_cache()
         scope_data = await self._load_scope_cache()
         ipguard_data = await self._load_all_ipguard_cache()
+        ipguard_mac_prefixes = self._extract_ipguard_mac_prefixes(scope_data)
 
-        # Group entries by (ip, mac) so we process all firewalls for a
-        # given terminal atomically — only mark unblocked if ALL firewalls
-        # succeed.
+        # Group entries by normalized MAC (IP may change due to DHCP,
+        # MAC is the stable identifier for a network interface).
+        # Process all firewall entries for a given terminal atomically —
+        # only mark unblocked if ALL firewalls succeed.
         from collections import defaultdict
         entry_groups = defaultdict(list)
         for entry in auto_blocked_entries:
-            key = (entry.ip_address or "", entry.mac_address or "")
+            # Normalize MAC for consistent grouping regardless of format
+            raw_mac = entry.mac_address or ""
+            mac_norm_key = raw_mac.replace('-', '').replace(':', '').replace('.', '').upper()
+            key = mac_norm_key  # Group by MAC only (IP on blacklist may be stale)
             entry_groups[key].append(entry)
 
         unblocked = 0
@@ -676,46 +683,90 @@ class ComplianceService:
         errors = []
         details = []
 
-        for (ip_addr, mac_addr), entries in entry_groups.items():
-            # Check if now compliant (with scope condition consideration)
-            wl_match = self._match_whitelist_in_memory(whitelist_data, ip_addr, mac_addr)
-            use_ip_only = self._check_in_scope(scope_data, ip_addr, mac_addr)
-            if use_ip_only:
-                ig_match = self._match_ipguard_ip_only_in_memory(ipguard_data, ip_addr)
+        for mac_norm_key, entries in entry_groups.items():
+            # Lookup current terminal record by MAC to get the latest IP address
+            # (IP may have changed since the blacklist entry was created due to DHCP)
+            mac_stmt = select(Terminal).where(
+                Terminal.mac_address_normalized == mac_norm_key
+            )
+            mac_result = await self.db.execute(mac_stmt)
+            terminal_record = mac_result.scalar_one_or_none()
+
+            # Use current terminal IP for compliance check; fall back to blacklist IP
+            if terminal_record:
+                current_ip = terminal_record.ip_address or ""
+                current_mac = terminal_record.mac_address or ""
             else:
-                ig_match = self._match_ipguard_in_memory(ipguard_data, ip_addr, mac_addr)
+                # Terminal record may have been deleted, use first blacklist entry
+                current_ip = entries[0].ip_address or ""
+                current_mac = entries[0].mac_address or ""
+
+            # Check if now compliant using CURRENT IP (important after DHCP change)
+            wl_match = self._match_whitelist_in_memory(whitelist_data, current_ip, current_mac)
+            use_ip_only = self._check_terminal_in_arp_scope(scope_data, current_ip, current_mac)
+            if use_ip_only:
+                ig_match = self._match_ipguard_ip_only_in_memory(ipguard_data, current_ip)
+            else:
+                ig_match = self._match_ipguard_in_memory(ipguard_data, current_ip, current_mac, ipguard_mac_prefixes)
 
             if not (wl_match or ig_match):
                 skipped += len(entries)
                 continue
 
-            # Try to unblock on ALL firewalls for this terminal
+            # Cooldown protection: skip auto-unblock if this MAC was recently auto-blocked
+            # within the cooldown period (default 10 minutes), to prevent rapid oscillation.
+            try:
+                cooldown_minutes = 10
+                cooldown_cutoff = datetime.now(UTC) - timedelta(minutes=cooldown_minutes)
+                bl_recent_block_stmt = select(Blacklist).where(
+                    (Blacklist.mac_address_normalized == mac_norm_key) &
+                    (Blacklist.is_auto_blocked == True) &
+                    (Blacklist.blocked_at >= cooldown_cutoff) &
+                    (Blacklist.auto_unblocked == False)
+                )
+                recent_block_result = await self.db.execute(bl_recent_block_stmt)
+                recent_block = recent_block_result.scalar_one_or_none()
+                if recent_block:
+                    skipped += len(entries)
+                    logger.info(
+                        f"Cooldown: skipping auto-unblock for MAC {mac_norm_key} - "
+                        f"recently auto-blocked at {recent_block.blocked_at}, "
+                        f"cooldown={cooldown_minutes}min"
+                    )
+                    continue
+            except Exception:
+                pass  # Cooldown check failure should not prevent unblocking
+
+            # Try to unblock on ALL firewalls for this terminal.
+            # IMPORTANT: Unblock each firewall using the IP that was originally blocked
+            # (stored in the blacklist entry), because that's the IP on the firewall's blocklist.
             all_success = True
             successfully_unblocked_entries = []
 
             for bl_entry in entries:
+                blocked_ip = bl_entry.ip_address or current_ip
                 fw_tag = bl_entry.firewall_tag
                 if fw_tag:
                     try:
-                        success = await self._unblock_on_firewall(ip_addr, fw_tag)
+                        success = await self._unblock_on_firewall(blocked_ip, fw_tag)
                         if success:
                             successfully_unblocked_entries.append(bl_entry)
                         else:
                             all_success = False
                             errors.append(
-                                f"Failed to unblock {ip_addr} on firewall '{fw_tag}'"
+                                f"Failed to unblock {blocked_ip} on firewall '{fw_tag}'"
                             )
                     except (ConnectionError, TimeoutError) as e:
                         all_success = False
                         errors.append(
-                            f"Error unblocking {ip_addr} on firewall '{fw_tag}': {str(e)}"
+                            f"Error unblocking {blocked_ip} on firewall '{fw_tag}': {str(e)}"
                         )
                         from app.services.event_emitter import emit_firewall_connection_lost
                         await emit_firewall_connection_lost(fw_tag, str(e))
                     except Exception as e:
                         all_success = False
                         errors.append(
-                            f"Error unblocking {ip_addr} on firewall '{fw_tag}': {str(e)}"
+                            f"Error unblocking {blocked_ip} on firewall '{fw_tag}': {str(e)}"
                         )
                 else:
                     # No firewall_tag on blacklist entry — try to find binding
@@ -725,18 +776,18 @@ class ComplianceService:
                         binding_success = True
                         for ft in fw_tags:
                             try:
-                                success = await self._unblock_on_firewall(ip_addr, ft)
+                                success = await self._unblock_on_firewall(blocked_ip, ft)
                                 if not success:
                                     binding_success = False
                                     all_success = False
                                     errors.append(
-                                        f"Failed to unblock {ip_addr} on firewall '{ft}' (resolved from binding)"
+                                        f"Failed to unblock {blocked_ip} on firewall '{ft}' (resolved from binding)"
                                     )
                             except Exception as e:
                                 binding_success = False
                                 all_success = False
                                 errors.append(
-                                    f"Error unblocking {ip_addr} on firewall '{ft}': {str(e)}"
+                                    f"Error unblocking {blocked_ip} on firewall '{ft}': {str(e)}"
                                 )
                         if binding_success:
                             successfully_unblocked_entries.append(bl_entry)
@@ -750,30 +801,28 @@ class ComplianceService:
                     bl_entry.auto_unblocked = True
                     bl_entry.unblocked_at = datetime.now(UTC)
 
-                if ip_addr:
-                    mac_stmt = select(Terminal).where(
-                        Terminal.ip_address == ip_addr,
-                        Terminal.mac_address == mac_addr
-                    )
-                    mac_result = await self.db.execute(mac_stmt)
-                    mac_records = mac_result.scalars().all()
-                    for record in mac_records:
-                        record.status = "unblocked"
-                        record.firewall_tag = None  # Clear firewall tag on unblock
-                        record.compliance_status = "bypass" if wl_match else "compliant"
-                        record.wl_match_type = wl_match.get("match_type") if isinstance(wl_match, dict) else wl_match
-                        # Update comments with unblock info
-                        resolved_fw = entries[0].firewall_tag or "N/A"
-                        unblock_comment = f"Auto-unblocked by TAM from firewall [{resolved_fw}]"
-                        if record.comments:
-                            record.comments = f"{record.comments}; {unblock_comment}"
-                        else:
-                            record.comments = unblock_comment
+                if terminal_record:
+                    # Update terminal firewall status
+                    terminal_record.status = "unblocked"
+                    terminal_record.firewall_tag = None  # Clear firewall tag on unblock
+                    # NOTE: Do NOT directly set compliance_status here!
+                    # Let the next scheduled compliance check apply the proper
+                    # confirm-count logic to prevent oscillation.
+                    terminal_record.wl_match_type = wl_match.get("match_type") if isinstance(wl_match, dict) else wl_match
+                    # Reset confirm count so next check will properly re-evaluate
+                    terminal_record.non_compliant_confirm_count = 0
+                    # Update comments with unblock info
+                    resolved_fw = entries[0].firewall_tag or "N/A"
+                    unblock_comment = f"Auto-unblocked by TAM from firewall [{resolved_fw}]"
+                    if terminal_record.comments:
+                        terminal_record.comments = f"{terminal_record.comments}; {unblock_comment}"
+                    else:
+                        terminal_record.comments = unblock_comment
 
                 unblocked += 1
                 details.append({
-                    "ip_address": ip_addr,
-                    "mac_address": mac_addr,
+                    "ip_address": current_ip,
+                    "mac_address": current_mac,
                     "action": "unblocked",
                     "reason": "now_compliant",
                 })
@@ -921,21 +970,33 @@ class ComplianceService:
     # ------------------------------------------------------------------
     # IPGuard Matching
     # ------------------------------------------------------------------
-    async def _check_ipguard(self, ip_address: str, mac_address: str) -> bool:
+    async def _check_ipguard(self, ip_address: str, mac_address: str, ipguard_mac_prefixes: list[str] | None = None) -> bool:
         """Check if IP+MAC matches any IPGuard baseline entry"""
         ipguard_data = await self._load_all_ipguard_cache()
-        return self._match_ipguard_in_memory(ipguard_data, ip_address, mac_address)
+        return self._match_ipguard_in_memory(ipguard_data, ip_address, mac_address, ipguard_mac_prefixes)
 
     def _match_ipguard_in_memory(
-        self, ipguard_data: dict[str, list[dict]], ip_address: str, mac_address: str
+        self, ipguard_data: dict[str, list[dict]], ip_address: str, mac_address: str,
+        ipguard_mac_prefixes: list[str] | None = None,
     ) -> bool:
-        """Match IP+MAC against in-memory IPGuard data from all sources"""
-        normalized_mac = mac_address.upper().replace(":", "-")
+        """Match IP+MAC against in-memory IPGuard data from all sources.
+
+        Matching order:
+        1. Exact IP+MAC match
+        2. IP match + IPGuard entry MAC matches any mac_prefix_ipguard scope
+        """
+        normalized_mac = mac_address.upper().replace(":", "-") if mac_address else ""
 
         for _source_tag, entries in ipguard_data.items():
             for entry in entries:
+                if entry.get("ip_address") != ip_address:
+                    continue
                 entry_mac = entry.get("mac_address", "").upper().replace(":", "-")
-                if entry.get("ip_address") == ip_address and entry_mac == normalized_mac:
+                # 1. Exact IP+MAC match
+                if entry_mac == normalized_mac:
+                    return True
+                # 2. IP match + IPGuard MAC prefix match (if any ipguard_mac_prefixes configured)
+                if ipguard_mac_prefixes and self._mac_matches_any_prefix(entry_mac, ipguard_mac_prefixes):
                     return True
         return False
 
@@ -991,9 +1052,32 @@ class ComplianceService:
 
         return data
 
-    def _check_in_scope(self, scope_data: list[dict], ip_address: str, mac_address: str) -> bool:
+    @staticmethod
+    def _mac_matches_any_prefix(mac: str, prefixes: list[str]) -> bool:
+        """Check if a MAC address matches any of the given prefixes.
+        Both mac and prefixes should already be normalized (uppercase, no separators).
         """
-        Check if terminal falls within any scope condition.
+        if not mac or not prefixes:
+            return False
+        normalized_mac = mac.upper().replace(":", "").replace("-", "")
+        for prefix in prefixes:
+            norm_prefix = prefix.upper().replace(":", "").replace("-", "")
+            if len(normalized_mac) >= len(norm_prefix) and normalized_mac.startswith(norm_prefix):
+                return True
+        return False
+
+    @staticmethod
+    def _extract_ipguard_mac_prefixes(scope_data: list[dict]) -> list[str]:
+        """Extract mac_prefix_ipguard values from scope data."""
+        prefixes = []
+        for scope in scope_data:
+            if scope.get("scope_type") == "mac_prefix_ipguard":
+                prefixes.append(scope.get("scope_value", ""))
+        return prefixes
+
+    def _check_terminal_in_arp_scope(self, scope_data: list[dict], ip_address: str, mac_address: str) -> bool:
+        """
+        Check if terminal falls within any ARP-level scope condition (ip_cidr, ip_range, mac_prefix_arp).
         Returns True if the terminal should use IP-only strategy.
         """
         if not scope_data:
@@ -1005,7 +1089,6 @@ class ComplianceService:
 
             if scope_type == "ip_cidr":
                 try:
-                    import ipaddress
                     network = ipaddress.ip_network(scope_value, strict=False)
                     ip = ipaddress.ip_address(ip_address)
                     if ip in network:
@@ -1015,7 +1098,6 @@ class ComplianceService:
 
             elif scope_type == "ip_range":
                 try:
-                    import ipaddress
                     start_ip_str, end_ip_str = scope_value.split("-")
                     start_ip = int(ipaddress.IPv4Address(start_ip_str))
                     end_ip = int(ipaddress.IPv4Address(end_ip_str))
@@ -1025,11 +1107,9 @@ class ComplianceService:
                 except (ValueError, TypeError):
                     continue
 
-            elif scope_type == "mac_prefix":
+            elif scope_type == "mac_prefix_arp":
                 try:
-                    scope_prefix = scope_value.upper().replace(":", "").replace("-", "")
-                    terminal_mac = mac_address.upper().replace(":", "").replace("-", "")
-                    if len(terminal_mac) >= len(scope_prefix) and terminal_mac.startswith(scope_prefix):
+                    if self._mac_matches_any_prefix(mac_address, [scope_value]):
                         return True
                 except (ValueError, TypeError):
                     continue
@@ -1450,8 +1530,8 @@ class ComplianceService:
             # This handles the case where a terminal was blocked, became compliant (auto-unblocked),
             # then became non-compliant again - the terminal status may still be "blocked" from
             # the previous block, but the blacklist entry was auto-unblocked and needs recreation.
+            # Query by MAC only (IP may change due to DHCP; blacklist entries may have stale IP).
             bl_active_stmt = select(Blacklist).where(
-                (Blacklist.ip_address == ip_addr) &
                 (Blacklist.mac_address_normalized == mac_norm) &
                 (Blacklist.auto_unblocked == False) &
                 (Blacklist.unblocked_at.is_(None))
@@ -1459,7 +1539,32 @@ class ComplianceService:
             bl_active_result = await self.db.execute(bl_active_stmt)
             has_active_blacklist = bl_active_result.scalar_one_or_none() is not None
 
+            # Cooldown protection: skip auto-block if terminal was recently auto-unblocked
+            # within the cooldown period (default 10 minutes), to prevent rapid oscillation.
+            _cooldown_skip_block = False
             if new_compliance == "non_compliant" and not has_active_blacklist:
+                try:
+                    cooldown_minutes = 10
+                    cooldown_cutoff = datetime.now(UTC) - timedelta(minutes=cooldown_minutes)
+                    bl_recent_stmt = select(Blacklist).where(
+                        (Blacklist.mac_address_normalized == mac_norm) &
+                        (Blacklist.auto_unblocked == True) &
+                        (Blacklist.unblocked_at.isnot(None)) &
+                        (Blacklist.unblocked_at >= cooldown_cutoff)
+                    )
+                    recent_result = await self.db.execute(bl_recent_stmt)
+                    recent_unblock = recent_result.scalar_one_or_none()
+                    if recent_unblock:
+                        _cooldown_skip_block = True
+                        logger.info(
+                            f"Cooldown: skipping auto-block for {ip_addr}/{mac_addr} - "
+                            f"recently auto-unblocked at {recent_unblock.unblocked_at}, "
+                            f"cooldown={cooldown_minutes}min"
+                        )
+                except Exception:
+                    pass  # Cooldown check failure should not block blocking
+
+            if new_compliance == "non_compliant" and not has_active_blacklist and not _cooldown_skip_block:
                 fw_tags = await self._get_bound_firewall_tags(terminal.source_tag)
                 if fw_tags:
                     # Check if terminal is already blocked on all required firewalls
@@ -1583,6 +1688,7 @@ class ComplianceService:
             whitelist_data = await self._load_whitelist_cache()
             ipguard_data = await self._load_all_ipguard_cache()
             scope_data = await self._load_scope_cache()
+            ipguard_mac_prefixes = self._extract_ipguard_mac_prefixes(scope_data)
 
             logger.debug(f"Loaded {len(whitelist_data)} whitelist entries")
             ipguard_total = sum(len(v) for v in ipguard_data.values())
@@ -1630,51 +1736,102 @@ class ComplianceService:
                     ip_addr = terminal.ip_address or ""
                     mac_addr = terminal.mac_address or ""
                     old_compliance = terminal.compliance_status
+                    confirm_threshold = await self._get_confirm_threshold()
 
                     wl_result = self._match_whitelist_in_memory(whitelist_data, ip_addr, mac_addr)
-                    use_ip_only = self._check_in_scope(scope_data, ip_addr, mac_addr)
+                    use_ip_only = self._check_terminal_in_arp_scope(scope_data, ip_addr, mac_addr)
                     if use_ip_only:
                         ig_match = self._match_ipguard_ip_only_in_memory(ipguard_data, ip_addr)
                     else:
-                        ig_match = self._match_ipguard_in_memory(ipguard_data, ip_addr, mac_addr)
+                        ig_match = self._match_ipguard_in_memory(ipguard_data, ip_addr, mac_addr, ipguard_mac_prefixes)
 
+                    # Determine matched status for this check
                     if wl_result:
-                        new_compliance = "bypass"
+                        current_check_status = "bypass"
                         new_wl_match_type = wl_result.get("match_type")
                         wl_comments = wl_result.get("comments")
-                        terminal.non_compliant_confirm_count = 0
                     elif ig_match:
-                        new_compliance = "compliant"
+                        current_check_status = "compliant"
                         new_wl_match_type = None
                         wl_comments = None
-                        terminal.non_compliant_confirm_count = 0
                     else:
-                        # IPGuard/whitelist both not matched
-                        if old_compliance in ("non_compliant", "unknown"):
-                            new_compliance = "non_compliant"
-                        elif old_compliance == "bypass":
-                            terminal.non_compliant_confirm_count += 1
-                            if terminal.non_compliant_confirm_count >= 1:
-                                new_compliance = "non_compliant"
-                                terminal.non_compliant_confirm_count = 0
-                            else:
-                                new_compliance = old_compliance
-                        else:
-                            confirm_threshold = await self._get_confirm_threshold()
-                            terminal.non_compliant_confirm_count += 1
-                            if terminal.non_compliant_confirm_count >= confirm_threshold:
-                                new_compliance = "non_compliant"
-                                terminal.non_compliant_confirm_count = 0
-                            else:
-                                new_compliance = old_compliance
+                        current_check_status = "non_compliant"
                         new_wl_match_type = None
                         wl_comments = None
 
-                    if old_compliance != new_compliance:
+                    # ---- IP change grace period ----
+                    # If IP was recently changed (within 2 check intervals ~10min),
+                    # do NOT downgrade to non_compliant yet; keep current state to
+                    # wait for IPGuard baseline to catch up with new IP-MAC mapping.
+                    in_ip_grace_period = False
+                    if terminal.ip_changed_at is not None:
+                        grace_minutes = 10  # ~2 ARP collection cycles
+                        grace_cutoff = datetime.now(UTC) - timedelta(minutes=grace_minutes)
+                        if terminal.ip_changed_at >= grace_cutoff:
+                            in_ip_grace_period = True
+                            logger.debug(
+                                f"Terminal[{batch_start + idx}] {ip_addr}/{mac_addr}: "
+                                f"in IP-change grace period (changed at {terminal.ip_changed_at.isoformat()}), "
+                                f"holding current state"
+                            )
+
+                    # ---- Symmetric confirm-count logic ----
+                    # Initialize compliant_confirm_count if not present (handles pre-migration records)
+                    if not hasattr(terminal, 'compliant_confirm_count') or terminal.compliant_confirm_count is None:
+                        terminal.compliant_confirm_count = 0
+
+                    new_compliance = old_compliance  # default: stay
+
+                    if in_ip_grace_period and current_check_status == "non_compliant":
+                        # Grace period: hold old state, reset non_compliant counter,
+                        # but still track that we see non-matches
+                        terminal.non_compliant_confirm_count += 1
                         logger.debug(
                             f"Terminal[{batch_start + idx}] {ip_addr}/{mac_addr}: "
+                            f"grace period hold, non_compliant_confirm_count={terminal.non_compliant_confirm_count}"
+                        )
+                    elif current_check_status == old_compliance:
+                        # Status matches, reset opposite counter
+                        if current_check_status == "non_compliant":
+                            terminal.compliant_confirm_count = 0
+                        else:
+                            terminal.non_compliant_confirm_count = 0
+                    elif current_check_status == "non_compliant":
+                        # Downgrade path: currently non-non_compliant, check says non_compliant
+                        terminal.non_compliant_confirm_count += 1
+                        terminal.compliant_confirm_count = 0
+                        logger.debug(
+                            f"Terminal[{batch_start + idx}] {ip_addr}/{mac_addr}: "
+                            f"downgrade check, non_compliant_confirm_count={terminal.non_compliant_confirm_count}/{confirm_threshold}"
+                        )
+                        if terminal.non_compliant_confirm_count >= confirm_threshold:
+                            new_compliance = "non_compliant"
+                            terminal.non_compliant_confirm_count = 0
+                            logger.info(
+                                f"Terminal[{batch_start + idx}] {ip_addr}/{mac_addr}: "
+                                f"CONFIRMED downgrade {old_compliance} → non_compliant after {confirm_threshold} checks"
+                            )
+                    else:
+                        # Upgrade path: currently non_compliant, check says compliant/bypass
+                        terminal.compliant_confirm_count += 1
+                        terminal.non_compliant_confirm_count = 0
+                        logger.debug(
+                            f"Terminal[{batch_start + idx}] {ip_addr}/{mac_addr}: "
+                            f"upgrade check, compliant_confirm_count={terminal.compliant_confirm_count}/{confirm_threshold}"
+                        )
+                        if terminal.compliant_confirm_count >= confirm_threshold:
+                            new_compliance = current_check_status
+                            terminal.compliant_confirm_count = 0
+                            logger.info(
+                                f"Terminal[{batch_start + idx}] {ip_addr}/{mac_addr}: "
+                                f"CONFIRMED upgrade non_compliant → {current_check_status} after {confirm_threshold} checks"
+                            )
+
+                    if old_compliance != new_compliance:
+                        logger.info(
+                            f"Terminal[{batch_start + idx}] {ip_addr}/{mac_addr}: "
                             f"{old_compliance} → {new_compliance} "
-                            f"(whitelist={bool(wl_result)}, ipguard={ig_match})"
+                            f"(whitelist={bool(wl_result)}, ipguard={ig_match}, grace={in_ip_grace_period})"
                         )
 
                     result = await self._apply_compliance_result(

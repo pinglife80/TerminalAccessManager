@@ -222,13 +222,9 @@ async def scheduled_ipguard_sync():
                         try:
                             await service.sync_ipguard_data(baseline.tag)
                             logger.info(f"Synced IPGuard data for baseline: {baseline.tag} [source=scheduler]")
-                            # Trigger compliance re-evaluation after IPGuard data update
-                            try:
-                                result = await service.recalculate_all_compliance()
-                                if result.get("non_compliant", 0) > 0 or result.get("bypass", 0) > 0 or result.get("compliant", 0) > 0:
-                                    logger.info(f"Compliance re-evaluated after IPGuard sync: {result} [source=scheduler]")
-                            except Exception as re:
-                                logger.error(f"Error re-evaluating compliance after IPGuard sync: {type(re).__name__}: {re} [source=scheduler]")
+                            # NOTE: Do NOT immediately trigger full compliance recalculation here.
+                            # This causes race conditions with ARP collection (IPGuard updated but ARP not yet refreshed).
+                            # The next scheduled compliance check / ARP collection will pick up the new cache naturally.
                         except Exception as e:
                             logger.error(f"Error syncing IPGuard data for {baseline.tag}: {type(e).__name__}: {e} [source=scheduler]")
                             # Emit datasource sync failed event for notification dispatch.
@@ -282,23 +278,28 @@ async def scheduled_compliance_check():
                                 ]
                                 result = await service.batch_check_compliance(check_entries)
 
-                                # Build lookup maps for compliance results
+                                # Build lookup maps for compliance results (keyed by normalized MAC for uniqueness)
                                 result_lookup = {}
                                 if result.details:
+                                    def _norm_mac(m: str) -> str:
+                                        return (m or "").replace('-', '').replace(':', '').replace('.', '').upper()
                                     for item in result.details.get("bypass", []):
-                                        result_lookup[item.get("ip_address")] = {
+                                        mac_key = _norm_mac(item.get("mac_address", ""))
+                                        result_lookup[mac_key] = {
                                             "compliance_status": "bypass",
                                             "wl_match_type": item.get("wl_match_type"),
                                             "wl_comments": item.get("wl_comments"),
                                         }
                                     for item in result.details.get("compliant", []):
-                                        result_lookup[item.get("ip_address")] = {
+                                        mac_key = _norm_mac(item.get("mac_address", ""))
+                                        result_lookup[mac_key] = {
                                             "compliance_status": "compliant",
                                             "wl_match_type": None,
                                             "wl_comments": None,
                                         }
                                     for item in result.details.get("non_compliant", []):
-                                        result_lookup[item.get("ip_address")] = {
+                                        mac_key = _norm_mac(item.get("mac_address", ""))
+                                        result_lookup[mac_key] = {
                                             "compliance_status": "non_compliant",
                                             "wl_match_type": None,
                                             "wl_comments": None,
@@ -306,7 +307,8 @@ async def scheduled_compliance_check():
 
                                 # Apply compliance results using shared method
                                 for entry in unchecked:
-                                    r = result_lookup.get(entry.ip_address)
+                                    mac_key = entry.mac_address_normalized or ""
+                                    r = result_lookup.get(mac_key)
                                     if r:
                                         await service._apply_compliance_result(
                                             entry,
@@ -358,13 +360,41 @@ async def scheduled_compliance_check():
                                     elif unit == 'm':
                                         td = td_cls(minutes=value)
 
+                                from sqlalchemy import select as sa_select2
                                 retry_blocked = 0
+                                cooldown_cutoff_retry = dt_cls.now(utc_cls) - td_cls(minutes=10)
                                 for terminal in retry_terminals:
                                     ip_addr = terminal.ip_address or ""
                                     mac_addr = terminal.mac_address or ""
+                                    mac_norm = mac_addr.replace('-', '').replace(':', '').replace('.', '').upper() if mac_addr else None
                                     fw_tags = await service._get_bound_firewall_tags(terminal.source_tag)
                                     if not fw_tags:
                                         continue
+                                    # Check if already has active blacklist by MAC (avoid duplicate blocks)
+                                    if mac_norm:
+                                        existing_bl_stmt = sa_select2(Blacklist).where(
+                                            (Blacklist.mac_address_normalized == mac_norm) &
+                                            (Blacklist.auto_unblocked == False) &
+                                            (Blacklist.unblocked_at.is_(None))
+                                        )
+                                        existing_bl_r = await db.execute(existing_bl_stmt)
+                                        if existing_bl_r.scalar_one_or_none():
+                                            terminal.status = "blocked"
+                                            continue
+                                        # Cooldown: skip if recently auto-unblocked
+                                        recent_unbl_stmt = sa_select2(Blacklist).where(
+                                            (Blacklist.mac_address_normalized == mac_norm) &
+                                            (Blacklist.auto_unblocked == True) &
+                                            (Blacklist.unblocked_at.isnot(None)) &
+                                            (Blacklist.unblocked_at >= cooldown_cutoff_retry)
+                                        )
+                                        recent_unbl_r = await db.execute(recent_unbl_stmt)
+                                        if recent_unbl_r.scalar_one_or_none():
+                                            logger.info(
+                                                f"Cooldown: skipping retry-block for {ip_addr}/{mac_addr} "
+                                                f"- recently auto-unblocked [source=scheduler]"
+                                            )
+                                            continue
                                     all_success = True
                                     for fw_tag in fw_tags:
                                         success = await service._block_on_firewall(
@@ -377,7 +407,6 @@ async def scheduled_compliance_check():
                                     if all_success:
                                         terminal.status = "blocked"
                                         terminal.firewall_tag = fw_tags[0] if len(fw_tags) == 1 else ",".join(fw_tags)
-                                        mac_norm = mac_addr.replace('-', '').replace(':', '').replace('.', '').upper() if mac_addr else None
                                         for fw_tag in fw_tags:
                                             bl_entry = Blacklist(
                                                 ip_address=ip_addr,

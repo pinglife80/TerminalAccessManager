@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Plus, Trash2, Edit2, Filter, CheckCircle, XCircle, Eye } from 'lucide-react';
 import { toast } from 'sonner';
-import { useComplianceScopes, useCreateComplianceScope, useUpdateComplianceScope, useDeleteComplianceScope, useToggleComplianceScope, ComplianceScope as ComplianceScopeType } from '@/api/complianceScope';
+import { useComplianceScopes, useCreateComplianceScope, useUpdateComplianceScope, useDeleteComplianceScope, useToggleComplianceScope, ComplianceScope as ComplianceScopeType, ScopeType } from '@/api/complianceScope';
 import { formatDate, getErrorMessage } from '@/lib/utils';
 import { PrimaryButton, IconButton } from '@/components/Button';
 import { EmptyState } from '@/components/StateDisplay';
@@ -23,7 +23,7 @@ const ComplianceScope: React.FC = () => {
   const [showDetailsModal, setShowDetailsModal] = useState(false);
   const [selectedScope, setSelectedScope] = useState<ComplianceScopeType | null>(null);
 
-  const [scopeType, setScopeType] = useState<'ip_cidr' | 'ip_range' | 'mac_prefix'>('ip_cidr');
+  const [scopeType, setScopeType] = useState<ScopeType>('ip_cidr');
   const [scopeValue, setScopeValue] = useState('');
   const [description, setDescription] = useState('');
   const [formError, setFormError] = useState('');
@@ -41,7 +41,8 @@ const ComplianceScope: React.FC = () => {
     switch (type) {
       case 'ip_cidr': return t('complianceScope.typeIpCidr');
       case 'ip_range': return t('complianceScope.typeIpRange');
-      case 'mac_prefix': return t('complianceScope.typeMacPrefix');
+      case 'mac_prefix_arp': return t('complianceScope.typeMacPrefixArp');
+      case 'mac_prefix_ipguard': return t('complianceScope.typeMacPrefixIpguard');
       default: return type;
     }
   };
@@ -50,7 +51,8 @@ const ComplianceScope: React.FC = () => {
     switch (type) {
       case 'ip_cidr': return t('complianceScope.ipCidrDesc');
       case 'ip_range': return t('complianceScope.ipRangeDesc');
-      case 'mac_prefix': return t('complianceScope.macPrefixDesc');
+      case 'mac_prefix_arp': return t('complianceScope.macPrefixArpDesc');
+      case 'mac_prefix_ipguard': return t('complianceScope.macPrefixIpguardDesc');
       default: return '';
     }
   };
@@ -59,7 +61,9 @@ const ComplianceScope: React.FC = () => {
     switch (type) {
       case 'ip_cidr': return t('complianceScope.valuePlaceholderCidr');
       case 'ip_range': return t('complianceScope.valuePlaceholderRange');
-      case 'mac_prefix': return t('complianceScope.valuePlaceholderMac');
+      case 'mac_prefix_arp':
+      case 'mac_prefix_ipguard':
+        return t('complianceScope.valuePlaceholderMac');
       default: return '';
     }
   };
@@ -284,12 +288,13 @@ const ComplianceScope: React.FC = () => {
             </label>
             <select
               value={scopeType}
-              onChange={(e) => { setScopeType(e.target.value as 'ip_cidr' | 'ip_range' | 'mac_prefix'); setScopeValue(''); }}
+              onChange={(e) => { setScopeType(e.target.value as ScopeType); setScopeValue(''); }}
               className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
             >
               <option value="ip_cidr">{t('complianceScope.typeIpCidr')}</option>
               <option value="ip_range">{t('complianceScope.typeIpRange')}</option>
-              <option value="mac_prefix">{t('complianceScope.typeMacPrefix')}</option>
+              <option value="mac_prefix_arp">{t('complianceScope.typeMacPrefixArp')}</option>
+              <option value="mac_prefix_ipguard">{t('complianceScope.typeMacPrefixIpguard')}</option>
             </select>
             <p className="mt-1 text-xs text-gray-500">{getScopeTypeDesc(scopeType)}</p>
           </div>
@@ -354,12 +359,13 @@ const ComplianceScope: React.FC = () => {
             </label>
             <select
               value={scopeType}
-              onChange={(e) => { setScopeType(e.target.value as 'ip_cidr' | 'ip_range' | 'mac_prefix'); setScopeValue(''); }}
+              onChange={(e) => { setScopeType(e.target.value as ScopeType); setScopeValue(''); }}
               className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
             >
               <option value="ip_cidr">{t('complianceScope.typeIpCidr')}</option>
               <option value="ip_range">{t('complianceScope.typeIpRange')}</option>
-              <option value="mac_prefix">{t('complianceScope.typeMacPrefix')}</option>
+              <option value="mac_prefix_arp">{t('complianceScope.typeMacPrefixArp')}</option>
+              <option value="mac_prefix_ipguard">{t('complianceScope.typeMacPrefixIpguard')}</option>
             </select>
             <p className="mt-1 text-xs text-gray-500">{getScopeTypeDesc(scopeType)}</p>
           </div>
