@@ -31,7 +31,9 @@ class Blacklist(Base):
         Index('idx_blacklist_mac', 'mac_address'),
         Index('idx_blacklist_auto', 'is_auto_blocked', 'auto_unblocked'),
         Index('idx_blacklist_unblocked', 'unblocked_at'),
-        Index('idx_blacklist_unique_active', 'ip_address', 'mac_address_normalized', unique=True, postgresql_where=(unblocked_at.is_(None) & (auto_unblocked == False))),
+        # Unique active entries per (IP, MAC, Firewall) - one entry per firewall
+        Index('idx_blacklist_unique_active', 'ip_address', 'mac_address_normalized', 'firewall_tag', unique=True,
+              postgresql_where=(unblocked_at.is_(None) & (auto_unblocked == False))),
     )
 
     def __repr__(self):
