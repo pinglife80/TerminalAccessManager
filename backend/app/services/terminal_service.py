@@ -1484,28 +1484,32 @@ class TerminalService:
 
             # --- Batch-load all data upfront to avoid N+1 queries ---
 
-            # 1. Batch-load all affected Terminals (1 query instead of N)
-            all_ips = list(set(e.ip_address for e in expired_entries if e.ip_address))
-            terminal_map = {}  # (ip_address, mac_address) -> list of Terminal
-            if all_ips:
-                t_stmt = select(Terminal).where(Terminal.ip_address.in_(all_ips))
+            # 1. Batch-load all affected Terminals by MAC (1 query instead of N)
+            # MAC is the stable identifier (IP may change due to DHCP)
+            all_mac_norms = list(set(e.mac_address_normalized for e in expired_entries if e.mac_address_normalized))
+            terminal_by_mac = {}  # mac_norm -> Terminal
+            if all_mac_norms:
+                t_stmt = select(Terminal).where(Terminal.mac_address_normalized.in_(all_mac_norms))
                 t_result = await self.db.execute(t_stmt)
                 for t in t_result.scalars().all():
-                    key = (t.ip_address, t.mac_address)
-                    if key not in terminal_map:
-                        terminal_map[key] = []
-                    terminal_map[key].append(t)
+                    if t.mac_address_normalized:
+                        terminal_by_mac[t.mac_address_normalized] = t
 
-            # 2. Batch-check for active blocks per unique IP (1 query instead of N)
-            active_block_ips = set()
-            if all_ips:
-                active_stmt = select(Blacklist.ip_address).where(
-                    (Blacklist.ip_address.in_(all_ips)) &
-                    (Blacklist.expires_at >= now) &
-                    (Blacklist.auto_unblocked == False)
+            # 2. Batch-check for active blocks per MAC (1 query instead of N)
+            # A terminal should only be unblocked if it has NO active entries on ANY firewall
+            active_block_macs = set()
+            if all_mac_norms:
+                active_stmt = select(Blacklist.mac_address_normalized).where(
+                    (Blacklist.mac_address_normalized.in_(all_mac_norms)) &
+                    (Blacklist.unblocked_at.is_(None)) &
+                    (Blacklist.auto_unblocked == False) &
+                    (or_(
+                        Blacklist.expires_at >= now,
+                        Blacklist.expires_at.is_(None),
+                    ))
                 )
                 active_result = await self.db.execute(active_stmt)
-                active_block_ips = set(row[0] for row in active_result.all())
+                active_block_macs = set(row[0] for row in active_result.all() if row[0])
 
             # 3. Pre-resolve SangforService instances by firewall_tag
             #    (1 query per unique tag instead of 1 query per entry)
@@ -1517,36 +1521,40 @@ class TerminalService:
             # --- Process entries using pre-loaded data ---
             count = 0
             failed_unblock_ips = set()  # Track IPs where Sangfor unblock failed
+            processed_macs = set()  # Track which terminals we've already updated to avoid duplicate work
 
             try:
                 for entry in expired_entries:
-                    # Check if IP has active blocks (using pre-loaded set)
-                    if entry.ip_address and entry.ip_address in active_block_ips:
-                        # IP still has active blocks — don't unblock on firewall,
-                        # just mark the expired entry as unblocked
+                    mac_norm = entry.mac_address_normalized
+
+                    # Check if this MAC still has active blocks on ANY firewall (using pre-loaded set)
+                    has_other_active = mac_norm in active_block_macs if mac_norm else False
+
+                    if has_other_active:
+                        # This MAC still has other active block entries — don't unblock on firewall,
+                        # just mark this expired entry as unblocked
                         entry.unblocked_at = datetime.now(UTC)
                         entry.unblocked_by = "system"
                         count += 1
                         continue
 
-                    # Restore terminal status and reset compliance for re-evaluation
-                    # (using pre-loaded map instead of per-entry query)
-                    if entry.ip_address:
-                        key = (entry.ip_address, entry.mac_address)
-                        mac_records = terminal_map.get(key, [])
-                        for record in mac_records:
-                            if record.status == "blocked":  # Only reset if still blocked
-                                record.status = TerminalStatus.UNBLOCKED.value
-                                # Reset compliance_status to "unknown" so the next
-                                # scheduled compliance check will re-evaluate it.
-                                record.compliance_status = "unknown"
+                    # Restore terminal status if this was the last active block for this MAC
+                    if mac_norm and mac_norm not in processed_macs:
+                        terminal = terminal_by_mac.get(mac_norm)
+                        if terminal and terminal.status == "blocked":
+                            terminal.status = TerminalStatus.UNBLOCKED.value
+                            # Reset compliance_status to "unknown" so the next
+                            # scheduled compliance check will re-evaluate it.
+                            terminal.compliance_status = "unknown"
+                            terminal.firewall_tag = None
+                        processed_macs.add(mac_norm)
 
                     # Try to unblock on Sangfor (using cached service)
                     fw_tag = entry.firewall_tag
                     svc = sangfor_cache.get(fw_tag) if fw_tag else None
                     sangfor_unblock_success = True  # Default to True; only False on explicit failure
 
-                    if entry.ip_address and svc and svc.base_url:
+                    if entry.ip_address and fw_tag and svc and svc.base_url:
                         try:
                             response = await svc.unblock_ip([{"srcIP": entry.ip_address}])
                             if response.get('code') != 0:
@@ -1571,13 +1579,16 @@ class TerminalService:
                             f"Keeping blacklist entry for consistency."
                         )
                         failed_unblock_ips.add(entry.ip_address)
+                    elif not fw_tag:
+                        # Orphaned entry without firewall_tag (migration 035 should have cleaned these)
+                        logger.warning(f"Expired entry {entry.id} for IP {entry.ip_address} has no firewall_tag - marking unblocked anyway")
 
                     if sangfor_unblock_success:
                         entry.unblocked_at = datetime.now(UTC)
                         entry.unblocked_by = "system"
                         count += 1
                     else:
-                        # Sangfor unblock failed — do NOT delete the blacklist entry
+                        # Sangfor unblock failed — do NOT mark as unblocked
                         # to maintain consistency between local DB and firewall.
                         # The entry will be retried on the next cleanup cycle.
                         # Extend expires_at slightly to avoid immediate retry loop.
