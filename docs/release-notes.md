@@ -1,10 +1,102 @@
 # 版本跟踪记录
 
-> 文档版本：v3.10.4 | 更新日期：2026-08-10
+> 文档版本：v3.11.0 | 更新日期：2026-08-20
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
+
+---
+
+## [v3.11.0] - 2026-08-20
+
+### Compliance Scope 条件管理与白名单导入增强
+
+#### 背景
+
+v3.10.4 发布后，业务场景提出新需求：希望能够根据网段范围或 MAC 前缀作为条件，在合规计算时仅将 IP 地址作为判断条件而忽略 MAC 地址。同时，白名单导入功能需要支持直接导入备份 ZIP/JSON 格式文件，黑名单导出存在字段引用错误。
+
+#### 问题描述
+
+1. **合规计算灵活性不足**：现有合规计算流程固定采用 IP+MAC 双重匹配策略，无法根据业务场景灵活切换为仅 IP 匹配
+2. **黑名单导出报错**：`GET /blacklist/export` 端点引用了 Blacklist 模型不存在的字段（status、block_time、added_by、created_at），导致 AttributeError 和 HTTP 500
+3. **白名单导入格式限制**：仅支持 CSV 格式导入，无法直接导入备份 ZIP/JSON 文件
+4. **recalculate_all_compliance 逻辑遗漏**：重算方法未加载 Scope 条件数据，导致重算时所有终端都采用 IP+MAC 双重匹配策略
+
+#### 根因分析
+
+1. **合规计算流程单一**：白名单检查 → IPGuard 基准匹配的两阶段流程无法满足"条件化匹配策略"需求，需要在白名单检查后增加一个条件判断节点
+2. **导出接口开发时未验证**：导出代码硬编码了 CSV 表头字段，未与实际模型字段对齐
+3. **导入格式单一**：导入功能仅实现了 CSV 解析逻辑，缺少 ZIP/JSON 解析和冲突处理机制
+
+#### 修复内容
+
+| 项目 | 修改文件 | 说明 |
+|------|---------|------|
+| ComplianceScope 模型 | `compliance_scope.py` (model) | 新增 scope_type（ip_cidr/ip_range/mac_prefix）和 scope_value 字段 |
+| ComplianceScope Schema | `compliance_scope.py` (schema) | 新增 Create/Update/Response Schema，含格式校验 |
+| ComplianceScope Service | `compliance_scope_service.py` | 实现 CRUD、缓存失效、格式校验（CIDR /24+、IP 范围、MAC 前缀 3-5 段） |
+| ComplianceScope API | `compliance_scope.py` (endpoint) | RESTful CRUD + toggle 端点，含权限检查 |
+| 合规计算流程集成 | `compliance_service.py` | 白名单后增加 scope 检查节点，实现 IP-only vs IP+MAC 策略选择 |
+| recalculate 修复 | `compliance_service.py` | 加载 scope 数据并应用条件匹配策略 |
+| bypass 快速降级 | `compliance_service.py` | bypass 状态 1 个确认周期降级为 non_compliant |
+| 黑名单导出修复 | `blacklist.py` | 替换为现有模型字段，新增 Status/Block Type/Auto Unblocked 列 |
+| 白名单导入增强 | `whitelist.py`、`terminal_service.py` | 新增 .zip/.json 支持，冲突处理（skip/overwrite），savepoint 事务 |
+| 前端 Scope 页面 | `ComplianceScope.tsx`、`complianceScope.ts` | 管理 UI、CRUD hooks、启用/禁用切换 |
+| 前端侧边栏/路由 | `Sidebar.tsx`、`App.tsx`、`constants.ts` | 新增 Scope 导航项和路由 |
+| UI 修复 | `Sidebar.tsx`、`index.css` | 修复折叠按钮裁剪，新增自定义滚动条样式 |
+| 数据库迁移 | `031_compliance_scope.py` | 创建 compliance_scope 表及索引 |
+
+#### 修改文件清单
+
+| 文件 | 变更类型 | 说明 |
+|------|----------|------|
+| `backend/alembic/versions/031_compliance_scope.py` | 新增 | 数据库迁移：创建 `compliance_scope` 表 |
+| `backend/app/models/compliance_scope.py` | 新增 | ComplianceScope ORM 模型 |
+| `backend/app/schemas/compliance_scope.py` | 新增 | Pydantic Schema |
+| `backend/app/services/compliance_scope_service.py` | 新增 | Service 层 |
+| `backend/app/api/v1/endpoints/compliance_scope.py` | 新增 | API 端点 |
+| `backend/app/services/compliance_service.py` | 修改 | 核心修改：scope 集成 + recalculate 修复 + bypass 降级 |
+| `backend/app/api/v1/endpoints/blacklist.py` | 修改 | 黑名单导出字段修复 |
+| `backend/app/api/v1/endpoints/whitelist.py` | 修改 | 白名单导入增强 |
+| `backend/app/services/terminal_service.py` | 修改 | 白名单导入逻辑增强 |
+| `backend/alembic/env.py` | 修改 | 注册 ComplianceScope 模型 |
+| `backend/app/models/__init__.py` | 修改 | 注册模型到列表 |
+| `backend/app/api/v1/api.py` | 修改 | 注册 compliance_scope 路由 |
+| `backend/app/schemas/terminal.py` | 修改 | Terminal Schema 新增字段 |
+| `frontend/src/api/complianceScope.ts` | 新增 | React Query hooks |
+| `frontend/src/pages/ComplianceScope.tsx` | 新增 | Scope 管理页面 |
+| `frontend/src/App.tsx` | 修改 | 路由注册 |
+| `frontend/src/components/Sidebar.tsx` | 修改 | 侧边栏折叠按钮修复 + 导航项 |
+| `frontend/src/index.css` | 修改 | 自定义滚动条样式 |
+| `frontend/src/lib/constants.ts` | 修改 | 新增 COMPLIANCE_SCOPE 导航项 |
+| `frontend/src/i18n/locales/{zh,en,ja}.ts` | 修改 | 三语言翻译 |
+| `frontend/src/pages/Whitelist.tsx` | 修改 | 导入功能增强 |
+| `frontend/src/pages/Blacklist.tsx` | 修改 | 页面小调整 |
+
+#### 验证结果
+
+- Python 语法检查：所有后端文件通过 `py_compile` ✅
+- TypeScript 编译：所有前端文件通过 `tsc --noEmit` ✅
+- ComplianceScope CRUD：正常创建、编辑、删除、切换启用状态 ✅
+- Scope 条件合规计算：CIDR/IP 范围/MAC 前缀条件正确匹配 ✅
+- 仅 IP 匹配策略：条件范围内终端使用 IP-only 匹配 ✅
+- 双重匹配策略：条件范围外终端保持 IP+MAC 匹配 ✅
+- recalculate_all_compliance：正确加载 Scope 数据并应用条件 ✅
+- bypass 降级：1 个确认周期后降级为 non_compliant ✅
+- 黑名单导出：CSV 包含正确字段 ✅
+- 白名单 ZIP 导入：正确解析嵌套/扁平结构 ✅
+- 白名单 JSON 导入：正确解析并处理冲突 ✅
+- 侧边栏折叠：按钮完全可见，滚动条正常 ✅
+
+#### 发布信息
+
+- 版本号：v3.11.0
+- 前一版本：v3.10.4
+- 变更类型：功能新增 + 修复 + 改进 (feat + fix)
+- 涉及模块：compliance_service.py, compliance_scope_service.py, blacklist.py, whitelist.py, terminal_service.py, ComplianceScope.tsx, Sidebar.tsx, Whitelist.tsx
+- 新增文件：7 个
+- 修改文件：17 个
 
 ---
 

@@ -6,6 +6,7 @@ from app.api.v1.endpoints import (
     backup,
     blacklist,
     compliance_baselines,
+    compliance_scope,
     data_sources,
     ldap,
     logs,
@@ -33,6 +34,7 @@ api_router.include_router(stats.router)
 api_router.include_router(settings.router)
 api_router.include_router(data_sources.router)
 api_router.include_router(compliance_baselines.router)
+api_router.include_router(compliance_scope.router)
 api_router.include_router(roles.router)
 api_router.include_router(notifications.router)
 api_router.include_router(system.router)

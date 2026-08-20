@@ -1,6 +1,7 @@
 from app.models.auth_config import AuthConfig
 from app.models.blacklist import Blacklist
 from app.models.compliance_baseline import ComplianceBaseline
+from app.models.compliance_scope import ComplianceScope
 from app.models.data_source import DataSource, DataSourceBinding
 from app.models.ldap_sync_log import LDAPSyncLog
 from app.models.log import AuditLog
@@ -17,6 +18,7 @@ __all__ = [
     "TerminalStatus",
     "Whitelist",
     "Blacklist",
+    "ComplianceScope",
     "AuditLog",
     "SystemConfig",
     "DataSource",

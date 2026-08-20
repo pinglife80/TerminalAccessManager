@@ -87,6 +87,23 @@ class WhitelistQuery(BaseModel):
     limit: int = Field(50, ge=1, le=200)
 
 
+class WhitelistImportError(BaseModel):
+    """Single import error detail"""
+    row: int = Field(..., description="CSV row number (1-based)")
+    reason: str = Field(..., description="Error description")
+    data: dict = Field(default_factory=dict, description="Row data that caused the error")
+
+
+class WhitelistImportResult(BaseModel):
+    """Result of whitelist CSV import"""
+    success_count: int = Field(0, description="Number of successfully imported entries")
+    skipped_count: int = Field(0, description="Number of skipped (duplicate) entries")
+    failed_count: int = Field(0, description="Number of failed entries")
+    errors: list[WhitelistImportError] = Field(default_factory=list, description="List of import errors")
+    mode: str = Field("skip", description="Conflict handling mode used")
+    total_processed: int = Field(0, description="Total rows processed (excluding header)")
+
+
 # Blacklist schemas
 class BlacklistBase(BaseModel):
     """Base blacklist schema"""

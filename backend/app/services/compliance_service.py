@@ -40,6 +40,8 @@ IPGUARD_CACHE_TTL = 900  # 15 minutes (1.5x sync interval to avoid expiry gap)
 IPGUARD_BACKUP_CACHE_PREFIX = "ipguard:backup:"
 WHITELIST_CACHE_KEY = "whitelist:all"
 WHITELIST_CACHE_TTL = 300  # 5 minutes
+SCOPE_CACHE_KEY = "compliance_scope:all"
+SCOPE_CACHE_TTL = 300  # 5 minutes
 
 # Distributed lock for compliance recalculation
 COMPLIANCE_RECALC_LOCK_KEY = "compliance:recalc:lock"
@@ -103,8 +105,9 @@ class ComplianceService:
 
         Logic:
         1. Check whitelist (IP pattern matching + MAC exact match) -> bypass
-        2. Check IPGuard baseline data (IP+MAC match) -> compliant
-        3. Neither matches -> non_compliant
+        2. Check scope conditions (determines IP-only vs IP+MAC strategy)
+        3. Check IPGuard baseline data (with scope-determined strategy) -> compliant
+        4. Neither matches -> non_compliant
 
         Returns: {"compliance_status": str, "matched_sources": [...], "whitelisted": bool, "wl_match_type": Optional[str]}
         """
@@ -112,15 +115,23 @@ class ComplianceService:
         whitelisted = False
         wl_match_type = None
 
-        # 1. Check whitelist
+        # 1. Check whitelist (pre-filter)
         whitelist_result = await self._check_whitelist(ip_address, mac_address)
         if whitelist_result:
             whitelisted = True
             wl_match_type = whitelist_result.get("match_type")
             matched_sources.append("whitelist")
 
-        # 2. Check IPGuard baseline
-        ipguard_match = await self._check_ipguard(ip_address, mac_address)
+        # 2. Check scope conditions (strategy selection)
+        scope_data = await self._load_scope_cache()
+        use_ip_only = self._check_in_scope(scope_data, ip_address, mac_address)
+
+        # 3. Check IPGuard baseline (with scope-determined strategy)
+        if use_ip_only:
+            ipguard_match = await self._check_ipguard_ip_only(ip_address)
+        else:
+            ipguard_match = await self._check_ipguard(ip_address, mac_address)
+
         if ipguard_match:
             matched_sources.append("ipguard")
 
@@ -142,7 +153,7 @@ class ComplianceService:
         """
         Batch compliance check.
 
-        Performance optimization: load all whitelist and IPGuard data into memory at once.
+        Performance optimization: load all whitelist, scope, and IPGuard data into memory at once.
 
         Args:
             entries: List of {"ip_address": str, "mac_address": str, "source_tag": str}
@@ -150,10 +161,9 @@ class ComplianceService:
         Returns:
             ComplianceCheckResult with counts and details
         """
-        # Load all whitelist data into memory
+        # Load all data into memory once
         whitelist_data = await self._load_whitelist_cache()
-
-        # Load all IPGuard data into memory (from all ipguard sources)
+        scope_data = await self._load_scope_cache()
         ipguard_data = await self._load_all_ipguard_cache()
 
         compliant_list = []
@@ -163,13 +173,18 @@ class ComplianceService:
         for entry in entries:
             ip_addr = entry.get("ip_address", "")
             mac_addr = entry.get("mac_address", "")
-            entry.get("source_tag", "")
 
-            # Check whitelist
+            # Check whitelist (pre-filter)
             wl_result = self._match_whitelist_in_memory(whitelist_data, ip_addr, mac_addr)
 
-            # Check IPGuard
-            ig_match = self._match_ipguard_in_memory(ipguard_data, ip_addr, mac_addr)
+            # Check scope conditions (strategy selection)
+            use_ip_only = self._check_in_scope(scope_data, ip_addr, mac_addr)
+
+            # Check IPGuard (with scope-determined strategy)
+            if use_ip_only:
+                ig_match = self._match_ipguard_ip_only_in_memory(ipguard_data, ip_addr)
+            else:
+                ig_match = self._match_ipguard_in_memory(ipguard_data, ip_addr, mac_addr)
 
             if wl_result:
                 entry["compliance_status"] = "bypass"
@@ -644,6 +659,7 @@ class ComplianceService:
 
         # Load compliance data
         whitelist_data = await self._load_whitelist_cache()
+        scope_data = await self._load_scope_cache()
         ipguard_data = await self._load_all_ipguard_cache()
 
         # Group entries by (ip, mac) so we process all firewalls for a
@@ -661,9 +677,13 @@ class ComplianceService:
         details = []
 
         for (ip_addr, mac_addr), entries in entry_groups.items():
-            # Check if now compliant
+            # Check if now compliant (with scope condition consideration)
             wl_match = self._match_whitelist_in_memory(whitelist_data, ip_addr, mac_addr)
-            ig_match = self._match_ipguard_in_memory(ipguard_data, ip_addr, mac_addr)
+            use_ip_only = self._check_in_scope(scope_data, ip_addr, mac_addr)
+            if use_ip_only:
+                ig_match = self._match_ipguard_ip_only_in_memory(ipguard_data, ip_addr)
+            else:
+                ig_match = self._match_ipguard_in_memory(ipguard_data, ip_addr, mac_addr)
 
             if not (wl_match or ig_match):
                 skipped += len(entries)
@@ -917,6 +937,103 @@ class ComplianceService:
                 entry_mac = entry.get("mac_address", "").upper().replace(":", "-")
                 if entry.get("ip_address") == ip_address and entry_mac == normalized_mac:
                     return True
+        return False
+
+    async def _check_ipguard_ip_only(self, ip_address: str) -> bool:
+        """Check IP-only match against IPGuard baseline data"""
+        ipguard_data = await self._load_all_ipguard_cache()
+        return self._match_ipguard_ip_only_in_memory(ipguard_data, ip_address)
+
+    def _match_ipguard_ip_only_in_memory(
+        self, ipguard_data: dict[str, list[dict]], ip_address: str
+    ) -> bool:
+        """Match IP-only against in-memory IPGuard data (ignore MAC)"""
+        for _source_tag, entries in ipguard_data.items():
+            for entry in entries:
+                if entry.get("ip_address") == ip_address:
+                    return True
+        return False
+
+    # ------------------------------------------------------------------
+    # Scope Conditions
+    # ------------------------------------------------------------------
+    async def _load_scope_cache(self) -> list[dict]:
+        """Load all active compliance scope conditions from Redis cache or database"""
+        try:
+            redis = await _get_redis()
+            cached = await redis.get(SCOPE_CACHE_KEY)
+            if cached:
+                data = json.loads(cached if isinstance(cached, str) else cached.decode())
+                return data
+        except Exception:
+            pass
+
+        from app.models.compliance_scope import ComplianceScope as ComplianceScopeModel
+        stmt = select(ComplianceScopeModel).where(ComplianceScopeModel.is_active == True)
+        result = await self.db.execute(stmt)
+        entries = result.scalars().all()
+
+        data = []
+        for entry in entries:
+            data.append({
+                "id": entry.id,
+                "scope_type": entry.scope_type,
+                "scope_value": entry.scope_value,
+                "description": entry.description,
+            })
+
+        try:
+            redis = await _get_redis()
+            scope_ttl = await get_config_value("cache_scope_ttl", WHITELIST_CACHE_TTL)
+            await redis.setex(SCOPE_CACHE_KEY, scope_ttl, json.dumps(data))
+        except Exception:
+            pass
+
+        return data
+
+    def _check_in_scope(self, scope_data: list[dict], ip_address: str, mac_address: str) -> bool:
+        """
+        Check if terminal falls within any scope condition.
+        Returns True if the terminal should use IP-only strategy.
+        """
+        if not scope_data:
+            return False
+
+        for scope in scope_data:
+            scope_type = scope.get("scope_type", "")
+            scope_value = scope.get("scope_value", "")
+
+            if scope_type == "ip_cidr":
+                try:
+                    import ipaddress
+                    network = ipaddress.ip_network(scope_value, strict=False)
+                    ip = ipaddress.ip_address(ip_address)
+                    if ip in network:
+                        return True
+                except (ValueError, TypeError):
+                    continue
+
+            elif scope_type == "ip_range":
+                try:
+                    import ipaddress
+                    start_ip_str, end_ip_str = scope_value.split("-")
+                    start_ip = int(ipaddress.IPv4Address(start_ip_str))
+                    end_ip = int(ipaddress.IPv4Address(end_ip_str))
+                    ip_val = int(ipaddress.IPv4Address(ip_address))
+                    if start_ip <= ip_val <= end_ip:
+                        return True
+                except (ValueError, TypeError):
+                    continue
+
+            elif scope_type == "mac_prefix":
+                try:
+                    scope_prefix = scope_value.upper().replace(":", "").replace("-", "")
+                    terminal_mac = mac_address.upper().replace(":", "").replace("-", "")
+                    if len(terminal_mac) >= len(scope_prefix) and terminal_mac.startswith(scope_prefix):
+                        return True
+                except (ValueError, TypeError):
+                    continue
+
         return False
 
     # ------------------------------------------------------------------
@@ -1465,6 +1582,7 @@ class ComplianceService:
 
             whitelist_data = await self._load_whitelist_cache()
             ipguard_data = await self._load_all_ipguard_cache()
+            scope_data = await self._load_scope_cache()
 
             logger.debug(f"Loaded {len(whitelist_data)} whitelist entries")
             ipguard_total = sum(len(v) for v in ipguard_data.values())
@@ -1514,7 +1632,11 @@ class ComplianceService:
                     old_compliance = terminal.compliance_status
 
                     wl_result = self._match_whitelist_in_memory(whitelist_data, ip_addr, mac_addr)
-                    ig_match = self._match_ipguard_in_memory(ipguard_data, ip_addr, mac_addr)
+                    use_ip_only = self._check_in_scope(scope_data, ip_addr, mac_addr)
+                    if use_ip_only:
+                        ig_match = self._match_ipguard_ip_only_in_memory(ipguard_data, ip_addr)
+                    else:
+                        ig_match = self._match_ipguard_in_memory(ipguard_data, ip_addr, mac_addr)
 
                     if wl_result:
                         new_compliance = "bypass"
@@ -1529,23 +1651,22 @@ class ComplianceService:
                     else:
                         # IPGuard/whitelist both not matched
                         if old_compliance in ("non_compliant", "unknown"):
-                            # Already non_compliant or new terminal → confirm immediately
                             new_compliance = "non_compliant"
+                        elif old_compliance == "bypass":
+                            terminal.non_compliant_confirm_count += 1
+                            if terminal.non_compliant_confirm_count >= 1:
+                                new_compliance = "non_compliant"
+                                terminal.non_compliant_confirm_count = 0
+                            else:
+                                new_compliance = old_compliance
                         else:
-                            # Was compliant/bypass → require confirmation cycles
-                            # to avoid false transitions from IPGuard data fluctuations
                             confirm_threshold = await self._get_confirm_threshold()
                             terminal.non_compliant_confirm_count += 1
                             if terminal.non_compliant_confirm_count >= confirm_threshold:
                                 new_compliance = "non_compliant"
                                 terminal.non_compliant_confirm_count = 0
                             else:
-                                # Keep original status, don't trigger block/unblock
                                 new_compliance = old_compliance
-                                logger.debug(
-                                    f"Terminal {ip_addr}/{mac_addr}: pending non_compliant confirmation "
-                                    f"({terminal.non_compliant_confirm_count}/{confirm_threshold})"
-                                )
                         new_wl_match_type = None
                         wl_comments = None
 

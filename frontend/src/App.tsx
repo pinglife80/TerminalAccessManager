@@ -23,6 +23,7 @@ const Roles = lazy(() => import('./pages/Roles'));
 const AuthProviders = lazy(() => import('./pages/AuthProviders'));
 const Backup = lazy(() => import('./pages/Backup'));
 const Notifications = lazy(() => import('./pages/Notifications'));
+const ComplianceScope = lazy(() => import('./pages/ComplianceScope'));
 const SystemSettings = lazy(() => import('./pages/SystemSettings'));
 const GeneralSettings = lazy(() => import('./pages/GeneralSettings'));
 const EmailSettings = lazy(() => import('./pages/EmailSettings'));
@@ -183,6 +184,7 @@ const App: React.FC = () => {
               <Route path="whitelist" element={<ProtectedRoute requiredPermission="whitelist:read"><Whitelist /></ProtectedRoute>} />
               <Route path="blacklist" element={<ProtectedRoute requiredPermission="blacklist:read"><Blacklist /></ProtectedRoute>} />
               <Route path="data-sources" element={<ProtectedRoute requiredPermission="datasource:read"><DataSources /></ProtectedRoute>} />
+              <Route path="compliance-scopes" element={<ProtectedRoute requiredPermission="compliance:read"><ComplianceScope /></ProtectedRoute>} />
               <Route path="audit-logs" element={<ProtectedRoute requiredPermission="audit:read"><AuditLogs /></ProtectedRoute>} />
               <Route path="system-settings" element={<ProtectedRoute requiredPermission="settings:read"><SystemSettings /></ProtectedRoute>} />
               <Route path="general-settings" element={<ProtectedRoute requiredPermission="settings:read"><GeneralSettings /></ProtectedRoute>} />
