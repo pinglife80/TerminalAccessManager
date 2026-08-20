@@ -1,6 +1,6 @@
 # TerminalAccessManager 数据库设计文档
 
-> 文档版本：v3.9.0  更新日期：2026-08-05
+> 文档版本：v3.12.0  更新日期：2026-08-20
 
 ## 1. 概述
 
@@ -207,32 +207,37 @@ docker-compose.yml 中 PostgreSQL 的 `command` 参数列表如下：
 | 字段 | 类型 | 约束 | 默认值 | 说明 |
 |---|---|---|---|---|
 | id | INTEGER | PK, INDEX | 自增 | 主键 |
-| ip_address | VARCHAR(45) | NOT NULL, INDEX | — | IPv4/IPv6 地址 |
+| ip_address | VARCHAR(45) | NOT NULL, INDEX | — | IPv4/IPv6 地址（DHCP换IP时更新） |
 | mac_address | VARCHAR(17) | NOT NULL, INDEX | — | MAC 地址（格式 XX-XX-XX-XX-XX-XX） |
-| status | VARCHAR(20) | INDEX | 'unblocked' | 终端状态（blocked/unblocked） |
+| status | VARCHAR(20) | INDEX | 'unblocked' | 终端防火墙状态（blocked/unblocked） |
 | comments | TEXT | | NULL | 备注 |
-| timestamp | TIMESTAMP WITH TZ | INDEX | utcnow | 记录创建时间 |
+| timestamp | TIMESTAMP WITH TZ | INDEX | utcnow | 记录创建时间（首次发现时间） |
 | updated_at | TIMESTAMP WITH TZ | INDEX | NULL | 记录更新时间（ARP 采集更新时写入，不覆盖 timestamp） |
 | source | VARCHAR(50) | | 'arp' | 数据来源 |
 | source_tag | VARCHAR(50) | INDEX | NULL | 数据源标签，关联 data_sources.tag |
 | compliance_status | VARCHAR(20) | INDEX | 'unknown' | 合规状态 |
 | wl_match_type | VARCHAR(10) | | NULL | 白名单匹配类型 |
-| mac_address_normalized | VARCHAR(12) | INDEX | NULL | MAC 地址标准化（去除分隔符的大写 12 位字符串，如 AABBCCDDEEFF） |
+| mac_address_normalized | VARCHAR(12) | NOT NULL, UNIQUE, INDEX | — | MAC 地址标准化（去除分隔符的大写 12 位字符串，如 AABBCCDDEEFF），v3.12起为唯一键 |
 | firewall_tag | VARCHAR(50) | | NULL | 封堵操作时写入的防火墙标签，解封时清除 |
+| non_compliant_confirm_count | INTEGER | | 0 | 连续不合规确认计数（降级用） |
+| compliant_confirm_count | INTEGER | | 0 | 连续合规确认计数（升级用，v3.12+） |
+| ip_changed_at | TIMESTAMP WITH TZ | | NULL | 最近IP变更时间戳（用于宽限期判断，v3.12+） |
+
+> **v3.12 重要变更**：终端记录以 MAC 地址为唯一标识，一个 MAC 对应一条记录，IP 地址作为可变属性在 DHCP 换 IP 时更新，不再产生重复记录。双网卡终端每个 MAC 独立一条记录。
 
 **索引：**
 
 | 索引名 | 类型 | 字段 |
 |---|---|---|
-| idx_terminal_timestamp | COMPOSITE | (mac_address, timestamp) |
+| idx_mac_timestamp | COMPOSITE | (mac_address, timestamp) |
 | idx_ip_status | COMPOSITE | (ip_address, status) |
-| idx_terminal_mac_normalized | SINGLE | mac_address_normalized | MAC 标准化列索引，加速格式无关搜索 |
+| uq_terminal_mac | UNIQUE | mac_address_normalized | MAC 标准化列唯一索引，一个MAC一条记录 |
 
 **约束：**
 
 | 约束名 | 类型 | 字段 | 说明 |
 |---|---|---|---|
-| uq_terminal_ip_mac | UNIQUE | (ip_address, mac_address) | 防止并发 ARP 采集产生重复 (ip, mac) 记录 |
+| uq_terminal_mac | UNIQUE | mac_address_normalized | 以归一化MAC为唯一标识，v3.12替换原uq_terminal_ip_mac |
 
 **数据字典 — status：**
 
@@ -867,6 +872,15 @@ docker-compose.yml 中 PostgreSQL 的 `command` 参数列表如下：
 | bool | system_config.value_type | 布尔值 |
 | json | system_config.value_type | JSON 对象 |
 
+### 4.8 ScopeType（合规范围条件类型，v3.11+）
+
+| 枚举值 | 适用表 | 说明 |
+|---|---|---|
+| ip_cidr | compliance_scope.scope_type | IP网段（CIDR）匹配终端IP，命中后忽略MAC仅用IP匹配IPGuard |
+| ip_range | compliance_scope.scope_type | IP范围匹配终端IP，命中后忽略MAC仅用IP匹配IPGuard |
+| mac_prefix_arp | compliance_scope.scope_type | MAC前缀匹配ARP采集的终端MAC，命中后忽略MAC仅用IP匹配IPGuard（v3.12拆分自原mac_prefix） |
+| mac_prefix_ipguard | compliance_scope.scope_type | MAC前缀匹配IPGuard基线中的MAC，命中后按IP+MAC精确匹配（v3.12新增） |
+
 ---
 
 ## 5. Redis 数据结构
@@ -989,6 +1003,11 @@ docker-compose.yml 中 PostgreSQL 的 `command` 参数列表如下：
 | 007_firewall_tag.py | terminals 表新增 firewall_tag 列（VARCHAR(50), nullable, default NULL） |
 | 008_audit_resource_name.py | audit_logs 表新增 resource_name 列 |
 | 009_audit_keyset_index.py | audit_logs 表新增 keyset 分页复合索引 |
+| ... (中间版本迁移省略) |
+| 031_compliance_scope.py | 新增 compliance_scope 合规范围条件表（v3.11.0） |
+| 032_mac_prefix_scope_type_split.py | 将 scope_type='mac_prefix' 迁移为 'mac_prefix_arp'，支持区分MAC前缀匹配数据源（v3.12.0） |
+| 033_terminal_mac_unique.py | 数据去重后删除旧联合约束，添加 mac_address_normalized 唯一约束 uq_terminal_mac（v3.12.0） |
+| 034_compliance_oscillation_fixes.py | terminals 表新增 compliant_confirm_count、ip_changed_at 字段（v3.12.0） |
 
 ### 003_search_indexes.py 详情
 

@@ -1,11 +1,58 @@
 # 更新日志
 
-> 文档版本：v3.11.0  更新日期：2026-08-20
+> 文档版本：v3.12.0  更新日期：2026-08-20
 
 本文件记录 TerminalAccessManager 的所有重要变更。
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
+
+***
+
+## [3.12.0] - 2026-08-20
+
+### 新增
+
+- **Compliance Scope 条件增强 - MAC前缀匹配数据源区分**：
+  - 原 `mac_prefix` 类型拆分为 `mac_prefix_arp` 和 `mac_prefix_ipguard` 两种独立类型
+  - `mac_prefix_arp`：匹配 ARP 采集的终端 MAC，命中后忽略 MAC 仅用 IP 匹配 IPGuard 基线
+  - `mac_prefix_ipguard`：匹配 IPGuard 基线中的 MAC，命中后按 IP+MAC 精确匹配
+  - 前端界面新增两种类型选项和说明，自动迁移原有 `mac_prefix` 数据为 `mac_prefix_arp`
+  - 新增 Alembic 迁移 `032_mac_prefix_scope_type_split`
+  - 关联文件：`compliance_scope.py`（model/schema/service）、`ComplianceScope.tsx`、`complianceScope.ts`、i18n 多语言文件
+
+- **终端唯一标识重构 - MAC地址作为终端主键**：
+  - Terminal 表唯一约束从 `(ip_address, mac_address)` 改为 `mac_address_normalized`（MAC归一化值）
+  - ARP 入库逻辑重构：按 MAC 查询现有记录并更新 IP 地址，DHCP 换 IP 不再产生重复终端记录
+  - 新增终端支持有线+无线双网卡场景：每个 MAC 对应一条独立记录，分别进行合规判断
+  - IPGuard 基线解析正确支持多 MAC-IP 对格式：`MAC1(IP1)MAC2(IP2)...`
+  - 数据迁移自动去重：保留每个 MAC 最新/被封禁记录，删除冲突的重复记录
+  - 新增 Alembic 迁移 `033_terminal_mac_unique`
+  - 关联文件：`terminal.py`（model）、`arp_collector_service.py`、`compliance_service.py`
+
+- **合规状态防震荡机制（三层保护）**：
+  - **对称确认计数**：降级（任何状态→non_compliant）和升级（non_compliant→compliant/bypass）都需要连续 N 次检查确认（默认 N=2≈10分钟），防止一次瞬态不匹配就触发状态切换
+  - **双向冷却期**：自动封禁后 10 分钟内不自动解封，自动解封后 10 分钟内不自动重新封禁
+  - **IP 变更宽限期**：DHCP 换 IP 后 10 分钟宽限期内不立即降级封禁，给 IPGuard 基线同步新 IP-MAC 映射留出时间
+  - **解封与状态变更解耦**：`auto_unblock` 仅处理防火墙 API 解封操作，不直接设置 `compliance_status`，合规状态由下一轮定时检查按确认计数逻辑正常更新
+  - 新增 Alembic 迁移 `034_compliance_oscillation_fixes`
+  - 关联文件：`compliance_service.py`、`main.py`、`terminal.py`（model）、`arp_collector_service.py`
+
+### 改进
+
+- **时序竞争消除**：IPGuard 基线同步完成后不再立即触发全量合规重算，避免"新基线+旧ARP数据"导致的误判，由下一轮定时合规检查自然使用新缓存
+- **黑名单查询优化**：活跃黑名单查询、重试封禁逻辑改为按 normalized MAC 查询标识，正确处理 DHCP 换 IP 场景，避免重复封禁/漏解封
+- **Auto-unblock 分组改进**：按 normalized MAC 分组处理同一终端的多防火墙条目，合规检查使用终端当前最新 IP，防火墙解封使用黑名单中记录的原始封禁 IP
+- **重试封禁逻辑增强**：retry-block 增加重复检查和冷却保护，防止同一终端重复添加封禁条目
+- **状态变更日志增强**：确认计数变化输出 debug 日志，达到阈值发生状态变更时输出 INFO 日志明确记录 "CONFIRMED downgrade/upgrade" 原因
+
+### 修复
+
+- **修复 auto_unblock 分组 key 未归一化**：原始 (ip, mac) 作为分组 key 未处理 MAC 格式差异，导致同一物理终端多防火墙条目被拆分到不同组，解封不一致
+- **修复 main.py 定时合规检查 result_lookup key 遗漏**：MAC 唯一化改造后，`scheduled_compliance_check` 仍用 IP 作为 result_lookup 的 key，导致双网卡/换 IP 场景结果应用错误
+- **修复 bypass 状态降级阈值硬编码为 1**：从 bypass 降级到 non_compliant 原来只需要 1 次不匹配就立即封禁，改为使用统一的配置确认阈值
+- **修复 unknown 状态无确认阈值**：新终端/IP 变更后的 unknown 状态第一次不匹配就直接 non_compliant，改为也需要达到确认阈值
+- **修复活跃黑名单查询条件**：在 MAC 唯一化后仍按 (IP, MAC) 查询活跃黑名单，DHCP 换 IP 后查不到已存在封禁记录，导致重复封禁
 
 ***
 

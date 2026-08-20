@@ -1,6 +1,6 @@
 # TerminalAccessManager 业务流程文档
 
-> 文档版本：v3.10.0  更新日期：2026-08-06
+> 文档版本：v3.12.0  更新日期：2026-08-20
 >
 > 本文档详细说明 TerminalAccessManager 的核心业务流程，包括数据采集、合规判定、封锁/解封的完整生命周期。
 
@@ -76,12 +76,21 @@ TerminalAccessManager 的核心业务流程由以下环节组成：
 class Terminal(Base):
     ip_address = Column(String(45), nullable=False, index=True)
     mac_address = Column(String(17), nullable=False, index=True)
-    mac_address_normalized = Column(String(12), nullable=True, index=True)
+    mac_address_normalized = Column(String(12), nullable=False, index=True)  # Unique per MAC (v3.12+)
     status = Column(String(20), default="unblocked", index=True)
     compliance_status = Column(String(20), default="unknown", index=True)
     source_tag = Column(String(50), nullable=True, index=True)
     firewall_tag = Column(String(50), nullable=True, index=True)
+    non_compliant_confirm_count = Column(Integer, default=0)  # Downgrade confirm counter
+    compliant_confirm_count = Column(Integer, default=0)      # Upgrade confirm counter (v3.12+)
+    ip_changed_at = Column(DateTime(timezone=True), nullable=True)  # Last IP change timestamp (v3.12+)
+
+    __table_args__ = (
+        UniqueConstraint('mac_address_normalized', name='uq_terminal_mac'),  # MAC is unique key (v3.12+)
+    )
 ```
+
+> **v3.12 重要变更**：终端记录以 MAC 地址为唯一标识，不再以 (IP, MAC) 联合主键。DHCP 换 IP 时更新现有记录而非新建，双网卡终端每个 MAC 独立一条记录。
 
 ---
 
@@ -89,12 +98,12 @@ class Terminal(Base):
 
 ### 3.1 流程概述
 
-合规判定流程根据白名单和IPGuard基线数据，判定终端是否合规。
+合规判定流程根据白名单、合规范围条件（Scope）和 IPGuard 基线数据，判定终端是否合规。
 
 ### 3.2 判定逻辑
 
 ```
-终端信息 → 白名单匹配 → IPGuard匹配 → 合规状态更新
+终端信息 → 白名单匹配 → Scope范围条件检查 → IPGuard匹配 → 状态确认计数 → 合规状态更新
 ```
 
 ### 3.3 判定规则
@@ -102,83 +111,142 @@ class Terminal(Base):
 | 条件 | 合规状态 | 说明 |
 |------|---------|------|
 | 匹配白名单 | `bypass` | 终端在白名单中，跳过合规检查 |
-| 匹配IPGuard | `compliant` | 终端在IPGuard基线中，合规 |
+| 在Scope范围内 + IP匹配IPGuard | `compliant` | 命中Scope条件，忽略MAC仅用IP匹配IPGuard基线 |
+| MAC匹配IPGuard + IP匹配 | `compliant` | 正常IP+MAC双重匹配IPGuard基线 |
 | 不匹配任何 | `non_compliant` | 终端不在白名单和IPGuard中，不合规 |
-| 未检查 | `unknown` | 终端刚采集，尚未执行合规检查 |
+| 未检查/IP变更宽限期 | `unknown`/保持原状态 | 终端刚采集或在IP变更宽限期内 |
 
-### 3.4 翻转确认机制（v3.7.0 新增）
+### 3.4 合规范围条件（Scope）类型
+
+v3.11 新增，v3.12 拆分 MAC 前缀类型：
+
+| Scope类型 | 匹配对象 | 命中后行为 |
+|-----------|---------|-----------|
+| `ip_cidr` | 终端IP | 忽略MAC，仅用IP匹配IPGuard |
+| `ip_range` | 终端IP（范围） | 忽略MAC，仅用IP匹配IPGuard |
+| `mac_prefix_arp` | ARP采集的终端MAC前缀 | 忽略MAC，仅用IP匹配IPGuard |
+| `mac_prefix_ipguard` | IPGuard基线中的MAC前缀 | 正常IP+MAC匹配，用于区分IPGuard基线中的特定设备类型 |
+
+### 3.5 三层防震荡机制（v3.12 增强）
 
 #### 背景
 
-IPGuard 基线数据中的 `AGENT.AGT_IP_MAC_STR` 字段记录 agent 当前上报的 IP+MAC 绑定关系。当终端 DHCP 续租或 agent 重连时该字段会更新，导致 TAM 的 IP+MAC 精确匹配瞬时失败。若直接采用单次同步结果判定合规状态，会产生"合规振荡"（终端在 compliant 与 non_compliant 之间频繁翻转，引发防火墙反复封堵/解封）。
+IPGuard 基线数据中的 `AGENT.AGT_IP_MAC_STR` 字段记录 agent 当前上报的 IP+MAC 绑定关系。当终端 DHCP 续租、agent 重连、双网卡切换或 IPGuard/ARP 同步时序不一致时，单次检查结果可能瞬态不匹配，导致"合规振荡"（终端在合规/不合规之间频繁翻转，引发防火墙反复封堵/解封）。
 
-#### 机制说明
+v3.12 引入三层防震荡保护彻底解决该问题：
 
-`recalculate_all_compliance` 中对 compliant/bypass → non_compliant 的翻转引入 `non_compliant_confirm_count` 计数器：
+#### 第一层：对称确认计数
+
+`recalculate_all_compliance` 中对**所有状态翻转**引入双向对称确认计数：
 
 | 终端当前状态 | 单次判定结果 | 行为 |
 |-------------|-------------|------|
-| unknown | non_compliant | **立即生效**，计数器不参与，触发封堵 |
-| non_compliant | non_compliant | 保持 non_compliant，计数器归零 |
-| compliant/bypass | non_compliant | 计数器 +1，未达阈值则**保持原状态**；达到阈值（默认 2）后变更为 non_compliant 并触发封堵 |
-| 任意状态 | compliant/bypass | 计数器归零，正常变更状态 |
+| 任意状态（含unknown/bypass） | non_compliant | 计数器 `non_compliant_confirm_count +1`，未达阈值**保持原状态**；达到阈值（默认 2 次≈10分钟）后变更为 non_compliant |
+| non_compliant | compliant/bypass | 计数器 `compliant_confirm_count +1`，未达阈值保持 non_compliant；达到阈值后变更为 compliant/bypass |
+| 任意状态 | 与当前状态一致 | 反向计数器归零 |
 
-> **说明**：首次发现的新终端（unknown → non_compliant）不受确认机制影响，立即封堵，确保新接入的不合规终端能被及时处置。
+> **说明**：v3.12 起 unknown/bypass 状态首次不匹配不再立即封禁，统一需要连续 N 次确认，防止瞬态误判。
+
+#### 第二层：双向冷却期
+
+- 自动封禁后 10 分钟内不执行自动解封
+- 自动解封后 10 分钟内不执行自动重新封禁
+- 利用 blacklist 表中的 `blocked_at`/`unblocked_at` 时间戳判断，无需额外字段
+- 手动操作不受冷却期限制
+
+#### 第三层：IP变更宽限期
+
+- ARP 采集发现 IP 变更时，记录 `ip_changed_at` 时间戳，**不立即重置**合规状态为 unknown
+- IP 变更后 10 分钟宽限期内：即使 IPGuard 不匹配也保持原合规状态，等待 IPGuard 基线同步新 IP-MAC 映射
+- 宽限期内仍累计不匹配计数，宽限期结束后正常按确认计数逻辑处理
+
+#### auto_unblock 解耦
+
+自动解封（`auto_unblock_compliant`）仅处理防火墙 API 解封操作，不直接修改 `compliance_status`。合规状态由下一轮定时合规检查按确认计数逻辑正常更新，避免解封后瞬态不匹配立即重新封禁。
 
 #### 配置项
 
 | 配置键 | 默认值 | 取值范围 | 说明 |
 |--------|--------|---------|------|
-| `compliance_confirm_threshold` | 2 | 1-10 | compliant/bypass → non_compliant 翻转所需连续确认次数 |
+| `compliance_confirm_threshold` | 2 | 1-10 | 所有状态翻转（升级/降级）所需连续确认次数 |
+| 冷却期（硬编码） | 10分钟 | - | 自动封禁/解封后最小间隔，可后续配置化 |
+| IP变更宽限期（硬编码） | 10分钟 | - | DHCP换IP后等待IPGuard同步时间，可后续配置化 |
 
 #### 相关数据
 
-- 数据库字段：`terminals.non_compliant_confirm_count`（INTEGER, NOT NULL, DEFAULT 0）
-- 迁移脚本：`backend/alembic/versions/029_terminal_non_compliant_confirm_count.py`
+- 数据库字段：
+  - `terminals.non_compliant_confirm_count`（INTEGER, NOT NULL, DEFAULT 0）- 降级确认计数
+  - `terminals.compliant_confirm_count`（INTEGER, NOT NULL, DEFAULT 0）- 升级确认计数（v3.12+）
+  - `terminals.ip_changed_at`（DATETIME(timezone), nullable）- 最近IP变更时间（v3.12+）
+  - `terminals.mac_address_normalized` 唯一约束 `uq_terminal_mac`（v3.12+）
+- 迁移脚本：
+  - `032_mac_prefix_scope_type_split.py` - MAC前缀类型拆分
+  - `033_terminal_mac_unique.py` - MAC唯一约束与数据去重
+  - `034_compliance_oscillation_fixes.py` - 新增对称计数和IP变更时间戳字段
 
-### 3.5 执行步骤
+### 3.6 双网卡终端处理（v3.12+）
+
+- 终端同时连接有线+无线网络时，ARP采集会获取到两个独立的 (MAC, IP) 对
+- v3.12 起每个 MAC 对应一条独立的 Terminal 记录，分别进行合规判断
+- IPGuard 基线中双网卡记录格式为：`MAC1(IP1)MAC2(IP2)...`，合规解析时正确展开为独立的 (MAC, IP) 对条目
+- 合规匹配时：MAC1+IP1 和 MAC2+IP2 分别独立匹配，任一匹配即该 MAC 对应的记录合规；不匹配的 MAC 独立进入确认计数流程
+
+### 3.7 执行步骤
 
 ```python
 def _match_whitelist_in_memory(whitelist_data, ip_addr, mac_addr):
     # 按MAC、IP、IP范围顺序匹配白名单
     # 返回匹配结果或None
 
-def _match_ipguard_in_memory(ipguard_data, ip_addr, mac_addr):
-    # 在IPGuard数据中查找终端
+def _match_ipguard_in_memory(ipguard_data, ip_addr, mac_addr, ipguard_mac_prefixes=None):
+    # 在IPGuard数据中查找终端，支持IPGuard MAC前缀匹配
+    # 正确解析多MAC-IP对格式 "MAC1(IP1)MAC2(IP2)..."
     # 返回匹配结果或None
 
-# 判定逻辑（含翻转确认机制）
+# 判定逻辑（v3.12 含三层防震荡机制）
 if wl_result:
-    new_compliance = "bypass"
-    terminal.non_compliant_confirm_count = 0
+    current_check_status = "bypass"
+    ...
 elif ig_match:
-    new_compliance = "compliant"
-    terminal.non_compliant_confirm_count = 0
+    current_check_status = "compliant"
+    ...
 else:
-    if old_compliance in ("non_compliant", "unknown"):
-        # 已是不合规或新终端：立即生效
+    current_check_status = "non_compliant"
+
+# IP变更宽限期检查
+if in_ip_grace_period and current_check_status == "non_compliant":
+    hold current state, increment non_compliant_confirm_count
+elif current_check_status == old_compliance:
+    reset opposite counter
+elif current_check_status == "non_compliant":
+    # 降级：需连续 N 次确认（任意状态，含unknown/bypass）
+    terminal.non_compliant_confirm_count += 1
+    terminal.compliant_confirm_count = 0
+    if non_compliant_confirm_count >= confirm_threshold:
         new_compliance = "non_compliant"
-    else:
-        # compliant/bypass → non_compliant：需连续 N 次确认
-        terminal.non_compliant_confirm_count += 1
-        if terminal.non_compliant_confirm_count >= confirm_threshold:
-            new_compliance = "non_compliant"
-            terminal.non_compliant_confirm_count = 0
-        else:
-            new_compliance = old_compliance  # 保持原状态
+else:
+    # 升级：需连续 N 次确认
+    terminal.compliant_confirm_count += 1
+    terminal.non_compliant_confirm_count = 0
+    if compliant_confirm_count >= confirm_threshold:
+        new_compliance = current_check_status
+
+# 冷却期检查：封禁/解封操作前检查是否在10分钟冷却期内
 ```
 
-### 3.6 触发时机
+### 3.8 触发时机
 
 | 触发场景 | 说明 |
 |---------|------|
 | ARP数据采集完成 | 新采集的终端自动触发合规检查，使用 `_apply_compliance_result` 共享方法 |
 | 白名单变更 | 添加/删除白名单条目后触发全量重算，使用 `_apply_compliance_result` 共享方法 |
-| IPGuard同步完成 | 基线数据更新后触发全量重算，使用 `_apply_compliance_result` 共享方法 |
-| 定时合规检查 | 定期检查 `compliance_status="unknown"` 的终端，使用 `_apply_compliance_result` 共享方法 |
+| 定时合规检查 | 定期检查所有终端合规状态，使用对称确认计数更新状态 |
+| Scope条件变更 | 合规范围条件变更后失效缓存，下一轮检查使用新条件 |
+| IPGuard同步完成 | v3.12起基线数据更新后**不立即**触发全量重算，由下一轮定时合规检查自然使用新缓存，避免时序竞争 |
+| 定时自动解封 | 定期检查已封禁终端是否恢复合规，冷却期保护下执行解封 |
 | 手动触发 | 通过API手动触发合规重算 |
 
-### 3.7 统一合规应用方法
+### 3.9 统一合规应用方法
 
 `_apply_compliance_result` 是所有合规检查路径共享的方法，确保行为一致性：
 

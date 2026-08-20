@@ -1,10 +1,58 @@
 # 版本跟踪记录
 
-> 文档版本：v3.11.0 | 更新日期：2026-08-20
+> 文档版本：v3.12.0 | 更新日期：2026-08-20
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
+
+---
+
+## [v3.12.0] - 2026-08-20
+
+### MAC前缀类型拆分、终端MAC唯一标识重构、合规状态防震荡
+
+#### 背景
+
+v3.11.0发布后发现多个严重问题：
+1. MAC前缀筛选条件无法区分匹配ARP终端还是IPGuard基线，功能不完整
+2. 终端以(IP,MAC)联合主键导致DHCP换IP产生重复记录，双网卡终端处理错误
+3. 合规状态频繁震荡（封禁→解封→封禁循环），由确认阈值不一致、时序竞争、缺少冷却期等多个根因导致
+
+#### 主要变更
+
+| 功能 | 说明 |
+|------|------|
+| MAC前缀类型拆分 | `mac_prefix`拆分为`mac_prefix_arp`（匹配ARP终端）和`mac_prefix_ipguard`（匹配IPGuard基线MAC） |
+| 终端MAC唯一标识 | Terminal表唯一键改为MAC归一化值，ARP入库按MAC更新IP，支持双网卡正确处理 |
+| 三层防震荡机制 | 对称确认计数、双向冷却期（10分钟）、IP变更宽限期（10分钟），彻底解决状态震荡 |
+| IPGuard双网卡格式支持 | 正确解析`MAC1(IP1)MAC2(IP2)...`格式 |
+
+#### 升级步骤
+
+```bash
+# 1. 拉取代码
+git checkout main
+git pull origin main
+
+# 2. 执行数据库迁移（包含数据去重：保留每个MAC最新/被封禁记录）
+cd backend && alembic upgrade head
+
+# 3. 重启服务
+docker compose up -d
+```
+
+#### 升级注意事项
+
+⚠️ **必须执行数据库迁移**：包含3个迁移脚本，其中033会去重重复终端记录（保留每个MAC最新/被封禁记录）
+⚠️ **合规判定延迟变化**：状态切换需要连续2次确认（约10分钟），防止瞬态误判，这是预期行为
+⚠️ **冷却期保护**：自动封禁/解封后10分钟内不执行反向操作，手动操作不受限
+
+#### 数据库迁移
+
+- `032_mac_prefix_scope_type_split.py` - 原有mac_prefix数据自动迁移为mac_prefix_arp
+- `033_terminal_mac_unique.py` - 数据去重后修改唯一约束为mac_address_normalized
+- `034_compliance_oscillation_fixes.py` - 新增compliant_confirm_count和ip_changed_at字段
 
 ---
 
