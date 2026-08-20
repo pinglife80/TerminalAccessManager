@@ -35,11 +35,14 @@ class Terminal(Base):
     compliance_status = Column(String(20), default="unknown", index=True)  # compliant / bypass / non_compliant / unknown
     wl_match_type = Column(String(10), nullable=True)  # "mac" / "ip" / "both" / null (whitelist match type)
     firewall_tag = Column(String(50), nullable=True, index=True)  # Firewall tag from block operation
-    non_compliant_confirm_count = Column(Integer, default=0)  # Consecutive non_compliant detections during compliant→non_compliant transition
+    non_compliant_confirm_count = Column(Integer, default=0)  # Consecutive non_compliant detections during compliant/bypass/unknown→non_compliant transition
+    compliant_confirm_count = Column(Integer, default=0)  # Consecutive compliant/bypass detections during non_compliant→compliant transition
+    ip_changed_at = Column(DateTime(timezone=True), nullable=True)  # Timestamp of last IP change (for grace period)
 
     # Composite index for efficient queries
+    # One record per MAC address (network interface); IP is an updatable attribute
     __table_args__ = (
-        UniqueConstraint('ip_address', 'mac_address', name='uq_terminal_ip_mac'),
+        UniqueConstraint('mac_address_normalized', name='uq_terminal_mac'),
         Index('idx_mac_timestamp', 'mac_address', 'timestamp'),
         Index('idx_ip_status', 'ip_address', 'status'),
     )

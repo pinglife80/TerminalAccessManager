@@ -268,7 +268,7 @@ class ArpCollectorService:
     ) -> SyncResult:
         """
         Process ARP entries:
-        1. Batch upsert to Terminal table (with source_tag)
+        1. Batch upsert to Terminal table (with source_tag) - one record per MAC
         2. Batch compliance check
         3. Update compliance_status
         4. Trigger auto-block (non-blocking)
@@ -276,7 +276,7 @@ class ArpCollectorService:
         added = 0
         updated = 0
         errors = []
-        seen_ips: set[str] = set()
+        seen_macs: set[str] = set()
 
         for entry in entries:
             ip_addr = entry.get("ip_address", "").strip()
@@ -285,34 +285,50 @@ class ArpCollectorService:
             if not ip_addr or not mac_addr:
                 continue
 
-            seen_ips.add(ip_addr)
-
             # Normalize MAC address
             mac_normalized = self._normalize_mac(mac_addr)
             if not mac_normalized:
                 continue
 
+            mac_norm_key = mac_normalized.replace('-', '').replace(':', '').replace('.', '').upper()
+
+            # Deduplicate within this batch by MAC
+            if mac_norm_key in seen_macs:
+                continue
+            seen_macs.add(mac_norm_key)
+
             try:
-                # Upsert: check if IP+MAC already exists
+                # Upsert: check if MAC already exists (one record per MAC/network interface)
                 stmt = select(Terminal).where(
-                    (Terminal.ip_address == ip_addr) &
-                    (Terminal.mac_address == mac_normalized)
+                    Terminal.mac_address_normalized == mac_norm_key
                 )
                 result = await self.db.execute(stmt)
                 existing = result.scalar_one_or_none()
 
                 if existing:
                     from datetime import datetime
+                    # Update IP if changed (DHCP renewal etc.)
+                    ip_changed = existing.ip_address != ip_addr
+                    existing.ip_address = ip_addr
                     existing.updated_at = datetime.now(UTC)
                     existing.source_tag = source_tag
                     existing.source = "arp"
+                    if ip_changed:
+                        # Record IP change timestamp for grace-period handling.
+                        # Do NOT immediately reset compliance_status to unknown;
+                        # the compliance recalculation logic will apply a grace
+                        # period to avoid immediate false blocks during DHCP renewal.
+                        existing.ip_changed_at = datetime.now(UTC)
+                        # Reset both confirm counters on IP change for clean re-evaluation
+                        existing.non_compliant_confirm_count = 0
+                        existing.compliant_confirm_count = 0
                     updated += 1
                 else:
                     # Create new entry
                     mac_record = Terminal(
                         ip_address=ip_addr,
                         mac_address=mac_normalized,
-                        mac_address_normalized=mac_normalized.replace('-', '').replace(':', '').replace('.', '').upper(),
+                        mac_address_normalized=mac_norm_key,
                         status=TerminalStatus.UNBLOCKED.value,
                         source="arp",
                         source_tag=source_tag,
@@ -353,23 +369,26 @@ class ArpCollectorService:
 
                 check_result = await compliance_service.batch_check_compliance(check_entries)
 
-                # Build lookup maps for compliance results
+                # Build lookup maps for compliance results (keyed by normalized MAC for uniqueness)
                 result_lookup = {}
                 if check_result.details:
                     for item in check_result.details.get("bypass", []):
-                        result_lookup[item.get("ip_address")] = {
+                        mac_key = self._normalize_mac(item.get("mac_address", "")).replace('-', '').replace(':', '').replace('.', '').upper()
+                        result_lookup[mac_key] = {
                             "compliance_status": "bypass",
                             "wl_match_type": item.get("wl_match_type"),
                             "wl_comments": item.get("wl_comments"),
                         }
                     for item in check_result.details.get("compliant", []):
-                        result_lookup[item.get("ip_address")] = {
+                        mac_key = self._normalize_mac(item.get("mac_address", "")).replace('-', '').replace(':', '').replace('.', '').upper()
+                        result_lookup[mac_key] = {
                             "compliance_status": "compliant",
                             "wl_match_type": None,
                             "wl_comments": None,
                         }
                     for item in check_result.details.get("non_compliant", []):
-                        result_lookup[item.get("ip_address")] = {
+                        mac_key = self._normalize_mac(item.get("mac_address", "")).replace('-', '').replace(':', '').replace('.', '').upper()
+                        result_lookup[mac_key] = {
                             "compliance_status": "non_compliant",
                             "wl_match_type": None,
                             "wl_comments": None,
@@ -377,7 +396,8 @@ class ArpCollectorService:
 
                 # Apply compliance results using shared method
                 for entry in unchecked_entries:
-                    result = result_lookup.get(entry.ip_address)
+                    mac_key = entry.mac_address_normalized or ""
+                    result = result_lookup.get(mac_key)
                     if result:
                         await compliance_service._apply_compliance_result(
                             entry,
@@ -421,7 +441,8 @@ class ArpCollectorService:
             newly_offline = 0
 
             for terminal in all_terminals:
-                if terminal.ip_address not in seen_ips and terminal.updated_at:
+                # Check if MAC was seen in this collection (one record per MAC, so check by MAC)
+                if terminal.mac_address_normalized not in seen_macs and terminal.updated_at:
                     last_seen = terminal.updated_at.timestamp() if terminal.updated_at.tzinfo else terminal.updated_at.replace(tzinfo=None).timestamp()
                     if (now_ts - last_seen) > offline_threshold_seconds:
                         newly_offline += 1
