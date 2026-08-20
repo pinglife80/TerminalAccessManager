@@ -4,12 +4,18 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 
-ScopeType = Literal["ip_cidr", "ip_range", "mac_prefix"]
+ScopeType = Literal["ip_cidr", "ip_range", "mac_prefix_arp", "mac_prefix_ipguard"]
 
 
 class ComplianceScopeBase(BaseModel):
-    scope_type: ScopeType = Field(..., description="Scope type: ip_cidr, ip_range, or mac_prefix")
-    scope_value: str = Field(..., description="Scope value: e.g., 192.168.0.0/16, 192.168.1.1-255, AA:BB:CC")
+    scope_type: ScopeType = Field(
+        ...,
+        description="Scope type: ip_cidr, ip_range, mac_prefix_arp, or mac_prefix_ipguard"
+    )
+    scope_value: str = Field(
+        ...,
+        description="Scope value: e.g., 192.168.0.0/16, 192.168.1.1-255, AA:BB:CC"
+    )
     description: str | None = Field(default=None, description="Description")
 
 

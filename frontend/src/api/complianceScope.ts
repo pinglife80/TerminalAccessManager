@@ -2,9 +2,11 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '@/lib/api';
 import { API_ENDPOINTS } from '@/lib/constants';
 
+export type ScopeType = 'ip_cidr' | 'ip_range' | 'mac_prefix_arp' | 'mac_prefix_ipguard';
+
 export interface ComplianceScope {
   id: number;
-  scope_type: 'ip_cidr' | 'ip_range' | 'mac_prefix';
+  scope_type: ScopeType;
   scope_value: string;
   description: string | null;
   is_active: boolean;
@@ -14,13 +16,13 @@ export interface ComplianceScope {
 }
 
 export interface ComplianceScopeCreate {
-  scope_type: 'ip_cidr' | 'ip_range' | 'mac_prefix';
+  scope_type: ScopeType;
   scope_value: string;
   description?: string;
 }
 
 export interface ComplianceScopeUpdate {
-  scope_type?: 'ip_cidr' | 'ip_range' | 'mac_prefix';
+  scope_type?: ScopeType;
   scope_value?: string;
   description?: string;
   is_active?: boolean;

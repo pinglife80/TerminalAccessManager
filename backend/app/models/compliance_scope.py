@@ -8,14 +8,17 @@ from app.core.database import Base
 class ComplianceScope(Base):
     """
     Compliance calculation scope (policy layer).
-    When a terminal's IP/MAC falls within a scope, compliance calculation
-    only checks IP address and ignores MAC address.
+    Controls whether compliance matching uses IP-only or IP+MAC strategy.
 
-    scope_type: 'ip_cidr' | 'ip_range' | 'mac_prefix'
+    scope_type:
+      - 'ip_cidr': Terminal IP in CIDR → IP-only match
+      - 'ip_range': Terminal IP in range → IP-only match
+      - 'mac_prefix_arp': Terminal MAC matches prefix (ARP source) → IP-only match
+      - 'mac_prefix_ipguard': IPGuard baseline MAC matches prefix → IP-only match for that entry
     scope_value:
       - ip_cidr: '192.168.0.0/16'
       - ip_range: '192.168.1.1-255'
-      - mac_prefix: 'AA:BB:CC'
+      - mac_prefix_arp / mac_prefix_ipguard: 'AA:BB:CC'
     """
 
     __tablename__ = "compliance_scope"

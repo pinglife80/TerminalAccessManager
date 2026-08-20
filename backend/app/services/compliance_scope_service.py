@@ -130,7 +130,7 @@ class ComplianceScopeService:
             except (ValueError, TypeError) as e:
                 raise ValueError(f"Invalid IP range: '{scope_value}': {e}")
 
-        elif scope_type == "mac_prefix":
+        elif scope_type in ("mac_prefix_arp", "mac_prefix_ipguard"):
             segments = scope_value.upper().split(":")
             if len(segments) < 3 or len(segments) > 5:
                 raise ValueError(
