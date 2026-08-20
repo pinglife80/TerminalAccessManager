@@ -25,6 +25,7 @@ from app.models.log import AuditLog  # noqa
 from app.models.system_config import SystemConfig  # noqa
 from app.models.data_source import DataSource, DataSourceBinding  # noqa
 from app.models.compliance_baseline import ComplianceBaseline  # noqa
+from app.models.compliance_scope import ComplianceScope  # noqa
 from app.models.role import Role, Permission, UserRole, RolePermission  # noqa
 
 target_metadata = Base.metadata

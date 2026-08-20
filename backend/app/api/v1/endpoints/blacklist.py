@@ -131,21 +131,26 @@ async def export_blacklist(
 
     writer.writerow([
         "ID", "MAC Address", "IP Address", "Status", "Firewall Tag",
-        "Reason", "Block Time", "Added By", "Created At", "Auto Unblocked"
+        "Reason", "Block Time", "Blocked By", "Source Tag", "Block Type", "Auto Unblocked"
     ])
 
     for b in blacklist:
+        is_blocked = not (b.auto_unblocked or b.unblocked_at)
+        status_label = "Blocked" if is_blocked else "Unblocked"
+        block_type = "Auto" if b.is_auto_blocked else "Manual"
+        unblock_label = "Yes" if b.auto_unblocked or b.unblocked_at else "No"
         writer.writerow([
             b.id,
             b.mac_address or "",
             b.ip_address or "",
-            b.status or "",
+            status_label,
             b.firewall_tag or "",
             b.reason or "",
-            b.block_time or "",
-            b.added_by or "",
-            b.created_at or "",
-            b.auto_unblocked or ""
+            b.blocked_at or "",
+            b.blocked_by or "",
+            b.source_tag or "",
+            block_type,
+            unblock_label,
         ])
 
     output.seek(0)

@@ -231,7 +231,7 @@ const Sidebar: React.FC = () => {
       </button>
 
       {/* Navigation */}
-      <nav className="flex-1 py-4 overflow-y-auto overflow-x-hidden">
+      <nav className="sidebar-scrollbar flex-1 min-h-0 py-4 overflow-y-auto overflow-x-hidden">
         <ul className="space-y-1 px-3">
           {NAV_ITEMS.map(renderNavItem)}
         </ul>

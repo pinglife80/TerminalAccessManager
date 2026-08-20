@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useWhitelist, WhitelistEntry } from '@/hooks/useTerminalData';
 import { useTranslation } from 'react-i18next';
-import { Search, Plus, Trash2, User, Server, Globe, RefreshCw, Download, Clock, ChevronDown, Eye } from 'lucide-react';
+import { Search, Plus, Trash2, User, Server, Globe, RefreshCw, Download, Clock, ChevronDown, Eye, Upload, FileText, X, CheckCircle, AlertCircle } from 'lucide-react';
 import { apiClient } from '@/lib/api';
 import { toast } from 'sonner';
 import { API_ENDPOINTS } from '@/lib/constants';
@@ -12,6 +12,21 @@ import { EmptyState } from '@/components/StateDisplay';
 import { PageSkeleton } from '@/components/Skeleton';
 import { Modal } from '@/components/Modal';
 import { DateRangeFilter } from '@/components/DateRangeFilter';
+
+interface ImportErrorRow {
+  row: number;
+  reason: string;
+  data: Record<string, unknown>;
+}
+
+interface ImportResult {
+  success_count: number;
+  skipped_count: number;
+  failed_count: number;
+  errors: ImportErrorRow[];
+  mode: string;
+  total_processed: number;
+}
 
 const Whitelist: React.FC = () => {
   const { t } = useTranslation();
@@ -33,6 +48,12 @@ const Whitelist: React.FC = () => {
   const [filterCollapsed, setFilterCollapsed] = useState(false);
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [importMode, setImportMode] = useState<'skip' | 'overwrite'>('skip');
+  const [importResult, setImportResult] = useState<ImportResult | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [isValidating, setIsValidating] = useState(false);
 
   // Debounce search term
   const debouncedSearch = useDebounce(searchTerm, 500);
@@ -161,6 +182,96 @@ const Whitelist: React.FC = () => {
     }
   };
 
+  const handleImportFileSelect = (file: File | null) => {
+    if (!file) {
+      setImportFile(null);
+      return;
+    }
+    const ext = file.name.toLowerCase().split('.').pop() || '';
+    if (!['csv', 'zip', 'json'].includes(ext)) {
+      toast.error(t('whitelist.invalidFileType'));
+      setImportFile(null);
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      toast.error(t('whitelist.fileTooLarge'));
+      setImportFile(null);
+      return;
+    }
+    setImportFile(file);
+    setImportResult(null);
+  };
+
+  const handleImport = async (validateOnly = false) => {
+    if (!importFile) {
+      toast.error(t('whitelist.noFileSelected'));
+      return;
+    }
+
+    const formData = new FormData();
+    formData.append('file', importFile);
+    formData.append('mode', importMode);
+    formData.append('validate_only', String(validateOnly));
+
+    if (validateOnly) {
+      setIsValidating(true);
+    } else {
+      setImporting(true);
+    }
+
+    try {
+      const response = await apiClient.post(API_ENDPOINTS.WHITELIST_IMPORT, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      const result = response.data as ImportResult;
+      setImportResult(result);
+
+      if (validateOnly) {
+        if (result.failed_count === 0) {
+          toast.success(t('whitelist.csvValidationPassed', { count: result.success_count }));
+        } else {
+          toast.error(t('whitelist.csvValidationFailed', { count: result.failed_count }));
+        }
+      } else {
+        if (result.success_count > 0) {
+          toast.success(t('whitelist.importSuccess'));
+          refetch();
+        } else {
+          toast.error(t('whitelist.importFailed'));
+        }
+      }
+    } catch (error: unknown) {
+      toast.error(getErrorMessage(error, validateOnly ? t('whitelist.validationRequestFailed') : t('whitelist.importFailed')));
+    } finally {
+      setIsValidating(false);
+      setImporting(false);
+    }
+  };
+
+  const resetImportModal = () => {
+    setShowImportModal(false);
+    setImportFile(null);
+    setImportResult(null);
+    setImportMode('skip');
+    setImporting(false);
+    setIsValidating(false);
+  };
+
+  const downloadTemplate = () => {
+    const header = 'ID,MAC Address,IP Pattern,Pattern Type,Comments,Added By,Created At\n';
+    const sample = '1,AA:BB:CC:DD:EE:FF,,mac_only,Office Printer,admin,2025-01-01T00:00:00\n';
+    const sample2 = '2,,192.168.1.0/24,cidr,Office Subnet,admin,2025-01-01T00:00:00\n';
+    const blob = new Blob(['\uFEFF' + header + sample + sample2], { type: 'text/csv;charset=utf-8' });
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', 'whitelist_template.csv');
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(url);
+  };
+
   const handleRemoveWhitelist = (identifier: string | null, ipPattern?: string | null) => {
     setDeleteIdentifier(identifier || '');
     setDeleteIpPattern(ipPattern || '');
@@ -208,6 +319,12 @@ const Whitelist: React.FC = () => {
             label={t('common.export')}
             variant="success"
             onClick={handleExport}
+          />
+          <PrimaryButton
+            icon={Upload}
+            label={t('whitelist.import')}
+            variant="secondary"
+            onClick={() => { setShowImportModal(true); setImportResult(null); }}
           />
           <PrimaryButton
             icon={Plus}
@@ -654,6 +771,210 @@ const Whitelist: React.FC = () => {
           />
         </div>
         )}
+      </Modal>
+
+      {/* Import Modal */}
+      <Modal isOpen={showImportModal} onClose={resetImportModal} title={t('whitelist.importWhitelist')} size="lg">
+        <div className="space-y-5">
+          {/* Description */}
+          <p className="text-sm text-muted-foreground">{t('whitelist.importDescription')}</p>
+
+          {/* CSV Format Hint */}
+          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-sm font-medium text-blue-800">{t('whitelist.csvFormatHint')}</p>
+              <button
+                onClick={downloadTemplate}
+                className="text-xs text-blue-600 hover:text-blue-800 underline font-medium"
+              >
+                {t('whitelist.downloadTemplate')}
+              </button>
+            </div>
+            <p className="text-xs text-blue-700">{t('whitelist.csvFormatDescription')}</p>
+            <p className="text-xs text-blue-700 mt-1">{t('whitelist.backupFormatDescription')}</p>
+          </div>
+
+          {/* File Upload Area */}
+          <div
+            className={`border-2 border-dashed rounded-xl p-6 text-center transition-colors ${
+              importFile ? 'border-green-400 bg-green-50' : 'border-border hover:border-blue-400'
+            }`}
+            onClick={() => {
+              const input = document.getElementById('import-file-input') as HTMLInputElement;
+              input?.click();
+            }}
+          >
+            <input
+              id="import-file-input"
+              type="file"
+              accept=".csv,.zip,.json"
+              className="hidden"
+              onChange={(e) => handleImportFileSelect(e.target.files?.[0] || null)}
+            />
+            {importFile ? (
+              <div className="flex flex-col items-center gap-2">
+                <FileText className="h-10 w-10 text-green-500" />
+                <p className="text-sm font-medium text-foreground">{importFile.name}</p>
+                <p className="text-xs text-muted-foreground">
+                  {t('whitelist.fileSize')}: {(importFile.size / 1024).toFixed(1)} KB
+                </p>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleImportFileSelect(null);
+                  }}
+                  className="text-xs text-red-500 hover:text-red-700 flex items-center gap-1 mt-1"
+                >
+                  <X className="h-3 w-3" />
+                  {t('common.cancel')}
+                </button>
+              </div>
+            ) : (
+              <div className="flex flex-col items-center gap-2">
+                <Upload className="h-10 w-10 text-muted-foreground" />
+                <p className="text-sm font-medium text-foreground">{t('whitelist.dragToUpload')}</p>
+                <p className="text-xs text-muted-foreground">{t('whitelist.fileFormatHint')}</p>
+                <p className="text-xs text-muted-foreground">{t('whitelist.fileOrBackupFormatHint')}</p>
+              </div>
+            )}
+          </div>
+
+          {/* Conflict Mode Selection */}
+          <div className="space-y-2">
+            <p className="text-sm font-medium text-foreground">{t('whitelist.conflictMode')}</p>
+            <div className="grid grid-cols-2 gap-3">
+              <button
+                onClick={() => { setImportMode('skip'); setImportResult(null); }}
+                className={`p-3 rounded-lg border-2 text-left transition-all ${
+                  importMode === 'skip'
+                    ? 'border-blue-500 bg-blue-50'
+                    : 'border-border hover:border-blue-300'
+                }`}
+              >
+                <div className="flex items-center gap-2 mb-1">
+                  {importMode === 'skip' ? (
+                    <CheckCircle className="h-4 w-4 text-blue-500" />
+                  ) : (
+                    <div className="h-4 w-4 rounded-full border-2 border-muted-foreground" />
+                  )}
+                  <span className="text-sm font-medium text-foreground">{t('whitelist.skipMode')}</span>
+                </div>
+                <p className="text-xs text-muted-foreground ml-6">{t('whitelist.skipModeDesc')}</p>
+              </button>
+
+              <button
+                onClick={() => { setImportMode('overwrite'); setImportResult(null); }}
+                className={`p-3 rounded-lg border-2 text-left transition-all ${
+                  importMode === 'overwrite'
+                    ? 'border-blue-500 bg-blue-50'
+                    : 'border-border hover:border-blue-300'
+                }`}
+              >
+                <div className="flex items-center gap-2 mb-1">
+                  {importMode === 'overwrite' ? (
+                    <CheckCircle className="h-4 w-4 text-blue-500" />
+                  ) : (
+                    <div className="h-4 w-4 rounded-full border-2 border-muted-foreground" />
+                  )}
+                  <span className="text-sm font-medium text-foreground">{t('whitelist.overwriteMode')}</span>
+                </div>
+                <p className="text-xs text-muted-foreground ml-6">{t('whitelist.overwriteModeDesc')}</p>
+              </button>
+            </div>
+          </div>
+
+          {/* Action Buttons */}
+          <div className="flex gap-3">
+            <PrimaryButton
+              label={t('whitelist.validateButton')}
+              variant="secondary"
+              onClick={() => handleImport(true)}
+              loading={isValidating}
+              disabled={!importFile}
+              className="flex-1"
+            />
+            <PrimaryButton
+              icon={Upload}
+              label={t('whitelist.importButton')}
+              variant="success"
+              onClick={() => handleImport(false)}
+              loading={importing}
+              disabled={!importFile}
+              className="flex-1"
+            />
+          </div>
+
+          {/* Import Result */}
+          {importResult && (
+            <div className="bg-background rounded-lg border border-border p-4 space-y-4">
+              <div className="flex items-center gap-2">
+                {importResult.failed_count > 0 ? (
+                  <AlertCircle className="h-5 w-5 text-red-500" />
+                ) : (
+                  <CheckCircle className="h-5 w-5 text-green-500" />
+                )}
+                <p className="text-sm font-semibold text-foreground">{t('whitelist.importResult')}</p>
+              </div>
+
+              <div className="grid grid-cols-4 gap-3">
+                <div className="text-center p-2 bg-green-50 rounded-lg">
+                  <p className="text-lg font-bold text-green-600">{importResult.success_count}</p>
+                  <p className="text-xs text-green-700">{t('whitelist.successCount')}</p>
+                </div>
+                <div className="text-center p-2 bg-yellow-50 rounded-lg">
+                  <p className="text-lg font-bold text-yellow-600">{importResult.skipped_count}</p>
+                  <p className="text-xs text-yellow-700">{t('whitelist.skippedCount')}</p>
+                </div>
+                <div className="text-center p-2 bg-red-50 rounded-lg">
+                  <p className="text-lg font-bold text-red-600">{importResult.failed_count}</p>
+                  <p className="text-xs text-red-700">{t('whitelist.failedCount')}</p>
+                </div>
+                <div className="text-center p-2 bg-blue-50 rounded-lg">
+                  <p className="text-lg font-bold text-blue-600">{importResult.total_processed}</p>
+                  <p className="text-xs text-blue-700">{t('whitelist.totalProcessed')}</p>
+                </div>
+              </div>
+
+              {importResult.errors.length > 0 && (
+                <div>
+                  <p className="text-sm font-medium text-foreground mb-2">{t('whitelist.errors')}</p>
+                  <div className="max-h-48 overflow-y-auto border border-border rounded-lg">
+                    <table className="w-full text-xs">
+                      <thead className="bg-muted sticky top-0">
+                        <tr>
+                          <th className="px-3 py-2 text-left font-medium text-muted-foreground">{t('whitelist.rowNumber')}</th>
+                          <th className="px-3 py-2 text-left font-medium text-muted-foreground">{t('whitelist.errorReason')}</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {importResult.errors.slice(0, 50).map((err, idx) => (
+                          <tr key={idx} className="border-t border-border">
+                            <td className="px-3 py-2 font-mono text-red-600">{err.row}</td>
+                            <td className="px-3 py-2 text-muted-foreground">{err.reason}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    {importResult.errors.length > 50 && (
+                      <p className="text-xs text-muted-foreground p-2 text-center border-t border-border">
+                        ... {importResult.errors.length - 50} more errors not shown
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Close Button */}
+          <div className="flex justify-end pt-2">
+            <PrimaryButton
+              label={t('common.close')}
+              variant="secondary"
+              onClick={resetImportModal}
+            />
+          </div>
+        </div>
       </Modal>
       </>
       )}

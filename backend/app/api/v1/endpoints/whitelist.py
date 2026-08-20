@@ -1,16 +1,27 @@
 import csv
+import os
 from io import StringIO
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.security import require_permission
 from app.models.user import User
-from app.schemas.terminal import PaginatedResponse, ResponseMessage, WhitelistCreate, WhitelistQuery, WhitelistResponse
+from app.schemas.terminal import (
+    PaginatedResponse,
+    ResponseMessage,
+    WhitelistCreate,
+    WhitelistImportResult,
+    WhitelistQuery,
+    WhitelistResponse,
+)
 from app.services.terminal_service import TerminalService
 
 router = APIRouter(prefix="/whitelist", tags=["Whitelist"])
+
+ALLOWED_EXTENSIONS = {".csv", ".zip", ".json"}
+MAX_FILE_SIZE = 5 * 1024 * 1024
 
 
 @router.get("/", response_model=PaginatedResponse[WhitelistResponse])
@@ -148,3 +159,70 @@ async def export_whitelist(
     }
 
     return Response(content=output.getvalue(), headers=headers)
+
+
+@router.post("/import", response_model=WhitelistImportResult)
+async def import_whitelist(
+    file: UploadFile = File(..., description="CSV, ZIP or JSON file to import"),
+    mode: str = Form("skip", description="Conflict handling: 'skip' or 'overwrite'"),
+    validate_only: bool = Form(False, description="If True, only validate without importing"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permission("whitelist:write")),
+):
+    """Import whitelist entries from a CSV, ZIP (backup), or JSON file.
+
+    CSV format (header row required):
+    ID,MAC Address,IP Pattern,Pattern Type,Comments,Added By,Created At
+
+    ZIP/JSON format: whitelist backup file containing whitelist.json
+    """
+    ext = os.path.splitext(file.filename or "")[1].lower()
+    if ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid file extension '{ext}'. Only .csv, .zip and .json files are allowed.",
+        )
+
+    content = await file.read()
+    if len(content) > MAX_FILE_SIZE:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"File too large. Maximum size is {MAX_FILE_SIZE // (1024 * 1024)}MB.",
+        )
+
+    if mode not in ("skip", "overwrite"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid mode. Must be 'skip' or 'overwrite'.",
+        )
+
+    service = TerminalService(db)
+
+    try:
+        if ext == ".csv":
+            try:
+                text_content = content.decode("utf-8-sig")
+            except UnicodeDecodeError:
+                text_content = content.decode("utf-8", errors="replace")
+
+            result = await service.import_whitelist_csv(
+                file_content=text_content,
+                mode=mode,
+                validate_only=validate_only,
+                username=current_user.username,
+            )
+        else:
+            result = await service.import_whitelist_from_backup(
+                file_bytes=content,
+                ext=ext,
+                mode=mode,
+                validate_only=validate_only,
+                username=current_user.username,
+            )
+
+        return WhitelistImportResult(**result)
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Import failed: {str(e)}",
+        )

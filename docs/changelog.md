@@ -1,11 +1,55 @@
 # 更新日志
 
-> 文档版本：v3.10.4  更新日期：2026-08-10
+> 文档版本：v3.11.0  更新日期：2026-08-20
 
 本文件记录 TerminalAccessManager 的所有重要变更。
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
+
+***
+
+## [3.11.0] - 2026-08-20
+
+### 新增
+
+- **Compliance Scope 条件管理**：支持根据网段范围或 MAC 前缀作为条件，在合规计算时只将 IP 地址作为判断条件而忽略 MAC 地址
+  - 新增 `compliance_scope` 数据表，支持三种条件类型：`ip_cidr`（IP 网段）、`ip_range`（IP 范围）、`mac_prefix`（MAC 前缀）
+  - 新增 ComplianceScope ORM 模型、Schema、Service 层和 REST API 端点
+  - 新增前端 Scope 管理页面，支持条件的增删改查和启用/禁用切换
+  - 合规计算流程集成：白名单检查 → Scope 条件检查 → IPGuard 基准匹配
+  - Scope 条件范围内的终端采用"仅 IP 匹配"策略，范围外保持"IP+MAC 双重匹配"
+  - 新增缓存失效机制，Scope 变更时自动清除相关缓存
+  - 新增 Alembic 迁移 `031_compliance_scope`
+  - 关联文件：`compliance_scope.py`（model/schema/service/endpoint）、`compliance_service.py`、`ComplianceScope.tsx`、`complianceScope.ts`
+
+### 改进
+
+- **白名单导入增强**：支持直接导入备份 ZIP/JSON 格式文件
+  - `POST /whitelist/import` 端点新增 `.zip` 和 `.json` 文件格式支持
+  - 自动识别 ZIP 文件内部结构（嵌套 `whitelist/whitelist.json` 或扁平 `whitelist.json`）
+  - 支持冲突处理模式：`skip`（跳过已存在条目）、`overwrite`（覆盖已存在条目）
+  - 采用 savepoint 事务隔离行级导入错误，单行失败不影响整体导入
+  - 导入完成后自动失效合规缓存
+  - 关联文件：`whitelist.py`、`terminal_service.py`、`Whitelist.tsx`
+
+### 修复
+
+- **黑名单导出字段引用错误**：修复 `GET /blacklist/export` 端点引用了 Blacklist 模型不存在的 `status`、`block_time`、`added_by`、`created_at` 字段
+  - 替换为现有模型字段：`blocked_at`、`blocked_by`、`source_tag`
+  - `status` 字段从 `auto_unblocked` / `unblocked_at` 动态派生
+  - CSV 表头新增 'Status'、'Block Type'、'Auto Unblocked' 列
+  - 关联文件：`blacklist.py`
+
+- **合规 recalculate_all_compliance 缺少 Scope 条件集成**：`recalculate_all_compliance()` 方法未加载 Scope 条件数据，导致重算时所有终端都采用 IP+MAC 双重匹配策略
+  - 修复：加载 Scope 数据并根据条件应用"仅 IP 匹配"策略
+  - 新增 bypass 状态快速降级机制（1 个确认周期而非默认阈值）
+  - 关联文件：`compliance_service.py`
+
+- **侧边栏折叠按钮裁剪问题**：侧边栏折叠按钮右侧被页面内容覆盖
+  - 修复：移除 `<aside>` 元素的 `overflow-hidden`，为 `<nav>` 添加 `min-h-0`
+  - 新增自定义细滚动条样式（6px 宽度，暗色主题）
+  - 关联文件：`Sidebar.tsx`、`index.css`
 
 ***
 

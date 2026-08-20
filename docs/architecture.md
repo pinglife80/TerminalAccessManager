@@ -1,6 +1,6 @@
 # TerminalAccessManager 系统架构设计文档
 
-> 文档版本：v3.10.0  更新日期：2026-08-06
+> 文档版本：v3.11.0  更新日期：2026-08-20
 
 ## 1. 系统概述
 
@@ -139,33 +139,52 @@ ARP 数据采集          合规判定              准入执行
 │ ARP 表   │     │ compliance_  │     │ ├─ 是 → bypass   │
 └──────────┘     │ status:      │     │ │   (wl_match_   │
                  │ unknown      │     │ │    type)        │
-                 └──────┬───────┘     │ ├─ 合规基准匹配? │
-                        │             │ │   └─ 是 →       │
-                 ┌──────▼───────┐     │ │     compliant  │
-                 │ 合规检查引擎  │     │ └─ 都不匹配 →    │
-                 │              │     │     non_compliant │
-                 └──────┬───────┘     └────────┬─────────┘
-                        │                      │
-              ┌───────────────────┐    ┌────────────────┐
-              │ 自动封禁          │    │ 自动解封        │
-              │ non_compliant     │    │ 已合规/白名单   │
-              │ → 防火墙封禁 API  │    │ → 防火墙解封 API│
-              │ → Blacklist 记录  │    │ → 更新状态      │
-              │ → status=blocked  │    │ → status=       │
-              └───────────────────┘    │   unblocked     │
-                                       └────────────────┘
+                 └──────┬───────┘     │ └─ 否 → 进入     │
+                        │             │    Scope 条件检查│
+                 ┌──────▼───────┐     │    (v3.11.0 新增)│
+                 │ 合规检查引擎  │     │                  │
+                 │              │     │ Scope 条件匹配? │
+                 └──────┬───────┘     │ ├─ 是 → 仅 IP   │
+                        │             │ │   匹配策略     │
+              ┌───────────────────┐   │ └─ 否 → IP+MAC │
+              │ 自动封禁          │   │   双重匹配策略  │
+              │ non_compliant     │   │                  │
+              │ → 防火墙封禁 API  │   │ 合规基准匹配?   │
+              │ → Blacklist 记录  │   │ ├─ 是 →         │
+              │ → status=blocked  │   │    compliant    │
+              └───────────────────┘   │ └─ 否 →         │
+                                       │    non_compliant│
+                                       └────────┬─────────┘
+                                                │
+                                      ┌────────────────┐
+                                      │ 自动解封        │
+                                      │ 已合规/白名单   │
+                                      │ → 防火墙解封 API│
+                                      │ → 更新状态      │
+                                      │ → status=       │
+                                      │   unblocked     │
+                                      └────────────────┘
 ```
 
 **详细步骤：**
 
 1. **ARP 数据采集** -- 定时任务通过 SSH 或 API 从交换机获取 ARP 表，解析后写入 `Terminal` 表（`compliance_status=unknown`）；已有终端更新时重置 `compliance_status=unknown` 确保重新评估
-2. **合规判定** -- 合规检查引擎依次执行：
-   - 白名单匹配（IP 精确匹配 / CIDR 匹配 / IP 范围匹配 + MAC 精确匹配）→ `bypass`，记录 `wl_match_type`（`mac` / `ip` / `both`）
-   - 合规基准匹配（IP + MAC 同时匹配）→ `compliant`
-   - 均不匹配 → `non_compliant`
-3. **自动封禁** -- `non_compliant` 终端按 `DataSourceBinding` 路由到对应防火墙，调用深信服 AF 黑白名单 API 永久封禁（`type=BLACK`，description 带 `TAM-` 前缀），创建 `Blacklist` 记录（`is_auto_blocked=True`），终端状态置为 `blocked`，`comments` 记录封堵信息
-4. **自动解封** -- 已封禁终端若恢复合规或匹配白名单，调用深信服 AF 黑白名单 API 按 IP 精确删除，更新 `Blacklist.auto_unblocked=True`，终端状态置为 `unblocked`，`comments` 记录解封信息
-5. **合规重算** -- 白名单增删、IPGuard 同步后触发 `recalculate_all_compliance`，批量重算所有终端合规状态，合规变更联动封堵/解封
+2. **白名单匹配** -- IP 精确匹配 / CIDR 匹配 / IP 范围匹配 + MAC 精确匹配 → `bypass`，记录 `wl_match_type`（`mac` / `ip` / `both`）。白名单终端跳过后续合规计算
+3. **Scope 条件检查（v3.11.0 新增）** -- 非白名单终端检查是否命中 ComplianceScope 条件：
+   - 条件类型支持：`ip_cidr`（IP 网段，最小 /24）、`ip_range`（IP 范围）、`mac_prefix`（MAC 前缀 3-5 段）
+   - 命中条件 → 采用**仅 IP 匹配策略**（忽略 MAC 地址，仅用 IP 与 IPGuard 基准比对）
+   - 未命中条件 → 保持**IP+MAC 双重匹配策略**
+4. **合规基准匹配** -- 根据匹配策略（IP-only 或 IP+MAC）与 IPGuard 基准数据比对：
+   - 匹配 → `compliant`
+   - 不匹配 → `non_compliant`
+5. **自动封禁** -- `non_compliant` 终端按 `DataSourceBinding` 路由到对应防火墙，调用深信服 AF 黑白名单 API 永久封禁（`type=BLACK`，description 带 `TAM-` 前缀），创建 `Blacklist` 记录（`is_auto_blocked=True`），终端状态置为 `blocked`，`comments` 记录封堵信息
+6. **自动解封** -- 已封禁终端若恢复合规或匹配白名单，调用深信服 AF 黑白名单 API 按 IP 精确删除，更新 `Blacklist.auto_unblocked=True`，终端状态置为 `unblocked`，`comments` 记录解封信息
+7. **合规重算** -- 白名单增删、IPGuard 同步、Scope 变更后触发 `recalculate_all_compliance`，批量重算所有终端合规状态，合规变更联动封堵/解封。bypass 状态在 1 个确认周期后快速降级为 non_compliant
+
+**Scope 条件缓存机制（v3.11.0 新增）：**
+- ComplianceScope 数据变更时自动失效相关 Redis 缓存
+- 合规计算时从缓存加载 Scope 数据，避免频繁查询数据库
+- 支持 scope 数据的批量预加载，提升合规计算性能
 
 **Terminal 状态模型：**
 
@@ -406,6 +425,7 @@ Status 描述的是终端在网络层的实际封堵情况，Compliance 描述�
 | 配置缓存 | `sys_config:{key}` | 300s (5 min) | 写穿透（更新时立即失效） | 三层读取：Redis → DB → .env |
 | 合规基准缓存 | `compliance_baseline:{source_tag}` | 600s (10 min) | 定时同步刷新 | 存储 IP+MAC 映射 JSON |
 | 白名单缓存 | `whitelist:all` | 300s (5 min) | 写时失效（白名单变更时 `invalidate_whitelist_cache`） | 存储全量白名单数据 |
+| Scope 条件缓存 | `compliance_scope:all` | 300s (5 min) | 写时失效（Scope 变更时 `invalidate_scope_cache`） | 存储全量 Scope 条件数据，合规计算时加载 |
 | 令牌黑名单 | `token_blacklist:{jti}` | token 剩余有效期 | 登出/刷新时写入 | 值为 `"1"`，自动过期 |
 | 速率限制 | `rate_limit:{ip}:{path}` | 60s | Sorted Set 滑动窗口 | score=时间戳，member=请求ID |
 | 登录计数 | `login_attempts:{username}` | 锁定时长 | 递增计数 | 首次设置时指定过期时间 |
