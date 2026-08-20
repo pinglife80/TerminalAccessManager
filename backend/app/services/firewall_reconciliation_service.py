@@ -3,13 +3,18 @@ Firewall Reconciliation Service
 
 Service for reconciling firewall blocked IPs with database blacklist entries.
 Ensures that the firewall state and database state remain synchronized.
+
+Key principle: Database is the source of truth. Reconciliation:
+- Adds missing Blacklist entries for IPs that are blocked on firewall but missing in DB
+- Re-blocks IPs on firewall that exist in DB but are missing from firewall
+- Never unblocks based solely on reconciliation mismatch (DB is authoritative)
 """
 
 from datetime import UTC, datetime, timedelta
-from typing import Any, Dict, List, Set, Tuple
+from typing import Any, Dict, Set, Tuple
 
 from loguru import logger
-from sqlalchemy import select, delete, or_
+from sqlalchemy import select, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.crypto import decrypt_config
@@ -28,16 +33,17 @@ class FirewallReconciliationService:
     async def reconcile(self) -> Dict[str, Any]:
         """
         Reconcile firewall status with database.
-        
+        Reconciliation runs PER FIREWALL independently to avoid cross-firewall corruption.
+
         Returns:
             Dict with reconciliation results:
-                - firewall_ip_count: Number of blocked IPs on firewall
-                - db_entry_count: Number of active blacklist entries in DB
-                - missing_in_db: IPs on firewall but not in DB
-                - missing_in_firewall: IPs in DB but not on firewall
+                - firewall_ip_count: Total blocked IPs across all firewalls
+                - db_entry_count: Total active blacklist entries in DB
+                - missing_in_db: IPs blocked on firewall but missing DB entries
+                - missing_in_firewall: IPs in DB but missing on firewall (re-blocked)
                 - created_in_db: Number of entries created in DB
-                - marked_unblocked: Number of entries marked as unblocked
-                - unblocked_on_firewall: Number of IPs unblocked on firewall
+                - reblocked_on_firewall: Number of IPs re-blocked on firewall
+                - firewall_errors: List of firewalls that failed to query
         """
         results = {
             "firewall_ip_count": 0,
@@ -45,44 +51,99 @@ class FirewallReconciliationService:
             "missing_in_db": [],
             "missing_in_firewall": [],
             "created_in_db": 0,
-            "marked_unblocked": 0,
-            "unblocked_on_firewall": 0,
+            "reblocked_on_firewall": 0,
+            "firewall_errors": [],
             "errors": [],
         }
 
         try:
-            firewall_ips = await self._get_firewall_blocked_ips()
-            db_entries = await self._get_db_active_blacklist()
+            # Get enabled firewalls
+            stmt = select(DataSource).where(
+                (DataSource.type == "sangfor") & (DataSource.enabled == True)
+            )
+            fw_result = await self.db.execute(stmt)
+            firewalls = fw_result.scalars().all()
 
-            results["firewall_ip_count"] = len(firewall_ips)
-            results["db_entry_count"] = len(db_entries)
+            if not firewalls:
+                logger.info("No enabled firewalls found for reconciliation")
+                return results
 
-            firewall_ip_set = set(firewall_ips)
-            db_ip_set = set(e[0] for e in db_entries)
+            # Get all active DB entries grouped by firewall_tag
+            db_entries_by_fw = await self._get_db_active_blacklist_by_firewall()
+            total_db_entries = sum(len(entries) for entries in db_entries_by_fw.values())
+            results["db_entry_count"] = total_db_entries
 
-            missing_in_db = sorted(firewall_ip_set - db_ip_set)
-            missing_in_firewall = sorted(db_ip_set - firewall_ip_set)
+            all_fw_ips = set()
+            total_created = 0
+            total_reblocked = 0
 
-            results["missing_in_db"] = missing_in_db
-            results["missing_in_firewall"] = missing_in_firewall
+            for fw in firewalls:
+                fw_tag = fw.tag
+                try:
+                    config = fw.config
+                    if config:
+                        config = decrypt_config(config)
 
-            if missing_in_db:
-                logger.warning(f"Found {len(missing_in_db)} IPs blocked on firewall but not in database")
-                created = await self._create_db_entries(missing_in_db)
-                results["created_in_db"] = created
+                    svc = await SangforService.get_cached_service(
+                        base_url=config.get("base_url", ""),
+                        username=config.get("username", ""),
+                        password=config.get("password", ""),
+                        verify_ssl=config.get("verify_ssl", True),
+                        ca_bundle=config.get("ca_bundle", ""),
+                    )
 
-            if missing_in_firewall:
-                logger.warning(f"Found {len(missing_in_firewall)} IPs in database but not blocked on firewall")
-                
-                if len(firewall_ips) == 0 and len(db_entries) > 0:
-                    logger.warning("Firewall returned 0 blocked IPs but database has active entries - this may indicate API failure. Skipping database updates to prevent data loss.")
-                else:
-                    unblocked, marked = await self._unblock_from_firewall(missing_in_firewall)
-                    results["unblocked_on_firewall"] = unblocked
-                    results["marked_unblocked"] = marked
+                    response = await svc.get_blocked_ips()
+                    fw_ips = self._parse_blocked_ips(response)
 
-            if not missing_in_db and not missing_in_firewall:
-                logger.info("Firewall and database are fully synchronized")
+                    # Safety: if API returns 0 IPs but we expect some, log warning and skip this firewall
+                    # This prevents clearing database when firewall API is temporarily down
+                    db_count_for_fw = len(db_entries_by_fw.get(fw_tag, set()))
+                    if len(fw_ips) == 0 and db_count_for_fw > 0:
+                        logger.warning(
+                            f"Firewall '{fw_tag}' returned 0 blocked IPs but database has {db_count_for_fw} "
+                            f"active entries - likely API failure. Skipping reconciliation for this firewall "
+                            f"to prevent data loss."
+                        )
+                        results["firewall_errors"].append(fw_tag)
+                        continue
+
+                    all_fw_ips.update(fw_ips)
+                    results["firewall_ip_count"] += len(fw_ips)
+
+                    db_ips_for_fw = db_entries_by_fw.get(fw_tag, set())
+
+                    # IPs on firewall but NOT in DB for this firewall → create DB entries
+                    missing_in_db = fw_ips - db_ips_for_fw
+                    if missing_in_db:
+                        logger.info(f"Firewall '{fw_tag}': {len(missing_in_db)} IPs blocked but missing in DB, creating entries")
+                        created = await self._create_db_entries_for_firewall(fw_tag, missing_in_db)
+                        total_created += created
+                        results["missing_in_db"].extend([(fw_tag, ip) for ip in sorted(missing_in_db)])
+
+                    # IPs in DB for this firewall but NOT on firewall → re-block on firewall
+                    missing_in_fw = db_ips_for_fw - fw_ips
+                    if missing_in_fw:
+                        logger.info(f"Firewall '{fw_tag}': {len(missing_in_fw)} IPs in DB but not blocked on firewall, re-blocking")
+                        reblocked = await self._reblock_on_firewall(fw_tag, svc, missing_in_fw)
+                        total_reblocked += reblocked
+                        results["missing_in_firewall"].extend([(fw_tag, ip) for ip in sorted(missing_in_fw)])
+
+                    if not missing_in_db and not missing_in_fw:
+                        logger.info(f"Firewall '{fw_tag}': fully synchronized ({len(fw_ips)} IPs)")
+
+                except Exception as e:
+                    logger.error(f"Failed to reconcile firewall '{fw_tag}': {str(e)}")
+                    results["firewall_errors"].append(fw_tag)
+                    results["errors"].append(f"{fw_tag}: {str(e)}")
+
+            results["created_in_db"] = total_created
+            results["reblocked_on_firewall"] = total_reblocked
+
+            if total_created > 0 or total_reblocked > 0:
+                await self.db.commit()
+                logger.info(f"Reconciliation complete: created {total_created} DB entries, re-blocked {total_reblocked} IPs on firewalls")
+            else:
+                logger.info("Reconciliation complete: firewall and database are in sync")
 
         except Exception as e:
             logger.error(f"Firewall reconciliation failed: {str(e)}")
@@ -90,202 +151,172 @@ class FirewallReconciliationService:
 
         return results
 
-    async def _get_firewall_blocked_ips(self) -> List[str]:
-        """Get all blocked IPs from all configured Sangfor firewalls"""
-        all_ips = set()
+    def _parse_blocked_ips(self, response: Any) -> Set[str]:
+        """Parse blocked IPs from Sangfor API response"""
+        ips = set()
+        if not response or not isinstance(response, dict):
+            return ips
 
-        stmt = select(DataSource).where(
-            (DataSource.type == "sangfor") & (DataSource.enabled == True)
-        )
-        result = await self.db.execute(stmt)
-        firewalls = result.scalars().all()
+        data = response.get("data", {})
+        if not isinstance(data, dict):
+            return ips
 
-        for fw in firewalls:
-            try:
-                config = fw.config
-                if config:
-                    config = decrypt_config(config)
+        items = data.get("items", [])
+        if not isinstance(items, list):
+            return ips
 
-                svc = await SangforService.get_cached_service(
-                    base_url=config.get("base_url", ""),
-                    username=config.get("username", ""),
-                    password=config.get("password", ""),
-                    verify_ssl=config.get("verify_ssl", True),
-                    ca_bundle=config.get("ca_bundle", ""),
-                )
+        for item in items:
+            if isinstance(item, dict):
+                ip = item.get("url") or item.get("srcIP") or item.get("ip")
+                if ip:
+                    ips.add(ip)
+        return ips
 
-                response = await svc.get_blocked_ips()
-
-                if response and isinstance(response, dict):
-                    logger.debug(f"Raw response code: {response.get('code')}, message: {response.get('message')}")
-                    data = response.get("data", {})
-                    logger.debug(f"Data type: {type(data).__name__}, data: {str(data)[:200]}")
-                    if isinstance(data, dict):
-                        items = data.get("items", [])
-                        if isinstance(items, list):
-                            for item in items:
-                                if isinstance(item, dict):
-                                    ip = item.get("url") or item.get("srcIP") or item.get("ip")
-                                    if ip:
-                                        all_ips.add(ip)
-                        else:
-                            logger.error(f"Items is not a list: {type(items).__name__}")
-                    else:
-                        logger.error(f"Data is not a dict: {type(data).__name__}")
-
-                logger.info(f"Retrieved {len(all_ips)} blocked IPs from firewall '{fw.tag}'")
-            except Exception as e:
-                logger.error(f"Failed to get blocked IPs from firewall '{fw.tag}': {str(e)}")
-
-        return list(all_ips)
-
-    async def _get_db_active_blacklist(self) -> List[Tuple[str, str, str]]:
-        """Get all active blacklist entries (ip_address, mac_address, firewall_tag)"""
+    async def _get_db_active_blacklist_by_firewall(self) -> Dict[str, Set[Tuple[str, str, str]]]:
+        """
+        Get all active blacklist entries grouped by firewall_tag.
+        Returns: {fw_tag: set of (ip_address, mac_address, mac_norm)}
+        """
         from datetime import datetime, UTC
 
         stmt = select(
             Blacklist.ip_address,
             Blacklist.mac_address,
-            Blacklist.firewall_tag
+            Blacklist.mac_address_normalized,
+            Blacklist.firewall_tag,
         ).where(
             (Blacklist.unblocked_at.is_(None)) &
             (Blacklist.auto_unblocked == False) &
+            (Blacklist.firewall_tag.isnot(None)) &
             (or_(
                 Blacklist.expires_at >= datetime.now(UTC),
                 Blacklist.expires_at.is_(None),
             ))
         )
         result = await self.db.execute(stmt)
-        return result.all()
+        rows = result.all()
 
-    async def _create_db_entries(self, ip_addresses: List[str]) -> int:
-        """Create blacklist entries and terminal records for IPs missing in database"""
+        by_fw: Dict[str, Set[Tuple[str, str, str]]] = {}
+        for ip, mac, mac_norm, fw_tag in rows:
+            if fw_tag not in by_fw:
+                by_fw[fw_tag] = set()
+            # Store IP for set comparison
+            by_fw[fw_tag].add(ip)
+        return by_fw
+
+    async def _create_db_entries_for_firewall(self, fw_tag: str, ip_addresses: Set[str]) -> int:
+        """
+        Create blacklist entries for IPs found blocked on a specific firewall
+        but missing from the database for that firewall.
+        Attempts to find MAC address via current Terminal records.
+        """
         created = 0
 
         for ip_address in ip_addresses:
             try:
-                stmt = select(Terminal).where(Terminal.ip_address == ip_address)
-                result = await self.db.execute(stmt)
-                terminal = result.scalar_one_or_none()
+                # Find terminal by IP address (best effort - may have multiple due to DHCP history,
+                # prefer non-blocked / most recent)
+                term_stmt = select(Terminal).where(
+                    Terminal.ip_address == ip_address
+                ).order_by(Terminal.last_seen.desc())
+                term_result = await self.db.execute(term_stmt)
+                terminal = term_result.scalar_one_or_none()
 
-                if not terminal:
-                    terminal = Terminal(
-                        ip_address=ip_address,
-                        status=TerminalStatus.BLOCKED.value,
-                        compliance_status="non_compliant",
-                        last_seen=datetime.now(UTC),
-                    )
-                    self.db.add(terminal)
+                mac_address = None
+                mac_norm = None
+                source_tag = None
 
+                if terminal:
+                    mac_address = terminal.mac_address
+                    mac_norm = terminal.mac_address_normalized
+                    source_tag = terminal.source_tag
+                    # Update terminal status to blocked since firewall says it's blocked
+                    if terminal.status != TerminalStatus.BLOCKED.value:
+                        terminal.status = TerminalStatus.BLOCKED.value
+                        if terminal.compliance_status in ("unknown", "compliant", "bypass"):
+                            terminal.compliance_status = "non_compliant"
                 else:
-                    terminal.status = TerminalStatus.BLOCKED.value
-                    terminal.compliance_status = "non_compliant"
+                    logger.warning(
+                        f"Reconciliation: IP {ip_address} blocked on firewall '{fw_tag}' "
+                        f"but no terminal record found - creating blacklist entry without MAC"
+                    )
 
-                stmt = select(Blacklist).where(
+                # Check for existing entry
+                existing_stmt = select(Blacklist).where(
                     (Blacklist.ip_address == ip_address) &
+                    (Blacklist.firewall_tag == fw_tag) &
                     (Blacklist.unblocked_at.is_(None)) &
                     (Blacklist.auto_unblocked == False)
                 )
-                result = await self.db.execute(stmt)
-                existing_bl = result.scalar_one_or_none()
+                existing_result = await self.db.execute(existing_stmt)
+                existing_bl = existing_result.scalar_one_or_none()
 
-                if not existing_bl:
-                    bl_entry = Blacklist(
-                        ip_address=ip_address,
-                        blocked_by="system",
-                        blocked_at=datetime.now(UTC),
-                        expires_at=datetime.now(UTC) + timedelta(days=30),
-                        source_tag="reconciliation",
-                        is_auto_blocked=True,
-                        auto_unblocked=False,
-                        reason="Reconciliation: IP blocked on firewall but not in database",
-                    )
-                    self.db.add(bl_entry)
-                    created += 1
+                if existing_bl:
+                    # Already exists (maybe added during reconciliation by another path)
+                    continue
+
+                bl_entry = Blacklist(
+                    ip_address=ip_address,
+                    mac_address=mac_address,
+                    mac_address_normalized=mac_norm,
+                    blocked_by="system",
+                    blocked_at=datetime.now(UTC),
+                    expires_at=datetime.now(UTC) + timedelta(days=30),
+                    source_tag=source_tag or "reconciliation",
+                    firewall_tag=fw_tag,
+                    is_auto_blocked=True,
+                    auto_unblocked=False,
+                    reason=f"Reconciliation: IP blocked on firewall '{fw_tag}' but missing in DB",
+                )
+                self.db.add(bl_entry)
+                await self.db.flush()
+                created += 1
 
             except Exception as e:
-                logger.error(f"Failed to create DB entry for {ip_address}: {str(e)}")
-
-        if created > 0:
-            await self.db.commit()
-            logger.info(f"Created {created} blacklist entries during reconciliation")
+                logger.error(f"Failed to create DB entry for {ip_address} on firewall '{fw_tag}': {str(e)}")
 
         return created
 
-    async def _unblock_from_firewall(self, ip_addresses: List[str]) -> Tuple[int, int]:
+    async def _reblock_on_firewall(
+        self, fw_tag: str, svc: SangforService, ip_addresses: Set[str]
+    ) -> int:
         """
-        Unblock IPs on firewall that are in database but not on firewall.
-        
-        Returns:
-            Tuple of (number of IPs unblocked on firewall, number of entries marked unblocked)
+        Re-block IPs on a firewall that are supposed to be blocked (exist in active DB)
+        but are currently missing from the firewall's blocklist.
+        Database is authoritative - we re-apply the block to firewall.
         """
-        unblocked = 0
-        marked = 0
-
-        stmt = select(DataSource).where(
-            (DataSource.type == "sangfor") & (DataSource.enabled == True)
-        )
-        result = await self.db.execute(stmt)
-        firewalls = result.scalars().all()
+        reblocked = 0
 
         for ip_address in ip_addresses:
             try:
-                firewall_unblocked = False
-
-                for fw in firewalls:
-                    try:
-                        config = fw.config
-                        if config:
-                            config = decrypt_config(config)
-
-                        svc = await SangforService.get_cached_service(
-                            base_url=config.get("base_url", ""),
-                            username=config.get("username", ""),
-                            password=config.get("password", ""),
-                            verify_ssl=config.get("verify_ssl", True),
-                            ca_bundle=config.get("ca_bundle", ""),
-                        )
-
-                        response = await svc.unblock_ip([{"srcIP": ip_address}])
-
-                        if response and response.get("code") == 0:
-                            firewall_unblocked = True
-                            break
-
-                    except Exception as e:
-                        logger.warning(f"Failed to unblock {ip_address} on firewall '{fw.tag}': {str(e)}")
-
-                stmt = select(Blacklist).where(
+                # Find the blacklist entry to get reason
+                bl_stmt = select(Blacklist).where(
                     (Blacklist.ip_address == ip_address) &
+                    (Blacklist.firewall_tag == fw_tag) &
                     (Blacklist.unblocked_at.is_(None)) &
                     (Blacklist.auto_unblocked == False)
                 )
-                result = await self.db.execute(stmt)
-                bl_entries = result.scalars().all()
+                bl_result = await self.db.execute(bl_stmt)
+                bl_entry = bl_result.scalar_one_or_none()
 
-                for entry in bl_entries:
-                    entry.auto_unblocked = True
-                    entry.unblocked_at = datetime.now(UTC)
-                    entry.unblocked_by = "system"
-                    marked += 1
+                reason = "Reconciliation: re-block (DB says should be blocked)"
+                if bl_entry and bl_entry.reason:
+                    reason = bl_entry.reason
 
-                stmt = select(Terminal).where(Terminal.ip_address == ip_address)
-                result = await self.db.execute(stmt)
-                terminals = result.scalars().all()
+                result = await svc.block_ip(
+                    [ip_address],
+                    source_tag=fw_tag,
+                    reason=reason
+                )
 
-                for terminal in terminals:
-                    terminal.status = TerminalStatus.UNBLOCKED.value
-                    terminal.compliance_status = "unknown"
-                    terminal.firewall_tag = None
-
-                if firewall_unblocked:
-                    unblocked += 1
+                if result.get("code") == 0:
+                    reblocked += 1
+                    logger.info(f"Re-blocked {ip_address} on firewall '{fw_tag}' during reconciliation")
+                else:
+                    error_msg = result.get("message", "unknown error")
+                    logger.warning(f"Failed to re-block {ip_address} on firewall '{fw_tag}': {error_msg}")
 
             except Exception as e:
-                logger.error(f"Failed to unblock {ip_address}: {str(e)}")
+                logger.error(f"Error re-blocking {ip_address} on firewall '{fw_tag}': {str(e)}")
 
-        if marked > 0:
-            await self.db.commit()
-            logger.info(f"Marked {marked} blacklist entries as unblocked during reconciliation")
-
-        return (unblocked, marked)
+        return reblocked
