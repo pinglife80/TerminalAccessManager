@@ -1,6 +1,6 @@
 # TerminalAccessManager - 运维操作手册
 
-> 文档版本：v3.12.0  更新日期：2026-08-20
+> 文档版本：v3.12.1  更新日期：2026-08-20
 
 ## 目录
 
@@ -484,6 +484,68 @@ docker compose -p tam exec backend curl -sk -o /dev/null -w "%{http_code}" <SANG
 **修复方式：**
 - 更新正确的 SMTP 凭证并保存
 - 系统会自动跳过认证错误通知的重试，无需手动清理重试队列
+
+---
+
+### 2.10 黑名单/终端/防火墙封锁计数不一致
+
+**故障现象（v3.12.0及之前版本可能出现）：**
+- Dashboard显示封锁85条，终端页面显示85条，防火墙实际85条，但黑名单页面显示99条
+- 或终端标记为blocked但黑名单无对应记录，反之亦然
+- 手动解封后终端状态不更新
+
+**可能原因：**
+1. v3.12.0及之前版本：防火墙封锁失败但Blacklist仍创建记录（errors累积bug）
+2. v3.12.0及之前版本：防火墙对账逻辑错误，错误标记记录状态
+3. 唯一约束错误导致多防火墙环境产生重复记录
+4. 历史遗留脏数据（孤儿记录：无firewall_tag、无MAC、重复条目）
+
+**v3.12.1已修复上述所有根因**，如仍发现不一致按以下步骤排查：
+
+**排查步骤：**
+
+```bash
+# 1. 查询实际统计数据对比
+docker compose -p tam exec -T postgres psql -U tam_admin tam_db -c "
+SELECT 'Terminal blocked' as metric, COUNT(*) as count FROM terminals WHERE status = 'blocked' AND source = 'arp'
+UNION ALL
+SELECT 'Blacklist active entries' as metric, COUNT(*) as count FROM blacklist 
+WHERE auto_unblocked = false AND unblocked_at IS NULL 
+  AND (expires_at >= now() OR expires_at IS NULL)
+UNION ALL
+SELECT 'Blacklist distinct MACs (active)' as metric, COUNT(DISTINCT mac_address_normalized) as count FROM blacklist 
+WHERE auto_unblocked = false AND unblocked_at IS NULL 
+  AND (expires_at >= now() OR expires_at IS NULL)
+  AND mac_address_normalized IS NOT NULL
+"
+
+# 2. 查找孤儿记录（无firewall_tag）
+docker compose -p tam exec -T postgres psql -U tam_admin tam_db -c "
+SELECT id, ip_address, mac_address, firewall_tag FROM blacklist 
+WHERE auto_unblocked = false AND unblocked_at IS NULL 
+  AND (expires_at >= now() OR expires_at IS NULL)
+  AND firewall_tag IS NULL
+"
+
+# 3. 查找重复记录
+docker compose -p tam exec -T postgres psql -U tam_admin tam_db -c "
+SELECT ip_address, mac_address_normalized, firewall_tag, COUNT(*) as cnt 
+FROM blacklist 
+WHERE auto_unblocked = false AND unblocked_at IS NULL 
+  AND (expires_at >= now() OR expires_at IS NULL)
+GROUP BY ip_address, mac_address_normalized, firewall_tag
+HAVING COUNT(*) > 1
+"
+
+# 4. 手动触发防火墙对账（自动修复差异）
+# 在系统设置页面点击"手动触发对账"，或调用API：
+# POST /api/v1/system/firewall-reconciliation
+```
+
+**修复方式：**
+- v3.12.1升级执行035迁移后，历史孤儿记录会被自动清理，三个位置计数自动对齐
+- 如升级后仍有1-2条差异，手动触发一次防火墙对账即可自动修复
+- v3.12.1版本后新代码保证不会再产生新的不一致
 
 ---
 

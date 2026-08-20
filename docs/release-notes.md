@@ -1,10 +1,63 @@
 # 版本跟踪记录
 
-> 文档版本：v3.12.0 | 更新日期：2026-08-20
+> 文档版本：v3.12.1 | 更新日期：2026-08-20
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
+
+---
+
+## [v3.12.1] - 2026-08-20
+
+### 黑名单与防火墙同步问题修复（Patch版本）
+
+#### 背景
+
+v3.12.0发布后发现严重数据一致性问题：
+- Dashboard/终端页面显示封锁数量与防火墙实际一致，但黑名单页面显示更多条目
+- 防火墙封锁失败时Blacklist仍创建记录，导致幽灵记录
+- 防火墙对账逻辑错误，可能错误删除有效记录
+- Blacklist唯一约束缺少firewall_tag字段，多防火墙环境会产生重复记录
+
+实际数据：Dashboard显示86条封锁，黑名单显示99条，存在13-15条不一致。
+
+#### 主要变更
+
+| 修复项 | 说明 |
+|--------|------|
+| 唯一约束修复 | Blacklist唯一索引从`(ip, mac)`改为`(ip, mac, firewall_tag)`，支持多防火墙独立记录 |
+| 封锁结果判断 | 每个防火墙独立判断成功/失败，不再共用错误列表；部分成功只创建成功防火墙的记录 |
+| 防火墙对账重写 | 以数据库为权威源，防火墙返回0条记录自动跳过，只补封缺失不错误解封 |
+| 过期清理修复 | 按归一化MAC匹配终端，所有防火墙Blacklist过期才更新终端状态 |
+| 重复检查修复 | recalculate中按防火墙查询已有活跃记录，每个防火墙独立幂等检查 |
+| 数据清理迁移 | 035迁移自动清理15条孤儿记录（无firewall_tag、无MAC、重复记录） |
+
+#### 升级步骤（推荐：一键升级）
+
+```bash
+# 生产环境直接使用upgrade一键完成pull+重建+迁移+验证
+git checkout main
+git pull origin main
+./manage.sh upgrade
+```
+
+#### 升级步骤（分步）
+
+```bash
+git checkout main
+git pull origin main
+./manage.sh update
+./manage.sh migrate
+./manage.sh health
+```
+
+#### 升级注意事项
+
+⚠️ **必须执行数据库迁移**：035迁移会自动清理历史脏数据（孤儿记录、重复记录），不删除有效封锁
+⚠️ **迁移自动备份**：`./manage.sh upgrade`自动备份，`./manage.sh migrate`提示备份
+⚠️ **服务自动重启**：升级过程服务会短暂重启，不影响数据
+⚠️ **升级后验证**：刷新Dashboard/终端/黑名单页面，三个位置封锁计数一致
 
 ---
 
