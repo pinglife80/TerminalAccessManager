@@ -1,6 +1,6 @@
 # TerminalAccessManager 数据库设计文档
 
-> 文档版本：v3.12.0  更新日期：2026-08-20
+> 文档版本：v3.12.1  更新日期：2026-08-20
 
 ## 1. 概述
 
@@ -1008,6 +1008,25 @@ docker-compose.yml 中 PostgreSQL 的 `command` 参数列表如下：
 | 032_mac_prefix_scope_type_split.py | 将 scope_type='mac_prefix' 迁移为 'mac_prefix_arp'，支持区分MAC前缀匹配数据源（v3.12.0） |
 | 033_terminal_mac_unique.py | 数据去重后删除旧联合约束，添加 mac_address_normalized 唯一约束 uq_terminal_mac（v3.12.0） |
 | 034_compliance_oscillation_fixes.py | terminals 表新增 compliant_confirm_count、ip_changed_at 字段（v3.12.0） |
+| 035_blacklist_fix_sync_issues.py | blacklist表修复同步问题：清理孤儿记录、去重、更新唯一索引为(ip, mac, firewall_tag)（v3.12.1） |
+
+### 035_blacklist_fix_sync_issues.py 详情
+
+修复黑名单与防火墙同步问题的数据迁移：
+
+| 步骤 | 操作 | 说明 |
+|------|------|------|
+| 1 | 标记无`firewall_tag`的活跃记录为已解封 | 清理历史reconciliation产生的幽灵记录 |
+| 2 | 标记无`mac_address_normalized`的活跃记录为已解封 | 清理MAC缺失的无效记录 |
+| 3 | 去重同一IP+MAC+firewall的多条活跃记录 | 保留最新一条，标记其余为已解封 |
+| 4 | 删除旧唯一索引`uq_blacklist_active` | 旧索引仅(ip,mac)，不支持多防火墙 |
+| 5 | 创建新唯一索引`idx_blacklist_unique_active` | 字段为(ip_address, mac_address_normalized, firewall_tag)，仅包含活跃记录 |
+| 6 | 清理90天前已解封历史记录 | 保持表大小，不影响活跃数据 |
+
+**Blacklist表唯一约束更新（v3.12.1）**：
+- 旧索引（v3.12.0及之前）：唯一索引仅包含`(ip_address, mac_address_normalized)`，单防火墙环境正常，多防火墙环境会冲突
+- 新索引（v3.12.1）：唯一索引包含`(ip_address, mac_address_normalized, firewall_tag)`，支持多防火墙部署下每个防火墙独立记录
+- 不影响单防火墙环境，原有逻辑不变
 
 ### 003_search_indexes.py 详情
 
