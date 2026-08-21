@@ -340,7 +340,17 @@ class SangforService:
                     results["skipped"].append(ip)
                     continue
 
-                response.raise_for_status()
+                try:
+                    response.raise_for_status()
+                except httpx.HTTPStatusError as http_err:
+                    # Log response body to help diagnose 400/4xx errors
+                    # (session issues, rate limiting, parameter errors, etc.)
+                    body = (http_err.response.text or "")[:500]
+                    logger.error(
+                        f"AF blacklist API returned HTTP {http_err.response.status_code} "
+                        f"for block_ip {ip}: body={body}"
+                    )
+                    raise
                 data = response.json()
 
                 if data.get("code") == 0:
@@ -475,12 +485,26 @@ class SangforService:
                 params=params
             )
             response.raise_for_status()
-            
+
             result = response.json()
             if not isinstance(result, dict):
                 logger.error(f"get_blocked_ips returned unexpected type: {type(result).__name__}")
                 return {"code": -1, "data": {"items": []}}
-            
+
+            # Log abnormal responses to help diagnose empty/error lists
+            if result.get("code") != 0:
+                logger.warning(
+                    f"get_blocked_ips returned non-zero code={result.get('code')}, "
+                    f"message={result.get('message', 'unknown')}, raw={(response.text or '')[:500]}"
+                )
+            else:
+                items = result.get("data", {}).get("items", [])
+                if not items:
+                    logger.warning(
+                        f"get_blocked_ips returned 0 items "
+                        f"(raw={(response.text or '')[:300]})"
+                    )
+
             return result
 
         except Exception as e:

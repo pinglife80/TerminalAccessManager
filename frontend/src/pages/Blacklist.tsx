@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Search, AlertTriangle, Clock, Server, Download, Eye, Shield, RefreshCw, ChevronDown, Unlock } from 'lucide-react';
-import { useBlacklist, BlacklistEntry } from '@/hooks/useTerminalData';
+import { useBlacklist, useBlacklistStats, BlacklistEntry } from '@/hooks/useTerminalData';
 import { apiClient } from '@/lib/api';
 import { toast } from 'sonner';
 import { API_ENDPOINTS } from '@/lib/constants';
@@ -50,6 +50,9 @@ const Blacklist: React.FC = () => {
     limit: pageSize,
     refetchInterval: autoRefresh || undefined,
   });
+
+  // Blacklist stats with firewall actual blocked count (from reconciliation cache)
+  const { data: blacklistStats } = useBlacklistStats(autoRefresh || undefined);
 
 
 
@@ -127,6 +130,27 @@ const Blacklist: React.FC = () => {
           variant="success"
           onClick={handleExport}
         />
+      </div>
+
+      {/* Unified block count: DB caliber + firewall actual comparison */}
+      <div className="mb-6 flex flex-wrap items-center gap-3">
+        <div className="flex items-center gap-2 bg-card border border-border rounded-xl px-4 py-2.5">
+          <Shield className="h-4 w-4 text-red-600" />
+          <span className="text-sm text-muted-foreground">{t('blacklist.activeBlocksDb')}:</span>
+          <span className="text-sm font-bold text-foreground">{blacklistStats?.total_active ?? totalFromServer}</span>
+        </div>
+        <div className="flex items-center gap-2 bg-card border border-border rounded-xl px-4 py-2.5">
+          <Server className="h-4 w-4 text-orange-500" />
+          <span className="text-sm text-muted-foreground">{t('blacklist.firewallActual')}:</span>
+          <span className="text-sm font-bold text-foreground">
+            {blacklistStats?.firewall_ip_count != null ? blacklistStats.firewall_ip_count : t('blacklist.firewallNotSynced')}
+          </span>
+          {blacklistStats?.firewall_synced_at && (
+            <span className="text-xs text-muted-foreground">
+              ({formatDate(blacklistStats.firewall_synced_at)})
+            </span>
+          )}
+        </div>
       </div>
 
       {/* Search and Filter */}

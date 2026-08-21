@@ -197,13 +197,15 @@ export interface BlacklistStats {
   manual_blocked: number;
   expired: number;
   active_blocks: number;
+  firewall_ip_count: number | null;
+  firewall_synced_at: string | null;
 }
 
 export const useBlacklistStats = (refetchInterval?: number) => {
   return useQuery({
     queryKey: ['blacklist-stats'],
     queryFn: async () => {
-      const response = await apiClient.get('/blacklist/stats');
+      const response = await apiClient.get(API_ENDPOINTS.BLACKLIST_STATS);
       return response.data as BlacklistStats;
     },
     refetchInterval: refetchInterval,

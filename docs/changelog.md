@@ -1,11 +1,45 @@
 # 更新日志
 
-> 文档版本：v3.12.1  更新日期：2026-08-20
+> 文档版本：v3.13.0  更新日期：2026-08-21
 
 本文件记录 TerminalAccessManager 的所有重要变更。
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
+
+***
+
+## [3.13.0] - 2026-08-21
+
+### 新增
+
+- **防火墙实际统计展示**：
+  - 新增 `_cache_reconcile_result` 函数，将对账结果缓存到 Redis（TTL 1 小时）
+  - 黑名单页面新增"防火墙实际封锁数"统计卡片
+  - 手动触发对账端点也会缓存结果
+  - 关联文件：`main.py`、`system.py`、`Blacklist.tsx`
+
+### 修复
+
+- **黑名单统计不一致问题**：
+  - 统一三个页面统计口径：Dashboard、终端管理、黑名单都使用 `blocked` 计数
+  - 终端管理页面从 `stats.non_compliant` 改为 `stats.blocked`
+  - 移除 `firewall_reconciliation_service.py` 中重复的缓存逻辑，统一使用 `main.py` 实现
+  - 修复前端 fallback 统计逻辑：从 `compliance_status` 改为 `status === 'blocked'`
+  - 关联文件：`firewall_reconciliation_service.py`、`Terminals.tsx`、`terminal_service.py`
+
+- **状态不变量加强**：
+  - 确保 `compliance_status='non_compliant'` 意味着 `status='blocked'`
+  - 冷却期阻止合规状态降级而非阻止封锁动作
+  - non_compliant 降级后封锁失败回滚状态
+  - retry-block 对已有中间态强制封锁
+  - 关联文件：`compliance_service.py`、`main.py`
+
+- **白名单终端稳定性修复**：
+  - 白名单匹配时直接设置 `compliance_status='bypass'` 并清零确认计数
+  - 增加周期性全量重算，修复卡死状态
+  - 消除震荡闭环，保持稳定的 bypass 状态
+  - 关联文件：`compliance_service.py`、`main.py`
 
 ***
 

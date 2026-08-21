@@ -415,7 +415,7 @@ const Terminals: React.FC = () => {
   const totalTerminals = stats?.total ?? totalFromServer;
   const normalCount = stats?.compliant ?? allTerminals.filter((m) => (m.compliance_status || 'unknown') === 'compliant').length;
   const bypassCount = stats?.bypass ?? allTerminals.filter((m) => m.compliance_status === 'bypass').length;
-  const blockedCount = stats?.non_compliant ?? allTerminals.filter((m) => m.compliance_status === 'non_compliant').length;
+  const blockedCount = stats?.blocked ?? allTerminals.filter((m) => m.status === 'blocked').length;
   const pendingCount = stats?.unknown ?? allTerminals.filter((m) => (m.compliance_status || 'unknown') === 'unknown').length;
 
   // Helper to get status label via i18n

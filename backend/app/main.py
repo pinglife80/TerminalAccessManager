@@ -82,6 +82,25 @@ async def _get_scheduler_interval(key: str, default: int) -> int:
     return default
 
 
+async def _cache_reconcile_result(results: dict) -> None:
+    """Cache latest firewall reconciliation result to Redis for stats display.
+    Key: reconcile:latest, TTL 1 hour."""
+    try:
+        import json
+        from datetime import datetime, UTC
+        from app.core.security import get_redis_client
+        redis_client = await get_redis_client()
+        payload = {
+            "firewall_ip_count": results.get("firewall_ip_count", 0),
+            "db_entry_count": results.get("db_entry_count", 0),
+            "firewall_errors": results.get("firewall_errors", []),
+            "synced_at": datetime.now(UTC).isoformat(),
+        }
+        await redis_client.setex("reconcile:latest", 3600, json.dumps(payload))
+    except Exception as e:
+        logger.warning(f"Failed to cache reconciliation result: {e}")
+
+
 async def cleanup_expired_blacklist():
     """Background task to periodically clean up expired blacklist entries"""
     while True:
@@ -168,9 +187,12 @@ async def firewall_reconciliation():
                     recon_svc = FirewallReconciliationService(db)
                     results = await recon_svc.reconcile()
 
+                    # Cache latest reconciliation result for firewall stats display
+                    await _cache_reconcile_result(results)
+
                     if results["missing_in_db"] or results["missing_in_firewall"]:
                         logger.warning(f"Firewall reconciliation found {len(results['missing_in_db'])} IPs missing in DB and {len(results['missing_in_firewall'])} IPs missing in firewall")
-                        logger.info(f"Reconciliation results: created_in_db={results['created_in_db']}, marked_unblocked={results['marked_unblocked']}, unblocked_on_firewall={results['unblocked_on_firewall']}")
+                        logger.info(f"Reconciliation results: created_in_db={results['created_in_db']}, reblocked_on_firewall={results['reblocked_on_firewall']}")
             finally:
                 await _release_task_lock("firewall_reconciliation")
         except Exception as e:
@@ -362,8 +384,48 @@ async def scheduled_compliance_check():
 
                                 from sqlalchemy import select as sa_select2
                                 retry_blocked = 0
+                                whitelist_fixed = 0
                                 cooldown_cutoff_retry = dt_cls.now(utc_cls) - td_cls(minutes=10)
+                                # Load whitelist cache once for authoritative whitelist check
+                                retry_whitelist_data = await service._load_whitelist_cache()
+
+                                # Pre-pass: authoritative whitelist check. Whitelist is admin-configured
+                                # truth; compliance_status may be stale due to historical crashes, so
+                                # never re-block a whitelist-matched terminal; self-heal it instead.
+                                remaining_retry = []
                                 for terminal in retry_terminals:
+                                    ip_addr = terminal.ip_address or ""
+                                    mac_addr = terminal.mac_address or ""
+                                    wl_hit = service._match_whitelist_in_memory(retry_whitelist_data, ip_addr, mac_addr)
+                                    if wl_hit:
+                                        terminal.compliance_status = "bypass"
+                                        terminal.compliant_confirm_count = 0
+                                        terminal.non_compliant_confirm_count = 0
+                                        whitelist_fixed += 1
+                                        logger.info(
+                                            f"Retry-block skipped for {ip_addr}/{mac_addr}: whitelist match "
+                                            f"({wl_hit.get('match_type')}), compliance_status set to bypass [source=scheduler]"
+                                        )
+                                    else:
+                                        remaining_retry.append(terminal)
+
+                                # Commit whitelist self-heal separately so a later retry-block
+                                # IntegrityError rollback cannot discard these fixes.
+                                if whitelist_fixed > 0:
+                                    try:
+                                        await db.commit()
+                                        logger.info(
+                                            f"Retry-block whitelist self-heal: fixed {whitelist_fixed} "
+                                            f"stale whitelist terminals from {source.tag} [source=scheduler]"
+                                        )
+                                    except Exception as wl_err:
+                                        await db.rollback()
+                                        logger.error(
+                                            f"Retry-block whitelist self-heal commit failed for {source.tag}: "
+                                            f"{type(wl_err).__name__}: {wl_err} [source=scheduler]"
+                                        )
+
+                                for terminal in remaining_retry:
                                     ip_addr = terminal.ip_address or ""
                                     mac_addr = terminal.mac_address or ""
                                     mac_norm = mac_addr.replace('-', '').replace(':', '').replace('.', '').upper() if mac_addr else None
@@ -378,22 +440,8 @@ async def scheduled_compliance_check():
                                             (Blacklist.unblocked_at.is_(None))
                                         )
                                         existing_bl_r = await db.execute(existing_bl_stmt)
-                                        if existing_bl_r.scalar_one_or_none():
+                                        if existing_bl_r.scalars().first():
                                             terminal.status = "blocked"
-                                            continue
-                                        # Cooldown: skip if recently auto-unblocked
-                                        recent_unbl_stmt = sa_select2(Blacklist).where(
-                                            (Blacklist.mac_address_normalized == mac_norm) &
-                                            (Blacklist.auto_unblocked == True) &
-                                            (Blacklist.unblocked_at.isnot(None)) &
-                                            (Blacklist.unblocked_at >= cooldown_cutoff_retry)
-                                        )
-                                        recent_unbl_r = await db.execute(recent_unbl_stmt)
-                                        if recent_unbl_r.scalar_one_or_none():
-                                            logger.info(
-                                                f"Cooldown: skipping retry-block for {ip_addr}/{mac_addr} "
-                                                f"- recently auto-unblocked [source=scheduler]"
-                                            )
                                             continue
                                     all_success = True
                                     for fw_tag in fw_tags:
@@ -425,10 +473,40 @@ async def scheduled_compliance_check():
                                         logger.info(f"Retry block succeeded for {ip_addr} on firewall(s) '{','.join(fw_tags)}' [source=scheduler]")
 
                                 if retry_blocked > 0:
-                                    await db.commit()
-                                    logger.info(f"Retry-blocked {retry_blocked} non-compliant unblocked terminals from {source.tag} [source=scheduler]")
+                                    try:
+                                        await db.commit()
+                                        logger.info(f"Retry-blocked {retry_blocked} non-compliant unblocked terminals from {source.tag} [source=scheduler]")
+                                    except IntegrityError as ie:
+                                        # Unique constraint violation (duplicate active blacklist entry):
+                                        # rollback this batch to avoid poisoning the whole scheduler
+                                        # session, then continue with other sources.
+                                        await db.rollback()
+                                        logger.error(
+                                            f"Retry-block commit failed for {source.tag} due to IntegrityError, "
+                                            f"rolled back to protect scheduler session: {ie} [source=scheduler]"
+                                        )
                         except Exception as re_err:
                             logger.error(f"Error in retry-block for {source.tag}: {type(re_err).__name__}: {re_err} [source=scheduler]")
+                            try:
+                                await db.rollback()
+                            except Exception:
+                                pass
+
+                    # ========== Periodic full compliance recalculation (self-healing) ==========
+                    # Ensures terminals stuck in stale states (e.g. whitelist terminals left as
+                    # non_compliant by historical crashes) are corrected automatically every cycle.
+                    # recalculate_all_compliance() holds a Redis distributed lock internally,
+                    # so it is safe against concurrent manual/recalc triggers.
+                    try:
+                        async with async_session_factory() as recalc_db:
+                            from app.services.compliance_service import ComplianceService as _RecalcSvc
+                            recalc_svc = _RecalcSvc(recalc_db)
+                            await recalc_svc.recalculate_all_compliance()
+                    except Exception as recalc_err:
+                        logger.error(
+                            f"Error in periodic full compliance recalculation: "
+                            f"{type(recalc_err).__name__}: {recalc_err} [source=scheduler]"
+                        )
 
                     # ========== Global compliance alert (based on DB stats, not per-source unchecked) ==========
                     try:

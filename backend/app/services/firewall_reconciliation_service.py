@@ -4,10 +4,11 @@ Firewall Reconciliation Service
 Service for reconciling firewall blocked IPs with database blacklist entries.
 Ensures that the firewall state and database state remain synchronized.
 
-Key principle: Database is the source of truth. Reconciliation:
-- Adds missing Blacklist entries for IPs that are blocked on firewall but missing in DB
-- Re-blocks IPs on firewall that exist in DB but are missing from firewall
-- Never unblocks based solely on reconciliation mismatch (DB is authoritative)
+Key principle: Firewall actual state is the authoritative source of truth for blocked status.
+Reconciliation runs PER FIREWALL independently to avoid cross-firewall corruption:
+- Adds missing Blacklist entries for IPs that are blocked on firewall but missing in DB (highest priority)
+- Re-blocks IPs on firewall that exist in DB but are missing from firewall (DB says should be blocked)
+- Never unblocks based solely on reconciliation mismatch
 """
 
 from datetime import UTC, datetime, timedelta
@@ -99,11 +100,29 @@ class FirewallReconciliationService:
                     # This prevents clearing database when firewall API is temporarily down
                     db_count_for_fw = len(db_entries_by_fw.get(fw_tag, set()))
                     if len(fw_ips) == 0 and db_count_for_fw > 0:
-                        logger.warning(
-                            f"Firewall '{fw_tag}' returned 0 blocked IPs but database has {db_count_for_fw} "
-                            f"active entries - likely API failure. Skipping reconciliation for this firewall "
-                            f"to prevent data loss."
-                        )
+                        # Probe with a known DB IP to distinguish "list API anomaly"
+                        # from "blacklist externally wiped / unknown state".
+                        probe_ip = next(iter(db_entries_by_fw[fw_tag]))[0]
+                        probe_hit = False
+                        try:
+                            probe_hit = await svc._find_blacklist_entry(probe_ip) is not None
+                        except Exception as probe_err:
+                            logger.warning(
+                                f"Probe query for '{fw_tag}' failed: {type(probe_err).__name__}: {probe_err}"
+                            )
+                        if probe_hit:
+                            logger.warning(
+                                f"Firewall '{fw_tag}' returned 0 blocked IPs but database has {db_count_for_fw} "
+                                f"active entries. Probe: '{probe_ip}' FOUND via single-query API, so the LIST "
+                                f"API appears faulty. Skipping reconciliation for this firewall to prevent data loss."
+                            )
+                        else:
+                            logger.warning(
+                                f"Firewall '{fw_tag}' returned 0 blocked IPs but database has {db_count_for_fw} "
+                                f"active entries. Probe: '{probe_ip}' NOT found via single-query API either - "
+                                f"cannot distinguish external wipe from API failure. Conservatively skipping "
+                                f"reconciliation for this firewall to prevent data loss."
+                            )
                         results["firewall_errors"].append(fw_tag)
                         continue
 
@@ -209,16 +228,24 @@ class FirewallReconciliationService:
         Create blacklist entries for IPs found blocked on a specific firewall
         but missing from the database for that firewall.
         Attempts to find MAC address via current Terminal records.
+
+        Safety: Skips whitelisted (bypass) terminals to prevent oscillation.
+        If a whitelisted terminal is found blocked on firewall, log warning but do NOT
+        create Blacklist entry - let compliance recalculation with cooldown handle unblock safely.
         """
         created = 0
 
+        # Load whitelist for safety check
+        from app.services.compliance_service import ComplianceService
+        _svc = ComplianceService(self.db)
+        whitelist_data = await _svc._load_whitelist_cache()
+
         for ip_address in ip_addresses:
             try:
-                # Find terminal by IP address (best effort - may have multiple due to DHCP history,
-                # prefer non-blocked / most recent)
+                # Find terminal by IP address (best effort - prefer most recently updated)
                 term_stmt = select(Terminal).where(
                     Terminal.ip_address == ip_address
-                ).order_by(Terminal.last_seen.desc())
+                ).order_by(Terminal.timestamp.desc())
                 term_result = await self.db.execute(term_stmt)
                 terminal = term_result.scalar_one_or_none()
 
@@ -230,11 +257,27 @@ class FirewallReconciliationService:
                     mac_address = terminal.mac_address
                     mac_norm = terminal.mac_address_normalized
                     source_tag = terminal.source_tag
-                    # Update terminal status to blocked since firewall says it's blocked
+
+                    # Update terminal firewall status to reflect actual firewall state
+                    # IMPORTANT: ONLY update 'status' field (firewall actual state),
+                    # NEVER modify 'compliance_status' here - that is solely the
+                    # responsibility of compliance recalculation logic with anti-oscillation.
                     if terminal.status != TerminalStatus.BLOCKED.value:
                         terminal.status = TerminalStatus.BLOCKED.value
-                        if terminal.compliance_status in ("unknown", "compliant", "bypass"):
-                            terminal.compliance_status = "non_compliant"
+
+                    # Safety check: if terminal is whitelisted (bypass), do NOT create Blacklist entry.
+                    # This prevents oscillation when a whitelisted terminal is erroneously blocked.
+                    # Compliance recalculation with cooldown will handle unblock safely.
+                    wl_match = _svc._match_whitelist_in_memory(
+                        whitelist_data, ip_address, mac_address or ""
+                    )
+                    if wl_match and terminal.compliance_status == "bypass":
+                        logger.warning(
+                            f"Reconciliation: IP {ip_address} blocked on firewall '{fw_tag}' "
+                            f"but terminal is whitelisted (bypass). Skipping Blacklist creation "
+                            f"to prevent oscillation - will be unblocked by compliance recalculation."
+                        )
+                        continue
                 else:
                     logger.warning(
                         f"Reconciliation: IP {ip_address} blocked on firewall '{fw_tag}' "
@@ -281,9 +324,9 @@ class FirewallReconciliationService:
         self, fw_tag: str, svc: SangforService, ip_addresses: Set[str]
     ) -> int:
         """
-        Re-block IPs on a firewall that are supposed to be blocked (exist in active DB)
+        Re-block IPs on a firewall that are marked as blocked in active DB entries
         but are currently missing from the firewall's blocklist.
-        Database is authoritative - we re-apply the block to firewall.
+        This handles cases where firewall may have lost blocks due to restart or policy sync.
         """
         reblocked = 0
 

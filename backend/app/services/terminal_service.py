@@ -242,14 +242,43 @@ class TerminalService:
             # Whitelist count - count terminals with compliance_status='bypass' instead of Whitelist entries
             whitelisted = compliance_counts.get("bypass", 0)
 
+            # Blocked count - unified caliber: count distinct active blacklist IPs.
+            # This aligns dashboard with blacklist page total and firewall actual state
+            # (synced via reconciliation), including NULL-MAC reconciliation entries
+            # that have no corresponding terminal record.
+            _now = datetime.now(UTC)
+            blocked_stmt = select(func.count(func.distinct(Blacklist.ip_address))).where(
+                (Blacklist.auto_unblocked == False) &
+                (Blacklist.unblocked_at.is_(None)) &
+                or_(
+                    Blacklist.expires_at >= _now,
+                    Blacklist.expires_at.is_(None),
+                )
+            )
+            blocked_result = await self.db.execute(blocked_stmt)
+            blocked = blocked_result.scalar() or 0
+
+            # Non-compliant count: ONLY count terminals that are both non_compliant AND blocked,
+            # to enforce the invariant: compliance_status='non_compliant' ⇒ status='blocked'
+            nc_blocked_result = await self.db.execute(
+                select(func.count())
+                .select_from(Terminal)
+                .where(
+                    (Terminal.source == 'arp') &
+                    (Terminal.compliance_status == 'non_compliant') &
+                    (Terminal.status == 'blocked')
+                )
+            )
+            non_compliant = nc_blocked_result.scalar() or 0
+
             return {
                 "total": total,
                 "whitelisted": whitelisted,
-                "blocked": status_counts.get(TerminalStatus.BLOCKED.value, 0),
+                "blocked": blocked,
                 "unblocked": status_counts.get(TerminalStatus.UNBLOCKED.value, 0),
                 "compliant": compliance_counts.get("compliant", 0),
                 "bypass": compliance_counts.get("bypass", 0),
-                "non_compliant": compliance_counts.get("non_compliant", 0),
+                "non_compliant": non_compliant,
                 "unknown": compliance_counts.get("unknown", 0),
             }
         except Exception as e:
@@ -644,15 +673,51 @@ class TerminalService:
                 resource_id = normalized_mac or ip_pattern
                 await self.log_action(username, "whitelist_create", "whitelist", resource_id, log_details)
 
-            # Invalidate whitelist cache and recalculate compliance for all terminals
-            try:
-                from app.services.compliance_service import ComplianceService
-                compliance_svc = ComplianceService(self.db)
+            # After creating/updating whitelist entry: handle based on pattern type
+            from app.services.compliance_service import ComplianceService
+            compliance_svc = ComplianceService(self.db)
+
+            if normalized_mac:
+                # Single MAC whitelist (terminal management page scenario):
+                # Process only this one terminal immediately, no full recalculation
+                await compliance_svc.invalidate_whitelist_cache()
+
+                # Find the terminal by normalized MAC
+                from app.models.terminal import Terminal
+                mac_norm_for_lookup = _normalize_mac(normalized_mac)
+                stmt = select(Terminal).where(
+                    Terminal.mac_address_normalized == mac_norm_for_lookup
+                ).order_by(desc(Terminal.updated_at))
+                result = await self.db.execute(stmt)
+                terminal = result.scalar_one_or_none()
+
+                if terminal:
+                    # Determine wl_match_type
+                    if ip_pattern:
+                        wl_match_type = "both"
+                    else:
+                        wl_match_type = "mac_only"
+
+                    # Apply manual whitelist immediately (bypasses cooldown)
+                    apply_result = await compliance_svc.apply_manual_whitelist_for_terminal(
+                        terminal,
+                        wl_match_type=wl_match_type,
+                        wl_comments=comments,
+                        username=username,
+                    )
+                    logger.info(f"Manual whitelist applied immediately for MAC {normalized_mac}: {apply_result}")
+                else:
+                    # Terminal not yet discovered by ARP - will be handled on first ARP collection
+                    logger.info(
+                        f"Whitelist added for MAC {normalized_mac} but no terminal record found yet - "
+                        f"will take effect when ARP discovers the terminal."
+                    )
+            else:
+                # IP-only whitelist (CIDR/range/single IP without MAC):
+                # May match multiple terminals, need full recalculation
                 await compliance_svc.invalidate_whitelist_cache()
                 recalc_result = await compliance_svc.recalculate_all_compliance()
-                logger.info(f"Whitelist add triggered compliance recalculation: {recalc_result}")
-            except Exception as e:
-                logger.warning(f"Failed to recalculate compliance after whitelist add: {e}")
+                logger.info(f"Whitelist add (IP pattern) triggered full compliance recalculation: {recalc_result}")
 
             await self.db.commit()
 
@@ -711,14 +776,44 @@ class TerminalService:
                         await self.db.delete(entry)
 
             if deleted_entries:
-                try:
-                    from app.services.compliance_service import ComplianceService
-                    compliance_svc = ComplianceService(self.db)
-                    await compliance_svc.invalidate_whitelist_cache()
+                from app.services.compliance_service import ComplianceService
+                compliance_svc = ComplianceService(self.db)
+                await compliance_svc.invalidate_whitelist_cache()
+
+                # Check if we only deleted MAC-based entries for a single terminal
+                mac_only_delete = all(
+                    entry.mac_address and not entry.ip_pattern
+                    for entry in deleted_entries
+                )
+                single_mac = None
+                if mac_only_delete:
+                    macs_in_delete = {entry.mac_address_normalized for entry in deleted_entries}
+                    if len(macs_in_delete) == 1:
+                        single_mac = next(iter(macs_in_delete))
+
+                if single_mac:
+                    # Single MAC whitelist removal: reset that terminal only, no full recalc
+                    stmt = select(Terminal).where(
+                        Terminal.mac_address_normalized == single_mac
+                    ).order_by(desc(Terminal.updated_at))
+                    result = await self.db.execute(stmt)
+                    terminal = result.scalar_one_or_none()
+
+                    if terminal:
+                        # Reset to unknown; next compliance cycle will re-evaluate naturally
+                        terminal.compliance_status = "unknown"
+                        terminal.wl_match_type = None
+                        terminal.wl_comments = None
+                        terminal.compliant_confirm_count = 0
+                        terminal.non_compliant_confirm_count = 0
+                        logger.info(
+                            f"Whitelist deleted for MAC {single_mac}: reset terminal {terminal.id} "
+                            f"compliance_status to unknown, will be re-evaluated on next check."
+                        )
+                else:
+                    # Mixed/IP-pattern deletion: may affect multiple terminals, full recalculation
                     recalc_result = await compliance_svc.recalculate_all_compliance()
-                    logger.info(f"Whitelist delete triggered compliance recalculation: {recalc_result}")
-                except Exception as e:
-                    logger.warning(f"Failed to recalculate compliance after whitelist delete: {e}")
+                    logger.info(f"Whitelist delete (IP pattern) triggered full compliance recalculation: {recalc_result}")
 
                 for entry in deleted_entries:
                     log_details_parts = []
@@ -1259,8 +1354,6 @@ class TerminalService:
         Default shows only active (not unblocked) records."""
         conditions = []
 
-        from datetime import datetime, UTC
-
         # Status filtering: default to active only (not unblocked and not expired)
         _active_filter = and_(
             Blacklist.auto_unblocked == False,
@@ -1320,8 +1413,6 @@ class TerminalService:
         Default counts only active (not unblocked) records."""
         conditions = []
 
-        from datetime import datetime, UTC
-
         # Status filtering: default to active only (not unblocked and not expired)
         _active_filter = and_(
             Blacklist.auto_unblocked == False,
@@ -1370,7 +1461,6 @@ class TerminalService:
     async def get_blacklist_stats(self) -> dict:
         """Get global blacklist statistics based on active (not unblocked) records."""
         from sqlalchemy import case
-        from datetime import datetime, UTC
 
         base_filter = and_(
             Blacklist.auto_unblocked == False,
@@ -1395,12 +1485,32 @@ class TerminalService:
 
         total_active = row.total_active or 0
         expired = row.expired or 0
+
+        # Firewall actual blocked count for comparison (from latest reconciliation cache).
+        # Read from Redis cache instead of querying firewall API in real time,
+        # so no extra load is added to the firewall.
+        firewall_ip_count = None
+        firewall_synced_at = None
+        try:
+            import json
+            from app.core.security import get_redis_client
+            redis_client = await get_redis_client()
+            cached = await redis_client.get("reconcile:latest")
+            if cached:
+                payload = json.loads(cached)
+                firewall_ip_count = payload.get("firewall_ip_count")
+                firewall_synced_at = payload.get("synced_at")
+        except Exception:
+            pass
+
         return {
             "total_active": total_active,
             "auto_blocked": row.auto_blocked or 0,
             "manual_blocked": row.manual_blocked or 0,
             "expired": expired,
             "active_blocks": total_active - expired,
+            "firewall_ip_count": firewall_ip_count,
+            "firewall_synced_at": firewall_synced_at,
         }
 
     async def check_blacklist(
