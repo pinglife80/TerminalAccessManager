@@ -115,7 +115,11 @@ async def trigger_firewall_reconciliation(
     
     recon_svc = FirewallReconciliationService(db)
     results = await recon_svc.reconcile()
-    
+
+    # Cache latest reconciliation result for firewall stats display
+    from app.main import _cache_reconcile_result
+    await _cache_reconcile_result(results)
+
     return {
         "success": True,
         "message": "Firewall reconciliation completed",
