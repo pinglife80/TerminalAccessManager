@@ -33,6 +33,43 @@ def _normalize_mac(mac: str) -> str:
     return mac.replace(':', '').replace('-', '').replace('.', '').upper()
 
 
+def _blacklist_terminal_join():
+    """Join condition linking a Blacklist entry to its Terminal by identity.
+
+    Primary key is normalized MAC; falls back to IP for NULL-MAC
+    (reconciliation-created) entries. Avoids IP-only joins that miss DHCP
+    re-addressed terminals or duplicate same-IP multi-terminal results.
+    """
+    return or_(
+        and_(
+            Blacklist.mac_address_normalized.is_not(None),
+            Blacklist.mac_address_normalized == Terminal.mac_address_normalized,
+        ),
+        and_(
+            Blacklist.mac_address_normalized.is_(None),
+            Blacklist.ip_address == Terminal.ip_address,
+        ),
+    )
+
+
+def _blacklist_terminal_key():
+    """Distinct-able identity key for a blacklist entry's terminal:
+    MAC-normalized when known, otherwise IP address."""
+    return func.coalesce(Blacklist.mac_address_normalized, Blacklist.ip_address)
+
+
+def _enabled_arp_source_tag_condition():
+    """Canonical 'ARP terminal' condition: terminal belongs to an *enabled*
+    ARP data source (arp_ssh / arp_api). Shared by dashboard stats and
+    scheduler retry-block so both count the same terminal set."""
+    return Terminal.source_tag.in_(
+        select(DataSource.tag).where(
+            (DataSource.type.in_(["arp_ssh", "arp_api"])) &
+            (DataSource.enabled == True)
+        )
+    )
+
+
 def _parse_date_range(start_date: str | None, end_date: str | None):
     """Parse date range strings into datetime objects for filtering"""
     conditions = []
@@ -217,16 +254,16 @@ class TerminalService:
     async def get_stats(self) -> dict:
         """Get dashboard statistics with efficient database queries"""
         try:
-            # Total terminals (ARP source only)
+            # Total terminals (enabled ARP sources only)
             total_result = await self.db.execute(
-                select(func.count()).select_from(Terminal).where(Terminal.source == 'arp')
+                select(func.count()).select_from(Terminal).where(_enabled_arp_source_tag_condition())
             )
             total = total_result.scalar() or 0
 
             # Count by compliance_status
             compliance_result = await self.db.execute(
                 select(Terminal.compliance_status, func.count())
-                .where(Terminal.source == 'arp')
+                .where(_enabled_arp_source_tag_condition())
                 .group_by(Terminal.compliance_status)
             )
             compliance_counts = dict(compliance_result.all())
@@ -234,7 +271,7 @@ class TerminalService:
             # Count by status
             status_result = await self.db.execute(
                 select(Terminal.status, func.count())
-                .where(Terminal.source == 'arp')
+                .where(_enabled_arp_source_tag_condition())
                 .group_by(Terminal.status)
             )
             status_counts = dict(status_result.all())
@@ -264,7 +301,7 @@ class TerminalService:
                 select(func.count())
                 .select_from(Terminal)
                 .where(
-                    (Terminal.source == 'arp') &
+                    _enabled_arp_source_tag_condition() &
                     (Terminal.compliance_status == 'non_compliant') &
                     (Terminal.status == 'blocked')
                 )
@@ -425,6 +462,15 @@ class TerminalService:
             if query.source_tag:
                 conditions.append(Terminal.source_tag == query.source_tag)
 
+            if query.arp_enabled_only:
+                conditions.append(
+                    Terminal.source_tag.in_(
+                        select(DataSource.tag).where(
+                            DataSource.type.in_(["arp_ssh", "arp_api"]) & (DataSource.enabled == True)
+                        )
+                    )
+                )
+
             # Firewall tag filter via Blacklist subquery
             if query.firewall_tag:
                 fw_subquery = (
@@ -479,6 +525,15 @@ class TerminalService:
 
             if query.source_tag:
                 conditions.append(Terminal.source_tag == query.source_tag)
+
+            if query.arp_enabled_only:
+                conditions.append(
+                    Terminal.source_tag.in_(
+                        select(DataSource.tag).where(
+                            DataSource.type.in_(["arp_ssh", "arp_api"]) & (DataSource.enabled == True)
+                        )
+                    )
+                )
 
             # Firewall tag filter via Blacklist subquery
             if query.firewall_tag:
@@ -1367,7 +1422,16 @@ class TerminalService:
             Blacklist.auto_unblocked == True,
             Blacklist.unblocked_at.is_not(None)
         )
-        if query and query.status:
+        category = query.category if query else None
+        needs_terminal_join = False
+        if category == 'success_blocked':
+            conditions.append(_active_filter)
+        elif category == 'success_unblocked':
+            conditions.append(_unblocked_filter)
+        elif category == 'pending_retry_unblock':
+            conditions.append(_active_filter)
+            needs_terminal_join = True
+        elif query and query.status:
             if query.status == 'active':
                 conditions.append(_active_filter)
             elif query.status == 'unblocked':
@@ -1397,16 +1461,58 @@ class TerminalService:
             skip = query.skip
             limit = query.limit
 
-        stmt = (
-            select(Blacklist)
-            .where(and_(*conditions) if conditions else True)
-            .order_by(desc(Blacklist.blocked_at))
-            .offset(skip)
-            .limit(limit)
-        )
+        if needs_terminal_join:
+            conditions.append(Terminal.compliance_status.in_(["compliant", "bypass"]))
+
+        if needs_terminal_join and category == 'pending_retry_unblock':
+            # Dedup by terminal identity (MAC-normalized, NULL→IP) so each
+            # pending-unblock terminal appears once, matching the stats card and
+            # list total count (avoids DHCP re-IP missing / same-IP multi-terminal dup).
+            sub = (
+                select(func.min(Blacklist.id).label("min_id"))
+                .select_from(Blacklist)
+                .join(Terminal, _blacklist_terminal_join())
+                .where(and_(*conditions) if conditions else True)
+                .group_by(_blacklist_terminal_key())
+                .subquery()
+            )
+            stmt = (
+                select(Blacklist)
+                .join(sub, Blacklist.id == sub.c.min_id)
+                .order_by(desc(Blacklist.blocked_at))
+                .offset(skip)
+                .limit(limit)
+            )
+        else:
+            stmt = select(Blacklist)
+            if needs_terminal_join:
+                stmt = stmt.join(Terminal, _blacklist_terminal_join())
+            stmt = (
+                stmt.where(and_(*conditions) if conditions else True)
+                .order_by(desc(Blacklist.blocked_at))
+                .offset(skip)
+                .limit(limit)
+            )
 
         result = await self.db.execute(stmt)
-        return result.scalars().all()
+        rows = result.scalars().all()
+
+        # Attach the associated terminal's compliance_status so the frontend can
+        # scope the "Retry Unblock" button to compliant/bypass entries only.
+        if rows:
+            entry_ids = [r.id for r in rows]
+            comp_rows = (
+                await self.db.execute(
+                    select(Blacklist.id, Terminal.compliance_status)
+                    .join(Terminal, _blacklist_terminal_join())
+                    .where(Blacklist.id.in_(entry_ids))
+                )
+            ).all()
+            compliance_map = {entry_id: comp for entry_id, comp in comp_rows}
+            for r in rows:
+                r.terminal_compliance_status = compliance_map.get(r.id)
+
+        return rows
 
     async def get_blacklist_count(self, query: BlacklistQuery | None = None) -> int:
         """Get total count of blacklist entries matching search criteria.
@@ -1426,7 +1532,16 @@ class TerminalService:
             Blacklist.auto_unblocked == True,
             Blacklist.unblocked_at.is_not(None)
         )
-        if query and query.status:
+        category = query.category if query else None
+        needs_terminal_join = False
+        if category == 'success_blocked':
+            conditions.append(_active_filter)
+        elif category == 'success_unblocked':
+            conditions.append(_unblocked_filter)
+        elif category == 'pending_retry_unblock':
+            conditions.append(_active_filter)
+            needs_terminal_join = True
+        elif query and query.status:
             if query.status == 'active':
                 conditions.append(_active_filter)
             elif query.status == 'unblocked':
@@ -1450,68 +1565,239 @@ class TerminalService:
             for dc in date_conditions:
                 conditions.append(dc(Blacklist.blocked_at))
 
-        stmt = (
-            select(func.count(Blacklist.id))
-            .where(and_(*conditions) if conditions else True)
-        )
+        if needs_terminal_join:
+            conditions.append(Terminal.compliance_status.in_(["compliant", "bypass"]))
+
+        if needs_terminal_join and category == 'pending_retry_unblock':
+            stmt = (
+                select(func.count(func.distinct(_blacklist_terminal_key())))
+                .select_from(Blacklist)
+                .join(Terminal, _blacklist_terminal_join())
+                .where(and_(*conditions) if conditions else True)
+            )
+        else:
+            stmt = select(func.count(Blacklist.id))
+            if needs_terminal_join:
+                stmt = stmt.select_from(Blacklist).join(Terminal, _blacklist_terminal_join())
+            stmt = stmt.where(and_(*conditions) if conditions else True)
 
         result = await self.db.execute(stmt)
         return result.scalar() or 0
 
     async def get_blacklist_stats(self) -> dict:
-        """Get global blacklist statistics based on active (not unblocked) records."""
-        from sqlalchemy import case
+        """Get blacklist statistics with actionable status categories.
 
-        base_filter = and_(
+        Categories:
+          - success_blocked: active blacklist entries actually blocked on firewall
+          - pending_retry_block: non_compliant terminals not yet blocked (await retry-block)
+          - success_unblocked: entries that have been unblocked on the firewall
+          - pending_retry_unblock: still-active entries whose terminal already became
+            compliant/bypass (unblock failed, awaiting retry)
+          - firewall_errors: firewalls that failed the latest reconciliation
+        """
+        _now = datetime.now(UTC)
+
+        active_filter = and_(
             Blacklist.auto_unblocked == False,
             Blacklist.unblocked_at.is_(None),
             or_(
-                Blacklist.expires_at >= datetime.now(UTC),
+                Blacklist.expires_at >= _now,
                 Blacklist.expires_at.is_(None),
-            )
+            ),
         )
 
-        stmt = select(
-            func.count(Blacklist.id).label('total_active'),
-            func.count(case((Blacklist.is_auto_blocked == True, 1))).label('auto_blocked'),
-            func.count(case((Blacklist.is_auto_blocked == False, 1))).label('manual_blocked'),
-            func.count(case(
-                ((Blacklist.expires_at.is_not(None)) & (Blacklist.expires_at < datetime.now(UTC)), 1)
-            )).label('expired'),
-        ).where(base_filter)
+        # ① success_blocked: distinct active blacklist IPs (actually blocked on firewall)
+        success_blocked = (
+            await self.db.execute(
+                select(func.count(func.distinct(Blacklist.ip_address))).where(active_filter)
+            )
+        ).scalar() or 0
 
-        result = await self.db.execute(stmt)
-        row = result.one()
+        # ② pending_retry_block: non_compliant terminals still unblocked
+        #    (matches main.py retry-block query: source_tag IN enabled ARP sources
+        #     AND compliance_status='non_compliant' AND status='unblocked')
+        pending_retry_block = (
+            await self.db.execute(
+                select(func.count())
+                .select_from(Terminal)
+                .where(
+                    Terminal.source_tag.in_(
+                        select(DataSource.tag).where(
+                            DataSource.type.in_(["arp_ssh", "arp_api"]) & (DataSource.enabled == True)
+                        )
+                    ) &
+                    (Terminal.compliance_status == "non_compliant") &
+                    (Terminal.status == "unblocked")
+                )
+            )
+        ).scalar() or 0
 
-        total_active = row.total_active or 0
-        expired = row.expired or 0
+        # ③ pending_retry_unblock: still-active entry + terminal already compliant/bypass.
+        #    Dedup by terminal identity (MAC-normalized, NULL→IP) so it matches the
+        #    list total and list rows (avoids DHCP re-IP missing / same-IP dup).
+        pending_retry_unblock = (
+            await self.db.execute(
+                select(func.count(func.distinct(_blacklist_terminal_key())))
+                .select_from(Blacklist)
+                .join(Terminal, _blacklist_terminal_join())
+                .where(
+                    active_filter &
+                    (Terminal.compliance_status.in_(["compliant", "bypass"]))
+                )
+            )
+        ).scalar() or 0
 
-        # Firewall actual blocked count for comparison (from latest reconciliation cache).
-        # Read from Redis cache instead of querying firewall API in real time,
-        # so no extra load is added to the firewall.
-        firewall_ip_count = None
-        firewall_synced_at = None
+        # ④ success_unblocked: entries that have been unblocked (on firewall)
+        success_unblocked = (
+            await self.db.execute(
+                select(func.count(Blacklist.id)).where(
+                    or_(
+                        Blacklist.auto_unblocked == True,
+                        Blacklist.unblocked_at.is_not(None),
+                    )
+                )
+            )
+        ).scalar() or 0
+
+        # ⑤ firewall_errors + synced_at from latest reconciliation cache
+        firewall_errors: list[dict] = []
+        synced_at: str | None = None
         try:
-            import json
             from app.core.security import get_redis_client
             redis_client = await get_redis_client()
             cached = await redis_client.get("reconcile:latest")
             if cached:
                 payload = json.loads(cached)
-                firewall_ip_count = payload.get("firewall_ip_count")
-                firewall_synced_at = payload.get("synced_at")
+                raw_errors = payload.get("firewall_errors", [])
+                for item in raw_errors:
+                    if isinstance(item, dict):
+                        firewall_errors.append({
+                            "tag": item.get("tag", ""),
+                            "error": item.get("error", ""),
+                        })
+                    elif isinstance(item, str):
+                        firewall_errors.append({"tag": item, "error": ""})
+                synced_at = payload.get("synced_at")
         except Exception:
             pass
 
         return {
-            "total_active": total_active,
-            "auto_blocked": row.auto_blocked or 0,
-            "manual_blocked": row.manual_blocked or 0,
-            "expired": expired,
-            "active_blocks": total_active - expired,
-            "firewall_ip_count": firewall_ip_count,
-            "firewall_synced_at": firewall_synced_at,
+            "success_blocked": success_blocked,
+            "pending_retry_block": pending_retry_block,
+            "success_unblocked": success_unblocked,
+            "pending_retry_unblock": pending_retry_unblock,
+            "firewall_errors": firewall_errors,
+            "synced_at": synced_at,
         }
+
+    async def retry_unblock(self, entry_id: int, username: str = "system") -> dict:
+        """Manually retry unblocking a single active blacklist entry on its firewall.
+
+        Returns {"success": bool, "error": str | None}.
+        """
+        entry = (
+            await self.db.execute(select(Blacklist).where(Blacklist.id == entry_id))
+        ).scalar_one_or_none()
+
+        if not entry:
+            return {"success": False, "error": "条目不存在"}
+        if entry.auto_unblocked or entry.unblocked_at:
+            return {"success": False, "error": "条目已解封"}
+        if not entry.ip_address:
+            return {"success": False, "error": "条目缺少 IP 地址"}
+        if not entry.firewall_tag:
+            return {"success": False, "error": "条目缺少防火墙标识"}
+
+        # Oscillation guard: "retry unblock" only makes sense for entries whose
+        # terminal has ALREADY become compliant/bypass (the pending_retry_unblock
+        # set). Unblocking a still-non_compliant terminal would just get re-blocked
+        # by the next compliance recalc. Match via MAC-normalized (NULL-MAC → IP).
+        term_compliance = (
+            await self.db.execute(
+                select(Terminal.compliance_status)
+                .select_from(Blacklist)
+                .join(Terminal, _blacklist_terminal_join())
+                .where(Blacklist.id == entry_id)
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+
+        if term_compliance not in ("compliant", "bypass"):
+            if term_compliance == "non_compliant":
+                error = "终端仍不合规（non_compliant），不可解封"
+            else:
+                error = f"终端合规状态未达解封条件（当前：{term_compliance or '无关联终端'}）"
+            return {"success": False, "error": error}
+
+        ip_address = entry.ip_address
+        firewall_tag = entry.firewall_tag
+
+        try:
+            fw_stmt = select(DataSource).where(
+                (DataSource.tag == firewall_tag) & (DataSource.type == "sangfor")
+            )
+            fw_source = (await self.db.execute(fw_stmt)).scalar_one_or_none()
+            if not fw_source or not fw_source.enabled:
+                return {"success": False, "error": f"防火墙 '{firewall_tag}' 不存在或已禁用"}
+
+            config = fw_source.config
+            if config:
+                config = decrypt_config(config)
+
+            svc = await SangforService.get_cached_service(
+                base_url=config.get("base_url", ""),
+                username=config.get("username", ""),
+                password=config.get("password", ""),
+                verify_ssl=config.get("verify_ssl", True),
+                ca_bundle=config.get("ca_bundle", ""),
+            )
+
+            result = await svc.unblock_ip([{"srcIP": ip_address}])
+            success = result.get("code") == 0
+        except Exception as e:
+            logger.error(f"retry_unblock failed for entry {entry_id}: {str(e)}")
+            entry.last_operation_type = "unblock"
+            entry.last_operation_status = "failed"
+            entry.last_operation_error = str(e)
+            entry.last_operation_at = datetime.now(UTC)
+            entry.retry_count = (entry.retry_count or 0) + 1
+            await self.db.commit()
+            return {"success": False, "error": str(e)}
+
+        if not success:
+            entry.last_operation_type = "unblock"
+            entry.last_operation_status = "failed"
+            entry.last_operation_error = result.get("message", "unknown error")
+            entry.last_operation_at = datetime.now(UTC)
+            entry.retry_count = (entry.retry_count or 0) + 1
+            await self.db.commit()
+            return {"success": False, "error": result.get("message", "unknown error")}
+
+        entry.auto_unblocked = True
+        entry.unblocked_at = datetime.now(UTC)
+        entry.unblocked_by = username
+        entry.reason = "手动重试解封"
+        entry.last_operation_type = "unblock"
+        entry.last_operation_status = "success"
+        entry.last_operation_at = datetime.now(UTC)
+        await self.db.commit()
+
+        await self.log_action(
+            username,
+            "firewall_unblock",
+            "blacklist",
+            str(entry.id),
+            {
+                "message": f"Retried unblock IP {ip_address} on firewall {firewall_tag}",
+                "ip_address": ip_address,
+                "firewall_tag": firewall_tag,
+                "success": True,
+            },
+            ip_address=ip_address,
+            resource_name=ip_address,
+        )
+
+        return {"success": True, "error": None}
 
     async def check_blacklist(
         self,

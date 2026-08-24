@@ -185,8 +185,12 @@ class ComplianceService:
             # Check IPGuard (with scope-determined strategy)
             if use_ip_only:
                 ig_match = self._match_ipguard_ip_only_in_memory(ipguard_data, ip_addr)
+                entry["use_ip_only"] = True
             else:
-                ig_match = self._match_ipguard_in_memory(ipguard_data, ip_addr, mac_addr, ipguard_mac_prefixes)
+                ig_match, ip_found, mac_found = self._match_ipguard_in_memory(ipguard_data, ip_addr, mac_addr, ipguard_mac_prefixes)
+                entry["use_ip_only"] = False
+                entry["ip_found"] = ip_found
+                entry["mac_found"] = mac_found
 
             if wl_result:
                 entry["compliance_status"] = "bypass"
@@ -548,6 +552,30 @@ class ComplianceService:
                         td = timedelta(minutes=value)
 
                 mac_norm = entry.mac_address.replace('-', '').replace(':', '').replace('.', '').upper() if entry.mac_address else None
+                
+                # Calculate detailed block reason (mirrors _apply_compliance_result)
+                block_reason = "自动封锁：不合规"
+                scope_data = await self._load_scope_cache()
+                use_ip_only = self._check_terminal_in_arp_scope(scope_data, entry.ip_address, entry.mac_address)
+                ipguard_mac_prefixes = self._extract_ipguard_mac_prefixes(scope_data)
+
+                if use_ip_only:
+                    block_reason = "IP 不合规"
+                else:
+                    ipguard_data = await self._load_all_ipguard_cache()
+                    _, ip_found, mac_found = self._match_ipguard_in_memory(
+                        ipguard_data, entry.ip_address, entry.mac_address, ipguard_mac_prefixes
+                    )
+
+                    if not ip_found and not mac_found:
+                        block_reason = "IP 和 MAC 都不合规"
+                    elif not ip_found and mac_found:
+                        block_reason = "IP 不合规，MAC 合规"
+                    elif ip_found and not mac_found:
+                        block_reason = "MAC 不合规，IP 合规"
+                    else:
+                        block_reason = "自动封锁：不合规"
+                
                 for fw_tag in successfully_blocked_fw:
                     # Check for existing entry (idempotency per firewall)
                     existing_stmt = select(Blacklist).where(
@@ -567,13 +595,16 @@ class ComplianceService:
                         ip_address=entry.ip_address,
                         mac_address=entry.mac_address,
                         mac_address_normalized=mac_norm,
-                        reason=f"Auto-blocked: non-compliant (source={arp_source_tag})",
+                        reason=block_reason,
                         blocked_by="system",
                         expires_at=datetime.now(UTC) + td,
                         source_tag=arp_source_tag,
                         firewall_tag=fw_tag,
                         is_auto_blocked=True,
                         auto_unblocked=False,
+                        last_operation_type="block",
+                        last_operation_status="success",
+                        last_operation_at=datetime.now(UTC),
                     )
                     try:
                         self.db.add(blacklist_entry)
@@ -816,9 +847,28 @@ class ComplianceService:
 
             if all_success:
                 # All firewalls unblocked — update Terminal and mark all entries
+                # Determine unblock reason (IP/MAC combination, consistent with block)
+                unblock_reason = self._build_unblock_reason(
+                    bool(wl_match), use_ip_only, ipguard_data, current_ip, current_mac, ipguard_mac_prefixes
+                )
+                
+                logger.info(
+                    f"Auto-unblock: Setting reason for {len(successfully_unblocked_entries)} entries: "
+                    f"reason='{unblock_reason}', current_ip={current_ip}, current_mac={current_mac}, "
+                    f"wl_match={wl_match is not None}, use_ip_only={use_ip_only}, ig_match={ig_match}"
+                )
+                
                 for bl_entry in successfully_unblocked_entries:
                     bl_entry.auto_unblocked = True
                     bl_entry.unblocked_at = datetime.now(UTC)
+                    bl_entry.reason = unblock_reason
+                    bl_entry.last_operation_type = "unblock"
+                    bl_entry.last_operation_status = "success"
+                    bl_entry.last_operation_at = datetime.now(UTC)
+                    logger.debug(
+                        f"Auto-unblock: Updated blacklist entry id={bl_entry.id}, ip={bl_entry.ip_address}, "
+                        f"mac={bl_entry.mac_address}, reason='{unblock_reason}'"
+                    )
 
                 if terminal_record:
                     # Update terminal firewall status
@@ -871,9 +921,28 @@ class ComplianceService:
                 # Partial failure — only mark successfully unblocked entries
                 # but leave Terminal status as blocked since some firewalls
                 # still hold the block
+                # Determine unblock reason for partial success (IP/MAC combination, consistent with block)
+                partial_unblock_reason = self._build_unblock_reason(
+                    bool(wl_match), use_ip_only, ipguard_data, current_ip, current_mac, ipguard_mac_prefixes
+                ) + "（部分成功）"
+                
+                logger.info(
+                    f"Auto-unblock (partial): Setting reason for {len(successfully_unblocked_entries)} entries: "
+                    f"reason='{partial_unblock_reason}', current_ip={current_ip}, current_mac={current_mac}, "
+                    f"wl_match={wl_match is not None}, use_ip_only={use_ip_only}"
+                )
+                
                 for bl_entry in successfully_unblocked_entries:
                     bl_entry.auto_unblocked = True
                     bl_entry.unblocked_at = datetime.now(UTC)
+                    bl_entry.reason = partial_unblock_reason
+                    bl_entry.last_operation_type = "unblock"
+                    bl_entry.last_operation_status = "success"
+                    bl_entry.last_operation_at = datetime.now(UTC)
+                    logger.debug(
+                        f"Auto-unblock (partial): Updated blacklist entry id={bl_entry.id}, ip={bl_entry.ip_address}, "
+                        f"mac={bl_entry.mac_address}, reason='{partial_unblock_reason}'"
+                    )
                 skipped += len(entries) - len(successfully_unblocked_entries)
 
         if unblocked > 0:
@@ -1014,32 +1083,47 @@ class ComplianceService:
     async def _check_ipguard(self, ip_address: str, mac_address: str, ipguard_mac_prefixes: list[str] | None = None) -> bool:
         """Check if IP+MAC matches any IPGuard baseline entry"""
         ipguard_data = await self._load_all_ipguard_cache()
-        return self._match_ipguard_in_memory(ipguard_data, ip_address, mac_address, ipguard_mac_prefixes)
+        is_compliant, _, _ = self._match_ipguard_in_memory(ipguard_data, ip_address, mac_address, ipguard_mac_prefixes)
+        return is_compliant
 
     def _match_ipguard_in_memory(
         self, ipguard_data: dict[str, list[dict]], ip_address: str, mac_address: str,
         ipguard_mac_prefixes: list[str] | None = None,
-    ) -> bool:
+    ) -> tuple[bool, bool, bool]:
         """Match IP+MAC against in-memory IPGuard data from all sources.
 
         Matching order:
         1. Exact IP+MAC match
         2. IP match + IPGuard entry MAC matches any mac_prefix_ipguard scope
+
+        Returns:
+            tuple: (is_compliant, is_ip_match, is_mac_match)
         """
         normalized_mac = mac_address.upper().replace(":", "-") if mac_address else ""
+        ip_found = False
+        mac_found = False
 
         for _source_tag, entries in ipguard_data.items():
             for entry in entries:
-                if entry.get("ip_address") != ip_address:
-                    continue
+                entry_ip = entry.get("ip_address")
                 entry_mac = entry.get("mac_address", "").upper().replace(":", "-")
-                # 1. Exact IP+MAC match
+
+                if entry_ip == ip_address:
+                    ip_found = True
+                    # 1. Exact IP+MAC match
+                    if entry_mac == normalized_mac:
+                        return (True, True, True)
+                    # 2. IP match + IPGuard MAC prefix match
+                    if ipguard_mac_prefixes and self._mac_matches_any_prefix(entry_mac, ipguard_mac_prefixes):
+                        return (True, True, True)
+
+                # Check if MAC matches any entry (even with different IP)
                 if entry_mac == normalized_mac:
-                    return True
-                # 2. IP match + IPGuard MAC prefix match (if any ipguard_mac_prefixes configured)
-                if ipguard_mac_prefixes and self._mac_matches_any_prefix(entry_mac, ipguard_mac_prefixes):
-                    return True
-        return False
+                    mac_found = True
+
+        # If we got here, no full match. Check what parts matched.
+        is_compliant = False
+        return (is_compliant, ip_found, mac_found)
 
     async def _check_ipguard_ip_only(self, ip_address: str) -> bool:
         """Check IP-only match against IPGuard baseline data"""
@@ -1055,6 +1139,36 @@ class ComplianceService:
                 if entry.get("ip_address") == ip_address:
                     return True
         return False
+
+    def _build_unblock_reason(
+        self,
+        wl_match: bool,
+        use_ip_only: bool,
+        ipguard_data: dict[str, list[dict]],
+        current_ip: str,
+        current_mac: str,
+        ipguard_mac_prefixes: list[str] | None,
+    ) -> str:
+        """Build a detailed unblock reason, mirroring the block-side IP/MAC breakdown.
+
+        Whitelist matches always unblock with '加入白名单'. For IPGuard compliance,
+        the reason reflects whether the IP, MAC, or both matched the baseline, so the
+        unblock reason stays consistent with the block reason granularity.
+        """
+        if wl_match:
+            return "加入白名单"
+        if use_ip_only:
+            return "IP 合规"
+        _, ip_found, mac_found = self._match_ipguard_in_memory(
+            ipguard_data, current_ip, current_mac, ipguard_mac_prefixes
+        )
+        if ip_found and mac_found:
+            return "IP 和 MAC 都合规"
+        if ip_found and not mac_found:
+            return "IP 合规，MAC 不合规"
+        if not ip_found and mac_found:
+            return "MAC 合规，IP 不合规"
+        return "合规解封"
 
     # ------------------------------------------------------------------
     # Scope Conditions
@@ -1429,6 +1543,30 @@ class ComplianceService:
         _cooldown_skip_downgrade = False
 
         old_compliance = terminal.compliance_status
+        
+        # Get detailed match info for non-compliant terminals
+        block_reason = "自动封锁：不合规"
+        if new_compliance == "non_compliant":
+            scope_data = await self._load_scope_cache()
+            use_ip_only = self._check_terminal_in_arp_scope(scope_data, ip_addr, mac_addr)
+            ipguard_mac_prefixes = self._extract_ipguard_mac_prefixes(scope_data)
+            
+            if use_ip_only:
+                # IP-only scope, just say IP is non-compliant
+                block_reason = "IP 不合规"
+            else:
+                # Get detailed match info
+                ipguard_data = await self._load_all_ipguard_cache()
+                _, ip_found, mac_found = self._match_ipguard_in_memory(ipguard_data, ip_addr, mac_addr, ipguard_mac_prefixes)
+                
+                if not ip_found and not mac_found:
+                    block_reason = "IP 和 MAC 都不合规"
+                elif not ip_found and mac_found:
+                    block_reason = "IP 不合规，MAC 合规"
+                elif ip_found and not mac_found:
+                    block_reason = "MAC 不合规，IP 合规"
+                else:
+                    block_reason = "自动封锁：不合规"
 
         # Pre-check: cooling period for downgrade to non_compliant (prevent intermediate state)
         if new_compliance == "non_compliant":
@@ -1601,6 +1739,25 @@ class ComplianceService:
                             else:
                                 terminal.comments = unblock_comment
                             
+                            # Determine unblock reason based on new compliance status
+                            # (IP/MAC combination, consistent with block)
+                            if new_compliance == "bypass":
+                                compliance_unblock_reason = "加入白名单"
+                            else:
+                                scope_data = await self._load_scope_cache()
+                                use_ip_only = self._check_terminal_in_arp_scope(scope_data, ip_addr, mac_addr)
+                                ipguard_mac_prefixes = self._extract_ipguard_mac_prefixes(scope_data)
+                                ipguard_data = await self._load_all_ipguard_cache()
+                                compliance_unblock_reason = self._build_unblock_reason(
+                                    False, use_ip_only, ipguard_data, ip_addr, mac_addr, ipguard_mac_prefixes
+                                )
+                            
+                            logger.info(
+                                f"_apply_compliance_result: Setting reason for unblock: "
+                                f"reason='{compliance_unblock_reason}', ip={ip_addr}, mac={mac_addr}, "
+                                f"new_compliance={new_compliance}, old_status={terminal.status}"
+                            )
+                            
                             # Query by MAC only (IP may change due to DHCP)
                             bl_stmt = select(Blacklist).where(
                                 (Blacklist.mac_address_normalized == mac_norm) &
@@ -1612,6 +1769,14 @@ class ComplianceService:
                             for bl_entry in bl_entries:
                                 bl_entry.auto_unblocked = True
                                 bl_entry.unblocked_at = datetime.now(UTC)
+                                bl_entry.reason = compliance_unblock_reason
+                                bl_entry.last_operation_type = "unblock"
+                                bl_entry.last_operation_status = "success"
+                                bl_entry.last_operation_at = datetime.now(UTC)
+                                logger.debug(
+                                    f"_apply_compliance_result: Updated blacklist entry id={bl_entry.id}, "
+                                    f"ip={bl_entry.ip_address}, mac={bl_entry.mac_address}, reason='{compliance_unblock_reason}'"
+                                )
                             
                             if failed_fw_tags:
                                 logger.warning(f"Partially auto-unblocked {ip_addr} (now {new_compliance}): succeeded on [{fw_info}], failed on [{','.join(failed_fw_tags)}]")
@@ -1646,8 +1811,12 @@ class ComplianceService:
                 missing_fw_tags = [fw for fw in fw_tags if fw not in active_fw_tags]
 
                 if not missing_fw_tags:
-                    # All firewalls already have active entries, ensure terminal status is correct
-                    if terminal.status != "blocked":
+                    if not fw_tags:
+                        # No bound firewall: cannot block, do NOT forge blocked status.
+                        terminal.status = "unblocked"
+                        terminal.firewall_tag = None
+                    elif terminal.status != "blocked":
+                        # All firewalls already have active entries, ensure terminal status is correct
                         terminal.status = "blocked"
                         terminal.firewall_tag = fw_tags[0] if len(fw_tags) == 1 else ",".join(fw_tags)
                 else:
@@ -1735,13 +1904,16 @@ class ComplianceService:
                                     ip_address=ip_addr,
                                     mac_address=mac_addr,
                                     mac_address_normalized=mac_norm,
-                                    reason="Auto-blocked: non-compliant (compliance recalculation)",
+                                    reason=block_reason,
                                     blocked_by="system",
                                     expires_at=datetime.now(UTC) + td,
                                     source_tag=terminal.source_tag,
                                     firewall_tag=fw_tag,
                                     is_auto_blocked=True,
                                     auto_unblocked=False,
+                                    last_operation_type="block",
+                                    last_operation_status="success",
+                                    last_operation_at=datetime.now(UTC),
                                 )
                                 try:
                                     self.db.add(bl_entry)
@@ -2190,10 +2362,19 @@ class ComplianceService:
 
             # Update successfully unblocked entries
             now = now_utc()
+            logger.info(
+                f"Manual whitelist: Setting reason for {len(successfully_unblocked)} entries: "
+                f"reason='加入白名单（手动）', username={username}, ip={ip_address}, mac={mac_address}"
+            )
             for bl_entry in successfully_unblocked:
                 bl_entry.auto_unblocked = True
                 bl_entry.unblocked_at = now
                 bl_entry.unblocked_by = username
+                bl_entry.reason = "加入白名单（手动）"
+                logger.debug(
+                    f"Manual whitelist: Updated blacklist entry id={bl_entry.id}, ip={bl_entry.ip_address}, "
+                    f"mac={bl_entry.mac_address}, reason='加入白名单（手动）'"
+                )
 
             if successfully_unblocked:
                 terminal.status = TerminalStatus.UNBLOCKED.value

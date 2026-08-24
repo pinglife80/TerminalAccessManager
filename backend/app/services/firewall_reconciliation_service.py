@@ -15,7 +15,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Dict, Set, Tuple
 
 from loguru import logger
-from sqlalchemy import select, or_
+from sqlalchemy import select, or_, and_, exists
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.crypto import decrypt_config
@@ -44,7 +44,7 @@ class FirewallReconciliationService:
                 - missing_in_firewall: IPs in DB but missing on firewall (re-blocked)
                 - created_in_db: Number of entries created in DB
                 - reblocked_on_firewall: Number of IPs re-blocked on firewall
-                - firewall_errors: List of firewalls that failed to query
+                - firewall_errors: List of {tag, error} dicts for firewalls that failed to query
         """
         results = {
             "firewall_ip_count": 0,
@@ -67,6 +67,7 @@ class FirewallReconciliationService:
 
             if not firewalls:
                 logger.info("No enabled firewalls found for reconciliation")
+                await self._repair_stale_terminal_status()
                 return results
 
             # Get all active DB entries grouped by firewall_tag
@@ -110,20 +111,23 @@ class FirewallReconciliationService:
                             logger.warning(
                                 f"Probe query for '{fw_tag}' failed: {type(probe_err).__name__}: {probe_err}"
                             )
+                        reason = None
                         if probe_hit:
+                            reason = "返回0个封锁IP但数据库存在活跃条目，单点探测命中，疑似列表接口异常（已跳过对账以防数据丢失）"
                             logger.warning(
                                 f"Firewall '{fw_tag}' returned 0 blocked IPs but database has {db_count_for_fw} "
                                 f"active entries. Probe: '{probe_ip}' FOUND via single-query API, so the LIST "
                                 f"API appears faulty. Skipping reconciliation for this firewall to prevent data loss."
                             )
                         else:
+                            reason = "返回0个封锁IP但数据库存在活跃条目，单点探测未命中，无法区分外部清空与接口故障（已保守跳过对账以防数据丢失）"
                             logger.warning(
                                 f"Firewall '{fw_tag}' returned 0 blocked IPs but database has {db_count_for_fw} "
                                 f"active entries. Probe: '{probe_ip}' NOT found via single-query API either - "
                                 f"cannot distinguish external wipe from API failure. Conservatively skipping "
                                 f"reconciliation for this firewall to prevent data loss."
                             )
-                        results["firewall_errors"].append(fw_tag)
+                        results["firewall_errors"].append({"tag": fw_tag, "error": reason})
                         continue
 
                     all_fw_ips.update(fw_ips)
@@ -152,7 +156,7 @@ class FirewallReconciliationService:
 
                 except Exception as e:
                     logger.error(f"Failed to reconcile firewall '{fw_tag}': {str(e)}")
-                    results["firewall_errors"].append(fw_tag)
+                    results["firewall_errors"].append({"tag": fw_tag, "error": str(e)})
                     results["errors"].append(f"{fw_tag}: {str(e)}")
 
             results["created_in_db"] = total_created
@@ -168,7 +172,62 @@ class FirewallReconciliationService:
             logger.error(f"Firewall reconciliation failed: {str(e)}")
             results["errors"].append(str(e))
 
+        # Self-heal orphaned 'blocked' terminals (status='blocked' but no active
+        # blacklist backing), regardless of whether any firewall query failed above.
+        try:
+            await self._repair_stale_terminal_status()
+        except Exception as heal_err:
+            logger.error(f"Failed to self-heal stale terminal status: {heal_err}")
+
         return results
+
+    async def _repair_stale_terminal_status(self) -> int:
+        """Reset terminals whose status='blocked' but have no active blacklist backing.
+
+        Only fixes the Terminal.status drift vs active blacklist (the single source
+        of truth for "blocked"). Does NOT modify compliance_status - that is owned
+        solely by the compliance calculation logic (three-layer anti-oscillation).
+
+        Matching: primary by normalized MAC; fallback to IP for NULL-MAC
+        reconciliation-created entries (avoid wrongly resetting genuinely-blocked
+        terminals whose blacklist entry has no MAC).
+        """
+        _now = datetime.now(UTC)
+        active_bl = (
+            select(Blacklist.id).where(
+                (Blacklist.auto_unblocked == False) &
+                (Blacklist.unblocked_at.is_(None)) &
+                or_(
+                    Blacklist.expires_at >= _now,
+                    Blacklist.expires_at.is_(None),
+                ) &
+                or_(
+                    and_(
+                        Blacklist.mac_address_normalized.is_not(None),
+                        Blacklist.mac_address_normalized == Terminal.mac_address_normalized,
+                    ),
+                    and_(
+                        Blacklist.mac_address_normalized.is_(None),
+                        Blacklist.ip_address == Terminal.ip_address,
+                    ),
+                )
+            )
+        )
+        stmt = select(Terminal).where(
+            (Terminal.status == TerminalStatus.BLOCKED.value) &
+            (~exists(active_bl))
+        )
+        result = await self.db.execute(stmt)
+        terminals = result.scalars().all()
+        fixed = 0
+        for t in terminals:
+            t.status = TerminalStatus.UNBLOCKED.value
+            t.firewall_tag = None
+            fixed += 1
+        if fixed:
+            await self.db.commit()
+            logger.info(f"Self-healed {fixed} orphaned 'blocked' terminals (no active blacklist backing)")
+        return fixed
 
     def _parse_blocked_ips(self, response: Any) -> Set[str]:
         """Parse blocked IPs from Sangfor API response"""
@@ -310,6 +369,9 @@ class FirewallReconciliationService:
                     is_auto_blocked=True,
                     auto_unblocked=False,
                     reason=f"Reconciliation: IP blocked on firewall '{fw_tag}' but missing in DB",
+                    last_operation_type="block",
+                    last_operation_status="success",
+                    last_operation_at=datetime.now(UTC),
                 )
                 self.db.add(bl_entry)
                 await self.db.flush()

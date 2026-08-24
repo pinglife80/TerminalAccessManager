@@ -467,6 +467,9 @@ async def scheduled_compliance_check():
                                                 firewall_tag=fw_tag,
                                                 is_auto_blocked=True,
                                                 auto_unblocked=False,
+                                                last_operation_type="block",
+                                                last_operation_status="success",
+                                                last_operation_at=dt_cls.now(utc_cls),
                                             )
                                             db.add(bl_entry)
                                         retry_blocked += 1

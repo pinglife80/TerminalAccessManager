@@ -24,6 +24,12 @@ class Blacklist(Base):
     auto_unblocked = Column(Boolean, default=False)  # Auto-unblocked after becoming compliant
     unblocked_at = Column(DateTime(timezone=True), nullable=True, index=True)  # Timestamp when unblocked
     unblocked_by = Column(String(50), nullable=True)  # User who unblocked
+    # Operation tracking for actionable status display
+    last_operation_type = Column(String(20), nullable=True)  # 'block' or 'unblock'
+    last_operation_status = Column(String(20), nullable=True)  # 'success' or 'failed'
+    last_operation_error = Column(Text, nullable=True)  # Failure reason
+    last_operation_at = Column(DateTime(timezone=True), nullable=True)  # Last operation timestamp
+    retry_count = Column(Integer, default=0, server_default='0', nullable=False)  # Retry count
 
     # Index for efficient queries
     __table_args__ = (

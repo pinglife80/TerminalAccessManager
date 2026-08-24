@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Search, AlertTriangle, Clock, Server, Download, Eye, Shield, RefreshCw, ChevronDown, Unlock } from 'lucide-react';
-import { useBlacklist, useBlacklistStats, BlacklistEntry } from '@/hooks/useTerminalData';
+import { useNavigate } from 'react-router-dom';
+import { Search, AlertTriangle, Clock, Server, Download, Eye, Shield, RefreshCw, ChevronDown, Unlock, ShieldCheck, ShieldAlert, AlertCircle } from 'lucide-react';
+import { useBlacklist, useBlacklistStats, useRetryBlacklistEntry, BlacklistEntry } from '@/hooks/useTerminalData';
 import { apiClient } from '@/lib/api';
 import { toast } from 'sonner';
 import { API_ENDPOINTS } from '@/lib/constants';
@@ -25,8 +26,10 @@ const REFRESH_OPTIONS: { labelKey?: string; label: string; value: number }[] = [
 
 const Blacklist: React.FC = () => {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const [searchTerm, setSearchTerm] = useState('');
   const [showDetailsModal, setShowDetailsModal] = useState(false);
+  const [showFirewallErrorsModal, setShowFirewallErrorsModal] = useState(false);
   const [selectedEntry, setSelectedEntry] = useState<BlacklistEntry | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
@@ -34,25 +37,29 @@ const Blacklist: React.FC = () => {
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [autoRefresh, setAutoRefresh] = useState<number>(0);
+  const [category, setCategory] = useState<string | undefined>(undefined);
 
   // Debounce search term
   const debouncedSearch = useDebounce(searchTerm, 500);
 
-  // Always show active (blocked) records only
+  // Always show active (blocked) records only when no category filter applied
   const statusParam = 'active';
 
   const { data: blacklistData, isLoading, refetch } = useBlacklist({
     search: debouncedSearch || undefined,
     start_date: startDate || undefined,
     end_date: endDate || undefined,
-    status: statusParam,
+    status: category ? undefined : statusParam,
+    category,
     skip: (currentPage - 1) * pageSize,
     limit: pageSize,
     refetchInterval: autoRefresh || undefined,
   });
 
-  // Blacklist stats with firewall actual blocked count (from reconciliation cache)
-  const { data: blacklistStats } = useBlacklistStats(autoRefresh || undefined);
+  const { data: stats } = useBlacklistStats();
+  const retryMutation = useRetryBlacklistEntry();
+
+
 
 
 
@@ -84,6 +91,19 @@ const Blacklist: React.FC = () => {
     setCurrentPage(1);
   };
 
+  const handleCategorySelect = (cat: string) => {
+    setCategory((prev) => (prev === cat ? undefined : cat));
+    setCurrentPage(1);
+  };
+
+  const handlePendingRetryBlock = () => {
+    navigate('/terminals?compliance_status=non_compliant&status=unblocked&arp_enabled_only=1');
+  };
+
+  const handleFirewallErrors = () => {
+    setShowFirewallErrorsModal(true);
+  };
+
   const handleExport = async () => {
     try {
       const params: Record<string, string> = {};
@@ -112,6 +132,16 @@ const Blacklist: React.FC = () => {
 
   const isExpired = (expiresAt: string | null) => expiresAt ? new Date(expiresAt) < new Date() : false;
 
+  const handleRetryUnblock = async (entry: BlacklistEntry) => {
+    try {
+      await retryMutation.mutateAsync(entry.id);
+      toast.success(t('blacklist.retryUnblockSuccess'));
+      refetch();
+    } catch (error: unknown) {
+      toast.error(getErrorMessage(error, t('blacklist.retryUnblockFailed')));
+    }
+  };
+
   return (
     <div className="min-h-full bg-background p-4 sm:p-6 lg:p-8">
       {isLoading && !blacklistData ? (
@@ -132,25 +162,86 @@ const Blacklist: React.FC = () => {
         />
       </div>
 
-      {/* Unified block count: DB caliber + firewall actual comparison */}
-      <div className="mb-6 flex flex-wrap items-center gap-3">
-        <div className="flex items-center gap-2 bg-card border border-border rounded-xl px-4 py-2.5">
-          <Shield className="h-4 w-4 text-red-600" />
-          <span className="text-sm text-muted-foreground">{t('blacklist.activeBlocksDb')}:</span>
-          <span className="text-sm font-bold text-foreground">{blacklistStats?.total_active ?? totalFromServer}</span>
-        </div>
-        <div className="flex items-center gap-2 bg-card border border-border rounded-xl px-4 py-2.5">
-          <Server className="h-4 w-4 text-orange-500" />
-          <span className="text-sm text-muted-foreground">{t('blacklist.firewallActual')}:</span>
-          <span className="text-sm font-bold text-foreground">
-            {blacklistStats?.firewall_ip_count != null ? blacklistStats.firewall_ip_count : t('blacklist.firewallNotSynced')}
-          </span>
-          {blacklistStats?.firewall_synced_at && (
-            <span className="text-xs text-muted-foreground">
-              ({formatDate(blacklistStats.firewall_synced_at)})
-            </span>
-          )}
-        </div>
+      {/* Stats Cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4 mb-6">
+        <button
+          type="button"
+          onClick={() => handleCategorySelect('success_blocked')}
+          className={`bg-card rounded-2xl border p-5 shadow-sm text-left transition-colors ${
+            category === 'success_blocked' ? 'border-blue-500 ring-2 ring-blue-200' : 'border-border hover:border-blue-300'
+          }`}
+        >
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm text-muted-foreground">{t('blacklist.statsSuccessBlocked')}</p>
+              <p className="text-3xl font-bold text-green-600 mt-1">{stats?.success_blocked ?? 0}</p>
+            </div>
+            <ShieldCheck className="h-8 w-8 text-green-500" />
+          </div>
+        </button>
+
+        <button
+          type="button"
+          onClick={handlePendingRetryBlock}
+          title={t('blacklist.pendingRetryBlockHint')}
+          className="bg-card rounded-2xl border border-border p-5 shadow-sm text-left transition-colors hover:border-yellow-300"
+        >
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm text-muted-foreground">{t('blacklist.statsPendingRetryBlock')}</p>
+              <p className="text-3xl font-bold text-yellow-600 mt-1">{stats?.pending_retry_block ?? 0}</p>
+            </div>
+            <ShieldAlert className="h-8 w-8 text-yellow-500" />
+          </div>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => handleCategorySelect('success_unblocked')}
+          className={`bg-card rounded-2xl border p-5 shadow-sm text-left transition-colors ${
+            category === 'success_unblocked' ? 'border-blue-500 ring-2 ring-blue-200' : 'border-border hover:border-blue-300'
+          }`}
+        >
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm text-muted-foreground">{t('blacklist.statsSuccessUnblocked')}</p>
+              <p className="text-3xl font-bold text-blue-600 mt-1">{stats?.success_unblocked ?? 0}</p>
+            </div>
+            <ShieldCheck className="h-8 w-8 text-blue-500" />
+          </div>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => handleCategorySelect('pending_retry_unblock')}
+          className={`bg-card rounded-2xl border p-5 shadow-sm text-left transition-colors ${
+            category === 'pending_retry_unblock' ? 'border-blue-500 ring-2 ring-blue-200' : 'border-border hover:border-orange-300'
+          }`}
+        >
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm text-muted-foreground">{t('blacklist.statsPendingRetryUnblock')}</p>
+              <p className="text-3xl font-bold text-orange-600 mt-1">{stats?.pending_retry_unblock ?? 0}</p>
+            </div>
+            <Clock className="h-8 w-8 text-orange-500" />
+          </div>
+        </button>
+
+        <button
+          type="button"
+          onClick={handleFirewallErrors}
+          className="bg-card rounded-2xl border border-border p-5 shadow-sm text-left transition-colors hover:border-red-300"
+        >
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm text-muted-foreground">{t('blacklist.statsFirewallErrors')}</p>
+              <p className={`text-3xl font-bold mt-1 ${stats?.firewall_errors?.length ? 'text-red-600' : 'text-muted-foreground'}`}>
+                {stats?.firewall_errors?.length ?? 0}
+              </p>
+            </div>
+            <AlertCircle className={`h-8 w-8 ${stats?.firewall_errors?.length ? 'text-red-500' : 'text-muted-foreground'}`} />
+          </div>
+        </button>
       </div>
 
       {/* Search and Filter */}
@@ -276,13 +367,10 @@ const Blacklist: React.FC = () => {
                   {t('blacklist.reason')}
                 </th>
                 <th className="px-4 sm:px-6 py-3.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                  {t('whitelist.type')}
-                </th>
-                <th className="px-4 sm:px-6 py-3.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                  {t('blacklist.blockedBy')}
-                </th>
-                <th className="px-4 sm:px-6 py-3.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider">
                   {t('blacklist.firewall')}
+                </th>
+                <th className="px-4 sm:px-6 py-3.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                  {t('blacklist.status')}
                 </th>
                 <th className="px-4 sm:px-6 py-3.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider">
                   {t('blacklist.blockedAt')}
@@ -298,7 +386,7 @@ const Blacklist: React.FC = () => {
             <tbody className="bg-card divide-y divide-border">
               {filteredBlacklist?.length === 0 ? (
                 <tr>
-                  <td colSpan={9}>
+                  <td colSpan={8}>
                     <EmptyState
                       icon={Shield}
                       title={t('blacklist.noBlockedTerminals')}
@@ -331,27 +419,33 @@ const Blacklist: React.FC = () => {
                         <span className="text-sm text-muted-foreground">{item.reason}</span>
                       </div>
                     </td>
-                    <td className="px-4 sm:px-6 py-4 whitespace-nowrap">
-                      {item.is_auto_blocked ? (
-                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-orange-100 text-orange-800">
-                          {t('blacklist.auto')}
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
-                          {t('blacklist.manual')}
-                        </span>
-                      )}
-                      {(item.auto_unblocked || item.unblocked_at) && (
-                        <span className="ml-1 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                          {t('blacklist.unblockedLabel')}
-                        </span>
-                      )}
-                    </td>
-                    <td className="px-4 sm:px-6 py-4 whitespace-nowrap text-sm text-muted-foreground">
-                      {item.blocked_by}
-                    </td>
                     <td className="px-4 sm:px-6 py-4 whitespace-nowrap text-sm text-muted-foreground">
                       {item.firewall_tag || '-'}
+                    </td>
+                    <td className="px-4 sm:px-6 py-4 whitespace-nowrap">
+                      <div className="flex items-center gap-2">
+                        {item.last_operation_status === 'success' ? (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                            {t('blacklist.opSuccess')}
+                          </span>
+                        ) : item.last_operation_status === 'failed' ? (
+                          <span
+                            className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800"
+                            title={item.last_operation_error || undefined}
+                          >
+                            {t('blacklist.opFailed')}
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-muted text-foreground">
+                            —
+                          </span>
+                        )}
+                        {(item.retry_count ?? 0) > 0 && (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
+                            {t('blacklist.retryCount', { count: item.retry_count })}
+                          </span>
+                        )}
+                      </div>
                     </td>
                     <td className="px-4 sm:px-6 py-4 whitespace-nowrap">
                       <div className="flex items-center text-sm text-muted-foreground">
@@ -376,6 +470,18 @@ const Blacklist: React.FC = () => {
                           title={t('terminal.viewDetails')}
                           onClick={() => handleViewDetails(item)}
                         />
+                        {!(item.auto_unblocked || item.unblocked_at) &&
+                          (item.terminal_compliance_status === 'compliant' ||
+                            item.terminal_compliance_status === 'bypass') && (
+                          <IconButton
+                            icon={Unlock}
+                            size="md"
+                            variant="success"
+                            title={t('blacklist.retryUnblock')}
+                            loading={retryMutation.isPending}
+                            onClick={() => handleRetryUnblock(item)}
+                          />
+                        )}
                       </ButtonGroup>
                     </td>
                   </tr>
@@ -487,6 +593,41 @@ const Blacklist: React.FC = () => {
           </div>
 
           
+        </div>
+      </Modal>
+
+      {/* Firewall Errors Modal */}
+      <Modal
+        isOpen={showFirewallErrorsModal}
+        onClose={() => setShowFirewallErrorsModal(false)}
+        title={t('blacklist.firewallErrorsTitle')}
+        size="md"
+      >
+        <div className="space-y-3">
+          {stats?.synced_at && (
+            <p className="text-xs text-muted-foreground">
+              {t('blacklist.firewallReconcileTime')}: {formatDate(stats.synced_at)}
+            </p>
+          )}
+          {stats?.firewall_errors?.length ? (
+            <ul className="space-y-3">
+              {stats.firewall_errors.map((fw, idx) => (
+                <li key={idx} className="rounded-lg border border-red-100 bg-red-50 p-3">
+                  <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+                    <AlertCircle className="h-4 w-4 text-red-500 flex-shrink-0" />
+                    {fw.tag}
+                  </div>
+                  {fw.error && (
+                    <p className="mt-1 pl-6 text-sm text-muted-foreground">{fw.error}</p>
+                  )}
+                </li>
+              ))}
+            </ul>
+          ) : stats?.synced_at ? (
+            <p className="text-sm text-muted-foreground">{t('blacklist.noFirewallErrors')}</p>
+          ) : (
+            <p className="text-sm text-muted-foreground">{t('blacklist.noReconcileData')}</p>
+          )}
         </div>
       </Modal>
       </>

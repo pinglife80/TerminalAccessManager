@@ -46,6 +46,7 @@ class TerminalQuery(BaseModel):
     compliance_status: str | None = Field(None, description="Filter by compliance status")
     source_tag: str | None = Field(None, description="Filter by source tag")
     firewall_tag: str | None = Field(None, description="Filter by firewall tag (via blacklist)")
+    arp_enabled_only: bool = Field(False, description="Restrict to enabled ARP data sources")
     start_date: str | None = Field(None, description="Filter by start date (YYYY-MM-DD)")
     end_date: str | None = Field(None, description="Filter by end date (YYYY-MM-DD)")
     skip: int = Field(0, ge=0)
@@ -130,6 +131,14 @@ class BlacklistResponse(BlacklistBase):
     auto_unblocked: bool = False
     unblocked_at: datetime | None = None
     unblocked_by: str | None = None
+    last_operation_type: str | None = None
+    last_operation_status: str | None = None
+    last_operation_error: str | None = None
+    last_operation_at: datetime | None = None
+    retry_count: int = 0
+    terminal_compliance_status: str | None = Field(
+        None, description="Associated terminal's compliance_status (compliant/bypass/non_compliant/unknown), null if no terminal"
+    )
 
     class Config:
         from_attributes = True
@@ -141,6 +150,7 @@ class BlacklistQuery(BaseModel):
     start_date: str | None = Field(None, description="Filter by start date (YYYY-MM-DD)")
     end_date: str | None = Field(None, description="Filter by end date (YYYY-MM-DD)")
     status: str | None = Field(None, description="Filter by status: active/unblocked/all")
+    category: str | None = Field(None, description="Filter by category: success_blocked/success_unblocked/pending_retry_unblock")
     skip: int = Field(0, ge=0)
     limit: int = Field(50, ge=1, le=200)
 

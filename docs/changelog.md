@@ -1,6 +1,6 @@
 # 更新日志
 
-> 文档版本：v3.13.0  更新日期：2026-08-21
+> 文档版本：v3.14.0  更新日期：2026-08-24
 
 本文件记录 TerminalAccessManager 的所有重要变更。
 
@@ -8,6 +8,43 @@
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ***
+
+## [3.14.0] - 2026-08-24
+
+### 新增
+
+- **黑名单操作追踪**：
+  - 新增 `last_operation_type/status/error/at` 与 `retry_count` 字段，追踪最近一次封锁/解封结果与重试次数
+  - 新增 Alembic 迁移 `036_blacklist_operation_tracking`
+  - 关联文件：`models/blacklist.py`、`schemas/terminal.py`、`endpoints/blacklist.py`
+
+- **黑名单展示能力增强**：
+  - 前端新增黑名单状态列、防火墙错误弹窗（展示结构化 `tag/error` 与对账同步时间）
+  - Retry Unblock 按钮按 `terminal_compliance_status`（compliant/bypass）条件显示
+  - 关联文件：`Blacklist.tsx`、`Terminals.tsx`、`useTerminalData.ts`、`i18n/locales/*`
+
+### 修复
+
+- **合规状态不变量与重试防护**：
+  - 强制 `compliance_status='non_compliant'` ⇒ `status='blocked'`，消除中间态
+  - retry-block 忽略冷却期、对 `non_compliant+unblocked` 强制封锁，并做白名单权威自愈预检
+  - 自动解封同步写 `compliance_status`（bypass/compliant 按命中类型落地），阻断被重封震荡
+  - 关联文件：`compliance_service.py`、`main.py`
+
+- **统计口径统一（MAC 归一化）**：
+  - blocked / non_compliant / pending_retry_block / pending_retry_unblock / source 口径统一
+  - 黑名单-终端关联改用 MAC 归一化（NULL-MAC 回退 IP）去重，消除 DHCP 换 IP 漏计
+  - 关联文件：`terminal_service.py`、`endpoints/terminals.py`
+
+- **防火墙对账增强**：
+  - 错误收集改为结构化 `[{tag, error}]`，支持前端展示
+  - 新增孤立 `blocked` 终端自愈（`_repair_stale_terminal_status`）
+  - 关联文件：`firewall_reconciliation_service.py`
+
+- **数据源安全删除**：
+  - `safe_delete_binding` 改用 MAC 归一化匹配终端，删除绑定后不再遗留孤立 blocked 终端
+  - `create_binding` 创建后触发 `recalculate_all_compliance()`
+  - 关联文件：`data_source_service.py`
 
 ## [3.13.0] - 2026-08-21
 
