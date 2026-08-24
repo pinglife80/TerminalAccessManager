@@ -533,10 +533,17 @@ class DataSourceService:
 
         # Step 2: Update terminal status
         for bl_entry in bl_entries:
-            terminal_stmt = select(Terminal).where(
-                (Terminal.ip_address == bl_entry.ip_address) &
-                (Terminal.mac_address == bl_entry.mac_address)
+            # Match by unified mac_address_normalized (not raw MAC string equality)
+            # so casing/separator differences can't leave orphaned 'blocked' terminals.
+            mac_norm = (
+                bl_entry.mac_address.replace('-', '').replace(':', '').replace('.', '').upper()
+                if bl_entry.mac_address else None
             )
+            terminal_stmt = select(Terminal)
+            if mac_norm:
+                terminal_stmt = terminal_stmt.where(Terminal.mac_address_normalized == mac_norm)
+            else:
+                terminal_stmt = terminal_stmt.where(Terminal.ip_address == bl_entry.ip_address)
             t_result = await self.db.execute(terminal_stmt)
             terminal = t_result.scalar_one_or_none()
             if terminal:
@@ -834,6 +841,16 @@ class DataSourceService:
         await self.db.commit()
         await self.db.refresh(binding)
         logger.info(f"Created binding: {arp_source_tag} -> {firewall_tag}")
+
+        # Recalculate compliance so re-binding immediately rebuilds the
+        # terminal compliance/block-state correspondence (no stale residual).
+        try:
+            from app.services.compliance_service import ComplianceService
+            cs = ComplianceService(self.db)
+            await cs.recalculate_all_compliance()
+        except Exception as e:
+            logger.warning(f"Failed to recalculate compliance after binding creation: {e}")
+
         return binding
 
     async def delete_binding(self, binding_id: int) -> bool:
