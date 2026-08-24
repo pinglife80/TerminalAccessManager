@@ -1,6 +1,6 @@
 # TerminalAccessManager 业务流程文档
 
-> 文档版本：v3.12.0  更新日期：2026-08-20
+> 文档版本：v3.14.0  更新日期：2026-08-24
 >
 > 本文档详细说明 TerminalAccessManager 的核心业务流程，包括数据采集、合规判定、封锁/解封的完整生命周期。
 
@@ -17,6 +17,9 @@
 7. [状态机流转图](#7-状态机流转图)
 8. [关键参数说明](#8-关键参数说明)
 9. [事件触发点汇总](#9-事件触发点汇总)
+10. [v3.10.0 变更记录](#10-v3100-变更记录)
+11. [防火墙对账流程](#11-防火墙对账流程v314-新增)
+12. [后台调度任务周期汇总](#12-后台调度任务周期汇总v314-新增)
 
 ---
 
@@ -160,9 +163,18 @@ v3.12 引入三层防震荡保护彻底解决该问题：
 - IP 变更后 10 分钟宽限期内：即使 IPGuard 不匹配也保持原合规状态，等待 IPGuard 基线同步新 IP-MAC 映射
 - 宽限期内仍累计不匹配计数，宽限期结束后正常按确认计数逻辑处理
 
-#### auto_unblock 解耦
+#### action-state 一致性（自动解封同步写 compliance_status）
 
-自动解封（`auto_unblock_compliant`）仅处理防火墙 API 解封操作，不直接修改 `compliance_status`。合规状态由下一轮定时合规检查按确认计数逻辑正常更新，避免解封后瞬态不匹配立即重新封禁。
+自动解封（`auto_unblock_compliant`）解封防火墙的同时，**同步写入 `compliance_status`**，并对两种命中类型分别设置：
+
+| 命中的恢复依据 | 解封后 `compliance_status` |
+|--------------|---------------------------|
+| 白名单命中（bypass） | `bypass` |
+| IPGuard 基线命中 | `compliant` |
+
+并同步清零双侧确认计数，避免解封后留下 `non_compliant + unblocked` 的中间态（该中间态会被 retry-block 在冷却期后重新封禁，且让"非合规数 > 封锁数"，违反 `non_compliant ⇒ blocked` 不变量）。
+
+> **v3.13/v3.14 变更**：早期版本这里是「解耦（不解封只改防火墙、compliance_status 交给下一轮）」；为避免中间态导致统计错乱与被重封，现改为「action-state 一致性」——解封动作与合规状态同步落地。
 
 #### 配置项
 
@@ -393,34 +405,37 @@ await emit_auto_block_triggered(blocked, arp_source_tag, terminal_list)
 | `is_auto_blocked` | boolean | 是否自动封锁 |
 | `expires_at` | datetime | 封锁过期时间 |
 
-### 4.5 封堵失败重试机制（v3.7.0 新增）
+### 4.5 定时合规检查调度器：四段式流程（v3.7.0 新增，v3.13/v3.14 完善）
 
 #### 背景
 
-防火墙 API 调用失败后，终端会停留在 `non_compliant + unblocked` 状态。原 `scheduled_compliance_check` 调度器只查询 `unknown` 状态的终端，不会重试已标记 `non_compliant` 但封堵失败的终端，导致非合规终端数大于已封堵终端数。
+防火墙 API 调用失败后，终端会停留在 `non_compliant + unblocked` 状态。原调度器只查 `unknown` 终端，不会重试已标记 `non_compliant` 但封堵失败的终端，导致非合规终端数大于已封堵终端数，且陈旧中间态无法自愈。
 
 #### 机制说明
 
-`scheduled_compliance_check` 调度器在每次执行时，额外扫描 `non_compliant + unblocked` 的终端并重新调用防火墙封堵 API：
+`scheduled_compliance_check`（默认每 300 秒）每个周期按顺序执行四段：
+
+| 段 | 处理内容 | 判断/动作 |
+|----|---------|----------|
+| ① unknown 检查 + auto_block | 对 `compliance_status=unknown` 的终端执行合规判定，判定为 non_compliant 的触发自动封锁 | 走三层防震荡确认计数 |
+| ② retry-block（重试封锁） | 扫描 `non_compliant + unblocked` 中间态终端，**忽略冷却期强制重新封锁** | 封锁前先做白名单权威预检：命中白名单的终端自愈为 `bypass` 并单独提交，不回滚进封锁批次 |
+| ③ 周期性全量重算 | `recalculate_all_compliance()` 全量自愈，修复卡死/陈旧状态 | 每周期执行（自愈 stale 状态） |
+| ④ 全局合规率告警 | 统计合规率，低于阈值触发 `COMPLIANCE_RATE_LOW` 告警 | 阈值来自系统配置（默认 80%），危险比例默认 50% |
 
 ```python
-# 封堵失败重试逻辑
+# ②retry-block 中间态扫描口径（仅启用的 arp_ssh/arp_api 数据源）
 retry_stmt = select(Terminal).where(
-    (Terminal.source_tag == source.tag) &
+    source_tag IN (启用 arp_ssh/arp_api) &
     (Terminal.compliance_status == "non_compliant") &
     (Terminal.status == "unblocked")
 )
-retry_terminals = retry_stmt.scalars().all()
-if retry_terminals:
-    # 重新执行封堵操作
-    ...
 ```
 
 | 扫描周期 | 扫描条件 | 处理动作 |
 |---------|---------|---------|
-| 300 秒 | `compliance_status="non_compliant" AND status="unblocked"` | 重新调用防火墙封堵 API |
+| 300 秒（`scheduler_compliance_check_interval`） | `non_compliant AND unblocked` | 强制重新调用防火墙封堵 API（忽略冷却期） |
 
-> **说明**：该机制确保防火墙 API 瞬时失败（网络抖动、设备重启等）不会导致终端永久停留在未封堵状态。重试与定时合规检查共享同一调度周期。
+> **说明**：该机制确保防火墙 API 瞬时失败（网络抖动、设备重启等）不会导致终端永久停留在未封堵状态；retry-block 对已存在的 `non_compliant + unblocked` 中间态直接强制封锁，尽快修复历史中间态。
 
 ---
 
@@ -510,6 +525,12 @@ class Blacklist(Base):
     auto_unblocked = Column(Boolean, default=False)
     unblocked_at = Column(DateTime(timezone=True), nullable=True)
     unblocked_by = Column(String(50), nullable=True)
+    # v3.14 新增：黑名单操作追踪字段（迁移 036）
+    last_operation_type = Column(String(20), nullable=True)     # block / unblock
+    last_operation_status = Column(String(20), nullable=True)   # success / failed
+    last_operation_error = Column(Text, nullable=True)          # 失败原因
+    last_operation_at = Column(DateTime(timezone=True), nullable=True)
+    retry_count = Column(Integer, nullable=False, default=0)    # 重试次数
 ```
 
 ### 6.2 黑名单状态
@@ -520,6 +541,8 @@ class Blacklist(Base):
 | 已解封 | `auto_unblocked == True OR unblocked_at IS NOT NULL` | 终端已解封，记录保留用于审计 |
 
 > **注意：** v3.6.6 统一了黑名单筛选逻辑，同时考虑 `auto_unblocked` 和 `unblocked_at` 两个字段，避免历史数据中 `auto_unblocked=True` 但 `unblocked_at IS NULL` 的记录被遗漏。
+
+> **对账补建条目（v3.13+）**：防火墙对账从防火墙实际封锁列表补建的 Blacklist 条目，若找不到终端记录，则 `mac_address`/`mac_address_normalized` 为 NULL、`source_tag="reconciliation"`。这类 NULL-MAC 条目在终端匹配 / 统计口径中回退到 IP 匹配（见 [§11 防火墙对账流程](#11-防火墙对账流程v314-新增)）。
 
 ### 6.3 清理流程
 
@@ -624,6 +647,24 @@ async def cleanup_expired_blacklist(self) -> int:
 | `non_compliant_confirm_count` | int | 终端连续判定为 non_compliant 的计数器（数据库字段，v3.7.0新增） |
 | `IPGUARD_CACHE_TTL` | int | IPGuard 缓存 TTL（v3.7.0 调整为 900 秒，1.5 倍同步间隔） |
 
+### 8.4 黑名单操作追踪参数（v3.14 新增）
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `last_operation_type` | string | 最近一次封锁/解封操作类型（block/unblock） |
+| `last_operation_status` | string | 最近一次操作结果（success/failed） |
+| `last_operation_error` | text | 最近一次操作失败原因 |
+| `last_operation_at` | datetime | 最近一次操作时间 |
+| `retry_count` | int | 重试封锁次数 |
+
+### 8.5 对账与调度相关参数
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `reconcile:latest` | Redis key | TTL 1h | 最新防火墙对账结果缓存（由对账任务 / 手动触发写入，黑名单页 stats 从缓存读取，不对接防火墙实时查询） |
+| 对账 0-IP 保护 | 逻辑 | 硬编码 | 防火墙返回 0 条但 DB 有活跃条目时，单点探测区分「列表类接口异常」与「外部清空」，均保守跳过以防丢失 |
+| 对账 cooling-window | 逻辑 | 硬编码 | 无需（对账只改 `status`，不改 `compliance_status`；合规状态由三层防震荡逻辑独立守护） |
+
 ---
 
 ## 9. 事件触发点汇总
@@ -697,3 +738,56 @@ async def cleanup_expired_blacklist(self) -> int:
 > - 合规率告警：阈值从硬编码 0.8 改为系统配置项（默认 80%）
 > - 合规率告警：危险比例从硬编码 0.5 改为系统配置项（默认 50%）
 > - 合规率告警：修复量纲不一致 bug（0-100 vs 0-1）
+
+---
+
+## 11. 防火墙对账流程（v3.14 新增）
+
+### 11.1 流程概述
+
+防火墙对账用于消除「防火墙实际封锁状态」与「数据库黑名单」之间的偏差，保证三处（仪表盘 / 终端页 / 黑名单页 / 防火墙）封锁计数一致。
+
+> **核心原则**：**防火墙实际状态是封锁状态的唯一事实源**；对账只更新 `status`（防火墙实际封锁态），**永不改动 `compliance_status`**（后者仅由合规判定逻辑 + 三层防震荡机制决定）。
+
+### 11.2 触发时机
+
+| 触发方式 | 周期 / 动作 |
+|---------|------------|
+| 后台任务 `firewall_reconciliation()` | 硬编码 **300 秒**（不读配置） |
+| 手动触发 `POST /system/firewall-reconciliation` | 立即执行一次 |
+| 结果缓存 | 写入 Redis `reconcile:latest`（TTL 1h），供黑名单页 stats 读取 |
+
+### 11.3 对账节点与判断标准
+
+按每个启用的防火墙（`type=sangfor`）独立执行，避免跨防火墙污染：
+
+| 节点 | 触发条件 | 判断标准与动作 |
+|------|---------|---------------|
+| **① 补建 DB 缺失（最高优先级）** | 防火墙有封锁 IP 但 DB 无该防火墙的活跃黑名单 | `_create_db_entries_for_firewall`：补建条目；若终端命中白名单（bypass）则**跳过并告警**（防止误封白名单终端、交由合规重算安全解封） |
+| **② DB 有但防火墙缺 → 重新封锁** | DB 活跃条目中的 IP 不在防火墙封锁列表 | `_reblock_on_firewall` 重新调用封堵 API |
+| **③ 0-IP 保护** | 防火墙返回 0 条但 DB 有该防火墙活跃条目 | 单点探测（`_find_blacklist_entry`）区分「列表类接口异常」与「外部清空」；两种情况都**保守跳过**该防火墙，防数据丢失 |
+| **④ 孤立 blocked 自愈** | 终端 `status=blocked` 但无活跃黑名单背书 | `_repair_stale_terminal_status`：重置为 `unblocked`（按 MAC 归一化匹配，NULL-MAC 回退 IP）；**不改 `compliance_status`** |
+
+### 11.4 返回结果
+
+- `firewall_ip_count`：所有防火墙实际封锁 IP 总数
+- `db_entry_count`：DB 活跃黑名单条目数
+- `created_in_db` / `reblocked_on_firewall`：本周期补建/重封数量
+- `firewall_errors`：`[{tag, error}]` 结构化错误（含 0-IP 保护、查询失败等），供前端弹窗展示
+
+---
+
+## 12. 后台调度任务周期汇总（v3.14 新增）
+
+后台任务全部在 `main.py` lifespan 中通过 `asyncio.create_task` 启动（见 `main.py#L763-L770`），受 Redis 分布式锁与暂停开关保护；配置类间隔经 `_get_scheduler_interval`（clamp 30–86400s）读取。
+
+| 后台任务 | 默认周期 | 是否可配 | 配置键 / 说明 |
+|---------|---------|---------|--------------|
+| `scheduled_arp_collection` | 300s (5min) | ✅ | `scheduler_arp_collection_interval` |
+| `scheduled_ipguard_sync` | 600s (10min) | ✅ | `scheduler_ipguard_sync_interval` |
+| `scheduled_compliance_check` | 300s (5min) | ✅ | `scheduler_compliance_check_interval`（四段式见 §4.5） |
+| `scheduled_auto_unblock` | 600s (10min) | ✅ | `scheduler_auto_unblock_interval` |
+| `cleanup_expired_blacklist` | 3600s (1h) | ✅ | `scheduler_firewall_query_interval` |
+| `firewall_reconciliation` | 300s (5min) | ❌ 硬编码 | `main.py#L179` |
+| `cleanup_expired_logs` | 86400s (24h) | ❌ 硬编码 | `main.py#L131`；保留天数 `audit_log_retention_days`（默认 90）可配 |
+| `scheduled_backup` | 60s 轮询 + cron | ⚠️ 轮询硬编码 | `main.py#L583` poll=60s；真实执行由 `backup_config.schedule` cron 决定 |

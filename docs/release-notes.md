@@ -1,10 +1,77 @@
 # 版本跟踪记录
 
-> 文档版本：v3.12.1 | 更新日期：2026-08-20
+> 文档版本：v3.14.0 | 更新日期：2026-08-24
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
+
+---
+
+## [v3.14.0] - 2026-08-24
+
+### 黑名单管理增强与统计口径统一（Minor 版本）
+
+#### 背景
+
+v3.13.0 发布后，围绕黑名单管理与合规状态一致性暴露出若干问题：封锁/解封结果缺乏可追踪的运行记录；统计口径（blocked / non_compliant / pending_retry_block / pending_retry_unblock / source）在仪表盘、终端页、黑名单页、调度器重试逻辑间不完全一致，DHCP 换 IP 会漏计或重复计数；防火墙对账的错误原因未结构化展示；删除数据源绑定后遗留孤立 `blocked` 终端。
+
+#### 主要变更
+
+| 变更项 | 说明 |
+|--------|------|
+| 黑名单操作追踪 | 新增 `last_operation_type/status/error/at` 与 `retry_count` 字段，迁移 `036_blacklist_operation_tracking` |
+| 状态不变量加强 | 强制 `non_compliant ⇒ blocked`；retry-block 忽略冷却期强制封锁中间态并做白名单权威预检 |
+| 自动解封一致性 | 解封时同步写 `compliance_status`（bypass/compliant 按命中类型），阻断被重封震荡 |
+| 统计口径统一 | blocked/non_compliant/pending_retry_* 口径统一；黑名单-终端关联改 MAC 归一化（NULL-MAC 回退 IP） |
+| 防火墙对账增强 | 错误收集结构化 `[{tag, error}]` + 孤立 blocked 终端自愈 |
+| 数据源安全删除 | `safe_delete_binding` 改用 MAC 归一化匹配终端；`create_binding` 后触发合规重算 |
+| 前端展示 | 黑名单状态列、防火墙错误弹窗（tag/error/对账时间）、条件 Retry Unblock 按钮 |
+
+#### 升级步骤（推荐：一键升级）
+
+```bash
+git checkout main
+git pull origin main
+./manage.sh upgrade
+```
+
+#### 升级注意事项
+
+⚠️ **必须执行数据库迁移**：036 迁移为黑名单表新增操作追踪字段（含 `server_default='0'` 的 `retry_count`，非破坏性）。
+⚠️ **升级后验证**：刷新仪表盘 / 终端页 / 黑名单页，封锁计数一致；黑名单页可见状态列与防火墙错误弹窗；Retry Unblock 按钮仅在 compliant/bypass 终端显示。
+
+---
+
+## [v3.13.0] - 2026-08-21
+
+### 防火墙实际统计展示与黑名单统计一致性（Minor 版本）
+
+#### 背景
+
+v3.12.1 发布后继续收敛黑名单统计口径：Dashboard、终端管理、黑名单三处封锁计数需对齐为 `blocked`（活跃黑名单去重 IP），并补充防火墙实际封锁数展示。
+
+#### 主要变更
+
+| 变更项 | 说明 |
+|--------|------|
+| 防火墙实际统计展示 | 新增 `_cache_reconcile_result`，对账结果缓存 Redis（`reconcile:latest`，TTL 1h），黑名单页新增「防火墙实际封锁数」卡片 |
+| 黑名单统计不一致修复 | 三页面统一 `blocked` 口径；终端页改读 `stats.blocked`；移除对账服务重复缓存逻辑 |
+| 状态不变量加强 | 确保 `non_compliant ⇒ blocked`；冷却期阻止降级而非阻止封锁；封锁失败回滚状态 |
+| 白名单稳定性修复 | 白名单命中直接设 `bypass` 并清零确认计数；周期全量重算修复卡死状态 |
+
+#### 升级步骤（推荐：一键升级）
+
+```bash
+git checkout main
+git pull origin main
+./manage.sh upgrade
+```
+
+#### 升级注意事项
+
+⚠️ **无新增数据库迁移**（本版本为逻辑与展示修复）。
+⚠️ **升级后验证**：刷新三处页面封锁计数一致。
 
 ---
 
