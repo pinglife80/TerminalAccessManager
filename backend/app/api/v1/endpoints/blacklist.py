@@ -24,12 +24,27 @@ async def get_blacklist_stats(
     return stats
 
 
+@router.post("/{entry_id}/retry")
+async def retry_entry(
+    entry_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permission("blacklist:write"))
+):
+    """Manually retry unblocking a single blacklist entry on its firewall."""
+    service = TerminalService(db)
+    result = await service.retry_unblock(entry_id, username=current_user.username)
+    if not result.get("success"):
+        raise HTTPException(status_code=400, detail=result.get("error", "重试失败"))
+    return {"success": True, "message": "解封成功"}
+
+
 @router.get("/", response_model=PaginatedResponse[BlacklistResponse])
 async def get_blacklist(
     search: str = Query(None, description="Search by MAC or IP"),
     start_date: str = Query(None, description="Filter by start date (YYYY-MM-DD)"),
     end_date: str = Query(None, description="Filter by end date (YYYY-MM-DD)"),
     status: str = Query(None, description="Filter by status: active/unblocked/all"),
+    category: str = Query(None, description="Filter by category: success_blocked/success_unblocked/pending_retry_unblock"),
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
@@ -39,12 +54,13 @@ async def get_blacklist(
     Default shows only active (auto_unblocked=False) records.
     Use status='unblocked' for unblocked history, 'all' for all records."""
     query = None
-    if search or start_date or end_date or status:
+    if search or start_date or end_date or status or category:
         query = BlacklistQuery(
             search=search,
             start_date=start_date,
             end_date=end_date,
             status=status,
+            category=category,
             skip=skip,
             limit=limit
         )
