@@ -1,4 +1,4 @@
-import { useQuery, keepPreviousData } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import { apiClient } from '@/lib/api';
 import { API_ENDPOINTS } from '@/lib/constants';
 
@@ -41,6 +41,26 @@ export interface BlacklistEntry {
   auto_unblocked: boolean;
   unblocked_at: string | null;
   unblocked_by: string | null;
+  last_operation_type: string | null;
+  last_operation_status: string | null;
+  last_operation_error: string | null;
+  last_operation_at: string | null;
+  retry_count: number;
+  terminal_compliance_status: string | null;  // compliant / bypass / non_compliant / unknown / null
+}
+
+export interface FirewallError {
+  tag: string;
+  error: string;
+}
+
+export interface BlacklistStats {
+  success_blocked: number;
+  pending_retry_block: number;
+  success_unblocked: number;
+  pending_retry_unblock: number;
+  firewall_errors: FirewallError[];
+  synced_at: string | null;
 }
 
 export interface DashboardStats {
@@ -113,6 +133,7 @@ export interface TerminalSearchParams {
   compliance_status?: string;
   source_tag?: string;
   firewall_tag?: string;
+  arp_enabled_only?: boolean;
   start_date?: string;
   end_date?: string;
   skip?: number;
@@ -172,6 +193,7 @@ export interface BlacklistSearchParams {
   start_date?: string;
   end_date?: string;
   status?: string;  // active / unblocked / all
+  category?: string;  // success_blocked / success_unblocked / pending_retry_unblock
   skip?: number;
   limit?: number;
   refetchInterval?: number;
@@ -191,26 +213,32 @@ export const useBlacklist = (params?: BlacklistSearchParams) => {
   });
 };
 
-export interface BlacklistStats {
-  total_active: number;
-  auto_blocked: number;
-  manual_blocked: number;
-  expired: number;
-  active_blocks: number;
-  firewall_ip_count: number | null;
-  firewall_synced_at: string | null;
-}
-
-export const useBlacklistStats = (refetchInterval?: number) => {
+export const useBlacklistStats = () => {
   return useQuery({
     queryKey: ['blacklist-stats'],
     queryFn: async () => {
-      const response = await apiClient.get(API_ENDPOINTS.BLACKLIST_STATS);
+      const response = await apiClient.get('/blacklist/stats');
       return response.data as BlacklistStats;
     },
-    refetchInterval: refetchInterval,
+    refetchInterval: 30000, // Refresh every 30 seconds
   });
 };
+
+export const useRetryBlacklistEntry = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (entryId: number) => {
+      const response = await apiClient.post(`/blacklist/${entryId}/retry`);
+      return response.data as { success: boolean; message: string };
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['blacklist'] });
+      queryClient.invalidateQueries({ queryKey: ['blacklist-stats'] });
+    },
+  });
+};
+
+
 
 // -------------------------------------------------------------------
 // Blacklist batch check - for Terminals page efficient lookup

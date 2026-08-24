@@ -1,4 +1,5 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useTerminals, useBlacklistCheck, useStats, useDataSources, Terminal } from '@/hooks/useTerminalData';
 import { useTranslation } from 'react-i18next';
 import { Search, Filter, RefreshCw, Clock, Server, Shield, ShieldOff, Plus, Download, Eye, Info, ChevronDown, Trash2 } from 'lucide-react';
@@ -78,11 +79,13 @@ function getTerminalActions(terminal: Terminal): {
 
 const Terminals: React.FC = () => {
   const { t } = useTranslation();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [searchTerm, setSearchTerm] = useState('');
-  const [filterStatus, setFilterStatus] = useState<string>('all');
-  const [filterCompliance, setFilterCompliance] = useState<string>('all');
+  const [filterStatus, setFilterStatus] = useState<string>(() => searchParams.get('status') || 'all');
+  const [filterCompliance, setFilterCompliance] = useState<string>(() => searchParams.get('compliance_status') || 'all');
   const [filterSource, setFilterSource] = useState<string>('all');
   const [filterFirewallTag, setFilterFirewallTag] = useState<string>('all');
+  const [filterArpEnabledOnly, setFilterArpEnabledOnly] = useState<boolean>(() => searchParams.get('arp_enabled_only') === '1');
   const [selectedTerminal, setSelectedTerminal] = useState<Terminal | null>(null);
   const [showModal, setShowModal] = useState(false);
   const [filterCollapsed, setFilterCollapsed] = useState(false);
@@ -91,6 +94,15 @@ const Terminals: React.FC = () => {
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [autoRefresh, setAutoRefresh] = useState<number>(0);
+
+  // 将跳转相关的三个筛选状态回写 URL，保证刷新/重复跳转不脱节
+  useEffect(() => {
+    const params = new URLSearchParams();
+    if (filterStatus !== 'all') params.set('status', filterStatus);
+    if (filterCompliance !== 'all') params.set('compliance_status', filterCompliance);
+    if (filterArpEnabledOnly) params.set('arp_enabled_only', '1');
+    setSearchParams(params, { replace: true });
+  }, [filterStatus, filterCompliance, filterArpEnabledOnly, setSearchParams]);
 
   // Debounce search term
   const debouncedSearch = useDebounce(searchTerm, 500);
@@ -130,6 +142,7 @@ const Terminals: React.FC = () => {
     compliance_status: filterCompliance !== 'all' ? filterCompliance : undefined,
     source_tag: filterSource !== 'all' ? filterSource : undefined,
     firewall_tag: filterFirewallTag !== 'all' ? filterFirewallTag : undefined,
+    arp_enabled_only: filterArpEnabledOnly || undefined,
     start_date: startDate || undefined,
     end_date: endDate || undefined,
     skip: (currentPage - 1) * pageSize,
@@ -398,6 +411,7 @@ const Terminals: React.FC = () => {
     setSearchTerm('');
     setFilterStatus('all');
     setFilterCompliance('all');
+    setFilterArpEnabledOnly(false);
     setFilterSource('all');
     setFilterFirewallTag('all');
     setStartDate('');
@@ -581,6 +595,18 @@ const Terminals: React.FC = () => {
                 </select>
               </div>
               )}
+
+              {/* Enabled-ARP-Only Filter */}
+              <label className="flex items-center gap-2 bg-background rounded-xl px-3 py-1.5 cursor-pointer">
+                <Server className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                <span className="text-sm text-muted-foreground font-medium">{t('terminal.onlyEnabledArp')}</span>
+                <input
+                  type="checkbox"
+                  checked={filterArpEnabledOnly}
+                  onChange={(e) => { setFilterArpEnabledOnly(e.target.checked); setCurrentPage(1); }}
+                  className="h-4 w-4 cursor-pointer"
+                />
+              </label>
 
               {/* Firewall Tag Filter */}
               {firewallTagOptions.length > 0 && (
