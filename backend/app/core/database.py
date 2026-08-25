@@ -4,17 +4,20 @@ from sqlalchemy.orm import DeclarativeBase
 from app.core.config import settings
 
 # Create async engine
-# SQLite does not support pool_size/max_overflow, so conditionally exclude them
+# SQLite (aiosqlite) does not support connection-pool tuning arguments
+# (pool_size/max_overflow/pool_timeout/pool_use_lifo), so conditionally exclude them.
 _engine_kwargs = {
     "echo": settings.DEBUG,
     "pool_pre_ping": True,
     "pool_recycle": 300,
-    "pool_timeout": 60,
-    "pool_use_lifo": True,
 }
 if not settings.DATABASE_URL.startswith("sqlite"):
-    _engine_kwargs["pool_size"] = 30
-    _engine_kwargs["max_overflow"] = 100
+    _engine_kwargs.update({
+        "pool_timeout": 60,
+        "pool_use_lifo": True,
+        "pool_size": 30,
+        "max_overflow": 100,
+    })
 
 engine = create_async_engine(
     settings.DATABASE_URL,
