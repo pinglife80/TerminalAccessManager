@@ -28,11 +28,13 @@ def create_mock_terminal(
     firewall_tag=None,
     comments="",
     wl_match_type=None,
+    mac_address_normalized=None,
 ):
     """Create a mock Terminal object with sensible defaults."""
     t = MagicMock(spec=Terminal)
     t.ip_address = ip
     t.mac_address = mac
+    t.mac_address_normalized = mac_address_normalized or mac.replace(':', '').replace('-', '').replace('.', '').upper()
     t.status = status
     t.compliance_status = compliance_status
     t.source_tag = source_tag
@@ -576,7 +578,7 @@ class TestCleanupExpiredBlacklist:
         term_result_mock = MagicMock()
         term_result_mock.scalars.return_value.all.return_value = []
 
-        # Third query: active blocks for same IP (non-expired)
+        # Third query: active blocks for the same MAC (non-expired)
         create_mock_blacklist(
             ip="192.168.1.100",
             mac="AA:BB:CC:DD:EE:FF",
@@ -584,7 +586,7 @@ class TestCleanupExpiredBlacklist:
             expires_at=now + timedelta(days=1),
         )
         active_result_mock = MagicMock()
-        active_result_mock.all.return_value = [("192.168.1.100",)]
+        active_result_mock.all.return_value = [("AABBCCDDEEFF",)]
 
         call_count = {"n": 0}
 
@@ -606,6 +608,7 @@ class TestCleanupExpiredBlacklist:
         # The expired entry should be marked as unblocked (soft delete, not unblocked on firewall)
         assert expired_entry.unblocked_at is not None
         assert expired_entry.unblocked_by == "system"
+        assert expired_entry.reason == "封锁时间到期自动解封"
         assert result >= 1
 
     @pytest.mark.asyncio
@@ -675,6 +678,8 @@ class TestCleanupExpiredBlacklist:
         # The unblocked terminal should remain unchanged
         assert unblocked_terminal.status == "unblocked"
         assert unblocked_terminal.compliance_status == "compliant"
+        # Expired entry should carry the independent unblock reason
+        assert expired_entry.reason == "封锁时间到期自动解封"
 
 
 # ===========================================================================

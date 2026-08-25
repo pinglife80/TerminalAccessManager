@@ -1931,6 +1931,7 @@ class TerminalService:
                         # just mark this expired entry as unblocked
                         entry.unblocked_at = datetime.now(UTC)
                         entry.unblocked_by = "system"
+                        entry.reason = "封锁时间到期自动解封"
                         count += 1
                         continue
 
@@ -1982,6 +1983,7 @@ class TerminalService:
                     if sangfor_unblock_success:
                         entry.unblocked_at = datetime.now(UTC)
                         entry.unblocked_by = "system"
+                        entry.reason = "封锁时间到期自动解封"
                         count += 1
                     else:
                         # Sangfor unblock failed — do NOT mark as unblocked
