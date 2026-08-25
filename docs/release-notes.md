@@ -1,12 +1,43 @@
 # 版本跟踪记录
 
-> 文档版本：v3.15.0 | 更新日期：2026-08-25
+> 文档版本：v3.16.0 | 更新日期：2026-08-25
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
 
 ---
+
+## [v3.16.0] - 2026-08-25
+
+### 黑名单解封事件列与到期解封 reason（Minor 版本）
+
+#### 背景
+
+黑名单列表对「成功解封」的条目此前未展示解封原因与时间，且到期自动解封（`cleanup_expired_blacklist`）在写入解封记录时缺失独立 reason，难以区分是合规解封（白名单/IPGuard 匹配）还是封锁到期解封。本版本新增「解封事件」列提升可读性，并统一写入到期解封 reason。
+
+#### 主要变更
+
+| 变更项 | 说明 |
+|--------|------|
+| 解封事件列 | 黑名单列表新增「解封事件」列，展示解封原因（reason）与时间（unblocked_at） |
+| i18n | 新增 `unblockEvent` 三语文案（zh/en/ja） |
+| 到期解封 reason | 统一写入「封锁时间到期自动解封」作为独立事件原因 |
+| SQLite 适配 | `database.py` 仅在非 SQLite 数据库应用连接池参数，保障单测可运行 |
+| 版本管理 | `manage.sh` 的 `version check`/`version bump` 统一从 `VERSION` 动态派生 |
+
+#### 升级步骤（推荐：一键升级）
+
+```bash
+git checkout main
+git pull origin main
+./manage.sh upgrade
+```
+
+#### 升级注意事项
+
+- 新增「解封事件」列自动跟随黑名单列表展示，无需额外配置。
+- 版本号统一从 `VERSION` 文件动态派生，`package.json` 由前端镜像构建期自动同步，无需手动修改。
 
 ## [v3.15.0] - 2026-08-25
 
