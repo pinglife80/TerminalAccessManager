@@ -1,6 +1,6 @@
 # 更新日志
 
-> 文档版本：v3.15.0  更新日期：2026-08-25
+> 文档版本：v3.16.0  更新日期：2026-08-25
 
 本文件记录 TerminalAccessManager 的所有重要变更。
 
@@ -8,6 +8,24 @@
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ***
+
+## [3.16.0] - 2026-08-25
+
+### 新增
+
+- **黑名单「解封事件」列**：
+  - 黑名单列表新增「解封事件」列，成功解封条目显示解封原因（reason）与时间（unblocked_at）
+  - 三语 i18n 新增 `unblockEvent` 文案（zh/en/ja）
+  - 关联文件：`Blacklist.tsx`、`locales/zh.ts`、`locales/en.ts`、`locales/ja.ts`
+
+### 修复
+
+- **到期自动解封缺失独立 reason**：`cleanup_expired_blacklist` 到期解封时未写入解封原因，现统一写入「封锁时间到期自动解封」作为独立事件原因，与合规解封（whitelist match / IPGuard match）区分
+  - 关联文件：`terminal_service.py`、`test_compliance_service.py`
+- **SQLite 连接池参数报错**：`database.py` 对 SQLite 也传入 `pool_timeout`/`pool_use_lifo` 等不支持的参数导致单测失败；改为仅在非 SQLite 数据库时应用
+  - 关联文件：`database.py`
+- **manage.sh 版本管理逻辑**：`version check`/`version bump` 改为统一从 `VERSION` 动态派生，移除对 `package.json`/`package-lock.json` 的静态写入与比对
+  - 关联文件：`manage.sh`
 
 ## [3.15.0] - 2026-08-25
 
