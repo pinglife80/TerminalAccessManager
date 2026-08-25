@@ -381,7 +381,10 @@ export interface EmailConfig {
 
 export interface ComplianceConfig {
   compliance_confirm_threshold: number;
+  block_time: string;
 }
+
+export const BLOCK_TIME_PRESETS = ['1h', '6h', '12h', '1d', '3d', '7d', '15d', '30d'];
 
 export interface AlertConfig {
   alert_compliance_rate_threshold: number;

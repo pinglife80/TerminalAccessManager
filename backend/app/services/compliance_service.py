@@ -2238,7 +2238,7 @@ class ComplianceService:
         try:
             from app.services.config_service import ConfigService
             config_service = ConfigService(self.db)
-            return await config_service.get("block_time", "30d")
+            return await config_service.get("block_time") or "30d"
         except Exception:
             return "30d"
 

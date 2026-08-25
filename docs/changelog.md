@@ -1,6 +1,6 @@
 # 更新日志
 
-> 文档版本：v3.14.0  更新日期：2026-08-24
+> 文档版本：v3.15.0  更新日期：2026-08-25
 
 本文件记录 TerminalAccessManager 的所有重要变更。
 
@@ -8,6 +8,22 @@
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ***
+
+## [3.15.0] - 2026-08-25
+
+### 新增
+
+- **黑名单封锁时长（block_time）可配置化**：
+  - 新增 `block_time` 系统配置项（compliance 分类，默认 30d，支持 1h/6h/12h/1d/3d/7d/15d/30d）
+  - 系统设置页（GeneralSettings）compliance 分组新增 block_time 下拉选择
+  - 自动封锁弹窗（ComplianceBaselinesTab）新增封锁时长下拉，默认取系统配置值、可逐次覆盖
+  - 防火墙对账补建条目改用系统配置 block_time，替代硬编码 30d
+  - 关联文件：`config_service.py`、`system_config.py`、`firewall_reconciliation_service.py`、`useTerminalData.ts`、`GeneralSettings.tsx`、`ComplianceBaselinesTab.tsx`
+
+### 修复
+
+- **`_get_block_time` 配置读取 bug**：原 `config_service.get("block_time", "30d")` 传入第二参数导致 TypeError 被静默捕获，配置从不生效；改为 `get("block_time") or "30d"`
+  - 关联文件：`compliance_service.py`
 
 ## [3.14.0] - 2026-08-24
 
