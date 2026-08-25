@@ -444,6 +444,7 @@ const ja = {
     statsSuccessBlocked: 'ブロック成功',
     statsPendingRetryBlock: 'ブロック再試行待ち',
     statsSuccessUnblocked: 'ブロック解除成功',
+    unblockEvent: 'ブロック解除イベント',
     statsPendingRetryUnblock: 'ブロック解除再試行待ち',
     statsFirewallErrors: 'ファイアウォールエラー',
     pendingRetryBlockHint: 'この分類は端末データです。クリックして端末管理を開きます',

@@ -379,6 +379,9 @@ const Blacklist: React.FC = () => {
                   {t('blacklist.expiresAt')}
                 </th>
                 <th className="px-4 sm:px-6 py-3.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                  {t('blacklist.unblockEvent')}
+                </th>
+                <th className="px-4 sm:px-6 py-3.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider">
                   {t('common.actions')}
                 </th>
               </tr>
@@ -386,7 +389,7 @@ const Blacklist: React.FC = () => {
             <tbody className="bg-card divide-y divide-border">
               {filteredBlacklist?.length === 0 ? (
                 <tr>
-                  <td colSpan={8}>
+                  <td colSpan={9}>
                     <EmptyState
                       icon={Shield}
                       title={t('blacklist.noBlockedTerminals')}
@@ -461,6 +464,22 @@ const Blacklist: React.FC = () => {
                       >
                         {formatDate(item.expires_at)}
                       </span>
+                    </td>
+                    <td className="px-4 sm:px-6 py-4">
+                      {(item.auto_unblocked || item.unblocked_at) ? (
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-1.5">
+                            <Unlock className="h-3.5 w-3.5 text-green-600 flex-shrink-0" />
+                            <span className="text-sm text-foreground">{item.reason || '—'}</span>
+                          </div>
+                          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                            <Clock className="h-3.5 w-3.5 flex-shrink-0" />
+                            {formatDate(item.unblocked_at)}
+                          </div>
+                        </div>
+                      ) : (
+                        <span className="text-sm text-muted-foreground">—</span>
+                      )}
                     </td>
                     <td className="px-4 sm:px-6 py-4 whitespace-nowrap">
                       <ButtonGroup>

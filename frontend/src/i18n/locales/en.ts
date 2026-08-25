@@ -447,6 +447,7 @@ const en = {
     statsSuccessBlocked: 'Successfully Blocked',
     statsPendingRetryBlock: 'Block Pending Retry',
     statsSuccessUnblocked: 'Successfully Unblocked',
+    unblockEvent: 'Unblock Event',
     statsPendingRetryUnblock: 'Unblock Pending Retry',
     statsFirewallErrors: 'Firewall Errors',
     pendingRetryBlockHint: 'This category is terminal data; click to open Terminal Management',

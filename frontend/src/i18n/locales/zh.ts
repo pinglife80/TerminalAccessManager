@@ -448,6 +448,7 @@ const zh = {
     statsSuccessBlocked: '成功封锁',
     statsPendingRetryBlock: '封锁失败待重试',
     statsSuccessUnblocked: '成功解封',
+    unblockEvent: '解封事件',
     statsPendingRetryUnblock: '解封失败待重试',
     statsFirewallErrors: '防火墙异常',
     pendingRetryBlockHint: '该分类为终端数据，点击跳转终端管理',
