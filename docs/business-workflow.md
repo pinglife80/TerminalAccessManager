@@ -1,6 +1,6 @@
 # TerminalAccessManager 业务流程文档
 
-> 文档版本：v3.14.0  更新日期：2026-08-24
+> 文档版本：v3.15.0  更新日期：2026-08-25
 >
 > 本文档详细说明 TerminalAccessManager 的核心业务流程，包括数据采集、合规判定、封锁/解封的完整生命周期。
 
@@ -400,7 +400,7 @@ await emit_auto_block_triggered(blocked, arp_source_tag, terminal_list)
 | 参数 | 类型 | 说明 |
 |------|------|------|
 | `arp_source_tag` | string | ARP数据源标签 |
-| `block_time` | string | 封锁时长（默认30d） |
+| `block_time` | string | 封锁时长（可配置，默认 30d；支持 1h/6h/12h/1d/3d/7d/15d/30d） |
 | `firewall_tag` | string | 防火墙标签 |
 | `is_auto_blocked` | boolean | 是否自动封锁 |
 | `expires_at` | datetime | 封锁过期时间 |
@@ -544,21 +544,73 @@ class Blacklist(Base):
 
 > **对账补建条目（v3.13+）**：防火墙对账从防火墙实际封锁列表补建的 Blacklist 条目，若找不到终端记录，则 `mac_address`/`mac_address_normalized` 为 NULL、`source_tag="reconciliation"`。这类 NULL-MAC 条目在终端匹配 / 统计口径中回退到 IP 匹配（见 [§11 防火墙对账流程](#11-防火墙对账流程v314-新增)）。
 
-### 6.3 清理流程
+### 6.3 黑名单过期清除流程
 
-定时任务定期清理过期的黑名单记录：
+系统定时扫描已到过期时间的活跃封禁条目，在防火墙上解封后同步数据库与终端状态，并触发合规重算。核心实现在 `terminal_service.py::cleanup_expired_blacklist`。
+
+#### 6.3.1 触发时机
+
+由后台任务 `cleanup_expired_blacklist()`（`main.py`）驱动：
+
+- **周期**：每轮间隔取系统配置 `scheduler_firewall_query_interval`（默认 300 秒），经 `_get_scheduler_interval` 读取并 clamp 到 30–86400 秒；`while True` 循环持续运行。
+- **并发控制**：每轮执行前经两层保护——
+  - 暂停开关：Redis 键 `scheduler:ctrl:firewall_query` 为 `paused` 时本轮跳过（`_is_task_paused`）。
+  - 分布式锁：Redis 键 `scheduler:lock:firewall_query` 以 `SET NX EX` 抢占，抢不到即跳过，避免多实例重复执行（`_acquire_task_lock`）。
+- **异常隔离**：整体 try/except，出错仅记日志 `[source=scheduler]`，不影响下一轮。
+
+> 该任务名沿用 `firewall_query` 与 `scheduler_firewall_query_interval` 配置键，但实际执行的是「黑名单过期清除」，非防火墙查询。
+
+#### 6.3.2 判断标准
+
+| 判定项 | 条件 | 说明 |
+|------|------|------|
+| 过期条目（待清理） | `expires_at < now` 且 `auto_unblocked == False` | 已到过期时间且尚未自动解封 |
+| 仍活跃条目（同 MAC 反向依据） | `unblocked_at IS NULL` 且 `auto_unblocked == False` 且（`expires_at >= now` 或 `expires_at IS NULL`） | 存在即代表该终端仍有其它有效封锁 |
+| 永久封禁 | `expires_at IS NULL` | 永不纳入自动过期清理（`expires_at < now` 对 NULL 不成立） |
+
+#### 6.3.3 执行流程
+
+```
+定时任务触发 → 查询过期条目 → 批量预加载 → 逐条处理(同行活跃检查 + 防火墙解封) → 提交审计 → 触发合规重算
+```
+
+1. **查询过期条目**：`expires_at < now AND auto_unblocked == False`；为空直接返回 0。
+2. **批量预加载（避免 N+1）**：
+   - 按 `mac_address_normalized` 一次性加载所有受影响终端（MAC 为稳定标识，应对 DHCP 换 IP）。
+   - 一次性查 `active_block_macs`（这些 MAC 仍存在其它活跃封锁）。
+   - 按 `firewall_tag` 预解析 `SangforService` 实例并缓存。
+3. **逐条处理**：
+   - **同 MAC 仍有其它活跃封锁**（`mac_address_normalized in active_block_macs`）→ 仅标记本条 `unblocked_at=now`、`unblocked_by="system"`，**不在防火墙上真正解封**（防止多防火墙场景误解封其它仍有效条目）。
+   - **是本 MAC 最后一条活跃封锁** → 若终端当前 `status == "blocked"`，则恢复 `status=unblocked`、`compliance_status=unknown`、`firewall_tag=None`（非 blocked 终端不改状态；`processed_macs` 去重，避免同一 MAC 重复更新）。
+   - **防火墙解封**：
+     - 成功 → 标记 `unblocked_at/by`，计数 +1。
+     - 失败（防火墙禁用/缺失 / API 返回 `code != 0` / 异常）→ **不标记解封**，将 `expires_at` 延后 `now + 30min` 供下一轮重试，保证 DB 与防火墙状态一致；记录进失败清单。
+     - 无 `firewall_tag` 的孤儿条目 → 记 warning 但仍标记解封。
+4. **提交 + 审计**：`count > 0` 时写入审计日志（含清理数量与失败 IP 列表），`commit`。
+5. **合规重算**：提交后触发 `recalculate_all_compliance()`，让因解封而状态变为 `unknown` 的终端尽快被重新评估，仍不合规的重新入封，形成闭环。
 
 ```python
 async def cleanup_expired_blacklist(self) -> int:
-    # 查找已过期且未解封的记录
+    now = datetime.now(UTC)
+    # 已过期且尚未自动解封
     stmt = select(Blacklist).where(
         (Blacklist.expires_at < now) &
-        (Blacklist.unblocked_at.is_(None))
+        (Blacklist.auto_unblocked == False)
     )
-    # 执行解封操作（软删除）
+    expired_entries = result.scalars().all()
+    ...
+    # 逐条处理
     for entry in expired_entries:
-        entry.unblocked_at = datetime.now(UTC)
-        entry.unblocked_by = "system"
+        if entry.mac_address_normalized in active_block_macs:
+            # 同 MAC 仍有其它活跃封锁：仅软删除本条，防火墙保留
+            entry.unblocked_at = now
+            entry.unblocked_by = "system"
+            continue
+        # 本 MAC 最后一条活跃封锁：恢复终端 + 防火墙解封
+        ...
+        if not unblock_success:
+            # 解封失败：延后 30 分钟重试，保持 DB 与防火墙一致
+            entry.expires_at = now + timedelta(minutes=30)
 ```
 
 ---
@@ -642,7 +694,7 @@ async def cleanup_expired_blacklist(self) -> int:
 | 参数 | 类型 | 说明 |
 |------|------|------|
 | `block_threshold` | int | 单次自动封锁阈值（默认50） |
-| `block_time` | string | 封锁时长配置（默认30d） |
+| `block_time` | string | 封锁时长（可配置，默认 30d；系统设置页配默认值，auto-block 弹窗可逐次指定） |
 | `compliance_confirm_threshold` | int | compliant/bypass → non_compliant 翻转确认阈值（默认2，范围1-10，v3.7.0新增） |
 | `non_compliant_confirm_count` | int | 终端连续判定为 non_compliant 的计数器（数据库字段，v3.7.0新增） |
 | `IPGUARD_CACHE_TTL` | int | IPGuard 缓存 TTL（v3.7.0 调整为 900 秒，1.5 倍同步间隔） |
@@ -787,7 +839,7 @@ async def cleanup_expired_blacklist(self) -> int:
 | `scheduled_ipguard_sync` | 600s (10min) | ✅ | `scheduler_ipguard_sync_interval` |
 | `scheduled_compliance_check` | 300s (5min) | ✅ | `scheduler_compliance_check_interval`（四段式见 §4.5） |
 | `scheduled_auto_unblock` | 600s (10min) | ✅ | `scheduler_auto_unblock_interval` |
-| `cleanup_expired_blacklist` | 3600s (1h) | ✅ | `scheduler_firewall_query_interval` |
+| `cleanup_expired_blacklist` | 300s (5min) | ✅ | `scheduler_firewall_query_interval` |
 | `firewall_reconciliation` | 300s (5min) | ❌ 硬编码 | `main.py#L179` |
 | `cleanup_expired_logs` | 86400s (24h) | ❌ 硬编码 | `main.py#L131`；保留天数 `audit_log_retention_days`（默认 90）可配 |
 | `scheduled_backup` | 60s 轮询 + cron | ⚠️ 轮询硬编码 | `main.py#L583` poll=60s；真实执行由 `backup_config.schedule` cron 决定 |

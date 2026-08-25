@@ -1,12 +1,43 @@
 # 版本跟踪记录
 
-> 文档版本：v3.14.0 | 更新日期：2026-08-24
+> 文档版本：v3.15.0 | 更新日期：2026-08-25
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
 
 ---
+
+## [v3.15.0] - 2026-08-25
+
+### 黑名单封锁时长（block_time）可配置化（Minor 版本）
+
+#### 背景
+
+黑名单封锁时长此前在自动封锁、调度器 retry-block、合规自动封锁、防火墙对账补建各路径中硬编码为 30 天，且后端 `_get_block_time` 因 `config_service.get("block_time", "30d")` 传入第二参数触发 TypeError 被静默捕获，配置从未生效。本版本统一为可配置的 `block_time` 系统配置，并修复配置读取 bug。
+
+#### 主要变更
+
+| 变更项 | 说明 |
+|--------|------|
+| 系统配置项 | 新增 `block_time`（compliance 分类，默认 30d，支持 1h/6h/12h/1d/3d/7d/15d/30d） |
+| 系统设置页 | compliance 分组新增 block_time 下拉选择 |
+| 自动封锁弹窗 | 新增封锁时长下拉，默认取系统配置值、可逐次覆盖 |
+| 防火墙对账补建 | 改用系统配置 block_time，替代硬编码 30d |
+| 配置读取修复 | `_get_block_time` 改为 `get("block_time") or "30d"`，修复 TypeError 静默失败 |
+
+#### 升级步骤（推荐：一键升级）
+
+```bash
+git checkout main
+git pull origin main
+./manage.sh upgrade
+```
+
+#### 升级注意事项
+
+- 新增的 `block_time` 配置默认值为 `30d`，与历史行为一致，无需迁移。
+- 若需调整默认封锁时长，登录系统设置页 → 合规分组 → block_time 下拉选择即可。
 
 ## [v3.14.0] - 2026-08-24
 
