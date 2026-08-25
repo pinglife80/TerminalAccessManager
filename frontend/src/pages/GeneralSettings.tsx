@@ -11,7 +11,7 @@ import {
   Settings as SettingsIcon, Wrench, Save, Upload, Database, Trash2,
   Loader2, AlertTriangle,
 } from 'lucide-react';
-import { useSettings, useSettingsList, type AllConfigs, type ConfigEntry } from '@/hooks/useTerminalData';
+import { useSettings, useSettingsList, BLOCK_TIME_PRESETS, type AllConfigs, type ConfigEntry } from '@/hooks/useTerminalData';
 import { useBrandingStore } from '@/store/branding';
 
 // ==================== Helpers ====================
@@ -47,7 +47,7 @@ const SECTION_FIELDS: Record<string, string[]> = {
     'scheduler_auto_unblock_interval', 'scheduler_backup_interval',
   ],
   general: ['environment', 'debug', 'log_level'],
-  compliance: ['compliance_confirm_threshold'],
+  compliance: ['compliance_confirm_threshold', 'block_time'],
   cache: ['cache_ipguard_ttl', 'cache_whitelist_ttl'],
   alert: [
     'alert_compliance_rate_threshold', 'alert_compliance_critical_ratio',
@@ -157,6 +157,15 @@ const Field: React.FC<FieldProps> = ({ entry, value, onChange }) => {
       <select value={value} onChange={(e) => onChange(e.target.value)} disabled={readonly} className={baseClass}>
         {['DEBUG', 'INFO', 'WARNING', 'ERROR'].map((lv) => (
           <option key={lv} value={lv}>{lv}</option>
+        ))}
+      </select>
+    );
+  } else if (entry.key === 'block_time') {
+    const options = BLOCK_TIME_PRESETS.includes(value) ? BLOCK_TIME_PRESETS : [value, ...BLOCK_TIME_PRESETS];
+    input = (
+      <select value={value} onChange={(e) => onChange(e.target.value)} disabled={readonly} className={baseClass}>
+        {options.map((bt) => (
+          <option key={bt} value={bt}>{bt}</option>
         ))}
       </select>
     );

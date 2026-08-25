@@ -15,7 +15,7 @@ import {
   Ban,
   Unlock,
 } from 'lucide-react';
-import { useComplianceBaselines, ComplianceBaselineItem, useDataSources } from '@/hooks/useTerminalData';
+import { useComplianceBaselines, ComplianceBaselineItem, useDataSources, useSettings, BLOCK_TIME_PRESETS } from '@/hooks/useTerminalData';
 import { useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '@/lib/api';
 import { toast } from 'sonner';
@@ -295,6 +295,7 @@ const ComplianceBaselinesTab = forwardRef<{ openAddModal: () => void }, Complian
   // E1: Compliance operations state
   const queryClient = useQueryClient();
   const { data: dataSources } = useDataSources();
+  const { data: configs } = useSettings();
   const arpSources = useMemo(
     () => (dataSources || []).filter((ds) => ds.type === 'arp_ssh' || ds.type === 'arp_api'),
     [dataSources],
@@ -305,6 +306,7 @@ const ComplianceBaselinesTab = forwardRef<{ openAddModal: () => void }, Complian
   const [autoUnblockLoading, setAutoUnblockLoading] = useState(false);
   const [forceCheck, setForceCheck] = useState(false);
   const [showAutoBlockModal, setShowAutoBlockModal] = useState(false);
+  const [autoBlockTime, setAutoBlockTime] = useState('30d');
 
   const handleComplianceCheck = async () => {
     setComplianceLoading(true);
@@ -328,6 +330,7 @@ const ComplianceBaselinesTab = forwardRef<{ openAddModal: () => void }, Complian
 
   const handleAutoBlockClick = () => {
     if (!selectedTag) { toast.warning(t('compliance.selectSourceTag')); return; }
+    setAutoBlockTime(configs?.compliance?.block_time || '30d');
     setShowAutoBlockModal(true);
   };
 
@@ -337,7 +340,7 @@ const ComplianceBaselinesTab = forwardRef<{ openAddModal: () => void }, Complian
     try {
       const response = await apiClient.post(API_ENDPOINTS.COMPLIANCE_AUTO_BLOCK, {
         arp_source_tag: selectedTag,
-        block_time: '30d',
+        block_time: autoBlockTime,
         dry_run: false,
       });
       const r = response.data;
@@ -436,6 +439,18 @@ const ComplianceBaselinesTab = forwardRef<{ openAddModal: () => void }, Complian
               <Ban className="h-5 w-5 text-red-600" />
             </div>
             <p className="text-sm text-muted-foreground">{t('compliance.autoBlockWarning')}</p>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-muted-foreground mb-1">{t('blacklist.blockDuration')}</label>
+            <select
+              value={autoBlockTime}
+              onChange={(e) => setAutoBlockTime(e.target.value)}
+              className="w-full px-3 py-2 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+            >
+              {BLOCK_TIME_PRESETS.map((bt) => (
+                <option key={bt} value={bt}>{bt}</option>
+              ))}
+            </select>
           </div>
           <div className="flex justify-end gap-2">
             <PrimaryButton label={t('common.cancel')} onClick={() => setShowAutoBlockModal(false)} variant="secondary" />
