@@ -656,63 +656,55 @@ cmd_version_check() {
     local base_version="${VERSION}"
     local all_ok="true"
 
-    # Files that need manual sync (for git cleanliness, Docker build auto-syncs too)
-    local static_files=(
-        "frontend/package.json"
-    )
+    # 1. VERSION — the single source of truth (must be a valid semver)
+    if [ -z "${base_version}" ]; then
+        echo -e "  ${RED}✗${NC} VERSION: ${RED}missing or empty${NC}"
+        all_ok="false"
+    elif ! echo "${base_version}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+        echo -e "  ${RED}✗${NC} VERSION: ${RED}${base_version}${NC} (invalid format, expected X.Y.Z)"
+        all_ok="false"
+    else
+        echo -e "  ${GREEN}✓${NC} VERSION: ${GREEN}${base_version}${NC} (single source of truth)"
+    fi
 
-    # Files that read VERSION dynamically — no manual sync needed
+    # 2. Files that read VERSION dynamically at runtime/build time
+    echo ""
+    echo -e "  ${DIM}Read VERSION dynamically at runtime/build:${NC}"
     local dynamic_files=(
+        "backend/app/core/config.py"
         "docker-compose.yml"
         "frontend/vite.config.ts"
         "manage.sh"
-        "frontend/Dockerfile"
     )
-
-    # Check static files
-    for file in "${static_files[@]}"; do
-        local file_path="${SCRIPT_DIR}/${file}"
-        local found_version=""
-
-        if [ ! -f "${file_path}" ]; then
-            echo -e "  ${RED}✗${NC} ${file}: ${RED}not found${NC}"
-            all_ok="false"
-            continue
-        fi
-
-        case "${file}" in
-            "frontend/package.json")
-                found_version=$(grep -m1 '"version"' "${file_path}" 2>/dev/null | sed 's/.*"version": "\([^"]*\)".*/\1/' | tr -d '[:space:]')
-                ;;
-        esac
-
-        if [ -z "${found_version}" ]; then
-            echo -e "  ${YELLOW}?${NC} ${file}: ${YELLOW}version not detected${NC}"
-        elif [ "${found_version}" = "${base_version}" ]; then
-            echo -e "  ${GREEN}✓${NC} ${file}: ${GREEN}${found_version}${NC}"
+    local dfile=""
+    for dfile in "${dynamic_files[@]}"; do
+        if [ -f "${SCRIPT_DIR}/${dfile}" ]; then
+            echo -e "  ${GREEN}✓${NC} ${dfile}: ${DIM}dynamic${NC}"
         else
-            echo -e "  ${RED}✗${NC} ${file}: ${RED}${found_version}${NC} (expected ${base_version})"
-            all_ok="false"
+            echo -e "  ${YELLOW}?${NC} ${dfile}: ${DIM}not found${NC}"
         fi
     done
 
-    # Show dynamic files (read VERSION at runtime/build time)
+    # 3. Build-time sync target: frontend/package.json is synchronized from
+    #    VERSION by frontend/Dockerfile during the image build. Verify the sync
+    #    step still exists instead of comparing the committed value (which may
+    #    legitimately lag VERSION until the next build).
     echo ""
-    echo -e "  ${DIM}Dynamically sourced from VERSION (no manual sync needed):${NC}"
-    for file in "${dynamic_files[@]}"; do
-        if [ -f "${SCRIPT_DIR}/${file}" ]; then
-            echo -e "  ${GREEN}✓${NC} ${file}: ${DIM}reads VERSION at runtime${NC}"
-        else
-            echo -e "  ${YELLOW}?${NC} ${file}: ${DIM}not found${NC}"
-        fi
-    done
+    echo -e "  ${DIM}Build-time sync (VERSION → package.json via frontend/Dockerfile):${NC}"
+    if [ -f "${SCRIPT_DIR}/frontend/Dockerfile" ] && \
+       grep -q 'cat VERSION' "${SCRIPT_DIR}/frontend/Dockerfile" 2>/dev/null && \
+       grep -q 'package.json' "${SCRIPT_DIR}/frontend/Dockerfile" 2>/dev/null; then
+        echo -e "  ${GREEN}✓${NC} frontend/package.json: ${DIM}synced from VERSION at image build${NC}"
+    else
+        echo -e "  ${RED}✗${NC} frontend/package.json: ${RED}build-time VERSION sync step missing (check frontend/Dockerfile)${NC}"
+        all_ok="false"
+    fi
 
     echo ""
     if [ "${all_ok}" = "true" ]; then
-        echo -e "${GREEN}${BOLD}✓ All versions are consistent (${base_version})${NC}"
+        echo -e "${GREEN}${BOLD}✓ All version references are uniformly sourced from VERSION (${base_version})${NC}"
     else
-        echo -e "${RED}${BOLD}✗ Version inconsistency detected!${NC}"
-        echo -e "  Run '${CYAN}./manage.sh version bump ${base_version}${NC}' to fix"
+        echo -e "${RED}${BOLD}✗ Version configuration issue detected!${NC}"
         exit 1
     fi
 }
@@ -736,31 +728,30 @@ cmd_version_bump() {
     echo -e "${CYAN}${BOLD}Bumping version to ${new_version}${NC}"
     echo ""
 
-    # 1. Write to VERSION file — the single source of truth
+    # VERSION is the single source of truth. Every other version reference is
+    # sourced dynamically from VERSION at runtime/build time, so only VERSION
+    # needs to be updated here:
+    #   - backend/app/core/config.py  → reads VERSION at runtime
+    #   - docker-compose.yml           → injects VERSION environment variable
+    #   - frontend/vite.config.ts      → reads VERSION at build time
+    #   - frontend/package.json        → synced by frontend/Dockerfile at build
+    #   - manage.sh                    → reads VERSION at runtime
     echo "${new_version}" > "${SCRIPT_DIR}/VERSION"
-    echo -e "  ${GREEN}✓${NC} VERSION (source of truth)"
-
-    # 2. Read back from VERSION to confirm and use as sync source
-    local synced_version
-    synced_version=$(cat "${SCRIPT_DIR}/VERSION" | tr -d '[:space:]')
-
-    # 3. Sync frontend/package.json FROM VERSION (for git cleanliness; Docker build auto-syncs anyway)
-    if [ -f "${SCRIPT_DIR}/frontend/package.json" ]; then
-        sed -i "s/\"version\": \"[0-9]*\.[0-9]*\.[0-9]*\"/\"version\": \"${synced_version}\"/" "${SCRIPT_DIR}/frontend/package.json"
-        echo -e "  ${GREEN}✓${NC} frontend/package.json"
-    else
-        echo -e "  ${YELLOW}?${NC} frontend/package.json: ${DIM}not found, skipping${NC}"
-    fi
-
-    # Note: docker-compose.yml, vite.config.ts, manage.sh, Dockerfile
-    # read VERSION dynamically at runtime/build time — no sync needed.
-    # frontend/package-lock.json is auto-generated by npm, never manually sync.
+    echo -e "  ${GREEN}✓${NC} VERSION (single source of truth)"
 
     echo ""
-    echo -e "${GREEN}${BOLD}✓ Version bumped successfully to ${synced_version}!${NC}"
+    echo -e "  ${DIM}Dynamically sourced from VERSION (no manual sync needed):${NC}"
+    echo -e "  ${DIM}  - backend/app/core/config.py${NC}"
+    echo -e "  ${DIM}  - docker-compose.yml${NC}"
+    echo -e "  ${DIM}  - frontend/vite.config.ts${NC}"
+    echo -e "  ${DIM}  - frontend/package.json (via frontend/Dockerfile at build)${NC}"
+    echo -e "  ${DIM}  - manage.sh${NC}"
+
+    echo ""
+    echo -e "${GREEN}${BOLD}✓ Version bumped successfully to ${new_version}!${NC}"
     echo ""
     echo -e "Next steps:"
-    echo -e "  1. ${CYAN}./manage.sh version check${NC} — Verify all versions are consistent"
+    echo -e "  1. ${CYAN}./manage.sh version check${NC} — Verify all version references source from VERSION"
     echo -e "  2. ${CYAN}./manage.sh -y update${NC} — Rebuild and restart services"
     echo -e "  3. ${CYAN}./manage.sh health${NC} — Verify deployment is healthy"
 }
@@ -3951,8 +3942,8 @@ cmd_help() {
     echo -e "  ${CYAN}ssl${NC} [--force]              Generate SSL certificates (idempotent)"
     echo -e "  ${CYAN}clean${NC}                     Remove ALL containers, volumes, data"
     echo -e "  ${CYAN}version${NC}                   Show version information"
-    echo -e "  ${CYAN}version check${NC}             Check version consistency across all files"
-    echo -e "  ${CYAN}version bump <ver>${NC}        Bump version in all version files"
+    echo -e "  ${CYAN}version check${NC}             Verify all version references source from VERSION"
+    echo -e "  ${CYAN}version bump <ver>${NC}        Update VERSION (single source of truth)"
     echo ""
     echo -e "${BOLD}Quick Start:${NC}"
     echo ""
