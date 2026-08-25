@@ -1,6 +1,6 @@
 # 更新日志
 
-> 文档版本：v3.16.0  更新日期：2026-08-25
+> 文档版本：v3.16.1  更新日期：2026-08-25
 
 本文件记录 TerminalAccessManager 的所有重要变更。
 
@@ -8,6 +8,20 @@
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ***
+
+## [3.16.1] - 2026-08-25
+
+### 修复
+
+- **IPGuard 匹配元组真值误判**：`_match_ipguard_in_memory` 返回 `(is_compliant, ip_found, mac_found)` 三元组，此前在 `auto_unblock_compliant` 与 `recalculate_all_compliance` 中把该元组直接当布尔值使用（非空元组恒为 True），导致本应不合规的终端被误判为合规；改为正确解包 `ig_match, _, _ = ...`
+  - 关联文件：`compliance_service.py`
+- **IPGuard 缓存陈旧导致的误判降级**：`recalculate_all_compliance` 依赖 IPGuard Redis 缓存做合规判定，缓存存在同步时延，导致「IPGuard 外部系统延迟登记」的终端在窗口期被误判 `non_compliant` 并封锁；新增缓存新鲜度门控，当基线同步时间戳超过可配置阈值时跳过降级、hold 原状态
+  - 关联文件：`compliance_service.py`
+
+### 新增
+
+- **系统配置项 `ipguard_stale_threshold_minutes`**：IPGuard 缓存陈旧阈值（默认 12 分钟，clamp 5~60），归入 compliance 配置组，系统设置页可编辑
+  - 关联文件：`config_service.py`、`system_config.py`、`GeneralSettings.tsx`、`useTerminalData.ts`
 
 ## [3.16.0] - 2026-08-25
 

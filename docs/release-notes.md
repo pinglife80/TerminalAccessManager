@@ -1,12 +1,41 @@
 # 版本跟踪记录
 
-> 文档版本：v3.16.0 | 更新日期：2026-08-25
+> 文档版本：v3.16.1 | 更新日期：2026-08-25
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
 
 ---
+
+## [v3.16.1] - 2026-08-25
+
+### 修复 IPGuard 合规误判并新增缓存新鲜度门控（Patch 版本）
+
+#### 背景
+
+合规判定依赖 IPGuard 基线数据，存在两类误判问题：其一是 `_match_ipguard_in_memory` 返回三元组被直接当作布尔值使用（非空元组恒为 True），导致本应不合规的终端被误判为合规；其二是 IPGuard Redis 缓存存在同步时延，延迟登记的终端在窗口期被误判降级并封锁。本版本修复上述两类误判，并新增缓存新鲜度门控从根上缩小误判时间窗。
+
+#### 主要变更
+
+| 变更项 | 说明 |
+|--------|------|
+| 元组真值误判修复 | `auto_unblock_compliant` 与 `recalculate_all_compliance` 正确解包 `ig_match, _, _ = ...` |
+| IPGuard 缓存新鲜度门控 | 基线同步时间戳超过可配置阈值时跳过降级、hold 原状态 |
+| 新增配置项 | `ipguard_stale_threshold_minutes`（默认 12 分钟，clamp 5~60），归入 compliance 配置组，系统设置页可编辑 |
+
+#### 升级步骤（推荐：一键升级）
+
+```bash
+git checkout main
+git pull origin main
+./manage.sh upgrade
+```
+
+#### 升级注意事项
+
+- 新增配置项 `ipguard_stale_threshold_minutes` 默认 12 分钟，可在系统设置页调整（5~60 分钟）。
+- IPGuard 缓存陈旧期间不执行合规降级，终端保持原状态，待缓存同步后由下一轮定时检查正常判定。
 
 ## [v3.16.0] - 2026-08-25
 

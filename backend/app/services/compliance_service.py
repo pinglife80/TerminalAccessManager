@@ -752,7 +752,7 @@ class ComplianceService:
             if use_ip_only:
                 ig_match = self._match_ipguard_ip_only_in_memory(ipguard_data, current_ip)
             else:
-                ig_match = self._match_ipguard_in_memory(ipguard_data, current_ip, current_mac, ipguard_mac_prefixes)
+                ig_match, _, _ = self._match_ipguard_in_memory(ipguard_data, current_ip, current_mac, ipguard_mac_prefixes)
 
             if not (wl_match or ig_match):
                 skipped += len(entries)
@@ -2003,6 +2003,10 @@ class ComplianceService:
                     "skipped": True, "reason": "ipguard_data_unavailable",
                 }
 
+            ipguard_cache_stale = await self._is_ipguard_cache_stale()
+            if ipguard_cache_stale:
+                logger.warning("IPGuard cache is stale; downgrades to non_compliant will be held this cycle")
+
             stmt = select(Terminal)
             result = await self.db.execute(stmt)
             terminals = result.scalars().all()
@@ -2019,6 +2023,8 @@ class ComplianceService:
             non_compliant_count = 0
             unchanged_count = 0
             unblocked_count = 0
+            corrected_count = 0
+            stale_skip_count = 0
 
             for batch_start in range(0, len(terminals), BATCH_SIZE):
                 batch_terminals = terminals[batch_start:batch_start + BATCH_SIZE]
@@ -2038,7 +2044,7 @@ class ComplianceService:
                     if use_ip_only:
                         ig_match = self._match_ipguard_ip_only_in_memory(ipguard_data, ip_addr)
                     else:
-                        ig_match = self._match_ipguard_in_memory(ipguard_data, ip_addr, mac_addr, ipguard_mac_prefixes)
+                        ig_match, _, _ = self._match_ipguard_in_memory(ipguard_data, ip_addr, mac_addr, ipguard_mac_prefixes)
 
                     # Initialize compliant_confirm_count if not present (handles pre-migration records)
                     if not hasattr(terminal, 'compliant_confirm_count') or terminal.compliant_confirm_count is None:
@@ -2087,47 +2093,54 @@ class ComplianceService:
                             else:
                                 new_compliance = old_compliance  # hold
                     elif not in_ip_grace_period:
-                        current_check_status = "non_compliant"
-                        new_wl_match_type = None
-                        wl_comments = None
-
-                        if old_compliance == "bypass":
-                            # SPECIAL PROTECTION: Currently whitelisted but this check missed whitelist.
-                            # Require 6 CONSECUTIVE misses (~30 minutes) before downgrading,
-                            # to avoid false positives from transient cache failures.
-                            terminal.non_compliant_confirm_count += 1
-                            whitelist_miss_threshold = 6
-                            if terminal.non_compliant_confirm_count >= whitelist_miss_threshold:
-                                new_compliance = "non_compliant"
-                                terminal.non_compliant_confirm_count = 0
-                                logger.warning(
-                                    f"Terminal[{batch_start + idx}] {ip_addr}/{mac_addr}: "
-                                    f"WHITELIST MISS {whitelist_miss_threshold} consecutive times, "
-                                    f"downgrading bypass → non_compliant"
-                                )
-                            else:
-                                new_compliance = "bypass"  # hold bypass
-                                logger.debug(
-                                    f"Terminal[{batch_start + idx}] {ip_addr}/{mac_addr}: "
-                                    f"whitelist transient miss ({terminal.non_compliant_confirm_count}/{whitelist_miss_threshold}), "
-                                    f"holding bypass"
-                                )
+                        if ipguard_cache_stale:
+                            current_check_status = "compliant"
+                            new_wl_match_type = None
+                            wl_comments = None
+                            new_compliance = old_compliance  # hold, cache stale -> no downgrade
+                            stale_skip_count += 1
                         else:
-                            # Normal downgrade path with confirm threshold
-                            if current_check_status == old_compliance:
-                                terminal.compliant_confirm_count = 0
-                            else:
+                            current_check_status = "non_compliant"
+                            new_wl_match_type = None
+                            wl_comments = None
+
+                            if old_compliance == "bypass":
+                                # SPECIAL PROTECTION: Currently whitelisted but this check missed whitelist.
+                                # Require 6 CONSECUTIVE misses (~30 minutes) before downgrading,
+                                # to avoid false positives from transient cache failures.
                                 terminal.non_compliant_confirm_count += 1
-                                terminal.compliant_confirm_count = 0
-                                if terminal.non_compliant_confirm_count >= confirm_threshold:
+                                whitelist_miss_threshold = 6
+                                if terminal.non_compliant_confirm_count >= whitelist_miss_threshold:
                                     new_compliance = "non_compliant"
                                     terminal.non_compliant_confirm_count = 0
-                                    logger.info(
+                                    logger.warning(
                                         f"Terminal[{batch_start + idx}] {ip_addr}/{mac_addr}: "
-                                        f"CONFIRMED downgrade {old_compliance} → non_compliant after {confirm_threshold} checks"
+                                        f"WHITELIST MISS {whitelist_miss_threshold} consecutive times, "
+                                        f"downgrading bypass → non_compliant"
                                     )
                                 else:
-                                    new_compliance = old_compliance  # hold
+                                    new_compliance = "bypass"  # hold bypass
+                                    logger.debug(
+                                        f"Terminal[{batch_start + idx}] {ip_addr}/{mac_addr}: "
+                                        f"whitelist transient miss ({terminal.non_compliant_confirm_count}/{whitelist_miss_threshold}), "
+                                        f"holding bypass"
+                                    )
+                            else:
+                                # Normal downgrade path with confirm threshold
+                                if current_check_status == old_compliance:
+                                    terminal.compliant_confirm_count = 0
+                                else:
+                                    terminal.non_compliant_confirm_count += 1
+                                    terminal.compliant_confirm_count = 0
+                                    if terminal.non_compliant_confirm_count >= confirm_threshold:
+                                        new_compliance = "non_compliant"
+                                        terminal.non_compliant_confirm_count = 0
+                                        logger.info(
+                                            f"Terminal[{batch_start + idx}] {ip_addr}/{mac_addr}: "
+                                            f"CONFIRMED downgrade {old_compliance} → non_compliant after {confirm_threshold} checks"
+                                        )
+                                    else:
+                                        new_compliance = old_compliance  # hold
 
                     if old_compliance != new_compliance:
                         logger.info(
@@ -2135,6 +2148,12 @@ class ComplianceService:
                             f"{old_compliance} → {new_compliance} "
                             f"(whitelist={bool(wl_result)}, ipguard={ig_match}, grace={in_ip_grace_period})"
                         )
+                        if old_compliance == "compliant" and new_compliance == "non_compliant":
+                            corrected_count += 1
+                            logger.warning(
+                                f"Terminal[{batch_start + idx}] {ip_addr}/{mac_addr}: "
+                                f"misclassification corrected (compliant → non_compliant, ipguard={ig_match})"
+                            )
 
                     result = await self._apply_compliance_result(
                         terminal, new_compliance, new_wl_match_type, wl_comments, ip_addr, mac_addr
@@ -2164,11 +2183,15 @@ class ComplianceService:
                 await self.log_action("system", "recalculate_compliance", "terminal", None, {
                     "message": f"Compliance recalculation: {len(terminals)} total, "
                                f"{bypass_count} → bypass, {compliant_count} → compliant, "
-                               f"{non_compliant_count} → non_compliant, {unblocked_count} auto-unblocked",
+                               f"{non_compliant_count} → non_compliant, {corrected_count} corrected, "
+                               f"{stale_skip_count} stale-held, {unblocked_count} auto-unblocked",
                     "total": len(terminals),
                     "bypass": bypass_count,
                     "compliant": compliant_count,
                     "non_compliant": non_compliant_count,
+                    "corrected": corrected_count,
+                    "stale_skip_count": stale_skip_count,
+                    "ipguard_cache_stale": ipguard_cache_stale,
                     "unchanged": unchanged_count,
                     "unblocked": unblocked_count,
                     "duration_ms": round(duration_ms, 2),
@@ -2179,8 +2202,9 @@ class ComplianceService:
             logger.info(
                 f"Compliance recalculation complete: {len(terminals)} total, "
                 f"{bypass_count} → bypass, {compliant_count} → compliant, "
-                f"{non_compliant_count} → non_compliant, {unchanged_count} unchanged, "
-                f"{unblocked_count} auto-unblocked, duration={duration_ms:.2f}ms"
+                f"{non_compliant_count} → non_compliant, {corrected_count} corrected, "
+                f"{stale_skip_count} stale-held, {unchanged_count} unchanged, "
+                f"{unblocked_count} auto-unblocked, cache_stale={ipguard_cache_stale}, duration={duration_ms:.2f}ms"
             )
 
             return {
@@ -2188,6 +2212,9 @@ class ComplianceService:
                 "bypass": bypass_count,
                 "compliant": compliant_count,
                 "non_compliant": non_compliant_count,
+                "corrected": corrected_count,
+                "stale_skip_count": stale_skip_count,
+                "ipguard_cache_stale": ipguard_cache_stale,
                 "unchanged": unchanged_count,
                 "unblocked": unblocked_count,
                 "duration_ms": round(duration_ms, 2),
@@ -2257,6 +2284,34 @@ class ComplianceService:
             return max(1, min(10, threshold))
         except Exception:
             return 2
+
+    async def _get_ipguard_stale_threshold_minutes(self) -> int:
+        """Get IPGuard cache stale threshold from system config (default 12min)."""
+        try:
+            from app.services.config_service import ConfigService
+            config_service = ConfigService(self.db)
+            value = await config_service.get("ipguard_stale_threshold_minutes") or "12"
+            threshold = int(value)
+            return max(5, min(60, threshold))
+        except Exception:
+            return 12
+
+    async def _is_ipguard_cache_stale(self) -> bool:
+        """Return True if IPGuard cache is stale (last sync exceeds threshold)."""
+        threshold = await self._get_ipguard_stale_threshold_minutes()
+        stmt = select(ComplianceBaseline).where(ComplianceBaseline.enabled == True)
+        result = await self.db.execute(stmt)
+        baselines = result.scalars().all()
+        if not baselines:
+            return True
+        sync_times = [b.last_sync_at for b in baselines if b.last_sync_at is not None]
+        if not sync_times:
+            return True  # never synced yet
+        newest = max(sync_times)
+        if newest.tzinfo is None:
+            newest = newest.replace(tzinfo=UTC)
+        age_minutes = (datetime.now(UTC) - newest).total_seconds() / 60.0
+        return age_minutes > threshold
 
     async def log_action(self, username: str, action: str, resource_type: str,
                          resource_id: str | None, details: dict,

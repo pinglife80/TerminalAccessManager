@@ -146,6 +146,7 @@ class ComplianceConfigResponse(BaseModel):
     """Compliance policy config values"""
     compliance_confirm_threshold: int
     block_time: str
+    ipguard_stale_threshold_minutes: int
 
 
 class CacheConfigResponse(BaseModel):

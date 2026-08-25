@@ -382,6 +382,7 @@ export interface EmailConfig {
 export interface ComplianceConfig {
   compliance_confirm_threshold: number;
   block_time: string;
+  ipguard_stale_threshold_minutes: number;
 }
 
 export const BLOCK_TIME_PRESETS = ['1h', '6h', '12h', '1d', '3d', '7d', '15d', '30d'];

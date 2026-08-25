@@ -47,7 +47,7 @@ const SECTION_FIELDS: Record<string, string[]> = {
     'scheduler_auto_unblock_interval', 'scheduler_backup_interval',
   ],
   general: ['environment', 'debug', 'log_level'],
-  compliance: ['compliance_confirm_threshold', 'block_time'],
+  compliance: ['compliance_confirm_threshold', 'block_time', 'ipguard_stale_threshold_minutes'],
   cache: ['cache_ipguard_ttl', 'cache_whitelist_ttl'],
   alert: [
     'alert_compliance_rate_threshold', 'alert_compliance_critical_ratio',
