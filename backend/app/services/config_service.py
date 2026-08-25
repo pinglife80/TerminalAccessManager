@@ -144,6 +144,9 @@ class ConfigService:
         {"key": "compliance_confirm_threshold", "value": "2", "category": "compliance",
          "value_type": "int", "description": "Consecutive non-compliant detections before status flips (1-10)",
          "is_readonly": False},
+        {"key": "block_time", "value": "30d", "category": "compliance",
+         "value_type": "string", "description": "Default blacklist block duration (e.g. 1h/6h/12h/1d/3d/7d/15d/30d)",
+         "is_readonly": False},
         # Cache
         {"key": "cache_ipguard_ttl", "value": "900", "category": "cache",
          "value_type": "int", "description": "IPGuard data cache TTL in seconds (60-7200)",
@@ -528,6 +531,7 @@ class ConfigService:
             ),
             compliance=ComplianceConfigResponse(
                 compliance_confirm_threshold=_val("compliance_confirm_threshold", 2),
+                block_time=_val("block_time", "30d"),
             ),
             cache=CacheConfigResponse(
                 cache_ipguard_ttl=_val("cache_ipguard_ttl", 900),

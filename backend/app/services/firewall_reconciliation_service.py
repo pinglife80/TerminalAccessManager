@@ -294,6 +294,11 @@ class FirewallReconciliationService:
         """
         created = 0
 
+        # Default block duration for reconciliation-created entries (follows system config)
+        from app.services.config_service import ConfigService
+        from app.services.terminal_service import _parse_block_time
+        block_delta = _parse_block_time(await ConfigService(self.db).get("block_time") or "30d")
+
         # Load whitelist for safety check
         from app.services.compliance_service import ComplianceService
         _svc = ComplianceService(self.db)
@@ -363,7 +368,7 @@ class FirewallReconciliationService:
                     mac_address_normalized=mac_norm,
                     blocked_by="system",
                     blocked_at=datetime.now(UTC),
-                    expires_at=datetime.now(UTC) + timedelta(days=30),
+                    expires_at=datetime.now(UTC) + block_delta,
                     source_tag=source_tag or "reconciliation",
                     firewall_tag=fw_tag,
                     is_auto_blocked=True,
