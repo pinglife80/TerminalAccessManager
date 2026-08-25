@@ -80,8 +80,5 @@ nginx/certs/
 docs/sangfor_api
 docs/todos.md
 
-# Trae IDE workspace
-.trae/
-
 # Temporary test scripts
 test_*.py
