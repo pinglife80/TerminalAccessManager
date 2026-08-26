@@ -1,6 +1,6 @@
 # TerminalAccessManager 业务流程文档
 
-> 文档版本：v3.16.1  更新日期：2026-08-25
+> 文档版本：v3.17.0  更新日期：2026-08-26
 >
 > 本文档详细说明 TerminalAccessManager 的核心业务流程，包括数据采集、合规判定、封锁/解封的完整生命周期。
 
@@ -181,8 +181,9 @@ v3.12 引入三层防震荡保护彻底解决该问题：
 | 配置键 | 默认值 | 取值范围 | 说明 |
 |--------|--------|---------|------|
 | `compliance_confirm_threshold` | 2 | 1-10 | 所有状态翻转（升级/降级）所需连续确认次数 |
-| 冷却期（硬编码） | 10分钟 | - | 自动封禁/解封后最小间隔，可后续配置化 |
-| IP变更宽限期（硬编码） | 10分钟 | - | DHCP换IP后等待IPGuard同步时间，可后续配置化 |
+| `compliance_cooldown_minutes` | 10 | 1-60 | 自动封禁/解封后的最小冷却间隔（v3.17.0 起可配置） |
+| `compliance_ip_grace_minutes` | 10 | 1-60 | DHCP 换 IP 后等待 IPGuard 基线同步的宽限期（v3.17.0 起可配置） |
+| `compliance_whitelist_miss_threshold` | 6 | 2-20 | 白名单终端连续未命中多少次后才降级 non_compliant（v3.17.0 起可配置） |
 
 #### 相关数据
 
@@ -270,6 +271,8 @@ else:
 | 状态变更事件 | 合规状态变更时触发对应事件通知 |
 | 自动解封 | 终端从 blocked 变为 compliant/bypass 时自动解封 |
 | 自动封堵 | 终端变为 non_compliant 且未封锁时自动封堵 |
+
+> **v3.17.0 新增**：首次发现路径（unknown 终端）走 `apply_initial_compliance_result`，在调用 `_apply_compliance_result` 前先套用与 `recalculate_all_compliance` 一致的确认阈值逻辑——`bypass`/`compliant` 立即应用，`non_compliant` 需累计 `non_compliant_confirm_count` 达到 `compliance_confirm_threshold` 才降级封堵，避免首次发现即瞬时误封锁。
 
 ### 3.8 白名单备注管理
 
@@ -657,7 +660,7 @@ async def cleanup_expired_blacklist(self) -> int:
 |---------|---------|--------|------|
 | unknown | 白名单匹配 | bypass | 立即生效 |
 | unknown | IPGuard匹配 | compliant | 立即生效 |
-| unknown | 无匹配 | non_compliant | 立即生效，触发封堵 |
+| unknown | 无匹配 | non_compliant | **需连续 N 次确认**（v3.17.0），N 由 `compliance_confirm_threshold` 控制；未达阈值保持 unknown |
 | non_compliant | 白名单添加 | bypass | 立即生效，触发解封 |
 | non_compliant | IPGuard同步 | compliant | 立即生效，触发解封 |
 | compliant | IPGuard移除 | non_compliant | **需连续 N 次确认**（v3.7.0），N 由 `compliance_confirm_threshold` 控制 |
@@ -696,6 +699,9 @@ async def cleanup_expired_blacklist(self) -> int:
 | `block_threshold` | int | 单次自动封锁阈值（默认50） |
 | `block_time` | string | 封锁时长（可配置，默认 30d；系统设置页配默认值，auto-block 弹窗可逐次指定） |
 | `compliance_confirm_threshold` | int | compliant/bypass → non_compliant 翻转确认阈值（默认2，范围1-10，v3.7.0新增） |
+| `compliance_cooldown_minutes` | int | 自动封禁/解封后的最小冷却间隔（默认10，范围1-60，v3.17.0新增可配置） |
+| `compliance_ip_grace_minutes` | int | DHCP 换 IP 后等待 IPGuard 基线同步的宽限期（默认10，范围1-60，v3.17.0新增可配置） |
+| `compliance_whitelist_miss_threshold` | int | 白名单终端连续未命中多少次后才降级 non_compliant（默认6，范围2-20，v3.17.0新增可配置） |
 | `non_compliant_confirm_count` | int | 终端连续判定为 non_compliant 的计数器（数据库字段，v3.7.0新增） |
 | `IPGUARD_CACHE_TTL` | int | IPGuard 缓存 TTL（v3.7.0 调整为 900 秒，1.5 倍同步间隔） |
 

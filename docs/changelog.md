@@ -1,6 +1,6 @@
 # 更新日志
 
-> 文档版本：v3.16.1  更新日期：2026-08-25
+> 文档版本：v3.17.0  更新日期：2026-08-26
 
 本文件记录 TerminalAccessManager 的所有重要变更。
 
@@ -8,6 +8,30 @@
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ***
+
+## [3.17.0] - 2026-08-26
+
+### 新增
+
+- **合规防抖参数全链可配置化**：新增 `compliance_cooldown_minutes`（默认 10，clamp 1~60）、`compliance_ip_grace_minutes`（默认 10，clamp 1~60）、`compliance_whitelist_miss_threshold`（默认 6，clamp 2~20）三项系统配置，归入 compliance 组，系统设置页可编辑
+  - 关联文件：`config_service.py`、`system_config.py`、`compliance_service.py`、`GeneralSettings.tsx`、`useTerminalData.ts`、`i18n/locales/{zh,en,ja}.ts`
+- **首次发现确认阈值保护**：新增 `apply_initial_compliance_result`，首次发现路径（arp_collector + main 调度兜底）非合规需累计达到确认阈值才降级封锁
+  - 关联文件：`compliance_service.py`、`arp_collector_service.py`、`main.py`
+- **auto_block 白名单权威预检**：自动封锁前强制校验白名单，命中则自愈为 bypass 并跳过封锁
+  - 关联文件：`compliance_service.py`
+
+### 修复
+
+- **确认阈值配置从不生效**：`_get_confirm_threshold` 向 `ConfigService.get` 传入第二参数触发 TypeError 被静默捕获，改为 `get(...) or "2"`
+  - 关联文件：`compliance_service.py`
+- **NULL-MAC 自动解封分组坍塌**：自动解封按 MAC 分组时空 MAC 回退 IP 分组，避免不同终端坍缩到同一桶
+  - 关联文件：`compliance_service.py`
+- **MAC+IP 白名单瞬时误判**：添加 both 白名单时校验终端当前 IP 是否匹配 ip_pattern，不匹配则交由下一轮重算评估
+  - 关联文件：`terminal_service.py`
+- **TerminalStatus 导入 NameError**：补齐 `TerminalStatus` 导入
+  - 关联文件：`compliance_service.py`
+- **死代码清理**：移除 `arp_collector_service.py` 中未使用的 `_auto_block_task`
+  - 关联文件：`arp_collector_service.py`
 
 ## [3.16.1] - 2026-08-25
 
