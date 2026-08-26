@@ -753,14 +753,31 @@ class TerminalService:
                     else:
                         wl_match_type = "mac_only"
 
-                    # Apply manual whitelist immediately (bypasses cooldown)
-                    apply_result = await compliance_svc.apply_manual_whitelist_for_terminal(
-                        terminal,
-                        wl_match_type=wl_match_type,
-                        wl_comments=comments,
-                        username=username,
-                    )
-                    logger.info(f"Manual whitelist applied immediately for MAC {normalized_mac}: {apply_result}")
+                    # For MAC+IP ("both") whitelist, only apply immediately if the
+                    # terminal's CURRENT IP actually matches ip_pattern. Otherwise
+                    # skip immediate bypass and let the next recalculate_all_compliance
+                    # evaluate it correctly (avoids transient misclassification).
+                    _ip_matches = True
+                    if wl_match_type == "both":
+                        _ip_matches = compliance_svc._ip_matches_pattern(
+                            terminal.ip_address or "", ip_pattern, "both"
+                        )
+
+                    if _ip_matches:
+                        # Apply manual whitelist immediately (bypasses cooldown)
+                        apply_result = await compliance_svc.apply_manual_whitelist_for_terminal(
+                            terminal,
+                            wl_match_type=wl_match_type,
+                            wl_comments=comments,
+                            username=username,
+                        )
+                        logger.info(f"Manual whitelist applied immediately for MAC {normalized_mac}: {apply_result}")
+                    else:
+                        logger.info(
+                            f"Whitelist added for MAC {normalized_mac} + IP pattern {ip_pattern} but "
+                            f"terminal current IP {terminal.ip_address} does not match - will take "
+                            f"effect via next compliance recalculation."
+                        )
                 else:
                     # Terminal not yet discovered by ARP - will be handled on first ARP collection
                     logger.info(

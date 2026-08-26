@@ -394,12 +394,13 @@ class ArpCollectorService:
                             "wl_comments": None,
                         }
 
-                # Apply compliance results using shared method
+                # Apply compliance results for newly discovered (unknown) terminals,
+                # with confirm-threshold protection against immediate false blocks.
                 for entry in unchecked_entries:
                     mac_key = entry.mac_address_normalized or ""
                     result = result_lookup.get(mac_key)
                     if result:
-                        await compliance_service._apply_compliance_result(
+                        await compliance_service.apply_initial_compliance_result(
                             entry,
                             result["compliance_status"],
                             result["wl_match_type"],
@@ -646,24 +647,3 @@ class ArpCollectorService:
             return None
         formatted = "-".join(mac_clean[i:i+2] for i in range(0, len(mac_clean), 2))
         return formatted
-
-    async def _auto_block_task(self, source_tag: str):
-        """Background task for auto-blocking non-compliant terminals.
-
-        Uses an independent database session to avoid lifecycle issues
-        with the parent request's session.
-        """
-        from app.core.database import async_session_factory
-        async with async_session_factory() as session:
-            try:
-                from app.services.compliance_service import ComplianceService
-                compliance_service = ComplianceService(session)
-                result = await compliance_service.auto_block_non_compliant(source_tag)
-                await session.commit()
-                logger.info(
-                    f"Auto-block result for '{source_tag}': "
-                    f"blocked={result.blocked}, skipped={result.skipped}"
-                )
-            except Exception as e:
-                await session.rollback()
-                logger.error(f"Auto-block task failed for '{source_tag}': {str(e)}")
