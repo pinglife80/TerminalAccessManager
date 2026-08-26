@@ -41,6 +41,9 @@ def create_mock_terminal(
     t.firewall_tag = firewall_tag
     t.comments = comments
     t.wl_match_type = wl_match_type
+    t.non_compliant_confirm_count = 0
+    t.compliant_confirm_count = 0
+    t.ip_changed_at = None
     return t
 
 
@@ -111,7 +114,8 @@ class TestComplianceStatusTransitions:
     async def test_unknown_to_compliant(self, service):
         """Terminal with unknown status, matches IPGuard baseline -> compliant."""
         with patch.object(service, "_check_whitelist", return_value=None), \
-             patch.object(service, "_check_ipguard", return_value=True):
+             patch.object(service, "_check_ipguard", return_value=True), \
+             patch.object(service, "_load_scope_cache", return_value=[]):
             result = await service.check_compliance("192.168.1.100", "AA:BB:CC:DD:EE:FF")
 
         assert result["compliance_status"] == "compliant"
@@ -122,7 +126,8 @@ class TestComplianceStatusTransitions:
     async def test_unknown_to_non_compliant(self, service):
         """Terminal with unknown status, no IPGuard match, no whitelist match -> non_compliant."""
         with patch.object(service, "_check_whitelist", return_value=None), \
-             patch.object(service, "_check_ipguard", return_value=False):
+             patch.object(service, "_check_ipguard", return_value=False), \
+             patch.object(service, "_load_scope_cache", return_value=[]):
             result = await service.check_compliance("192.168.1.100", "AA:BB:CC:DD:EE:FF")
 
         assert result["compliance_status"] == "non_compliant"
@@ -134,7 +139,8 @@ class TestComplianceStatusTransitions:
         """Terminal with unknown status, matches whitelist -> bypass."""
         wl_result = {"match_type": "mac", "comments": "test device"}
         with patch.object(service, "_check_whitelist", return_value=wl_result), \
-             patch.object(service, "_check_ipguard", return_value=True):
+             patch.object(service, "_check_ipguard", return_value=True), \
+             patch.object(service, "_load_scope_cache", return_value=[]):
             result = await service.check_compliance("192.168.1.100", "AA:BB:CC:DD:EE:FF")
 
         assert result["compliance_status"] == "bypass"
@@ -150,7 +156,8 @@ class TestComplianceStatusTransitions:
         Simulates a terminal that previously matched IPGuard but no longer does.
         """
         with patch.object(service, "_check_whitelist", return_value=None), \
-             patch.object(service, "_check_ipguard", return_value=False):
+             patch.object(service, "_check_ipguard", return_value=False), \
+             patch.object(service, "_load_scope_cache", return_value=[]):
             result = await service.check_compliance("192.168.1.100", "AA:BB:CC:DD:EE:FF")
 
         assert result["compliance_status"] == "non_compliant"
@@ -160,7 +167,8 @@ class TestComplianceStatusTransitions:
         """Terminal was non_compliant, added to whitelist -> bypass."""
         wl_result = {"match_type": "ip", "comments": "newly whitelisted"}
         with patch.object(service, "_check_whitelist", return_value=wl_result), \
-             patch.object(service, "_check_ipguard", return_value=False):
+             patch.object(service, "_check_ipguard", return_value=False), \
+             patch.object(service, "_load_scope_cache", return_value=[]):
             result = await service.check_compliance("192.168.1.100", "AA:BB:CC:DD:EE:FF")
 
         assert result["compliance_status"] == "bypass"
@@ -170,7 +178,8 @@ class TestComplianceStatusTransitions:
     async def test_bypass_to_non_compliant(self, service):
         """Terminal was bypass, removed from whitelist -> non_compliant."""
         with patch.object(service, "_check_whitelist", return_value=None), \
-             patch.object(service, "_check_ipguard", return_value=False):
+             patch.object(service, "_check_ipguard", return_value=False), \
+             patch.object(service, "_load_scope_cache", return_value=[]):
             result = await service.check_compliance("192.168.1.100", "AA:BB:CC:DD:EE:FF")
 
         assert result["compliance_status"] == "non_compliant"
@@ -209,6 +218,10 @@ class TestAutoBlockTerminal:
         ds_result_mock = MagicMock()
         ds_result_mock.scalar_one_or_none.return_value = mock_fw_source
 
+        # Mock: idempotency check returns no existing blacklist entry
+        idempotency_result_mock = MagicMock()
+        idempotency_result_mock.scalar_one_or_none.return_value = None
+
         call_count = {"n": 0}
 
         async def execute_side_effect(stmt):
@@ -217,8 +230,11 @@ class TestAutoBlockTerminal:
                 return bl_result_mock
             elif call_count["n"] == 2:
                 return nc_result_mock
-            # Call 3+: DataSource queries for firewall resolution
-            return ds_result_mock
+            elif call_count["n"] == 3:
+                # DataSource query for firewall resolution
+                return ds_result_mock
+            # Call 4+: idempotency check for existing blacklist entries
+            return idempotency_result_mock
 
         mock_db.execute = AsyncMock(side_effect=execute_side_effect)
 
@@ -228,7 +244,11 @@ class TestAutoBlockTerminal:
 
         with patch("app.services.data_source_service.DataSourceService") as ds_cls, \
              patch("app.services.sangfor_service.SangforService", return_value=mock_sangfor), \
-             patch("app.core.crypto.decrypt_config", return_value={"base_url": "https://fw.example.com", "username": "admin", "password": "pass", "verify_ssl": True, "ca_bundle": ""}):
+             patch("app.core.crypto.decrypt_config", return_value={"base_url": "https://fw.example.com", "username": "admin", "password": "pass", "verify_ssl": True, "ca_bundle": ""}), \
+             patch.object(service, "_get_block_time", return_value="30d"), \
+             patch.object(service, "_load_whitelist_cache", return_value=[]), \
+             patch.object(service, "_load_scope_cache", return_value=[]), \
+             patch.object(service, "_load_all_ipguard_cache", return_value={}):
             ds_instance = MagicMock()
             ds_instance.get_firewall_tags_for_arp = AsyncMock(return_value=["fw1"])
             ds_cls.return_value = ds_instance
@@ -304,6 +324,10 @@ class TestAutoBlockTerminal:
         ds_result_mock = MagicMock()
         ds_result_mock.scalar_one_or_none.return_value = mock_fw_source
 
+        # Mock: idempotency check returns no existing blacklist entry
+        idempotency_result_mock = MagicMock()
+        idempotency_result_mock.scalar_one_or_none.return_value = None
+
         call_count = {"n": 0}
 
         async def execute_side_effect(stmt):
@@ -312,8 +336,11 @@ class TestAutoBlockTerminal:
                 return bl_result_mock
             elif call_count["n"] == 2:
                 return nc_result_mock
-            # Call 3+: DataSource queries for firewall resolution
-            return ds_result_mock
+            elif call_count["n"] in (3, 4):
+                # DataSource queries for firewall resolution (fw1, fw2)
+                return ds_result_mock
+            # Call 5+: idempotency check for existing blacklist entries
+            return idempotency_result_mock
 
         mock_db.execute = AsyncMock(side_effect=execute_side_effect)
 
@@ -325,7 +352,11 @@ class TestAutoBlockTerminal:
 
         with patch("app.services.data_source_service.DataSourceService") as ds_cls, \
              patch("app.services.sangfor_service.SangforService", return_value=mock_sangfor), \
-             patch("app.core.crypto.decrypt_config", return_value={"base_url": "https://fw.example.com", "username": "admin", "password": "pass", "verify_ssl": True, "ca_bundle": ""}):
+             patch("app.core.crypto.decrypt_config", return_value={"base_url": "https://fw.example.com", "username": "admin", "password": "pass", "verify_ssl": True, "ca_bundle": ""}), \
+             patch.object(service, "_get_block_time", return_value="30d"), \
+             patch.object(service, "_load_whitelist_cache", return_value=[]), \
+             patch.object(service, "_load_scope_cache", return_value=[]), \
+             patch.object(service, "_load_all_ipguard_cache", return_value={}):
             ds_instance = MagicMock()
             ds_instance.get_firewall_tags_for_arp = AsyncMock(return_value=fw_tags)
             ds_cls.return_value = ds_instance
@@ -377,7 +408,7 @@ class TestAutoUnblockTerminal:
             compliance_status="non_compliant",
         )
         term_result_mock = MagicMock()
-        term_result_mock.scalars.return_value.all.return_value = [terminal]
+        term_result_mock.scalar_one_or_none.return_value = terminal
 
         call_count = {"n": 0}
 
@@ -397,6 +428,7 @@ class TestAutoUnblockTerminal:
 
         with patch.object(service, "_load_whitelist_cache", return_value=wl_data), \
              patch.object(service, "_load_all_ipguard_cache", return_value=ig_data), \
+             patch.object(service, "_load_scope_cache", return_value=[]), \
              patch.object(service, "_unblock_on_firewall", return_value=True):
 
             result = await service.auto_unblock_compliant()
@@ -426,12 +458,19 @@ class TestAutoUnblockTerminal:
         bl_result_mock = MagicMock()
         bl_result_mock.scalars.return_value.all.return_value = [bl_entry_fw1, bl_entry_fw2]
 
+        # Mock: terminal lookup returns None (use blacklist entry IP/MAC for compliance check)
+        term_result_mock = MagicMock()
+        term_result_mock.scalar_one_or_none.return_value = None
+
         call_count = {"n": 0}
 
         async def execute_side_effect(stmt):
             call_count["n"] += 1
             if call_count["n"] == 1:
                 return bl_result_mock
+            elif call_count["n"] == 2:
+                # Terminal lookup query
+                return term_result_mock
             return MagicMock()
 
         mock_db.execute = AsyncMock(side_effect=execute_side_effect)
@@ -446,6 +485,7 @@ class TestAutoUnblockTerminal:
 
         with patch.object(service, "_load_whitelist_cache", return_value=wl_data), \
              patch.object(service, "_load_all_ipguard_cache", return_value=ig_data), \
+             patch.object(service, "_load_scope_cache", return_value=[]), \
              patch.object(service, "_unblock_on_firewall", side_effect=mock_unblock):
 
             result = await service.auto_unblock_compliant()
@@ -485,7 +525,7 @@ class TestAutoUnblockTerminal:
             compliance_status="non_compliant",
         )
         term_result_mock = MagicMock()
-        term_result_mock.scalars.return_value.all.return_value = [terminal]
+        term_result_mock.scalar_one_or_none.return_value = terminal
 
         call_count = {"n": 0}
 
@@ -504,6 +544,7 @@ class TestAutoUnblockTerminal:
 
         with patch.object(service, "_load_whitelist_cache", return_value=wl_data), \
              patch.object(service, "_load_all_ipguard_cache", return_value=ig_data), \
+             patch.object(service, "_load_scope_cache", return_value=[]), \
              patch.object(service, "_unblock_on_firewall", return_value=True):
 
             result = await service.auto_unblock_compliant()
@@ -791,20 +832,41 @@ class TestRecalculateCompliance:
         term_result_mock = MagicMock()
         term_result_mock.scalars.return_value.all.return_value = [terminal]
 
+        # Mock: subsequent DB queries inside _apply_compliance_result must return
+        # empty results so the downgrade/block path proceeds (no cooldown skips).
+        no_row_result = MagicMock()
+        no_row_result.scalar_one_or_none.return_value = None
+
+        empty_all_result = MagicMock()
+        empty_all_result.all.return_value = []
+
         call_count = {"n": 0}
 
         async def execute_side_effect(stmt):
             call_count["n"] += 1
-            return term_result_mock
+            if call_count["n"] == 1:
+                return term_result_mock      # select(Terminal) -> [terminal]
+            elif call_count["n"] == 2:
+                return no_row_result         # downgrade cooldown check -> None
+            elif call_count["n"] == 3:
+                return empty_all_result      # active blacklist lookup -> []
+            elif call_count["n"] == 4:
+                return no_row_result         # block cooldown check -> None
+            return no_row_result             # idempotency check -> None
 
         mock_db.execute = AsyncMock(side_effect=execute_side_effect)
 
-        # No whitelist, no IPGuard -> terminal becomes non_compliant -> auto-block
+        # No whitelist, no IPGuard match -> terminal becomes non_compliant -> auto-block.
+        # IPGuard data must be non-empty (otherwise recalculation is skipped entirely).
         wl_data = []
-        ig_data = {}
+        ig_data = {"lab": [{"ip_address": "10.0.0.99", "mac_address": "11-22-33-44-55-66"}]}
 
         with patch.object(service, "_load_whitelist_cache", return_value=wl_data), \
              patch.object(service, "_load_all_ipguard_cache", return_value=ig_data), \
+             patch.object(service, "_load_scope_cache", return_value=[]), \
+             patch.object(service, "_is_ipguard_cache_stale", return_value=False), \
+             patch.object(service, "_get_confirm_threshold", return_value=1), \
+             patch.object(service, "_get_cooldown_minutes", return_value=10), \
              patch.object(service, "_get_bound_firewall_tags", return_value=["fw1"]), \
              patch.object(service, "_block_on_firewall", return_value=True), \
              patch.object(service, "_get_block_time", return_value="30d"):
@@ -877,10 +939,13 @@ class TestRecalculateCompliance:
 
         # Whitelist match -> terminal becomes bypass -> should be auto-unblocked
         wl_data = [{"mac_address": "AA-BB-CC-DD-EE-FF", "ip_pattern": None, "pattern_type": "mac_only", "comments": "test"}]
-        ig_data = {}
+        ig_data = {"lab": [{"ip_address": "10.0.0.99", "mac_address": "11-22-33-44-55-66"}]}
 
         with patch.object(service, "_load_whitelist_cache", return_value=wl_data), \
              patch.object(service, "_load_all_ipguard_cache", return_value=ig_data), \
+             patch.object(service, "_load_scope_cache", return_value=[]), \
+             patch.object(service, "_is_ipguard_cache_stale", return_value=False), \
+             patch.object(service, "_get_confirm_threshold", return_value=2), \
              patch.object(service, "_get_bound_firewall_tags", return_value=["fw1"]), \
              patch.object(service, "_unblock_on_firewall", return_value=True):
 
@@ -937,10 +1002,13 @@ class TestRecalculateCompliance:
 
         # New whitelist entry matches this terminal
         wl_data = [{"mac_address": "AA-BB-CC-DD-EE-FF", "ip_pattern": None, "pattern_type": "mac_only", "comments": "newly added"}]
-        ig_data = {}
+        ig_data = {"lab": [{"ip_address": "10.0.0.99", "mac_address": "11-22-33-44-55-66"}]}
 
         with patch.object(service, "_load_whitelist_cache", return_value=wl_data), \
              patch.object(service, "_load_all_ipguard_cache", return_value=ig_data), \
+             patch.object(service, "_load_scope_cache", return_value=[]), \
+             patch.object(service, "_is_ipguard_cache_stale", return_value=False), \
+             patch.object(service, "_get_confirm_threshold", return_value=2), \
              patch.object(service, "_get_bound_firewall_tags", return_value=["fw1"]), \
              patch.object(service, "_unblock_on_firewall", return_value=True):
 

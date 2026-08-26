@@ -59,7 +59,7 @@ class TestLocalProvider:
 
         async def mock_execute(*args, **kwargs):
             class MockResult:
-                async def scalar_one_or_none(self):
+                def scalar_one_or_none(self):
                     return mock_user
             return MockResult()
 
@@ -91,7 +91,7 @@ class TestLocalProvider:
 
         async def mock_execute(*args, **kwargs):
             class MockResult:
-                async def scalar_one_or_none(self):
+                def scalar_one_or_none(self):
                     return mock_user
             return MockResult()
 
@@ -110,7 +110,7 @@ class TestLocalProvider:
 
         async def mock_execute(*args, **kwargs):
             class MockResult:
-                async def scalar_one_or_none(self):
+                def scalar_one_or_none(self):
                     return None
             return MockResult()
 
