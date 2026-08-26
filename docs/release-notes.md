@@ -1,12 +1,47 @@
 # 版本跟踪记录
 
-> 文档版本：v3.16.1 | 更新日期：2026-08-25
+> 文档版本：v3.17.0 | 更新日期：2026-08-26
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
 
 ---
+
+## [v3.17.0] - 2026-08-26
+
+### 合规状态机防抖参数可配置化与首次发现确认阈值保护（Minor 版本）
+
+#### 背景
+
+围绕「终端合规检测准确、稳定；谨慎降级 non_compliant、迅速升级 compliant、白名单迅速生效」的核心边界，复盘发现四类问题：其一，用于防抖的冷却期、IP 变更宽限期、白名单未命中阈值在上述路径中硬编码（10/10/6），无法按环境调节；其二，`_get_confirm_threshold` 因向 `ConfigService.get` 传入第二个参数触发 TypeError 被静默捕获，确认阈值配置从未生效；其三，首次发现终端（unknown）路径绕过确认阈值，直接降级封锁，存在误封锁风险；其四，NULL-MAC 终端在自动解封分组时坍缩到同一桶，及 MAC+IP 白名单存在瞬时误判。本版本将防抖参数全链参数化（后端 + 前端系统设置），为首次发现路径补上确认阈值保护，并修复上述缺陷。
+
+#### 主要变更
+
+| 变更项 | 说明 |
+|--------|------|
+| 防抖参数可配置化 | 新增 `compliance_cooldown_minutes`（默认 10，clamp 1~60）、`compliance_ip_grace_minutes`（默认 10，clamp 1~60）、`compliance_whitelist_miss_threshold`（默认 6，clamp 2~20）三项系统配置，归入 compliance 组 |
+| 前端系统设置同步 | compliance 分组新增 3 个可编辑字段 + 三语文案（zh/en/ja） |
+| 首次发现确认阈值保护 | 新增 `apply_initial_compliance_result`，首次发现路径（arp_collector + main 调度兜底）不再瞬时封锁，非合规需累计达到确认阈值才降级封锁 |
+| auto_block 白名单权威预检 | 自动封锁前强制校验白名单，命中则自愈为 bypass 并跳过封锁 |
+| 配置读取修复 | `_get_confirm_threshold` 去除第二参数，修复「确认阈值配置从不生效」的静默失败 |
+| NULL-MAC 分组修复 | 自动解封按 MAC 分组时空 MAC 回退 IP 分组，避免不同终端坍缩到同一桶 |
+| MAC+IP 白名单即时生效校验 | 添加 both 白名单时校验终端当前 IP 是否匹配 ip_pattern，不匹配则交由下一轮重算评估 |
+| TerminalStatus 导入修复 | 补齐 `TerminalStatus` 导入，修复 NameError |
+| 死代码清理 | 移除 `arp_collector_service.py` 中未使用的 `_auto_block_task` |
+
+#### 升级步骤（推荐：一键升级）
+
+```bash
+git checkout main
+git pull origin main
+./manage.sh upgrade
+```
+
+#### 升级注意事项
+
+- 新增 3 个防抖参数默认值与历史行为一致，无需迁移，可在系统设置页 → 合规分组调整。
+- 首次发现路径新增确认阈值后，新终端从 unknown 到 non_compliant（封锁）的延迟增加至「确认阈值 × 采集周期」，属预期的防误封锁行为。
 
 ## [v3.16.1] - 2026-08-25
 

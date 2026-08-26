@@ -327,12 +327,14 @@ async def scheduled_compliance_check():
                                             "wl_comments": None,
                                         }
 
-                                # Apply compliance results using shared method
+                                # Apply compliance results for newly discovered (unknown)
+                                # terminals, with confirm-threshold protection against
+                                # immediate false blocks.
                                 for entry in unchecked:
                                     mac_key = entry.mac_address_normalized or ""
                                     r = result_lookup.get(mac_key)
                                     if r:
-                                        await service._apply_compliance_result(
+                                        await service.apply_initial_compliance_result(
                                             entry,
                                             r["compliance_status"],
                                             r["wl_match_type"],
@@ -385,7 +387,6 @@ async def scheduled_compliance_check():
                                 from sqlalchemy import select as sa_select2
                                 retry_blocked = 0
                                 whitelist_fixed = 0
-                                cooldown_cutoff_retry = dt_cls.now(utc_cls) - td_cls(minutes=10)
                                 # Load whitelist cache once for authoritative whitelist check
                                 retry_whitelist_data = await service._load_whitelist_cache()
 

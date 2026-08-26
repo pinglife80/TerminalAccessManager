@@ -25,7 +25,7 @@ from app.models.blacklist import Blacklist
 from app.models.compliance_baseline import ComplianceBaseline
 from app.models.data_source import DataSource
 from app.models.log import AuditLog
-from app.models.terminal import Terminal
+from app.models.terminal import Terminal, TerminalStatus
 from app.models.whitelist import Whitelist
 from app.schemas.data_source import (
     AutoBlockResult,
@@ -392,6 +392,10 @@ class ComplianceService:
         3. Call firewall API to block
         4. Create Blacklist records (is_auto_blocked=True)
         """
+        # Read configured block_time (default '30d') so residual auto-block
+        # follows the same configurable duration as the main block path.
+        block_time = await self._get_block_time()
+
         # Find non-compliant entries from this ARP source that are not already in blacklist
         # First, get all currently blacklisted IP+MAC combinations for this source
         bl_stmt = select(Blacklist.ip_address, Blacklist.mac_address_normalized).where(
@@ -421,6 +425,33 @@ class ComplianceService:
         non_compliant_entries = [
             e for e in non_compliant_entries if not is_already_blacklisted(e)
         ]
+
+        # Authoritative whitelist pre-check: whitelist is admin-configured truth;
+        # compliance_status may be stale due to historical crashes, so never block a
+        # whitelist-matched terminal here. Self-heal it to bypass and skip blocking.
+        if non_compliant_entries:
+            whitelist_data = await self._load_whitelist_cache()
+            whitelist_fixed = 0
+            entries_to_block = []
+            for entry in non_compliant_entries:
+                wl_hit = self._match_whitelist_in_memory(
+                    whitelist_data, entry.ip_address or "", entry.mac_address or ""
+                )
+                if wl_hit:
+                    entry.compliance_status = "bypass"
+                    entry.compliant_confirm_count = 0
+                    entry.non_compliant_confirm_count = 0
+                    whitelist_fixed += 1
+                    logger.info(
+                        f"Auto-block skipped for {entry.ip_address}/{entry.mac_address}: "
+                        f"whitelist match ({wl_hit.get('match_type')}), "
+                        f"compliance_status set to bypass"
+                    )
+                else:
+                    entries_to_block.append(entry)
+            if whitelist_fixed > 0:
+                await self.db.flush()
+            non_compliant_entries = entries_to_block
 
         if not non_compliant_entries:
             return AutoBlockResult(
@@ -720,7 +751,9 @@ class ComplianceService:
             # Normalize MAC for consistent grouping regardless of format
             raw_mac = entry.mac_address or ""
             mac_norm_key = raw_mac.replace('-', '').replace(':', '').replace('.', '').upper()
-            key = mac_norm_key  # Group by MAC only (IP on blacklist may be stale)
+            # NULL-MAC entries (from firewall reconciliation) share the empty MAC;
+            # group them by IP instead so distinct terminals don't collapse into one bucket.
+            key = mac_norm_key if mac_norm_key else (entry.ip_address or "")
             entry_groups[key].append(entry)
 
         unblocked = 0
@@ -728,14 +761,26 @@ class ComplianceService:
         errors = []
         details = []
 
-        for mac_norm_key, entries in entry_groups.items():
-            # Lookup current terminal record by MAC to get the latest IP address
-            # (IP may have changed since the blacklist entry was created due to DHCP)
-            mac_stmt = select(Terminal).where(
-                Terminal.mac_address_normalized == mac_norm_key
+        for group_key, entries in entry_groups.items():
+            # Recover the normalized MAC for this group (empty for NULL-MAC groups).
+            group_mac_norm = (
+                entries[0].mac_address.replace('-', '').replace(':', '').replace('.', '').upper()
+                if entries[0].mac_address else ""
             )
-            mac_result = await self.db.execute(mac_stmt)
-            terminal_record = mac_result.scalar_one_or_none()
+
+            # Lookup current terminal record: by MAC for MAC-bearing groups, by IP for
+            # NULL-MAC groups (IP may have changed since block due to DHCP for MAC groups).
+            if group_mac_norm:
+                mac_stmt = select(Terminal).where(
+                    Terminal.mac_address_normalized == group_mac_norm
+                )
+                mac_result = await self.db.execute(mac_stmt)
+                terminal_record = mac_result.scalar_one_or_none()
+            else:
+                fallback_ip = entries[0].ip_address or ""
+                ip_stmt = select(Terminal).where(Terminal.ip_address == fallback_ip)
+                ip_result = await self.db.execute(ip_stmt)
+                terminal_record = ip_result.scalar_one_or_none()
 
             # Use current terminal IP for compliance check; fall back to blacklist IP
             if terminal_record:
@@ -765,10 +810,10 @@ class ComplianceService:
             _cooldown_skip_unblock = False
             if not wl_match:
                 try:
-                    cooldown_minutes = 10
+                    cooldown_minutes = await self._get_cooldown_minutes()
                     cooldown_cutoff = datetime.now(UTC) - timedelta(minutes=cooldown_minutes)
                     bl_recent_block_stmt = select(Blacklist).where(
-                        (Blacklist.mac_address_normalized == mac_norm_key) &
+                        (Blacklist.mac_address_normalized == group_mac_norm) &
                         (Blacklist.is_auto_blocked == True) &
                         (Blacklist.blocked_at >= cooldown_cutoff) &
                         (Blacklist.auto_unblocked == False)
@@ -779,7 +824,7 @@ class ComplianceService:
                         _cooldown_skip_unblock = True
                         skipped += len(entries)
                         logger.info(
-                            f"Cooldown: skipping auto-unblock for MAC {mac_norm_key} - "
+                            f"Cooldown: skipping auto-unblock for MAC {group_mac_norm} - "
                             f"recently auto-blocked at {recent_block.blocked_at}, "
                             f"cooldown={cooldown_minutes}min"
                         )
@@ -1509,6 +1554,44 @@ class ComplianceService:
         except Exception:
             pass
 
+    async def apply_initial_compliance_result(
+        self,
+        terminal: Terminal,
+        new_compliance: str,
+        new_wl_match_type: str | None,
+        wl_comments: str | None,
+        ip_addr: str,
+        mac_addr: str,
+    ) -> dict:
+        """Apply compliance result for a newly discovered (unknown) terminal.
+
+        Mirrors the confirm-threshold logic in recalculate_all_compliance so the
+        first-discovery path no longer blocks non_compliant terminals instantly:
+
+        - bypass: authoritative whitelist match, applied immediately.
+        - compliant: applied immediately (prompt upgrade has no block risk).
+        - non_compliant: accumulates non_compliant_confirm_count; only downgrades
+          and blocks once the count reaches compliance_confirm_threshold.
+        """
+        if new_compliance == "non_compliant":
+            terminal.non_compliant_confirm_count = (terminal.non_compliant_confirm_count or 0) + 1
+            terminal.compliant_confirm_count = 0
+            threshold = await self._get_confirm_threshold()
+            if terminal.non_compliant_confirm_count < threshold:
+                logger.info(
+                    f"First-discovery {ip_addr}/{mac_addr}: non_compliant confirm "
+                    f"{terminal.non_compliant_confirm_count}/{threshold}, holding "
+                    f"(not blocking yet)"
+                )
+                return {"status_changed": False, "new_compliance": terminal.compliance_status, "unblocked": False}
+            terminal.non_compliant_confirm_count = 0
+        elif new_compliance in ("compliant", "bypass"):
+            terminal.non_compliant_confirm_count = 0
+
+        return await self._apply_compliance_result(
+            terminal, new_compliance, new_wl_match_type, wl_comments, ip_addr, mac_addr
+        )
+
     async def _apply_compliance_result(
         self,
         terminal: Terminal,
@@ -1571,7 +1654,7 @@ class ComplianceService:
         # Pre-check: cooling period for downgrade to non_compliant (prevent intermediate state)
         if new_compliance == "non_compliant":
             try:
-                cooldown_minutes = 10
+                cooldown_minutes = await self._get_cooldown_minutes()
                 cooldown_cutoff = datetime.now(UTC) - timedelta(minutes=cooldown_minutes)
                 bl_recent_stmt = select(Blacklist).where(
                     (Blacklist.mac_address_normalized == mac_norm) &
@@ -1688,7 +1771,7 @@ class ComplianceService:
                 _cooldown_skip_unblock = False
                 if new_compliance != "bypass":
                     try:
-                        cooldown_minutes = 10
+                        cooldown_minutes = await self._get_cooldown_minutes()
                         cooldown_cutoff = datetime.now(UTC) - timedelta(minutes=cooldown_minutes)
                         bl_recent_block_stmt = select(Blacklist).where(
                             (Blacklist.mac_address_normalized == mac_norm) &
@@ -1822,7 +1905,7 @@ class ComplianceService:
                 else:
                     # Need to block on missing firewalls
                     try:
-                        cooldown_minutes = 10
+                        cooldown_minutes = await self._get_cooldown_minutes()
                         cooldown_cutoff = datetime.now(UTC) - timedelta(minutes=cooldown_minutes)
                         bl_recent_stmt = select(Blacklist).where(
                             (Blacklist.mac_address_normalized == mac_norm) &
@@ -2057,7 +2140,7 @@ class ComplianceService:
                     # terminals to non_compliant yet to wait for IPGuard baseline to catch up.
                     in_ip_grace_period = False
                     if terminal.ip_changed_at is not None and old_compliance != "bypass":
-                        grace_minutes = 10
+                        grace_minutes = await self._get_ip_grace_minutes()
                         grace_cutoff = datetime.now(UTC) - timedelta(minutes=grace_minutes)
                         if terminal.ip_changed_at >= grace_cutoff:
                             in_ip_grace_period = True
@@ -2109,7 +2192,7 @@ class ComplianceService:
                                 # Require 6 CONSECUTIVE misses (~30 minutes) before downgrading,
                                 # to avoid false positives from transient cache failures.
                                 terminal.non_compliant_confirm_count += 1
-                                whitelist_miss_threshold = 6
+                                whitelist_miss_threshold = await self._get_whitelist_miss_threshold()
                                 if terminal.non_compliant_confirm_count >= whitelist_miss_threshold:
                                     new_compliance = "non_compliant"
                                     terminal.non_compliant_confirm_count = 0
@@ -2279,7 +2362,7 @@ class ComplianceService:
         try:
             from app.services.config_service import ConfigService
             config_service = ConfigService(self.db)
-            value = await config_service.get("compliance_confirm_threshold", "2")
+            value = await config_service.get("compliance_confirm_threshold") or "2"
             threshold = int(value)
             return max(1, min(10, threshold))
         except Exception:
@@ -2295,6 +2378,39 @@ class ComplianceService:
             return max(5, min(60, threshold))
         except Exception:
             return 12
+
+    async def _get_cooldown_minutes(self) -> int:
+        """Get compliance transition cooldown period from system config (default 10min)."""
+        try:
+            from app.services.config_service import ConfigService
+            config_service = ConfigService(self.db)
+            value = await config_service.get("compliance_cooldown_minutes") or "10"
+            minutes = int(value)
+            return max(1, min(60, minutes))
+        except Exception:
+            return 10
+
+    async def _get_ip_grace_minutes(self) -> int:
+        """Get IP change grace period from system config (default 10min)."""
+        try:
+            from app.services.config_service import ConfigService
+            config_service = ConfigService(self.db)
+            value = await config_service.get("compliance_ip_grace_minutes") or "10"
+            minutes = int(value)
+            return max(1, min(60, minutes))
+        except Exception:
+            return 10
+
+    async def _get_whitelist_miss_threshold(self) -> int:
+        """Get consecutive whitelist-miss threshold from system config (default 6)."""
+        try:
+            from app.services.config_service import ConfigService
+            config_service = ConfigService(self.db)
+            value = await config_service.get("compliance_whitelist_miss_threshold") or "6"
+            threshold = int(value)
+            return max(2, min(20, threshold))
+        except Exception:
+            return 6
 
     async def _is_ipguard_cache_stale(self) -> bool:
         """Return True if IPGuard cache is stale (last sync exceeds threshold)."""
@@ -2419,7 +2535,7 @@ class ComplianceService:
             now = now_utc()
             logger.info(
                 f"Manual whitelist: Setting reason for {len(successfully_unblocked)} entries: "
-                f"reason='加入白名单（手动）', username={username}, ip={ip_address}, mac={mac_address}"
+                f"reason='加入白名单（手动）', username={username}, ip={ip_addr}, mac={mac_addr}"
             )
             for bl_entry in successfully_unblocked:
                 bl_entry.auto_unblocked = True

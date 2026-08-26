@@ -147,6 +147,9 @@ class ComplianceConfigResponse(BaseModel):
     compliance_confirm_threshold: int
     block_time: str
     ipguard_stale_threshold_minutes: int
+    compliance_cooldown_minutes: int
+    compliance_ip_grace_minutes: int
+    compliance_whitelist_miss_threshold: int
 
 
 class CacheConfigResponse(BaseModel):
