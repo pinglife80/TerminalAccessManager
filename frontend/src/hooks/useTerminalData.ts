@@ -383,6 +383,9 @@ export interface ComplianceConfig {
   compliance_confirm_threshold: number;
   block_time: string;
   ipguard_stale_threshold_minutes: number;
+  compliance_cooldown_minutes: number;
+  compliance_ip_grace_minutes: number;
+  compliance_whitelist_miss_threshold: number;
 }
 
 export const BLOCK_TIME_PRESETS = ['1h', '6h', '12h', '1d', '3d', '7d', '15d', '30d'];
