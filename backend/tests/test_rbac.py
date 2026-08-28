@@ -11,27 +11,29 @@ from app.core.security import (
 )
 
 
+@pytest.fixture
+def mock_db(mock_async_session):
+    """Mock AsyncSession with correct sync/async method split."""
+    return mock_async_session
+
+
 class TestGetUserPermissions:
     """Test get_user_permissions with Redis cache"""
 
     @pytest.mark.asyncio
-    async def test_cache_hit_returns_permissions(self, mock_redis_patch):
+    async def test_cache_hit_returns_permissions(self, mock_redis_patch, mock_db):
         """Should return permissions from Redis cache when available"""
         mock_redis = mock_redis_patch
         cached_perms = json.dumps(["terminal:read", "terminal:write"])
         await mock_redis.setex("user_perms:1", 300, cached_perms)
 
-        # Mock DB session (should not be called)
-        mock_db = AsyncMock()
-
         result = await get_user_permissions(mock_db, user_id=1)
         assert result == {"terminal:read", "terminal:write"}
 
     @pytest.mark.asyncio
-    async def test_cache_miss_queries_database(self, mock_redis_patch):
+    async def test_cache_miss_queries_database(self, mock_redis_patch, mock_db):
         """Should query database when Redis cache is empty"""
         mock_redis = mock_redis_patch
-        mock_db = AsyncMock()
 
         # Mock database query result
         mock_result = MagicMock()
@@ -48,10 +50,8 @@ class TestGetUserPermissions:
         assert set(json.loads(cached)) == {"terminal:read", "whitelist:read"}
 
     @pytest.mark.asyncio
-    async def test_cache_miss_empty_permissions(self, mock_redis_patch):
+    async def test_cache_miss_empty_permissions(self, mock_redis_patch, mock_db):
         """Should handle user with no permissions"""
-        mock_db = AsyncMock()
-
         mock_result = MagicMock()
         mock_scalars = MagicMock()
         mock_scalars.all.return_value = []
@@ -62,9 +62,8 @@ class TestGetUserPermissions:
         assert result == set()
 
     @pytest.mark.asyncio
-    async def test_redis_unavailable_falls_back_to_db(self):
+    async def test_redis_unavailable_falls_back_to_db(self, mock_db):
         """Should fall back to database when Redis is unavailable"""
-        mock_db = AsyncMock()
         mock_result = MagicMock()
         mock_scalars = MagicMock()
         mock_scalars.all.return_value = ["terminal:read"]
@@ -106,7 +105,7 @@ class TestRequirePermission:
     """Test require_permission dependency factory"""
 
     @pytest.mark.asyncio
-    async def test_superuser_always_passes(self):
+    async def test_superuser_always_passes(self, mock_db):
         """Superuser should pass any permission check"""
         checker = require_permission("any:permission")
 
@@ -114,13 +113,11 @@ class TestRequirePermission:
         mock_user.is_superuser = True
         mock_user.id = 1
 
-        mock_db = AsyncMock()
-
         result = await checker(current_user=mock_user, db=mock_db)
         assert result == mock_user
 
     @pytest.mark.asyncio
-    async def test_user_with_permission_passes(self):
+    async def test_user_with_permission_passes(self, mock_db):
         """User with the required permission should pass"""
         checker = require_permission("terminal:read")
 
@@ -128,14 +125,12 @@ class TestRequirePermission:
         mock_user.is_superuser = False
         mock_user.id = 1
 
-        mock_db = AsyncMock()
-
         with patch("app.core.security.get_user_permissions", return_value={"terminal:read", "terminal:write"}):
             result = await checker(current_user=mock_user, db=mock_db)
             assert result == mock_user
 
     @pytest.mark.asyncio
-    async def test_user_without_permission_denied(self):
+    async def test_user_without_permission_denied(self, mock_db):
         """User without the required permission should get 403"""
         from fastapi import HTTPException
 
@@ -145,8 +140,6 @@ class TestRequirePermission:
         mock_user.is_superuser = False
         mock_user.id = 1
 
-        mock_db = AsyncMock()
-
         with patch("app.core.security.get_user_permissions", return_value={"terminal:read"}):
             with pytest.raises(HTTPException) as exc_info:
                 await checker(current_user=mock_user, db=mock_db)
@@ -154,7 +147,7 @@ class TestRequirePermission:
             assert "role:write" in exc_info.value.detail
 
     @pytest.mark.asyncio
-    async def test_user_with_empty_permissions_denied(self):
+    async def test_user_with_empty_permissions_denied(self, mock_db):
         """User with no permissions should be denied"""
         from fastapi import HTTPException
 
@@ -163,8 +156,6 @@ class TestRequirePermission:
         mock_user = MagicMock()
         mock_user.is_superuser = False
         mock_user.id = 1
-
-        mock_db = AsyncMock()
 
         with patch("app.core.security.get_user_permissions", return_value=set()):
             with pytest.raises(HTTPException) as exc_info:

@@ -260,6 +260,144 @@ class TestAuthEndpoints:
         assert response.json()["success"] is True
 
 
+def _solve_question(question: str) -> str:
+    """Compute the arithmetic answer for a captcha question string."""
+    if "+" in question:
+        a, b = question.split("+")
+        return str(int(a.strip()) + int(b.strip()))
+    a, b = question.split("-")
+    return str(int(a.strip()) - int(b.strip()))
+
+
+class TestLoginSecurity:
+    """Test account lockout and captcha security flows"""
+
+    def _login(self, client, username="testuser", password="testpassword123", **params):
+        return client.post(
+            "/api/v1/auth/login",
+            data={"username": username, "password": password},
+            params=params,
+        )
+
+    def test_login_account_locked(self, client, test_user, mock_redis_patch):
+        mock_redis_patch._data["login_lock:testuser"] = "3"
+        response = self._login(client)
+        assert response.status_code == 423
+        detail = response.json()["detail"]
+        assert detail["locked"] is True
+        assert detail["lock_remaining"] > 0
+
+    def test_login_captcha_required_without_captcha(self, client, test_user, mock_redis_patch):
+        mock_redis_patch._data["login_attempts:testuser"] = "3"
+        response = self._login(client)
+        assert response.status_code == 400
+        detail = response.json()["detail"]
+        assert detail["captcha_required"] is True
+
+    def test_login_captcha_wrong_answer(self, client, test_user, mock_redis_patch):
+        mock_redis_patch._data["login_attempts:testuser"] = "3"
+        captcha = client.get("/api/v1/auth/captcha").json()
+        response = self._login(
+            client, captcha_id=captcha["captcha_id"], captcha="-999"
+        )
+        assert response.status_code == 400
+        assert response.json()["detail"]["captcha_required"] is True
+
+    def test_login_captcha_correct_answer(self, client, test_user, mock_redis_patch):
+        mock_redis_patch._data["login_attempts:testuser"] = "3"
+        captcha = client.get("/api/v1/auth/captcha").json()
+        answer = _solve_question(captcha["question"])
+        response = self._login(
+            client, captcha_id=captcha["captcha_id"], captcha=answer
+        )
+        assert response.status_code == 200
+        assert "access_token" in response.json()
+
+    def test_login_inactive_user(self, client, test_user, mock_redis_patch):
+        # LocalProvider returns "Account is disabled" -> unified 401
+        response = self._login(client, username="inactive_user", password="whatever123")
+        assert response.status_code == 401
+
+
+class TestRefreshEdgeCases:
+    """Test refresh token validation and rotation"""
+
+    def _login(self, client, username="testuser", password="testpassword123"):
+        return client.post(
+            "/api/v1/auth/login",
+            data={"username": username, "password": password},
+        )
+
+    def test_refresh_invalid_token(self, client):
+        response = client.post("/api/v1/auth/refresh", json={"refresh_token": "garbage"})
+        assert response.status_code == 401
+
+    def test_refresh_access_token_rejected(self, client, test_user):
+        login = self._login(client).json()
+        response = client.post(
+            "/api/v1/auth/refresh", json={"refresh_token": login["access_token"]}
+        )
+        assert response.status_code == 401
+
+    def test_refresh_rotation_revokes_old_token(self, client, test_user):
+        refresh_token = self._login(client).json()["refresh_token"]
+        first = client.post("/api/v1/auth/refresh", json={"refresh_token": refresh_token})
+        assert first.status_code == 200
+
+        # Reusing the old (now blacklisted) refresh token must fail
+        second = client.post("/api/v1/auth/refresh", json={"refresh_token": refresh_token})
+        assert second.status_code == 401
+
+
+class TestPasswordAndProfile:
+    """Test password change (token invalidation) and profile update"""
+
+    def _login(self, client, username="testuser", password="testpassword123"):
+        return client.post(
+            "/api/v1/auth/login",
+            data={"username": username, "password": password},
+        )
+
+    def test_change_password_invalidates_old_token(self, client, test_user, mock_redis_patch):
+        access_token = self._login(client).json()["access_token"]
+        headers = {"Authorization": f"Bearer {access_token}"}
+
+        # Change password
+        response = client.put(
+            "/api/v1/auth/me/password",
+            headers=headers,
+            json={"current_password": "testpassword123", "new_password": "NewSecure456"},
+        )
+        assert response.status_code == 200
+
+        # Old token must now be rejected due to version increment
+        me = client.get("/api/v1/auth/me", headers=headers)
+        assert me.status_code == 401
+
+        # Old password should fail, new password should succeed
+        assert self._login(client).status_code == 401
+        assert self._login(client, password="NewSecure456").status_code == 200
+
+    def test_change_password_wrong_current(self, client, test_user):
+        access_token = self._login(client).json()["access_token"]
+        response = client.put(
+            "/api/v1/auth/me/password",
+            headers={"Authorization": f"Bearer {access_token}"},
+            json={"current_password": "wrongpassword", "new_password": "NewSecure456"},
+        )
+        assert response.status_code == 400
+
+    def test_update_profile_email(self, client, test_user):
+        access_token = self._login(client).json()["access_token"]
+        response = client.put(
+            "/api/v1/auth/me/profile",
+            headers={"Authorization": f"Bearer {access_token}"},
+            json={"email": "newmail@example.com"},
+        )
+        assert response.status_code == 200
+        assert response.json()["email"] == "newmail@example.com"
+
+
 class TestHealthAndRoot:
     """Test basic application endpoints"""
 
