@@ -213,16 +213,14 @@ class WebhookChannel(NotificationChannelBase):
         try:
             async with httpx.AsyncClient(timeout=self.config.get("timeout", 10)) as client:
                 # Try a HEAD request first to check connectivity
-                try:
-                    response = await client.head(url)
+                head_response = await client.head(url)
+                if head_response.status_code != 405:
                     return ChannelTestResult(
                         success=True,
-                        message=f"Connection to {url} successful (HTTP {response.status_code})",
+                        message=f"Connection to {url} successful (HTTP {head_response.status_code})",
                     )
-                except httpx.MethodNotAllowed:
-                    # HEAD might not be allowed, try a minimal POST
-                    pass
 
+                # HEAD is not allowed (405), fall back to a minimal POST
                 # Send a test POST with minimal payload
                 payload = {"test": True, "timestamp": time.time()}
                 response = await client.post(

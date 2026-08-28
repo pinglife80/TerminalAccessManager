@@ -115,20 +115,29 @@ class ComplianceScopeService:
                 raise ValueError(f"Invalid IP CIDR format: '{scope_value}': {e}")
 
         elif scope_type == "ip_range":
-            if not re.match(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}-\d{1,3}$", scope_value):
+            # Format: "192.168.1.1-255" = prefix "192.168.1" with start/end last octets.
+            # This matches _parse_ip_range / _ip_in_range convention elsewhere.
+            match = re.match(r"^(\d{1,3}\.\d{1,3}\.\d{1,3})\.(\d{1,3})-(\d{1,3})$", scope_value)
+            if not match:
                 raise ValueError(
                     f"Invalid IP range format: '{scope_value}'. Expected format: 192.168.1.1-255"
                 )
+            prefix = match.group(1)
+            start = int(match.group(2))
+            end = int(match.group(3))
+
+            # Validate the prefix is a valid IPv4 address (catches 999.999.999.x etc.)
             try:
-                start_ip, end_ip = scope_value.split("-")
-                start_val = int(ipaddress.IPv4Address(start_ip))
-                end_val = int(ipaddress.IPv4Address(end_ip))
-                if start_val > end_val:
-                    raise ValueError(
-                        f"Invalid IP range: start IP ({start_ip}) is greater than end IP ({end_ip})"
-                    )
+                ipaddress.IPv4Address(f"{prefix}.1")
             except (ValueError, TypeError) as e:
                 raise ValueError(f"Invalid IP range: '{scope_value}': {e}")
+
+            if start > end:
+                raise ValueError(
+                    f"Invalid IP range: start IP (start={start}) is greater than end IP (end={end})"
+                )
+            if end > 255:
+                raise ValueError(f"IP range end ({end}) exceeds 255")
 
         elif scope_type in ("mac_prefix_arp", "mac_prefix_ipguard"):
             segments = scope_value.upper().split(":")

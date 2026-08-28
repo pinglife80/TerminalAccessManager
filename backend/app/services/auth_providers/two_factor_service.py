@@ -10,7 +10,7 @@ from loguru import logger
 
 try:
     from app.services.email_service import (
-        generate_verification_code,
+        generate_email_code,
         invalidate_email_codes,
         send_email_code,
         verify_email_code,
@@ -20,7 +20,7 @@ except ImportError:
     invalidate_email_codes = None
     send_email_code = None
     verify_email_code = None
-    generate_verification_code = None
+    generate_email_code = None
     EMAIL_SERVICE_AVAILABLE = False
 
 try:
@@ -97,8 +97,8 @@ class TwoFactorService:
         Returns:
             Generated verification code
         """
-        if generate_verification_code:
-            code = generate_verification_code(length=6)
+        if generate_email_code:
+            code = await generate_email_code(length=6)
         else:
             code = ''.join(random.choices('0123456789', k=6))
         self._codes[user.email] = code

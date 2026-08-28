@@ -12,7 +12,7 @@ Reconciliation runs PER FIREWALL independently to avoid cross-firewall corruptio
 """
 
 from datetime import UTC, datetime, timedelta
-from typing import Any, Dict, Set, Tuple
+from typing import Any, Dict, Set
 
 from loguru import logger
 from sqlalchemy import select, or_, and_, exists
@@ -103,7 +103,7 @@ class FirewallReconciliationService:
                     if len(fw_ips) == 0 and db_count_for_fw > 0:
                         # Probe with a known DB IP to distinguish "list API anomaly"
                         # from "blacklist externally wiped / unknown state".
-                        probe_ip = next(iter(db_entries_by_fw[fw_tag]))[0]
+                        probe_ip = next(iter(db_entries_by_fw[fw_tag]))
                         probe_hit = False
                         try:
                             probe_hit = await svc._find_blacklist_entry(probe_ip) is not None
@@ -250,10 +250,10 @@ class FirewallReconciliationService:
                     ips.add(ip)
         return ips
 
-    async def _get_db_active_blacklist_by_firewall(self) -> Dict[str, Set[Tuple[str, str, str]]]:
+    async def _get_db_active_blacklist_by_firewall(self) -> Dict[str, Set[str]]:
         """
         Get all active blacklist entries grouped by firewall_tag.
-        Returns: {fw_tag: set of (ip_address, mac_address, mac_norm)}
+        Returns: {fw_tag: set of ip_address}
         """
         from datetime import datetime, UTC
 
@@ -274,7 +274,7 @@ class FirewallReconciliationService:
         result = await self.db.execute(stmt)
         rows = result.all()
 
-        by_fw: Dict[str, Set[Tuple[str, str, str]]] = {}
+        by_fw: Dict[str, Set[str]] = {}
         for ip, mac, mac_norm, fw_tag in rows:
             if fw_tag not in by_fw:
                 by_fw[fw_tag] = set()
