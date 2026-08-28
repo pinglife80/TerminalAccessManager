@@ -334,7 +334,7 @@ class NotificationService:
     ) -> None:
         """Backward-compatible log wrapper."""
         logger_inst = self._get_logger()
-        await logger_inst.log_notification(event, channel_name, result)
+        await logger_inst.log_notification(event, channel_name, result, self.db)
 
     async def _render_template(
         self,

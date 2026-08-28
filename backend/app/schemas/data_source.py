@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 # ------------------------------------------------------------------
@@ -40,8 +40,7 @@ class DataSourceResponse(DataSourceBase):
     updated_at: datetime | None = None
     warnings: list[str] | None = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ------------------------------------------------------------------
@@ -60,8 +59,7 @@ class DataSourceBindingResponse(BaseModel):
     firewall_tag: str
     created_at: datetime | None = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ------------------------------------------------------------------

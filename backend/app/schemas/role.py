@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class PermissionResponse(BaseModel):
@@ -10,8 +10,7 @@ class PermissionResponse(BaseModel):
     module: str
     description: str | None = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class RoleResponse(BaseModel):
@@ -23,8 +22,7 @@ class RoleResponse(BaseModel):
     updated_at: datetime | None = None
     permissions: list[str] = []  # permission codes
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class RoleDetailResponse(RoleResponse):
@@ -55,5 +53,4 @@ class RoleUserResponse(BaseModel):
     is_active: bool = True
     is_superuser: bool = False
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)

@@ -3,6 +3,13 @@ Core business logic tests for TerminalAccessManager.
 Tests authentication, encryption, and search functionality.
 """
 
+import os
+import subprocess
+import sys
+from unittest.mock import AsyncMock, patch
+
+import pytest
+
 from app.core.crypto import decrypt_config, decrypt_value, encrypt_config, encrypt_value
 
 
@@ -80,37 +87,84 @@ class TestFieldEncryption:
 
 
 class TestSecretKeyValidation:
-    """Test SECRET_KEY strength validation"""
+    """Test SECRET_KEY strength validation (production startup)"""
+
+    def _import_config_in_production(self, secret_key: str) -> subprocess.CompletedProcess:
+        """Import app.core.config in a subprocess under production env."""
+        code = (
+            "import os\n"
+            "os.environ.update({\n"
+            "    'ENVIRONMENT': 'production',\n"
+            f"    'SECRET_KEY': {secret_key!r},\n"
+            "    'DATABASE_URL': 'sqlite+aiosqlite:///:memory:',\n"
+            "    'VERSION': 'test',\n"
+            "})\n"
+            "import app.core.config\n"
+        )
+        return subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
 
     def test_short_key_rejected_in_production(self):
-        """Short SECRET_KEY should be rejected in production via startup validation"""
+        """Short SECRET_KEY (<32) must abort startup in production."""
+        result = self._import_config_in_production("short-key")
+        assert result.returncode != 0
+        assert "too short" in result.stderr
+
+    def test_insecure_default_key_rejected_in_production(self):
+        """Known insecure default SECRET_KEY must abort startup in production."""
         import app.core.config as config_module
 
-        # Verify the insecure defaults blocklist exists (used at startup)
-        assert hasattr(config_module, '_INSECURE_DEFAULTS')
-        # Verify startup validation runs when ENVIRONMENT=production
-        # (actual sys.exit happens at module level, so we verify the mechanism exists)
-        assert len(config_module._INSECURE_DEFAULTS) > 0
+        insecure = "change-this-to-a-random-secret-key-in-production"
+        assert insecure in config_module._INSECURE_DEFAULTS
+
+        result = self._import_config_in_production(insecure)
+        assert result.returncode != 0
+        assert "insecure default" in result.stderr
 
     def test_insecure_defaults_list(self):
-        """Known insecure default values should be in the blocklist"""
+        """Known insecure default values should be in the blocklist."""
         import app.core.config as config_module
 
-        assert hasattr(config_module, '_INSECURE_DEFAULTS')
-        assert "your-secret-key-change-in-production" in config_module._INSECURE_DEFAULTS
-        assert "password" in config_module._INSECURE_DEFAULTS
+        for value in (
+            "change-this-to-a-random-secret-key-in-production",
+            "your-secret-key-change-in-production",
+            "password",
+        ):
+            assert value in config_module._INSECURE_DEFAULTS
 
 
 class TestLoginSecurity:
     """Test login security measures"""
 
-    def test_login_error_messages_are_uniform(self):
-        """Both user-not-found and wrong-password should return same message"""
-        # This is verified by the backend implementation:
-        # Both cases return "Invalid credentials" in the detail.message field
-        # preventing user enumeration
-        expected_message = "Invalid credentials"
-        assert expected_message == "Invalid credentials"
+    @pytest.mark.asyncio
+    async def test_login_error_messages_are_uniform(self):
+        """Both user-not-found and wrong-password return the same error_message."""
+        from app.services.auth_providers.local_provider import LocalProvider
+
+        class _NoUserResult:
+            def scalar_one_or_none(self):
+                return None
+
+        db1 = AsyncMock()
+        db1.execute = AsyncMock(return_value=_NoUserResult())
+        not_found = await LocalProvider({"enabled": True}, db1).authenticate("nobody", "pw")
+        assert not_found.error_message == "Invalid credentials"
+
+        class _User:
+            id = 1
+            username = "u"
+            email = "u@example.com"
+            hashed_password = "x"
+            is_active = True
+
+        class _UserResult:
+            def scalar_one_or_none(self):
+                return _User()
+
+        db2 = AsyncMock()
+        db2.execute = AsyncMock(return_value=_UserResult())
+        with patch("app.services.auth_providers.local_provider.verify_password", return_value=False):
+            wrong_pw = await LocalProvider({"enabled": True}, db2).authenticate("u", "bad")
+        assert wrong_pw.error_message == "Invalid credentials"
 
     def test_like_wildcard_escaping(self):
         """LIKE wildcard characters should be properly escaped"""
@@ -123,9 +177,9 @@ class TestLoginSecurity:
         assert _escape_like("100%") == "100\\%"
         assert _escape_like("a_b%c") == "a\\_b\\%c"
 
-    def test_token_version_functions_exist(self):
-        """Token version functions should be importable"""
-        from app.core.security import get_token_version, increment_token_version
+    @pytest.mark.asyncio
+    async def test_token_version_default(self):
+        """get_token_version returns 0 for an unknown user (no cached version)."""
+        from app.core.security import get_token_version
 
-        assert callable(get_token_version)
-        assert callable(increment_token_version)
+        assert await get_token_version(999999) == 0

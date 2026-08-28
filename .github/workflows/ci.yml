@@ -49,7 +49,7 @@ jobs:
           DATABASE_URL: "sqlite+aiosqlite:///:memory:"
           REDIS_URL: "redis://localhost:6379/0"
           DB_PASSWORD: "ci_test_password"
-        run: python -m pytest tests/ -v --tb=short
+        run: python -m pytest tests/ -v --tb=short --cov-fail-under=20
 
   backend-build:
     name: Backend Docker Build

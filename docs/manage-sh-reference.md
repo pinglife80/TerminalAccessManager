@@ -553,6 +553,11 @@ cp .env .env.backup             # 备份配置文件
 ./manage.sh test
 ```
 
+**说明：**
+- 该命令在 backend Docker 容器内执行 pytest（`dc exec -T backend python -m pytest tests/`），**本地无需安装 Python/venv/pip 依赖**，仅需 Docker 与已构建的 backend 镜像。
+- 若服务未启动，命令会先 `dc up -d` 并等待 postgres/redis/backend 就绪；后端单元测试已 mock 数据库与 Redis，不依赖真实数据。
+- CI 的 `backend-test` 作业（见 `.github/workflows/ci.yml`）在 GitHub Actions 中运行同一套测试用例，可作为远程验证兜底。
+
 ---
 
 ### 3.2 shell — 访问服务终端

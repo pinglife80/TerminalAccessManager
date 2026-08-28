@@ -78,7 +78,7 @@ services:
       - "127.0.0.1:${TAM_BACKEND_PORT:-8000}:${TAM_BACKEND_PORT:-8000}"
     environment:
       # Core
-      PROJECT_NAME: ${PROJECT_NAME:-Terminal Access Platform}
+      PROJECT_NAME: ${PROJECT_NAME:-Terminal Access Manager}
       ENVIRONMENT: ${ENVIRONMENT:-development}
       DEBUG: ${DEBUG:-false}
       VERSION: "${VERSION}"

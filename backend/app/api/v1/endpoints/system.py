@@ -37,7 +37,7 @@ async def get_system_status(
     uptime_str = f"{days}d {hours}h {minutes}m {seconds}s"
 
     try:
-        await db.execute("SELECT 1")
+        await db.execute(text("SELECT 1"))
         db_status = "healthy"
     except Exception:
         db_status = "unhealthy"

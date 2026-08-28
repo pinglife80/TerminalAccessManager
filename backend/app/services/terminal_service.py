@@ -768,7 +768,6 @@ class TerminalService:
                         apply_result = await compliance_svc.apply_manual_whitelist_for_terminal(
                             terminal,
                             wl_match_type=wl_match_type,
-                            wl_comments=comments,
                             username=username,
                         )
                         logger.info(f"Manual whitelist applied immediately for MAC {normalized_mac}: {apply_result}")
@@ -875,7 +874,6 @@ class TerminalService:
                         # Reset to unknown; next compliance cycle will re-evaluate naturally
                         terminal.compliance_status = "unknown"
                         terminal.wl_match_type = None
-                        terminal.wl_comments = None
                         terminal.compliant_confirm_count = 0
                         terminal.non_compliant_confirm_count = 0
                         logger.info(

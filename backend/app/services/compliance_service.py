@@ -2448,7 +2448,6 @@ class ComplianceService:
         self,
         terminal,
         wl_match_type: str,
-        wl_comments: str | None,
         username: str,
     ) -> dict:
         """Apply manual whitelist to a single terminal immediately.
@@ -2477,7 +2476,6 @@ class ComplianceService:
         # Update terminal compliance fields immediately
         terminal.compliance_status = "bypass"
         terminal.wl_match_type = wl_match_type
-        terminal.wl_comments = wl_comments
         # Reset anti-oscillation counters
         terminal.compliant_confirm_count = 0
         terminal.non_compliant_confirm_count = 0
@@ -2550,7 +2548,6 @@ class ComplianceService:
             if successfully_unblocked:
                 terminal.status = TerminalStatus.UNBLOCKED.value
                 terminal.firewall_tag = None
-                terminal.unblocked_at = now
                 unblocked = True
 
             # Audit log
