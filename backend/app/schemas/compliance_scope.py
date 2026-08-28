@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 ScopeType = Literal["ip_cidr", "ip_range", "mac_prefix_arp", "mac_prefix_ipguard"]
@@ -37,8 +37,7 @@ class ComplianceScopeResponse(ComplianceScopeBase):
     created_at: datetime
     updated_at: datetime | None = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ComplianceScopeListResponse(BaseModel):

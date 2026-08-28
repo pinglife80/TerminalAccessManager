@@ -1,7 +1,7 @@
 import os
 import sys
 
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 def _load_version() -> str:
@@ -105,9 +105,7 @@ class Settings(BaseSettings):
     COMPANY_NAME: str = "TAM"
     SUPPORT_EMAIL: str | None = None
 
-    class Config:
-        env_file = ".env"
-        case_sensitive = True
+    model_config = SettingsConfigDict(env_file=".env", case_sensitive=True)
 
 
 # Create global settings instance with validation

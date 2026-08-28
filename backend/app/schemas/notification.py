@@ -7,7 +7,7 @@ Pydantic models for notification-related API requests/responses.
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class NotificationChannelBase(BaseModel):
@@ -45,8 +45,7 @@ class NotificationChannelResponse(NotificationChannelBase):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class NotificationLogResponse(BaseModel):
@@ -65,8 +64,7 @@ class NotificationLogResponse(BaseModel):
     sent_at: datetime
     completed_at: datetime | None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class NotificationLogListResponse(BaseModel):
@@ -156,8 +154,7 @@ class NotificationTemplateResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class NotificationTemplatePreviewRequest(BaseModel):
@@ -226,8 +223,7 @@ class NotificationRuleResponse(NotificationRuleBase):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ==================== Notification Statistics ====================

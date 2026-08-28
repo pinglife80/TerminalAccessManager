@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Generic, TypeVar
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 # Terminal schemas
@@ -34,8 +34,7 @@ class TerminalResponse(TerminalBase):
     wl_match_type: str | None = Field(None, description="Whitelist match type: mac/ip/both/null")
     firewall_tag: str | None = Field(None, description="Firewall tag from block operation")
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class TerminalQuery(BaseModel):
@@ -75,8 +74,7 @@ class WhitelistResponse(WhitelistBase):
     added_by: str
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class WhitelistQuery(BaseModel):
@@ -140,8 +138,7 @@ class BlacklistResponse(BlacklistBase):
         None, description="Associated terminal's compliance_status (compliant/bypass/non_compliant/unknown), null if no terminal"
     )
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class BlacklistQuery(BaseModel):
@@ -185,8 +182,7 @@ class AuditLogResponse(AuditLogBase):
     ip_address: str | None = None
     timestamp: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class AuditLogQuery(BaseModel):
