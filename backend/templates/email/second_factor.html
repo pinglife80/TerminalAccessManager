@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>二次校验验证码</h2>
+<p>您好，</p>
+<p>您正在进行登录操作。请使用以下验证码完成身份验证：</p>
+<div class="code">{{ code }}</div>
+<p>验证码有效期：5 分钟</p>
+<p>如果这不是您的操作，请立即联系管理员。</p>
+{% endblock %}

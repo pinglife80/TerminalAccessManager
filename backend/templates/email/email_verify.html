@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>验证您的邮箱</h2>
+<p>您好，</p>
+<p>感谢您注册 {{ system_name }}。请使用以下验证码完成邮箱验证：</p>
+<div class="code">{{ code }}</div>
+<p>验证码有效期：{{ ttl_minutes }} 分钟</p>
+<p>如果您没有注册 {{ system_name }}，请忽略此邮件。</p>
+{% endblock %}
