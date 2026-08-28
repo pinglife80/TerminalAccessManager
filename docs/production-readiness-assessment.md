@@ -12,6 +12,7 @@
 
 | 文档版本 | 更新日期 | 关联版本 | 更新内容 |
 |---------|---------|---------|---------|
+| v3.17.1 | 2026-08-28 | v3.17.1 | Pydantic v2 迁移（8 schema + config）；SQLAlchemy 2.0 text()；本地 2FA 验证码生成修复；webhook 测试连接 405 降级修复；compliance scope ip_range 校验重写；防火墙对账元组解包修复；死代码清理；6A–6E 测试补全与覆盖率门槛 |
 | v3.17.0 | 2026-08-26 | v3.17.0 | 合规防抖参数可配置化（冷却期/IP 宽限期/白名单未命中阈值）；首次发现确认阈值保护；auto_block 白名单权威预检；NULL-MAC 分组修复；MAC+IP 白名单 IP 校验 |
 | v3.16.1 | 2026-08-25 | v3.16.1 | 修复 IPGuard 匹配元组真值误判；新增 IPGuard 缓存新鲜度门控与可配置项 ipguard_stale_threshold_minutes |
 | v3.16.0 | 2026-08-25 | v3.16.0 | 黑名单「解封事件」列（reason+时间）；到期自动解封写入独立 reason；SQLite 连接池参数适配；manage.sh 版本统一从 VERSION 动态派生 |

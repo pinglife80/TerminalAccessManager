@@ -1,12 +1,48 @@
 # 版本跟踪记录
 
-> 文档版本：v3.17.0 | 更新日期：2026-08-26
+> 文档版本：v3.17.1 | 更新日期：2026-08-28
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
 
 ---
+
+## [v3.17.1] - 2026-08-28
+
+### Pydantic v2 迁移、运行时回归修复与测试覆盖补全（Patch 版本）
+
+#### 背景
+
+自 v3.17.0 发布以来，工作区积累了一批未提交改动，围绕两条主线：其一，将后端迁移到 Pydantic v2 / SQLAlchemy 2.0 的推荐用法并修复若干运行时回归（本地 2FA 验证码生成、webhook 测试连接降级、compliance scope IP 范围校验、防火墙对账探测解包、通知日志事务）；其二，完成 6A–6E 测试链补测并启用 pytest 覆盖率门槛。全部改动向后兼容、无新用户功能，故以 Patch 发布。
+
+#### 主要变更
+
+| 变更项 | 说明 |
+|--------|------|
+| Pydantic v2 迁移 | 8 个文件（config + 7 schema）将弃用的 `class Config` → `model_config = ConfigDict/SettingsConfigDict(...)` |
+| SQLAlchemy 2.0 文本 SQL | `system.py` 健康检查 `db.execute("SELECT 1")` → `db.execute(text("SELECT 1"))` |
+| 本地 2FA 修复 | `two_factor_service.py` 将不存在的 `generate_verification_code` 改为 `generate_email_code` 并补 `await` |
+| Webhook 测试连接修复 | `webhook_channel.py` 由捕获不存在的 `httpx.MethodNotAllowed` 改为按 `status_code == 405` 触发 HEAD→POST 降级 |
+| Compliance Scope 校验修复 | `compliance_scope_service.py` 重写 `ip_range` 校验，解析「前缀 + 起止末位八位组」并校验 `start>end`、`end>255`、非法前缀 |
+| 防火墙对账修复 | `firewall_reconciliation_service.py` `probe_ip` 元组解包修复、返回 `Set[str]` |
+| 通知日志事务一致性（F） | `notification_service.py` `_log_notification` 传入 `self.db`，保持请求级事务 |
+| 死代码清理 | 移除 `compliance_service.py` / `terminal_service.py` 失效的 `wl_comments` 参数与 `unblocked_at` 冗余赋值 |
+| 品牌文案一致性 | `.env.example` 残留 `Terminal Access Platform` → `Terminal Access Manager` |
+| 测试与覆盖率 | 6A–6E 测试补全（约 6000+ 行）；`pyproject.toml` 启用 `--cov=app`；`ci.yml` 增加 `--cov-fail-under=20`；默认邮件模板文件化 |
+
+#### 升级步骤（推荐：一键升级）
+
+```bash
+git checkout main
+git pull origin main
+./manage.sh upgrade
+```
+
+#### 升级注意事项
+
+- 本次仅技术债迁移与 bug 修复，无数据库迁移、无配置变更，历史行为不变。
+- CI 新增 `--cov-fail-under=20` 门槛（首期低基线），后续随补测逐轮上调。
 
 ## [v3.17.0] - 2026-08-26
 

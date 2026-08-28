@@ -1,6 +1,6 @@
 # 更新日志
 
-> 文档版本：v3.17.0  更新日期：2026-08-26
+> 文档版本：v3.17.1  更新日期：2026-08-28
 
 本文件记录 TerminalAccessManager 的所有重要变更。
 
@@ -8,6 +8,35 @@
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ***
+
+## [3.17.1] - 2026-08-28
+
+### 修复
+
+- **Pydantic v2 迁移**：8 个文件将弃用的 `class Config` 改为 `model_config = ConfigDict/SettingsConfigDict(...)`，消除弃用告警并适配 v2 `from_attributes` 语义
+  - 关联文件：`config.py`、`schemas/{auth,auth_provider,compliance_baseline,compliance_scope,data_source,notification,role,terminal}.py`
+- **SQLAlchemy 2.0 文本 SQL**：系统状态健康检查 `db.execute("SELECT 1")` 改为 `db.execute(text("SELECT 1"))`
+  - 关联文件：`endpoints/system.py`
+- **本地 2FA 验证码生成失效**：`two_factor_service.py` 引用不存在的 `generate_verification_code`，改为 `generate_email_code` 并补 `await`
+  - 关联文件：`services/auth_providers/two_factor_service.py`
+- **Webhook 测试连接降级逻辑**：`webhook_channel.py` 捕获不存在的 `httpx.MethodNotAllowed`，改为按 `status_code == 405` 触发 HEAD→POST 降级
+  - 关联文件：`services/notification_channels/webhook_channel.py`
+- **Compliance Scope IP 范围校验**：`compliance_scope_service.py` 重写 `ip_range` 校验，正确解析「前缀 + 起止末位八位组」格式并校验 `start>end`、`end>255`、非法前缀
+  - 关联文件：`services/compliance_scope_service.py`
+- **防火墙对账探测元组解包**：`firewall_reconciliation_service.py` `probe_ip` 解包修复、`_get_db_active_blacklist_by_firewall` 返回类型 `Set[Tuple]` → `Set[str]`
+  - 关联文件：`services/firewall_reconciliation_service.py`
+- **通知日志事务一致性（F）**：`notification_service.py` `_log_notification` 传入注入的 `self.db`，保持请求级事务
+  - 关联文件：`services/notification_service.py`
+- **死代码清理**：移除 `compliance_service.py` / `terminal_service.py` 中失效的 `wl_comments` 参数与 `unblocked_at` 冗余赋值
+  - 关联文件：`services/compliance_service.py`、`services/terminal_service.py`
+- **品牌文案一致性**：`.env.example` 残留 `Terminal Access Platform` → `Terminal Access Manager`
+  - 关联文件：`.env.example`
+
+### 改进
+
+- **测试覆盖补全（6A–6E）**：新增/扩充 9 个测试文件与 `conftest.py`，覆盖认证安全链、核心合规链、通知投递链、备份/邮件链（约 6000+ 行）
+- **覆盖率基础设施**：`pyproject.toml` 启用 `--cov=app`，`ci.yml` 增加 `--cov-fail-under=20` 门槛
+- **默认邮件模板文件化**：新增 6 个 `backend/templates/email/*.html` 默认模板，全新部署即可正常渲染
 
 ## [3.17.0] - 2026-08-26
 
