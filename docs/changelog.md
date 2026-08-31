@@ -1,6 +1,6 @@
 # 更新日志
 
-> 文档版本：v3.17.1  更新日期：2026-08-28
+> 文档版本：v3.17.2  更新日期：2026-08-31
 
 本文件记录 TerminalAccessManager 的所有重要变更。
 
@@ -8,6 +8,34 @@
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ***
+
+## [3.17.2] - 2026-08-31
+
+### 修复
+
+- **RBAC 授权加固（6 项）**：种子新增 `compliance:read`(36) / `compliance:write`(37) 权限并改为按 `Permission.code` 幂等补种；`POST /system/firewall-reconciliation` 增加 `system:manage` 权限；`GET /auth/users/email-available` 增加登录鉴权防邮箱枚举；4 个备份读接口改用 `backup:read`；operator 角色移除死权限 `terminal:write`
+  - 关联文件：`cli.py`、`endpoints/system.py`、`endpoints/auth.py`、`endpoints/backup.py`
+- **备份服务修复**：修复失效 settings 引用、错误 imports 与 `SameFileError` 等 14+ 处备份服务问题，并同步修复 15 个 pre-existing 失败用例
+  - 关联文件：`services/backup_service.py`、`tests/test_backup_service.py`
+- **中文日志乱码**：日志 JSON 序列化 `ensure_ascii=False`，修复中文日志 unicode 乱码
+  - 关联文件：`core/logging_config.py`
+- **角色编辑"已存在"误报**：角色更新唯一性校验排除当前 `role_id`
+  - 关联文件：`endpoints/roles.py`
+- **数据源删除统计偏差**：删除 ARP/防火墙数据源时影响统计改用 `firewall_tag` 过滤；删除合规基线按基线 tag 过滤
+  - 关联文件：`services/data_source_service.py`、`endpoints/compliance_baselines.py`
+- **会话超时体验**：超时提醒改为可手动关闭的对话框 + 倒计时自动注销
+  - 关联文件：`App.tsx`、`useTokenExpiration.ts`
+- **i18n 三语补全**：补齐 20 个断键 + 22 个日语缺失，清理 9 个僵尸词条，三语 leaf key 完全对齐（1421）
+  - 关联文件：`i18n/locales/{en,zh,ja}.ts`
+
+### 改进
+
+- **暗色模式一致性**：输入/筛选/下拉框字体对比度修复 + 全站数据表表头统一 `bg-card` + 合规范围等页语义 token 迁移
+  - 关联文件：`index.css` 及 16 个 `.tsx`
+- **终端搜索框布局**：搜索框独占整行，避免被相邻筛选条件挤压
+  - 关联文件：`Terminals.tsx`
+- **备份列表分页**：备份列表增加分页
+  - 关联文件：`Backup.tsx`
 
 ## [3.17.1] - 2026-08-28
 

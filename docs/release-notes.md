@@ -1,12 +1,49 @@
 # 版本跟踪记录
 
-> 文档版本：v3.17.1 | 更新日期：2026-08-28
+> 文档版本：v3.17.2 | 更新日期：2026-08-31
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
 
 ---
+
+## [v3.17.2] - 2026-08-31
+
+### RBAC 授权加固、i18n 三语补全与暗色模式统一（Patch 版本）
+
+#### 背景
+
+自 v3.17.1 发布以来，工作区积累了一批未提交改动，围绕四条主线：其一，全面检查系统 RBAC 授权发现 6 项遗漏与缺陷（新增 `compliance:read/write` 权限、为敏感接口补授权、移除死权限、修复种子早退）；其二，全面检查 en/zh/ja 三语 i18n，补齐 20 个断键与 22 个日语缺失、清理 9 个僵尸词条；其三，统一暗色模式样式（输入框字体对比度、表头背景、语义 token）并修复终端搜索框被挤压、备份列表无分页等 UX 问题；其四，修复备份服务、中文日志乱码、角色编辑误报、数据源删除统计等若干后端 bug。全部改动向后兼容、无新用户功能，故以 Patch 发布。
+
+#### 主要变更
+
+| 变更项 | 说明 |
+|--------|------|
+| RBAC 授权加固（6 项） | 新增 `compliance:read`(36)/`compliance:write`(37) 并幂等补种；`firewall-reconciliation` 加 `system:manage`；`email-available` 加登录鉴权；4 个备份读接口改用 `backup:read`；operator 移除死权限 `terminal:write` |
+| 备份服务修复 | 修复失效 settings 引用、错误 imports、`SameFileError` 等 14+ 处问题，同步修复 15 个 pre-existing 失败用例 |
+| 中文日志乱码 | JSON 日志 `ensure_ascii=False` |
+| 角色编辑误报 | 唯一性校验排除当前 `role_id` |
+| 数据源删除统计 | ARP/防火墙删除按 `firewall_tag` 过滤、合规基线按基线 tag 过滤 |
+| 会话超时体验 | 对话框化 + 手动关闭 + 倒计时自动注销 |
+| i18n 三语补全 | 补 20 断键 + 22 日语 + 清 9 僵尸，三语 leaf key=1421 对齐 |
+| 暗色模式一致性 | 输入框对比度 + 表头 `bg-card` + 语义 token 迁移 |
+| 终端搜索框 | 独占整行 |
+| 备份列表分页 | 增加分页 |
+
+#### 升级步骤（推荐：一键升级）
+
+```bash
+git checkout main
+git pull origin main
+./manage.sh upgrade
+```
+
+#### 升级注意事项
+
+- 本次新增 `compliance:read` / `compliance:write` 权限，须在存量环境触发 RBAC 种子补种（`_ensure_rbac_seed` 已改为按 `Permission.code` 幂等补齐），否则合规范围页面可能出现权限不符。
+- 4 个备份读接口由 `backup:read` 权限控制，viewer 角色默认无该权限（admin 有）。
+- 无数据库迁移、无破坏性变更。
 
 ## [v3.17.1] - 2026-08-28
 
