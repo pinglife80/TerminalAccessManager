@@ -186,7 +186,9 @@ async def update_role(
         if role.name in BUILT_IN_ROLES:
             raise HTTPException(status_code=400, detail="Cannot rename built-in roles")
 
-        existing_role = await db.execute(select(Role).where(Role.name == data.name))
+        existing_role = await db.execute(
+            select(Role).where(Role.name == data.name, Role.id != role_id)
+        )
         if existing_role.scalar_one_or_none():
             raise HTTPException(status_code=400, detail=f"Role '{data.name}' already exists")
 
