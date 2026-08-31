@@ -472,40 +472,80 @@ class SangforService:
         """Get list of blocked IPs from Sangfor AF blacklist.
 
         Uses the whiteblacklist API (section 8.1.1) with type=BLACK.
-        Optionally filter by search keyword.
+
+        The list API is paginated: ``_length`` is capped at 200, and subsequent
+        pages must be fetched via ``_start`` until ``totalItems`` is exhausted.
+        Previous versions read only the first page (200 entries), silently
+        under-counting the firewall and causing the reconciliation to falsely
+        re-block already-blocked IPs on every cycle. This version aggregates all
+        pages into a single ``items`` list.
         """
         try:
-            params = {"type": "BLACK", "_length": 200}
-            if search:
-                params["_search"] = search
+            page_size = 200
+            start = 0
+            all_items: list[Any] = []
+            last_result: dict[str, Any] = {"code": 0, "data": {"items": []}}
 
-            response = await self._request_with_backoff(
-                "GET",
-                f"{self.base_url}{API_PREFIX}/v1/namespaces/public/whiteblacklist",
-                params=params
-            )
-            response.raise_for_status()
+            while True:
+                params: dict[str, Any] = {
+                    "type": "BLACK",
+                    "_start": start,
+                    "_length": page_size,
+                }
+                if search:
+                    params["_search"] = search
 
-            result = response.json()
-            if not isinstance(result, dict):
-                logger.error(f"get_blocked_ips returned unexpected type: {type(result).__name__}")
-                return {"code": -1, "data": {"items": []}}
-
-            # Log abnormal responses to help diagnose empty/error lists
-            if result.get("code") != 0:
-                logger.warning(
-                    f"get_blocked_ips returned non-zero code={result.get('code')}, "
-                    f"message={result.get('message', 'unknown')}, raw={(response.text or '')[:500]}"
+                response = await self._request_with_backoff(
+                    "GET",
+                    f"{self.base_url}{API_PREFIX}/v1/namespaces/public/whiteblacklist",
+                    params=params
                 )
-            else:
-                items = result.get("data", {}).get("items", [])
-                if not items:
-                    logger.warning(
-                        f"get_blocked_ips returned 0 items "
-                        f"(raw={(response.text or '')[:300]})"
-                    )
+                response.raise_for_status()
 
-            return result
+                result = response.json()
+                if not isinstance(result, dict):
+                    logger.error(f"get_blocked_ips returned unexpected type: {type(result).__name__}")
+                    return {"code": -1, "data": {"items": []}}
+
+                last_result = result
+
+                if result.get("code") != 0:
+                    logger.warning(
+                        f"get_blocked_ips returned non-zero code={result.get('code')}, "
+                        f"message={result.get('message', 'unknown')}, raw={(response.text or '')[:500]}"
+                    )
+                    break
+
+                data = result.get("data") or {}
+                items = data.get("items", [])
+                if not items:
+                    break
+
+                all_items.extend(items)
+                got = len(items)
+
+                total_items = data.get("totalItems")
+                if total_items is not None and start + got >= total_items:
+                    break
+                if got < page_size:
+                    break
+
+                start += got
+
+                # Defensive cap in case the API reports a stale/incorrect totalItems.
+                if len(all_items) >= 100000:
+                    logger.warning("get_blocked_ips reached safety cap of 100000 items")
+                    break
+
+            # Return the fully aggregated item list while preserving the API shape.
+            if isinstance(last_result, dict) and last_result.get("code") == 0:
+                data_out = dict(last_result.get("data") or {})
+                data_out["items"] = all_items
+                last_result["data"] = data_out
+                if not all_items:
+                    logger.warning("get_blocked_ips returned 0 items across all pages")
+
+            return last_result
 
         except Exception as e:
             logger.error(f"Failed to get blocked IPs: {str(e)}")
