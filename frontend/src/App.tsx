@@ -7,6 +7,8 @@ import ProtectedRoute from './components/ProtectedRoute';
 import Layout from './components/Layout';
 import ErrorBoundary from './components/ErrorBoundary';
 import { logger } from './lib/logger';
+import { useTranslation } from 'react-i18next';
+import { X } from 'lucide-react';
 
 // Lazy-loaded pages for code splitting
 const Login = lazy(() => import('./pages/Login'));
@@ -71,7 +73,8 @@ const queryClient = new QueryClient({
 const App: React.FC = () => {
   const { initializeAuth, isAuthenticated, isInitializing } = useAuthStore();
   const { initTheme } = useThemeStore();
-  useTokenExpiration();
+  const { t } = useTranslation();
+  const sessionWarning = useTokenExpiration();
 
   useEffect(() => {
     document.title = branding.title;
@@ -198,6 +201,44 @@ const App: React.FC = () => {
             </Route>
           </Routes>
         </BrowserRouter>
+        {sessionWarning.show && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 p-4">
+            <div className="bg-card border border-border rounded-2xl w-full max-w-md p-6 shadow-xl">
+              <div className="flex items-start justify-between mb-3">
+                <h3 className="text-lg font-semibold text-foreground">
+                  {sessionWarning.type === 'idle' ? t('session.idleTitle') : t('session.expiryTitle')}
+                </h3>
+                <button
+                  onClick={sessionWarning.onClose}
+                  className="p-1 hover:bg-muted rounded-lg transition-colors"
+                  title={t('common.close')}
+                  aria-label={t('common.close')}
+                >
+                  <X className="h-5 w-5 text-muted-foreground" />
+                </button>
+              </div>
+              <p className="text-sm text-muted-foreground mb-4">
+                {sessionWarning.type === 'idle'
+                  ? t('session.idleMessage', { minutes: Math.max(1, Math.ceil(sessionWarning.countdown / 60)) })
+                  : t('session.expiryMessage', { minutes: Math.max(1, Math.ceil(sessionWarning.countdown / 60)) })}
+              </p>
+              <div className="flex items-center justify-end gap-3">
+                <button
+                  onClick={sessionWarning.onLogout}
+                  className="px-4 py-2 text-sm font-medium text-muted-foreground border border-border rounded-lg hover:bg-muted transition-colors"
+                >
+                  {t('session.logoutNow')}
+                </button>
+                <button
+                  onClick={sessionWarning.onContinue}
+                  className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors"
+                >
+                  {t('session.continueSession')}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
         <Toaster position="top-right" richColors />
       </ErrorBoundary>
     </QueryClientProvider>
