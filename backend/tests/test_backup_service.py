@@ -127,7 +127,7 @@ class TestInit:
         assert svc.config is cfg
 
     def test_permission_error_falls_back_to_tmp(self):
-        with patch.object(os, "makedirs", side_effect=PermissionError):
+        with patch.object(os, "makedirs", side_effect=[PermissionError, None]):
             svc = BackupService()
         assert svc.backup_dir == "/tmp/backups"
 
@@ -280,11 +280,11 @@ class TestBackupDatabase:
         svc = BackupService()
         proc = _subprocess()
         with patch.object(settings, "DATABASE_URL", ""), \
-             patch.object(settings, "POSTGRES_SERVER", "pg"), \
-             patch.object(settings, "POSTGRES_USER", "pu"), \
-             patch.object(settings, "POSTGRES_DB", "pdb"), \
-             patch.object(settings, "POSTGRES_PASSWORD", "pp"), \
-             patch.object(settings, "POSTGRES_PORT", 15432), \
+             patch.object(settings, "DB_HOST", "pg"), \
+             patch.object(settings, "DB_USER", "pu"), \
+             patch.object(settings, "DB_NAME", "pdb"), \
+             patch.object(settings, "DB_PASSWORD", "pp"), \
+             patch.object(settings, "DB_PORT", 15432), \
              patch.object(bs.asyncio, "create_subprocess_exec", AsyncMock(return_value=proc)) as sp:
             await svc._backup_database("/tmp")
 
@@ -299,7 +299,6 @@ class TestBackupDatabase:
         svc = BackupService()
         proc = _subprocess()
         with patch.object(settings, "DATABASE_URL", ""), \
-             patch.object(settings, "POSTGRES_SERVER", ""), \
              patch.object(settings, "DB_HOST", "dbh"), \
              patch.object(settings, "DB_USER", "dbu"), \
              patch.object(settings, "DB_NAME", "dbn"), \
@@ -317,7 +316,6 @@ class TestBackupDatabase:
     async def test_no_host_raises(self):
         svc = BackupService()
         with patch.object(settings, "DATABASE_URL", ""), \
-             patch.object(settings, "POSTGRES_SERVER", ""), \
              patch.object(settings, "DB_HOST", ""):
             with pytest.raises(Exception, match="not configured"):
                 await svc._backup_database("/tmp")
@@ -384,12 +382,13 @@ class TestBackupLogs:
 class TestBackupBranding:
     @pytest.mark.asyncio
     async def test_copies_branding_files(self, tmp_path):
-        brand_dir = tmp_path / "branding"
-        brand_dir.mkdir()
+        upload_dir = tmp_path / "uploads"
+        brand_dir = upload_dir / "branding"
+        brand_dir.mkdir(parents=True)
         (brand_dir / "logo.png").write_bytes(b"png")
 
         svc = BackupService()
-        with patch.object(settings, "UPLOAD_DIR", str(tmp_path)):
+        with patch.object(settings, "UPLOAD_DIR", str(upload_dir)):
             result = await svc._backup_branding(str(tmp_path))
 
         assert result == os.path.join(str(tmp_path), "branding.zip")
@@ -604,7 +603,7 @@ class TestUploadViaFtp:
         svc = BackupService()
         svc.config.storage_config = {"host": "h", "use_ssl": True, "path": "/bk"}
         ftp = MagicMock()
-        ftp.cwd.side_effect = bs.ftplib.error_perm("no dir")
+        ftp.cwd.side_effect = [bs.ftplib.error_perm("no dir"), None]
         with patch.object(bs.ftplib, "FTP_TLS", return_value=ftp):
             result = await svc._upload_via_ftp(str(f))
 
@@ -764,9 +763,6 @@ class TestListRemote:
         ftp.nlst.return_value = ["a.zip"]
         ftp.size.return_value = 123
         ftp.voidcmd.return_value = "213 20260101000000"
-        with patch.object(bs.ftplib, "FTP", return_value=ftp), \
-             patch.object(bs.timezone, "timezone") as _tz:
-            _tz.utc = _tz  # not critical; astimezone mocked below
         with patch.object(bs.ftplib, "FTP", return_value=ftp):
             result = await svc._list_via_ftp()
 
@@ -926,8 +922,8 @@ class TestRunBackup:
         svc._upload_backup = AsyncMock(return_value="/tmp/full.zip")
         svc.cleanup_old_backups = AsyncMock()
 
-        with patch.object(bs, "emit_backup_completed", AsyncMock()) as emit_ok, \
-             patch.object(bs, "emit_backup_failed", AsyncMock()) as emit_fail:
+        with patch("app.services.event_emitter.emit_backup_completed", AsyncMock()) as emit_ok, \
+             patch("app.services.event_emitter.emit_backup_failed", AsyncMock()) as emit_fail:
             job = await svc.run_backup("full")
 
         assert job.status == "completed"
@@ -946,7 +942,7 @@ class TestRunBackup:
         svc.create_archive = AsyncMock(return_value="/tmp/db.zip")
         svc.cleanup_old_backups = AsyncMock()
 
-        with patch.object(bs, "emit_backup_completed", AsyncMock()):
+        with patch("app.services.event_emitter.emit_backup_completed", AsyncMock()):
             job = await svc.run_backup("database")
 
         svc.backup_database.assert_awaited_once()
@@ -966,8 +962,8 @@ class TestRunBackup:
         svc.create_archive = AsyncMock(return_value="/tmp/full.zip")
         svc.cleanup_old_backups = AsyncMock()
 
-        with patch.object(bs, "emit_backup_completed", AsyncMock()) as emit_ok, \
-             patch.object(bs, "emit_backup_failed", AsyncMock()) as emit_fail:
+        with patch("app.services.event_emitter.emit_backup_completed", AsyncMock()) as emit_ok, \
+             patch("app.services.event_emitter.emit_backup_failed", AsyncMock()) as emit_fail:
             job = await svc.run_backup("full")
 
         assert job.status == "failed"
@@ -1052,7 +1048,12 @@ class TestRestoreLogsFromZip:
             zf.writestr("app.log", "hello")
 
         svc = BackupService()
-        with patch.object(os.path, "isdir", return_value=False):
+        real_isdir = os.path.isdir
+        with patch.object(
+            os.path,
+            "isdir",
+            side_effect=lambda p: False if p == "/var/log/tam" else real_isdir(p),
+        ):
             result = await svc._restore_logs_from_zip(str(logs_zip))
         assert result is True
 
@@ -1092,7 +1093,7 @@ class TestRestoreWhitelist:
         db.execute = AsyncMock()
         svc = BackupService(db=db)
         with patch.object(svc, "verify_backup", AsyncMock(return_value=True)), \
-             patch("app.services.compliance_service.recalculate_all_compliance", AsyncMock()):
+             patch("app.services.compliance_service.ComplianceService.recalculate_all_compliance", AsyncMock()):
             assert await svc.restore_whitelist(str(wl_zip)) is True
         db.commit.assert_awaited()
 
@@ -1104,7 +1105,7 @@ class TestRestoreWhitelist:
         db = mock_async_session
         db.execute = AsyncMock()
         svc = BackupService(db=db)
-        with patch("app.services.compliance_service.recalculate_all_compliance", AsyncMock()):
+        with patch("app.services.compliance_service.ComplianceService.recalculate_all_compliance", AsyncMock()):
             assert await svc._restore_whitelist_from_json(str(json_file)) is True
         db.commit.assert_awaited()
 
