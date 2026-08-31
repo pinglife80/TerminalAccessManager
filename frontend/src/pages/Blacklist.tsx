@@ -174,7 +174,7 @@ const Blacklist: React.FC = () => {
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm text-muted-foreground">{t('blacklist.statsSuccessBlocked')}</p>
-              <p className="text-3xl font-bold text-green-600 mt-1">{stats?.success_blocked ?? 0}</p>
+              <p className="text-3xl font-bold text-green-600 dark:text-green-400 mt-1">{stats?.success_blocked ?? 0}</p>
             </div>
             <ShieldCheck className="h-8 w-8 text-green-500" />
           </div>
@@ -189,7 +189,7 @@ const Blacklist: React.FC = () => {
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm text-muted-foreground">{t('blacklist.statsPendingRetryBlock')}</p>
-              <p className="text-3xl font-bold text-yellow-600 mt-1">{stats?.pending_retry_block ?? 0}</p>
+              <p className="text-3xl font-bold text-yellow-600 dark:text-yellow-400 mt-1">{stats?.pending_retry_block ?? 0}</p>
             </div>
             <ShieldAlert className="h-8 w-8 text-yellow-500" />
           </div>
@@ -205,7 +205,7 @@ const Blacklist: React.FC = () => {
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm text-muted-foreground">{t('blacklist.statsSuccessUnblocked')}</p>
-              <p className="text-3xl font-bold text-blue-600 mt-1">{stats?.success_unblocked ?? 0}</p>
+              <p className="text-3xl font-bold text-blue-600 dark:text-blue-400 mt-1">{stats?.success_unblocked ?? 0}</p>
             </div>
             <ShieldCheck className="h-8 w-8 text-blue-500" />
           </div>
@@ -355,7 +355,7 @@ const Blacklist: React.FC = () => {
       <div className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden">
         <div className="overflow-x-auto">
           <table className="min-w-full divide-y divide-border">
-            <thead className="bg-background">
+            <thead className="bg-card">
               <tr>
                 <th className="px-4 sm:px-6 py-3.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider">
                   {t('terminal.mac')}
@@ -401,9 +401,9 @@ const Blacklist: React.FC = () => {
                 (filteredBlacklist || []).map((item) => (
                   <tr
                     key={item.id}
-                    className={`hover:bg-blue-50/30 transition-colors ${
+                    className={`hover:bg-muted/40 transition-colors ${
                       (item.auto_unblocked || item.unblocked_at) ? 'opacity-60' : isExpired(item.expires_at) ? 'opacity-50' : ''
-                    } ${!(item.auto_unblocked || item.unblocked_at) && item.is_auto_blocked ? 'bg-orange-50/30' : ''}`}
+                    } ${!(item.auto_unblocked || item.unblocked_at) && item.is_auto_blocked ? 'bg-orange-500/10 dark:bg-orange-500/15' : ''}`}
                   >
                     <td className="px-4 sm:px-6 py-4 whitespace-nowrap">
                       <div className="flex items-center">

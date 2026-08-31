@@ -130,7 +130,7 @@ const Roles: React.FC = () => {
       <div className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden">
         <div className="overflow-x-auto">
           <table className="min-w-full divide-y divide-border">
-            <thead className="bg-background">
+            <thead className="bg-card">
               <tr>
                 <th className="px-4 sm:px-6 py-3.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider">
                   {t('roles.roleName')}
@@ -356,7 +356,7 @@ const Roles: React.FC = () => {
               <p className="text-sm text-muted-foreground text-center py-4">{t('roles.noUsersInRole')}</p>
             ) : (
               <table className="min-w-full divide-y divide-border">
-                <thead className="bg-background">
+                <thead className="bg-card">
                   <tr>
                     <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground uppercase">{t('auditLogs.user')}</th>
                     <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground uppercase">{t('users.email')}</th>
@@ -443,9 +443,9 @@ const RoleFormModal: React.FC<{
       toast.error(t('roles.roleName') + ' ' + t('common.required').toLowerCase());
       return;
     }
-    // Validate role name format: lowercase letters, digits, underscores, must start with a letter
-    if (!/^[a-z][a-z0-9_]*$/.test(name.trim())) {
-      toast.error(t('roles.invalidRoleNameFormat', 'Role name must start with a lowercase letter and contain only lowercase letters, digits, and underscores'));
+    // Validate role name format: must start with a letter, containing letters, digits, underscores, hyphens
+    if (!/^[a-zA-Z][a-zA-Z0-9_-]*$/.test(name.trim())) {
+      toast.error(t('roles.invalidRoleNameFormat', 'Role name must start with a letter and contain only letters, digits, underscores, and hyphens'));
       return;
     }
     setSaving(true);
@@ -454,11 +454,7 @@ const RoleFormModal: React.FC<{
       description: description.trim(),
       permission_ids: selectedPermIds,
     };
-    if (role) {
-      await onSave(data);
-    } else {
-      await onSave(data);
-    }
+    await onSave(data);
     setSaving(false);
   };
 

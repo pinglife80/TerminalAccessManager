@@ -170,11 +170,11 @@ const ComplianceScope: React.FC = () => {
   }
 
   return (
-    <div className="p-6">
+    <div className="min-h-full bg-background p-4 sm:p-6 lg:p-8">
       <div className="mb-6 flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">{t('complianceScope.title')}</h1>
-          <p className="mt-1 text-sm text-gray-500">{t('complianceScope.description')}</p>
+          <h1 className="text-2xl font-bold text-foreground">{t('complianceScope.title')}</h1>
+          <p className="mt-1 text-sm text-muted-foreground">{t('complianceScope.description')}</p>
         </div>
         <PrimaryButton
           icon={Plus}
@@ -190,45 +190,45 @@ const ComplianceScope: React.FC = () => {
           icon={Filter}
         />
       ) : (
-        <div className="overflow-hidden rounded-lg bg-white shadow">
-          <table className="min-w-full divide-y divide-gray-200">
-            <thead className="bg-gray-50">
+        <div className="overflow-hidden rounded-lg bg-card border border-border shadow-sm">
+          <table className="min-w-full divide-y divide-border">
+            <thead className="bg-card">
               <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-muted-foreground">
                   {t('complianceScope.typeLabel')}
                 </th>
-                <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-muted-foreground">
                   {t('complianceScope.valueLabel')}
                 </th>
-                <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-muted-foreground">
                   {t('complianceScope.descriptionLabel')}
                 </th>
-                <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-muted-foreground">
                   {t('complianceScope.activeLabel')}
                 </th>
-                <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-muted-foreground">
                   {t('complianceScope.createdBy')}
                 </th>
-                <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-muted-foreground">
                   {t('complianceScope.createdAt')}
                 </th>
-                <th className="px-6 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500">
+                <th className="px-6 py-3 text-right text-xs font-medium uppercase tracking-wider text-muted-foreground">
                   Actions
                 </th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-200 bg-white">
+            <tbody className="divide-y divide-border bg-card">
               {scopes.map((scope) => (
-                <tr key={scope.id} className="hover:bg-gray-50">
+                <tr key={scope.id} className="hover:bg-muted/50">
                   <td className="whitespace-nowrap px-6 py-4">
-                    <span className="inline-flex rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-medium text-blue-800">
+                    <span className="inline-flex rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-medium text-blue-800 dark:bg-blue-500/15 dark:text-blue-400">
                       {getScopeTypeLabel(scope.scope_type)}
                     </span>
                   </td>
-                  <td className="whitespace-nowrap px-6 py-4 font-mono text-sm text-gray-900">
+                  <td className="whitespace-nowrap px-6 py-4 font-mono text-sm text-foreground">
                     {scope.scope_value}
                   </td>
-                  <td className="px-6 py-4 text-sm text-gray-500">
+                  <td className="px-6 py-4 text-sm text-muted-foreground">
                     {scope.description || '-'}
                   </td>
                   <td className="whitespace-nowrap px-6 py-4">
@@ -236,17 +236,17 @@ const ComplianceScope: React.FC = () => {
                       onClick={() => handleToggle(scope)}
                       className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
                         scope.is_active
-                          ? 'bg-green-100 text-green-800 hover:bg-green-200'
-                          : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                          ? 'bg-green-100 text-green-800 hover:bg-green-200 dark:bg-green-500/15 dark:text-green-400 dark:hover:bg-green-500/25'
+                          : 'bg-gray-100 text-muted-foreground hover:bg-gray-200 dark:bg-muted dark:hover:bg-muted/80'
                       }`}
                     >
                       {scope.is_active ? t('complianceScope.enabled') : t('complianceScope.disabled')}
                     </button>
                   </td>
-                  <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-500">
+                  <td className="whitespace-nowrap px-6 py-4 text-sm text-muted-foreground">
                     {scope.created_by}
                   </td>
-                  <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-500">
+                  <td className="whitespace-nowrap px-6 py-4 text-sm text-muted-foreground">
                     {formatDate(scope.created_at)}
                   </td>
                   <td className="whitespace-nowrap px-6 py-4 text-right text-sm">
@@ -283,24 +283,24 @@ const ComplianceScope: React.FC = () => {
       >
         <div className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700">
+            <label className="block text-sm font-medium text-foreground">
               {t('complianceScope.typeLabel')}
             </label>
             <select
               value={scopeType}
               onChange={(e) => { setScopeType(e.target.value as ScopeType); setScopeValue(''); }}
-              className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              className="mt-1 block w-full rounded-md border border-border px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
             >
               <option value="ip_cidr">{t('complianceScope.typeIpCidr')}</option>
               <option value="ip_range">{t('complianceScope.typeIpRange')}</option>
               <option value="mac_prefix_arp">{t('complianceScope.typeMacPrefixArp')}</option>
               <option value="mac_prefix_ipguard">{t('complianceScope.typeMacPrefixIpguard')}</option>
             </select>
-            <p className="mt-1 text-xs text-gray-500">{getScopeTypeDesc(scopeType)}</p>
+            <p className="mt-1 text-xs text-muted-foreground">{getScopeTypeDesc(scopeType)}</p>
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700">
+            <label className="block text-sm font-medium text-foreground">
               {t('complianceScope.valueLabel')}
             </label>
             <input
@@ -308,12 +308,12 @@ const ComplianceScope: React.FC = () => {
               value={scopeValue}
               onChange={(e) => setScopeValue(e.target.value)}
               placeholder={getScopePlaceholder(scopeType)}
-              className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 font-mono text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              className="mt-1 block w-full rounded-md border border-border px-3 py-2 font-mono text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
             />
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700">
+            <label className="block text-sm font-medium text-foreground">
               {t('complianceScope.descriptionLabel')}
             </label>
             <textarea
@@ -321,12 +321,12 @@ const ComplianceScope: React.FC = () => {
               onChange={(e) => setDescription(e.target.value)}
               placeholder={t('complianceScope.descriptionPlaceholder')}
               rows={3}
-              className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              className="mt-1 block w-full rounded-md border border-border px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
             />
           </div>
 
           {formError && (
-            <div className="rounded-md bg-red-50 p-3 text-sm text-red-600">
+            <div className="rounded-md bg-red-50 p-3 text-sm text-red-600 dark:bg-red-500/10 dark:text-red-400">
               {formError}
             </div>
           )}
@@ -354,24 +354,24 @@ const ComplianceScope: React.FC = () => {
       >
         <div className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700">
+            <label className="block text-sm font-medium text-foreground">
               {t('complianceScope.typeLabel')}
             </label>
             <select
               value={scopeType}
               onChange={(e) => { setScopeType(e.target.value as ScopeType); setScopeValue(''); }}
-              className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              className="mt-1 block w-full rounded-md border border-border px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
             >
               <option value="ip_cidr">{t('complianceScope.typeIpCidr')}</option>
               <option value="ip_range">{t('complianceScope.typeIpRange')}</option>
               <option value="mac_prefix_arp">{t('complianceScope.typeMacPrefixArp')}</option>
               <option value="mac_prefix_ipguard">{t('complianceScope.typeMacPrefixIpguard')}</option>
             </select>
-            <p className="mt-1 text-xs text-gray-500">{getScopeTypeDesc(scopeType)}</p>
+            <p className="mt-1 text-xs text-muted-foreground">{getScopeTypeDesc(scopeType)}</p>
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700">
+            <label className="block text-sm font-medium text-foreground">
               {t('complianceScope.valueLabel')}
             </label>
             <input
@@ -379,12 +379,12 @@ const ComplianceScope: React.FC = () => {
               value={scopeValue}
               onChange={(e) => setScopeValue(e.target.value)}
               placeholder={getScopePlaceholder(scopeType)}
-              className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 font-mono text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              className="mt-1 block w-full rounded-md border border-border px-3 py-2 font-mono text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
             />
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700">
+            <label className="block text-sm font-medium text-foreground">
               {t('complianceScope.descriptionLabel')}
             </label>
             <textarea
@@ -392,12 +392,12 @@ const ComplianceScope: React.FC = () => {
               onChange={(e) => setDescription(e.target.value)}
               placeholder={t('complianceScope.descriptionPlaceholder')}
               rows={3}
-              className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              className="mt-1 block w-full rounded-md border border-border px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
             />
           </div>
 
           {formError && (
-            <div className="rounded-md bg-red-50 p-3 text-sm text-red-600">
+            <div className="rounded-md bg-red-50 p-3 text-sm text-red-600 dark:bg-red-500/10 dark:text-red-400">
               {formError}
             </div>
           )}
@@ -424,10 +424,10 @@ const ComplianceScope: React.FC = () => {
         title={t('common.confirmDelete')}
       >
         <div className="space-y-4">
-          <p className="text-sm text-gray-700">
+          <p className="text-sm text-foreground">
             {t('complianceScope.confirmDelete')}
           </p>
-          <div className="rounded-md bg-gray-50 p-3 text-sm">
+          <div className="rounded-md bg-muted p-3 text-sm">
             <p><span className="font-medium">{t('complianceScope.typeLabel')}:</span> {selectedScope && getScopeTypeLabel(selectedScope.scope_type)}</p>
             <p><span className="font-medium">{t('complianceScope.valueLabel')}:</span> <span className="font-mono">{selectedScope?.scope_value}</span></p>
           </div>
@@ -457,18 +457,18 @@ const ComplianceScope: React.FC = () => {
           <div className="space-y-4">
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <dt className="text-sm font-medium text-gray-500">{t('complianceScope.typeLabel')}</dt>
-                <dd className="mt-1 text-sm text-gray-900">{getScopeTypeLabel(selectedScope.scope_type)}</dd>
+                <dt className="text-sm font-medium text-muted-foreground">{t('complianceScope.typeLabel')}</dt>
+                <dd className="mt-1 text-sm text-foreground">{getScopeTypeLabel(selectedScope.scope_type)}</dd>
               </div>
               <div>
-                <dt className="text-sm font-medium text-gray-500">{t('complianceScope.activeLabel')}</dt>
+                <dt className="text-sm font-medium text-muted-foreground">{t('complianceScope.activeLabel')}</dt>
                 <dd className="mt-1 text-sm">
                   {selectedScope.is_active ? (
-                    <span className="inline-flex items-center rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-800">
+                    <span className="inline-flex items-center rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-800 dark:bg-green-500/15 dark:text-green-400">
                       <CheckCircle className="mr-1 h-3 w-3" /> {t('complianceScope.enabled')}
                     </span>
                   ) : (
-                    <span className="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-500">
+                    <span className="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-muted-foreground dark:bg-muted">
                       <XCircle className="mr-1 h-3 w-3" /> {t('complianceScope.disabled')}
                     </span>
                   )}
@@ -476,22 +476,22 @@ const ComplianceScope: React.FC = () => {
               </div>
             </div>
             <div>
-              <dt className="text-sm font-medium text-gray-500">{t('complianceScope.valueLabel')}</dt>
-              <dd className="mt-1 font-mono text-sm text-gray-900">{selectedScope.scope_value}</dd>
-              <p className="mt-1 text-xs text-gray-500">{getScopeTypeDesc(selectedScope.scope_type)}</p>
+              <dt className="text-sm font-medium text-muted-foreground">{t('complianceScope.valueLabel')}</dt>
+              <dd className="mt-1 font-mono text-sm text-foreground">{selectedScope.scope_value}</dd>
+              <p className="mt-1 text-xs text-muted-foreground">{getScopeTypeDesc(selectedScope.scope_type)}</p>
             </div>
             <div>
-              <dt className="text-sm font-medium text-gray-500">{t('complianceScope.descriptionLabel')}</dt>
-              <dd className="mt-1 text-sm text-gray-900">{selectedScope.description || '-'}</dd>
+              <dt className="text-sm font-medium text-muted-foreground">{t('complianceScope.descriptionLabel')}</dt>
+              <dd className="mt-1 text-sm text-foreground">{selectedScope.description || '-'}</dd>
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <dt className="text-sm font-medium text-gray-500">{t('complianceScope.createdBy')}</dt>
-                <dd className="mt-1 text-sm text-gray-900">{selectedScope.created_by}</dd>
+                <dt className="text-sm font-medium text-muted-foreground">{t('complianceScope.createdBy')}</dt>
+                <dd className="mt-1 text-sm text-foreground">{selectedScope.created_by}</dd>
               </div>
               <div>
-                <dt className="text-sm font-medium text-gray-500">{t('complianceScope.createdAt')}</dt>
-                <dd className="mt-1 text-sm text-gray-900">{formatDate(selectedScope.created_at)}</dd>
+                <dt className="text-sm font-medium text-muted-foreground">{t('complianceScope.createdAt')}</dt>
+                <dd className="mt-1 text-sm text-foreground">{formatDate(selectedScope.created_at)}</dd>
               </div>
             </div>
           </div>

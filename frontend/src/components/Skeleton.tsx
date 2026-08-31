@@ -65,7 +65,7 @@ export const TableSkeleton: React.FC<{ rows?: number; columns?: number }> = ({
   <div className="bg-card shadow rounded-lg overflow-hidden">
     <div className="overflow-x-auto">
       <table className="min-w-full divide-y divide-border">
-        <thead className="bg-background">
+        <thead className="bg-card">
           <tr>
             {Array.from({ length: columns }).map((_, i) => (
               <th

@@ -522,9 +522,9 @@ const Terminals: React.FC = () => {
         {!filterCollapsed && (
         <>
         <div className="p-4 sm:p-5">
-          <div className="flex flex-col xl:flex-row gap-4">
+          <div className="flex flex-col gap-4">
             {/* Search Input */}
-            <div className="flex-1 relative">
+            <div className="relative">
               <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-5 w-5 text-muted-foreground" />
               <input
                 type="text"
@@ -759,7 +759,7 @@ const Terminals: React.FC = () => {
       <div className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden">
         <div className="overflow-x-auto">
           <table className="min-w-full divide-y divide-border">
-            <thead className="bg-background">
+            <thead className="bg-card">
               <tr>
                 <th className="px-4 sm:px-6 py-3.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider">
                   {t('terminal.mac')}

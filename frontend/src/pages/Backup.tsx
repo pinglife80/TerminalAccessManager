@@ -7,6 +7,7 @@ import { formatDate, getErrorMessage } from '@/lib/utils';
 import { HardDrive, Plus, Download, RotateCcw, Trash2, Play, Settings, CheckCircle, AlertCircle, TestTube, Save, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { PrimaryButton } from '@/components/Button';
+import { Pagination } from '@/components/Pagination';
 
 interface BackupConfig {
   enabled: boolean;
@@ -99,6 +100,10 @@ const Backup: React.FC = () => {
   const [restoreContents, setRestoreContents] = useState<BackupContents | null>(null);
   const [restoreLoading, setRestoreLoading] = useState(false);
   const [isWhitelistRestore, setIsWhitelistRestore] = useState(false);
+  const [backupPage, setBackupPage] = useState(1);
+  const [backupPageSize, setBackupPageSize] = useState(10);
+  const [whitelistPage, setWhitelistPage] = useState(1);
+  const [whitelistPageSize, setWhitelistPageSize] = useState(10);
 
   const { register, handleSubmit, reset, watch, setValue } = useForm<BackupConfig>({
     defaultValues: {
@@ -278,6 +283,14 @@ const Backup: React.FC = () => {
     if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(2) + ' KB';
     return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
   };
+
+  const backupTotalPages = Math.max(1, Math.ceil(backups.length / backupPageSize));
+  const pagedBackups = backups.slice((backupPage - 1) * backupPageSize, backupPage * backupPageSize);
+  const whitelistTotalPages = Math.max(1, Math.ceil(whitelistBackups.length / whitelistPageSize));
+  const pagedWhitelistBackups = whitelistBackups.slice(
+    (whitelistPage - 1) * whitelistPageSize,
+    whitelistPage * whitelistPageSize,
+  );
 
   return (
     <div className="min-h-full bg-background p-4 sm:p-6 lg:p-8">
@@ -544,7 +557,7 @@ const Backup: React.FC = () => {
                 </div>
               ) : (
                 <div className="space-y-3">
-                  {backups.map((backup) => (
+                  {pagedBackups.map((backup) => (
                     <div key={backup.filename} className="flex items-center justify-between p-4 bg-background rounded-xl">
                       <div className="flex items-center gap-4">
                         <div className="w-10 h-10 rounded-lg bg-blue-100 flex items-center justify-center">
@@ -590,6 +603,17 @@ const Backup: React.FC = () => {
                   ))}
                 </div>
               )}
+              {backups.length > 0 && (
+                <Pagination
+                  currentPage={backupPage}
+                  totalPages={backupTotalPages}
+                  onPageChange={setBackupPage}
+                  pageSize={backupPageSize}
+                  onPageSizeChange={(size) => { setBackupPageSize(size); setBackupPage(1); }}
+                  totalItems={backups.length}
+                  variant="bottom"
+                />
+              )}
             </div>
 
             <div className="bg-card rounded-2xl border border-border p-6">
@@ -614,7 +638,7 @@ const Backup: React.FC = () => {
                 </div>
               ) : (
                 <div className="space-y-3">
-                  {whitelistBackups.map((backup) => (
+                  {pagedWhitelistBackups.map((backup) => (
                     <div key={backup.filename} className="flex items-center justify-between p-4 bg-background rounded-xl">
                       <div className="flex items-center gap-4">
                         <div className="w-10 h-10 rounded-lg bg-green-100 flex items-center justify-center">
@@ -655,6 +679,17 @@ const Backup: React.FC = () => {
                     </div>
                   ))}
                 </div>
+              )}
+              {whitelistBackups.length > 0 && (
+                <Pagination
+                  currentPage={whitelistPage}
+                  totalPages={whitelistTotalPages}
+                  onPageChange={setWhitelistPage}
+                  pageSize={whitelistPageSize}
+                  onPageSizeChange={(size) => { setWhitelistPageSize(size); setWhitelistPage(1); }}
+                  totalItems={whitelistBackups.length}
+                  variant="bottom"
+                />
               )}
             </div>
           </div>
