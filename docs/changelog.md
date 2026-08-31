@@ -1,6 +1,6 @@
 # 更新日志
 
-> 文档版本：v3.17.2  更新日期：2026-08-31
+> 文档版本：v3.17.3  更新日期：2026-08-31
 
 本文件记录 TerminalAccessManager 的所有重要变更。
 
@@ -8,6 +8,28 @@
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ***
+
+## [3.17.3] - 2026-08-31
+
+### 修复
+
+- **数据状态一致性根治（对齐口径 + 根治中间态）**：新增 `Terminal.block_state` 字段（037 迁移）区分 `non_compliant + unblocked` 中间态的「不可封锁（no_firewall）」与「封锁失败待重试（block_failed）」；`get_stats` 新增 `non_compliant_unblocked`，`get_blacklist_stats` 拆分 `pending_retry_block`（仅可重试）与 `unblockable_non_compliant`（无绑定防火墙）并新增 `firewall_ip_count`（防火墙实际封锁 IP 数）曝光
+  - 关联文件：`models/terminal.py`、`alembic/versions/037_terminal_block_state.py`、`services/compliance_service.py`、`services/terminal_service.py`、`services/firewall_reconciliation_service.py`、`main.py`
+- **调度器 retry-block 回填与收敛**：无防火墙终端标 `no_firewall`、封锁失败标 `block_failed`、成功/已有条目标 `None`，首轮调度后结束 `block_state=NULL` 历史残留
+  - 关联文件：`main.py`
+- **统计口径显式化（前端）**：终端页拆「非合规已封锁 / 非合规待封锁」两卡并展示 `block_state` 徽标；黑名单页新增「防火墙实际封锁」「不可封锁非合规」卡，网格调整为 `xl:grid-cols-7`；新增 `block_state` 筛选与跳转联动
+  - 关联文件：`Terminals.tsx`、`Blacklist.tsx`、`useTerminalData.ts`、`schemas/terminal.py`、`endpoints/terminals.py`
+- **深信服分页拉取修复**：`get_blocked_ips` 原仅读取第一页（200 条），低估防火墙实际封锁数、导致对账每轮误重复封堵已在防火墙的 IP；改为循环聚合全部分页直至 `totalItems` 耗尽
+  - 关联文件：`sangfor_service.py`
+- **会话超时自动注销**：倒计时归零后延迟到下一事件循环执行跳转，先落地 logout 状态再跳登录页，修复弹窗消失但页面未退出登录的竞态
+  - 关联文件：`useTokenExpiration.ts`
+
+### 改进
+
+- **i18n 三语补全**：新增 `blacklist.statsFirewallBlocked/statsUnblockable`、`terminal.blockState.*`、`terminal.nonCompliantBlocked/Unblocked` 等文案键（en/zh/ja 对齐）
+  - 关联文件：`i18n/locales/{en,zh,ja}.ts`
+- **前端交互一致性**：防火墙对账确认由浏览器原生 `confirm` 改为系统 `Modal`；终端统计卡标签统一最小高度对齐，消除文本换行导致的尺寸不一致
+  - 关联文件：`GeneralSettings.tsx`
 
 ## [3.17.2] - 2026-08-31
 

@@ -1,12 +1,48 @@
 # 版本跟踪记录
 
-> 文档版本：v3.17.2 | 更新日期：2026-08-31
+> 文档版本：v3.17.3 | 更新日期：2026-08-31
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
 
 ---
+
+## [v3.17.3] - 2026-08-31
+
+### 数据状态一致性问题根治：对齐统计口径 + 根治 non_compliant+unblocked 中间态（Patch 版本）
+
+#### 背景
+
+用户反馈三个长期无法消除的现象：① Dashboard/终端/黑名单页「非合规且封锁」统计总与防火墙实际封锁数对不上；② 终端管理页存在大量 non_compliant + unblocked（非合规未封锁）终端；③ 黑名单页总堆积大量 Block Pending Retry。经代码审查确认三者同源：统计口径混淆（三个本质不同对象被强行对齐）+ 中间态无出口（non_compliant+unblocked 无标记、永久堆积并重复计入 Block Pending Retry）。本次一次性根治。
+
+#### 主要变更
+
+| 变更项 | 说明 |
+|--------|------|
+| 新增 `Terminal.block_state` 字段 | 037 迁移；`None`=正常 / `no_firewall`=无绑定防火墙不可封锁 / `block_failed`=封锁失败待重试 |
+| 合规状态机落地 | `_apply_compliance_result`、`auto_block_non_compliant` 各封锁落点叠加 `block_state` |
+| 调度器 retry-block 回填 | 无防火墙→`no_firewall`、失败→`block_failed`、成功→`None`，首轮后清除 NULL 残留 |
+| 统计口径拆分 | `get_stats` 新增 `non_compliant_unblocked`；`get_blacklist_stats` 拆分可重试/不可封锁并曝光 `firewall_ip_count` |
+| 对账自愈联动 | `_repair_stale_terminal_status` 重置时为 non_compliant 回填 `block_failed` |
+| 前端显式化 | 终端页拆「非合规已封锁/待封锁」卡 + `block_state` 徽标；黑名单页新增「防火墙实际封锁」「不可封锁非合规」卡；新增 `block_state` 筛选跳转 |
+| 深信服分页拉取修复 | `get_blocked_ips` 循环聚合全部分页（原仅第一页 200 条），根除对账每轮误重复封堵 |
+| 会话超时自动注销修复 | 倒计时归零后延迟跳转，先落地 logout 状态，修复弹窗消失但未跳登录页的竞态 |
+| 前端交互一致性 | 防火墙对账确认改用系统 `Modal`；终端统计卡标签统一最小高度对齐 |
+
+#### 升级步骤（推荐：一键升级）
+
+```bash
+git checkout main
+git pull origin main
+./manage.sh upgrade
+```
+
+#### 升级注意事项
+
+- 本次含数据库迁移 037（`terminals` 新增 `block_state` 列），`./manage.sh upgrade` 会自动执行 `alembic upgrade head`。
+- 历史 `block_state=NULL` 由调度器首轮 retry-block 自动回填，无需一次性数据迁移。
+- 无破坏性变更；防火墙实际封锁数口径为「各防火墙封锁 IP 数之和，未跨防火墙去重」。
 
 ## [v3.17.2] - 2026-08-31
 
