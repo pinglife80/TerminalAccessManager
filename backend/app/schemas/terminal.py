@@ -33,6 +33,7 @@ class TerminalResponse(TerminalBase):
     compliance_status: str = Field("unknown", description="Compliance status: compliant/bypass/non_compliant/unknown")
     wl_match_type: str | None = Field(None, description="Whitelist match type: mac/ip/both/null")
     firewall_tag: str | None = Field(None, description="Firewall tag from block operation")
+    block_state: str | None = Field(None, description="Blockable state: null/no_firewall/block_failed")
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -45,6 +46,7 @@ class TerminalQuery(BaseModel):
     compliance_status: str | None = Field(None, description="Filter by compliance status")
     source_tag: str | None = Field(None, description="Filter by source tag")
     firewall_tag: str | None = Field(None, description="Filter by firewall tag (via blacklist)")
+    block_state: str | None = Field(None, description="Filter by block_state (no_firewall/block_failed)")
     arp_enabled_only: bool = Field(False, description="Restrict to enabled ARP data sources")
     start_date: str | None = Field(None, description="Filter by start date (YYYY-MM-DD)")
     end_date: str | None = Field(None, description="Filter by end date (YYYY-MM-DD)")

@@ -39,7 +39,13 @@ export const useTokenExpiration = (): SessionWarning => {
   const performLogout = useCallback(() => {
     dismissWarning();
     logout();
-    window.location.replace('/login');
+    // Defer the hard redirect to the next tick so React flushes the logout
+    // state update (isAuthenticated -> false) before navigation. Without this,
+    // the synchronous location change can race with React's re-render, leaving
+    // the dialog dismissed but the page still on the authenticated route.
+    window.setTimeout(() => {
+      window.location.replace('/login');
+    }, 0);
   }, [dismissWarning, logout]);
 
   const resetIdleTimer = useCallback(() => {

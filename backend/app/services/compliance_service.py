@@ -468,6 +468,11 @@ class ComplianceService:
 
         if not firewall_tags:
             logger.warning(f"No firewall bindings found for ARP source '{arp_source_tag}'")
+            # Mark these non_compliant terminals as unblockable so they are reported
+            # separately from the actionable retry backlog.
+            for entry in non_compliant_entries:
+                entry.block_state = "no_firewall"
+            await self.db.flush()
             return AutoBlockResult(
                 total_non_compliant=len(non_compliant_entries),
                 blocked=0,
@@ -559,6 +564,7 @@ class ComplianceService:
                 # Update MAC status
                 entry.status = "blocked"
                 entry.firewall_tag = successfully_blocked_fw[0] if len(successfully_blocked_fw) == 1 else ",".join(successfully_blocked_fw)
+                entry.block_state = None
                 # Update comments with block info
                 fw_info = ",".join(successfully_blocked_fw)
                 block_comment = f"Auto-blocked by TAM on firewall [{fw_info}]"
@@ -670,6 +676,7 @@ class ComplianceService:
                 )
             else:
                 skipped += 1
+                entry.block_state = "block_failed"
 
         # Close all pre-resolved SangforService instances
         for svc in sangfor_services.values():
@@ -1812,6 +1819,7 @@ class ComplianceService:
                         if successful_fw_tags:
                             terminal.status = "unblocked"
                             terminal.firewall_tag = None
+                            terminal.block_state = None
                             unblocked = True
                             fw_info = ",".join(successful_fw_tags)
                             unblock_comment = f"Auto-unblocked by TAM from firewall [{fw_info}]"
@@ -1870,6 +1878,7 @@ class ComplianceService:
                     else:
                         terminal.status = "unblocked"
                         terminal.firewall_tag = None
+                        terminal.block_state = None
                         unblocked = True
 
             # Check if terminal needs (re-)block: non-compliant AND no active blacklist entry on ALL required firewalls
@@ -1898,10 +1907,12 @@ class ComplianceService:
                         # No bound firewall: cannot block, do NOT forge blocked status.
                         terminal.status = "unblocked"
                         terminal.firewall_tag = None
+                        terminal.block_state = "no_firewall"
                     elif terminal.status != "blocked":
                         # All firewalls already have active entries, ensure terminal status is correct
                         terminal.status = "blocked"
                         terminal.firewall_tag = fw_tags[0] if len(fw_tags) == 1 else ",".join(fw_tags)
+                        terminal.block_state = None
                 else:
                     # Need to block on missing firewalls
                     try:
@@ -2010,6 +2021,7 @@ class ComplianceService:
                             all_active_fw = list(active_fw_tags | set(successfully_blocked_fw))
                             terminal.status = "blocked"
                             terminal.firewall_tag = all_active_fw[0] if len(all_active_fw) == 1 else ",".join(all_active_fw)
+                            terminal.block_state = None
                             fw_info = ",".join(successfully_blocked_fw)
                             block_comment = f"Auto-blocked by TAM on firewall [{fw_info}]"
                             if terminal.comments:
@@ -2022,12 +2034,25 @@ class ComplianceService:
                             else:
                                 logger.info(f"Auto-blocked {ip_addr} (now non_compliant) on firewall(s) '{fw_info}'")
                         else:
-                            # All firewall blocks failed, rollback compliance status to old value
-                            terminal.compliance_status = old_compliance
-                            logger.warning(
-                                f"Rollback compliance status to {old_compliance} for {ip_addr}/{mac_addr} - "
-                                f"failed to block on all required firewalls"
-                            )
+                            # All firewall blocks failed.
+                            if old_compliance == "non_compliant":
+                                # Retry failure on an already non_compliant terminal: keep
+                                # non_compliant+unblocked but mark block_state so it is
+                                # reported as an actionable retry (not a permanent backlog).
+                                terminal.block_state = "block_failed"
+                                logger.warning(
+                                    f"Retry block failed for {ip_addr}/{mac_addr}: keeping non_compliant "
+                                    f"with block_state='block_failed'"
+                                )
+                            else:
+                                # First-time downgrade failed: rollback compliance status to
+                                # old value, leaving no intermediate non_compliant+unblocked state.
+                                terminal.compliance_status = old_compliance
+                                terminal.block_state = None
+                                logger.warning(
+                                    f"Rollback compliance status to {old_compliance} for {ip_addr}/{mac_addr} - "
+                                    f"failed to block on all required firewalls"
+                                )
         else:
             if terminal.status == "blocked" and not terminal.firewall_tag:
                 fw_tags = await self._get_bound_firewall_tags(terminal.source_tag)

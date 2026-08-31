@@ -1,6 +1,6 @@
 # TerminalAccessManager 业务流程文档
 
-> 文档版本：v3.17.2  更新日期：2026-08-31
+> 文档版本：v3.17.3  更新日期：2026-08-31
 >
 > 本文档详细说明 TerminalAccessManager 的核心业务流程，包括数据采集、合规判定、封锁/解封的完整生命周期。
 
@@ -668,6 +668,18 @@ async def cleanup_expired_blacklist(self) -> int:
 
 > **v3.7.0 变更**：compliant/bypass → non_compliant 的翻转不再立即生效，需连续 N 次同步确认（默认 2 次）后才正式变更状态，以消除 IPGuard 数据波动导致的合规振荡。详见 [3.4 翻转确认机制](#34-翻转确认机制v370-新增)。
 
+### 7.3 封锁状态（block_state）语义（v3.17.3 新增）
+
+`compliance_status='non_compliant'` 且 `status='unblocked'` 是合规状态机的中间态，通过 `block_state` 字段区分其可收敛性，避免永久积压进 Block Pending Retry：
+
+| block_state | 含义 | 统计归属 |
+|------------|------|---------|
+| `None` | 正常（已封锁或非 non_compliant 中间态不适用） | — |
+| `no_firewall` | non_compliant 但 ARP 源无绑定防火墙，不可自动封锁 | 黑名单页「不可封锁非合规」 |
+| `block_failed` | non_compliant 且封锁失败，可由 retry-block 重试 | 黑名单页「Block Pending Retry」 |
+
+> 调度器 `retry-block` 首轮会对历史 NULL 自动回填：无防火墙→`no_firewall`、封锁失败→`block_failed`、成功→`None`，从而结束中间态永久堆积。
+
 ---
 
 ## 8. 关键参数说明
@@ -681,6 +693,7 @@ async def cleanup_expired_blacklist(self) -> int:
 | `source_tag` | string | ARP数据源标签 |
 | `firewall_tag` | string | 绑定的防火墙标签 |
 | `wl_match_type` | string | 白名单匹配类型：mac/ip/both |
+| `block_state` | string | 中间态封锁状态：`None`/`no_firewall`/`block_failed`（v3.17.3 新增） |
 
 ### 8.2 黑名单相关参数
 
