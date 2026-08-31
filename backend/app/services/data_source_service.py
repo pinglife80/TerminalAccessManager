@@ -123,28 +123,41 @@ class DataSourceService:
         source_type = source.type
         source_name = source.name
 
-        # Count affected terminals
-        terminal_stmt = select(Terminal).where(Terminal.source_tag == tag)
-        terminal_result = await self.db.execute(terminal_stmt)
-        terminals = terminal_result.scalars().all()
-        terminal_count = len(terminals)
-        blocked_count = sum(1 for t in terminals if t.status == "blocked")
+        # Count affected terminals / blacklist / bindings by source type
+        if source_type == "sangfor":
+            # Sangfor firewalls associate terminals via firewall_tag
+            terminal_stmt = select(Terminal).where(Terminal.firewall_tag.contains(tag))
+            terminal_result = await self.db.execute(terminal_stmt)
+            terminals = terminal_result.scalars().all()
+            terminal_count = len(terminals)
+            blocked_count = sum(1 for t in terminals if t.status == "blocked")
 
-        # Count affected blacklist entries
-        bl_stmt = select(Blacklist).where(
-            (Blacklist.source_tag == tag) | (Blacklist.firewall_tag == tag)
-        )
-        bl_result = await self.db.execute(bl_stmt)
-        blacklist_entries = bl_result.scalars().all()
-        bl_count = len(blacklist_entries)
+            bl_stmt = select(Blacklist).where(Blacklist.firewall_tag == tag)
+            bl_result = await self.db.execute(bl_stmt)
+            blacklist_entries = bl_result.scalars().all()
+            bl_count = len(blacklist_entries)
 
-        # Count affected bindings
-        bind_stmt = select(DataSourceBinding).where(
-            (DataSourceBinding.arp_source_tag == tag) | (DataSourceBinding.firewall_tag == tag)
-        )
-        bind_result = await self.db.execute(bind_stmt)
-        bindings = bind_result.scalars().all()
-        bind_count = len(bindings)
+            bind_stmt = select(DataSourceBinding).where(DataSourceBinding.firewall_tag == tag)
+            bind_result = await self.db.execute(bind_stmt)
+            bindings = bind_result.scalars().all()
+            bind_count = len(bindings)
+        else:
+            # ARP sources associate terminals/blacklist via source_tag
+            terminal_stmt = select(Terminal).where(Terminal.source_tag == tag)
+            terminal_result = await self.db.execute(terminal_stmt)
+            terminals = terminal_result.scalars().all()
+            terminal_count = len(terminals)
+            blocked_count = sum(1 for t in terminals if t.status == "blocked")
+
+            bl_stmt = select(Blacklist).where(Blacklist.source_tag == tag)
+            bl_result = await self.db.execute(bl_stmt)
+            blacklist_entries = bl_result.scalars().all()
+            bl_count = len(blacklist_entries)
+
+            bind_stmt = select(DataSourceBinding).where(DataSourceBinding.arp_source_tag == tag)
+            bind_result = await self.db.execute(bind_stmt)
+            bindings = bind_result.scalars().all()
+            bind_count = len(bindings)
 
         # Build warnings and actions
         warnings = []
@@ -455,8 +468,8 @@ class DataSourceService:
         bl_entries = bl_result.scalars().all()
         bl_count = len(bl_entries)
 
-        # Count distinct blocked IPs
-        blocked_ips = set(bl.ip_address for bl in bl_entries)
+        # Count distinct blocked IPs (exclude NULL-IP reconciliation entries)
+        blocked_ips = set(bl.ip_address for bl in bl_entries if bl.ip_address)
         blocked_count = len(blocked_ips)
 
         warnings = []

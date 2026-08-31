@@ -151,24 +151,42 @@ async def preview_delete_baseline(
     tag = baseline.tag
     name = baseline.name
 
-    # Count terminals with compliance_status determined by this baseline
+    # Count terminals whose compliance is associated with this baseline (scoped by tag)
     from app.models.terminal import Terminal
+    from app.services.compliance_service import ComplianceService
 
-    # Count terminals with non-unknown compliance status
+    cs = ComplianceService(db)
+    try:
+        ipguard_data = await cs._load_all_ipguard_cache()
+    except Exception:
+        ipguard_data = {}
+
+    tag_entries = ipguard_data.get(tag, [])
+    tag_ips = {str(e.get("ip_address")) for e in tag_entries if e.get("ip_address")}
+    tag_macs = {str(e.get("mac_address", "")).upper().replace(":", "-") for e in tag_entries if e.get("mac_address")}
+
     terminal_stmt = select(Terminal).where(Terminal.compliance_status.in_(["compliant", "non_compliant"]))
     terminal_result = await db.execute(terminal_stmt)
-    all_compliant_terminals = terminal_result.scalars().all()
+    terminals = terminal_result.scalars().all()
 
-    compliant_count = sum(1 for t in all_compliant_terminals if t.compliance_status == "compliant")
-    non_compliant_count = sum(1 for t in all_compliant_terminals if t.compliance_status == "non_compliant")
+    compliant_count = 0
+    non_compliant_count = 0
+    for term in terminals:
+        ip_match = term.ip_address in tag_ips
+        mac_match = bool(term.mac_address) and (term.mac_address.upper().replace(":", "-") in tag_macs)
+        if ip_match or mac_match:
+            if term.compliance_status == "compliant":
+                compliant_count += 1
+            else:
+                non_compliant_count += 1
 
     warnings = []
     actions = []
 
     if compliant_count > 0:
-        warnings.append(f"该基准当前覆盖 {compliant_count} 个合规终端")
+        warnings.append(f"删除后 {compliant_count} 个合规终端将被重新评估")
     if non_compliant_count > 0:
-        warnings.append(f"该基准关联 {non_compliant_count} 个不合规终端")
+        warnings.append(f"删除后 {non_compliant_count} 个不合规终端可能被自动封堵")
 
     actions.append(f"清理 Redis 缓存 (ipguard:{tag})")
     actions.append(f"删除合规基准 [{name}]")
@@ -179,7 +197,7 @@ async def preview_delete_baseline(
         warnings=warnings,
         actions=actions,
         affected=DeletePreviewAffected(
-            compliant_terminals=compliant_count + non_compliant_count,
+            compliant_terminals=compliant_count,
         ),
     )
 

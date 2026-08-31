@@ -253,18 +253,12 @@ class BackupService:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         return f"backup_{backup_type}_{timestamp}"
 
-    async def _backup_database(self, temp_dir: str) -> str:
-        """Backup PostgreSQL database using pg_dump"""
-        backup_path = os.path.join(temp_dir, "database.sql")
+    def _resolve_db_params(self) -> tuple[str, int, str, str, str]:
+        """Resolve (host, port, user, name, password) for pg_dump/pg_restore.
 
-        # Resolve DB connection params for pg_dump.
-        # Priority (highest → lowest):
-        #   1. DATABASE_URL — the canonical way docker-compose / production injects it
-        #      (postgresql+asyncpg://user:pass@host:port/dbname)
-        #   2. POSTGRES_* explicit settings (legacy overrides)
-        #   3. DB_HOST / DB_PORT / DB_USER / DB_NAME / DB_PASSWORD (local-dev defaults,
-        #      but DB_HOST has a default 'localhost' in config.py, so only used when
-        #      neither DATABASE_URL nor POSTGRES_* yields a usable host)
+        Priority: DATABASE_URL (canonical, injected by docker-compose /
+        production) → DB_* explicit settings (fallback).
+        """
         import re
         import urllib.parse
 
@@ -274,47 +268,44 @@ class BackupService:
         db_name = ""
         db_password = ""
 
-        # --- Attempt 1: parse DATABASE_URL ---
-        url = getattr(settings, 'DATABASE_URL', '') or ''
+        # Parse DATABASE_URL (postgresql:// or postgresql+asyncpg://)
+        url = getattr(settings, "DATABASE_URL", "") or ""
         if url:
-            # Handle both standard and async dialects: postgresql:// and postgresql+asyncpg://
             parsed = re.match(
-                r'postgresql(?:\+\w+)?://([^:]+):(.+?)@([^:/]+)(?::(\d+))?/([^?]+)',
-                url
+                r"postgresql(?:\+\w+)?://([^:]+):(.+?)@([^:/]+)(?::(\d+))?/([^?]+)",
+                url,
             )
             if parsed:
                 db_user = urllib.parse.unquote(parsed.group(1))
                 db_password = urllib.parse.unquote(parsed.group(2))
                 db_host = parsed.group(3)
-                db_port = int(parsed.group(4) or '5432')
+                db_port = int(parsed.group(4) or "5432")
                 db_name = parsed.group(5)
 
-        # --- Attempt 2/3: explicit POSTGRES_* or DB_* fields as fallback ---
+        # Fall back to explicit DB_* settings when URL yielded no host
         if not db_host:
-            pg_server = getattr(settings, 'POSTGRES_SERVER', '') or ''
-            db_host = pg_server or (getattr(settings, 'DB_HOST', '') or '')
-
-            # Only use fallback values when DATABASE_URL was not parsed
+            db_host = getattr(settings, "DB_HOST", "") or ""
             if not db_user:
-                db_user = (getattr(settings, 'POSTGRES_USER', '')
-                           or getattr(settings, 'DB_USER', '') or '')
+                db_user = getattr(settings, "DB_USER", "") or ""
             if not db_name:
-                db_name = (getattr(settings, 'POSTGRES_DB', '')
-                           or getattr(settings, 'DB_NAME', '') or '')
+                db_name = getattr(settings, "DB_NAME", "") or ""
             if not db_password:
-                db_password = (getattr(settings, 'POSTGRES_PASSWORD', '')
-                               or getattr(settings, 'DB_PASSWORD', '') or '')
-            # For port, fall back to POSTGRES_PORT > DB_PORT > 5432
-            if getattr(settings, 'POSTGRES_PORT', 0):
-                db_port = int(settings.POSTGRES_PORT)
-            elif getattr(settings, 'DB_PORT', 0):
+                db_password = getattr(settings, "DB_PASSWORD", "") or ""
+            if getattr(settings, "DB_PORT", 0):
                 db_port = int(settings.DB_PORT)
 
         if not db_host:
             raise Exception(
-                "PostgreSQL not configured, cannot backup database "
-                "(no usable DATABASE_URL, POSTGRES_*, or DB_* settings)"
+                "PostgreSQL not configured, cannot resolve database connection "
+                "(no usable DATABASE_URL or DB_* settings)"
             )
+
+        return db_host, db_port, db_user, db_name, db_password
+
+    async def _backup_database(self, temp_dir: str) -> str:
+        """Backup PostgreSQL database using pg_dump"""
+        backup_path = os.path.join(temp_dir, "database.sql")
+        db_host, db_port, db_user, db_name, db_password = self._resolve_db_params()
 
         # Build pg_dump command
         cmd = [
@@ -730,8 +721,8 @@ class BackupService:
                 logger.info("Whitelist restoration completed")
 
                 try:
-                    from app.services.compliance_service import recalculate_all_compliance
-                    await recalculate_all_compliance(self.db)
+                    from app.services.compliance_service import ComplianceService
+                    await ComplianceService(self.db).recalculate_all_compliance()
                     logger.info("Compliance recalculation triggered after whitelist restore")
                 except Exception as e:
                     logger.error(f"Failed to trigger compliance recalculation: {e}")
@@ -789,8 +780,8 @@ class BackupService:
             logger.info("Whitelist restored from JSON")
 
             try:
-                from app.services.compliance_service import recalculate_all_compliance
-                await recalculate_all_compliance(self.db)
+                from app.services.compliance_service import ComplianceService
+                await ComplianceService(self.db).recalculate_all_compliance()
                 logger.info("Compliance recalculation triggered after whitelist restore")
             except Exception as e:
                 logger.error(f"Failed to trigger compliance recalculation: {e}")
@@ -1072,18 +1063,20 @@ class BackupService:
 
     async def _restore_database(self, db_file: str):
         """Restore PostgreSQL database"""
+        db_host, db_port, db_user, db_name, db_password = self._resolve_db_params()
+
         cmd = [
             "pg_restore",
-            "-h", settings.POSTGRES_SERVER,
-            "-p", str(settings.POSTGRES_PORT),
-            "-U", settings.POSTGRES_USER,
-            "-d", settings.POSTGRES_DB,
+            "-h", db_host,
+            "-p", str(db_port),
+            "-U", db_user,
+            "-d", db_name,
             "-c",  # Clean (drop) database objects before creating them
             db_file,
         ]
 
         env = os.environ.copy()
-        env["PGPASSWORD"] = settings.POSTGRES_PASSWORD
+        env["PGPASSWORD"] = db_password
 
         process = await asyncio.create_subprocess_exec(
             *cmd,

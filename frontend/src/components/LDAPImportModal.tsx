@@ -203,7 +203,7 @@ const LDAPImportModal: React.FC<LDAPImportModalProps> = ({ isOpen, onClose, onIm
               <button
                 type="button"
                 onClick={() => setShowAdvanced(!showAdvanced)}
-                className="text-sm text-blue-600 hover:text-blue-700 flex items-center gap-1"
+                className="text-sm text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 flex items-center gap-1"
               >
                 <Filter className="h-4 w-4" />
                 {showAdvanced ? t('users.hideAdvanced') : t('users.showAdvanced')}
@@ -215,7 +215,7 @@ const LDAPImportModal: React.FC<LDAPImportModalProps> = ({ isOpen, onClose, onIm
               </button>
 
               {showAdvanced && (
-                <div className="space-y-3 bg-gray-50 p-4 rounded-lg">
+                <div className="space-y-3 bg-muted p-4 rounded-lg">
                   <div>
                     <label className="block text-sm font-medium text-muted-foreground mb-1">
                       {t('users.searchBase')}
@@ -279,7 +279,7 @@ const LDAPImportModal: React.FC<LDAPImportModalProps> = ({ isOpen, onClose, onIm
                   </div>
                   <button
                     onClick={toggleAllUsers}
-                    className="text-sm text-blue-600 hover:text-blue-700"
+                    className="text-sm text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300"
                   >
                     {selectedUsers.length === users.length
                       ? t('users.deselectAll')
@@ -289,7 +289,7 @@ const LDAPImportModal: React.FC<LDAPImportModalProps> = ({ isOpen, onClose, onIm
 
                 <div className="max-h-72 overflow-y-auto border border-border rounded-lg">
                   <table className="w-full">
-                    <thead className="bg-gray-50 sticky top-0">
+                    <thead className="bg-card sticky top-0">
                       <tr>
                         <th className="px-4 py-2 text-left text-xs font-medium text-muted-foreground w-12">
                           <input
@@ -314,8 +314,8 @@ const LDAPImportModal: React.FC<LDAPImportModalProps> = ({ isOpen, onClose, onIm
                       {users.map(user => (
                         <tr
                           key={user.dn}
-                          className={`border-t hover:bg-gray-50 ${
-                            selectedUsers.includes(user.dn) ? 'bg-blue-50' : ''
+                          className={`border-t hover:bg-muted/50 ${
+                            selectedUsers.includes(user.dn) ? 'bg-blue-50 dark:bg-blue-500/10' : ''
                           }`}
                         >
                           <td className="px-4 py-2">
@@ -350,7 +350,7 @@ const LDAPImportModal: React.FC<LDAPImportModalProps> = ({ isOpen, onClose, onIm
                     <button
                       onClick={loadMore}
                       disabled={isLoading}
-                      className="text-sm text-blue-600 hover:text-blue-700 disabled:text-muted-foreground"
+                      className="text-sm text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 disabled:text-muted-foreground"
                     >
                       {isLoading ? t('common.loading') : t('users.loadMore')}
                     </button>
@@ -368,8 +368,8 @@ const LDAPImportModal: React.FC<LDAPImportModalProps> = ({ isOpen, onClose, onIm
                         onClick={() => selectRole(role.id)}
                         className={`px-3 py-1 rounded-full text-sm font-medium transition-all ${
                           selectedRole === role.id
-                            ? 'bg-blue-100 text-blue-700 border border-blue-200 ring-2 ring-blue-500'
-                            : 'bg-gray-100 text-gray-700 border border-gray-200 hover:bg-gray-200'
+                            ? 'bg-blue-100 text-blue-700 border border-blue-200 ring-2 ring-blue-500 dark:bg-blue-500/15 dark:text-blue-300 dark:border-blue-500/30'
+                            : 'bg-muted text-muted-foreground border border-border hover:bg-muted/80'
                         }`}
                       >
                         {role.name}
@@ -407,18 +407,18 @@ const LDAPImportModal: React.FC<LDAPImportModalProps> = ({ isOpen, onClose, onIm
           </>
         ) : (
           <div className="space-y-4">
-            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-              <h3 className="font-medium text-blue-800 flex items-center gap-2">
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 dark:bg-blue-500/10 dark:border-blue-500/30">
+              <h3 className="font-medium text-blue-800 dark:text-blue-300 flex items-center gap-2">
                 <AlertCircle className="h-5 w-5" />
                 {t('users.confirmImport')}
               </h3>
-              <p className="text-sm text-blue-700 mt-2">
+              <p className="text-sm text-blue-700 dark:text-blue-300 mt-2">
                 {t('users.aboutToImport', { count: selectedUsers.length })}
               </p>
             </div>
 
             <div className="border border-border rounded-lg overflow-hidden">
-              <div className="bg-gray-50 px-4 py-2">
+              <div className="bg-muted px-4 py-2">
                 <span className="text-sm font-medium text-muted-foreground">
                   {t('users.selectedUsers')} ({selectedUsers.length})
                 </span>
@@ -438,7 +438,7 @@ const LDAPImportModal: React.FC<LDAPImportModalProps> = ({ isOpen, onClose, onIm
             </div>
 
             {selectedRole !== null && (
-              <div className="bg-gray-50 border border-border rounded-lg p-3">
+              <div className="bg-muted border border-border rounded-lg p-3">
                 <span className="text-sm text-muted-foreground">{t('users.roleToAssign')}:</span>
                 <div className="flex flex-wrap gap-2 mt-2">
                   {(() => {
@@ -446,7 +446,7 @@ const LDAPImportModal: React.FC<LDAPImportModalProps> = ({ isOpen, onClose, onIm
                     return role ? (
                       <span
                         key={selectedRole}
-                        className="px-2 py-1 bg-blue-100 text-blue-700 rounded text-xs"
+                        className="px-2 py-1 bg-blue-100 text-blue-700 dark:bg-blue-500/15 dark:text-blue-300 rounded text-xs"
                       >
                         {role.name}
                       </span>

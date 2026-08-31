@@ -291,7 +291,7 @@ const OperationSourceTab = forwardRef<{ openAddModal: () => void }, OperationSou
         <>
           <div className="overflow-x-auto">
             <table className="w-full divide-y divide-border">
-              <thead className="bg-muted/50">
+              <thead className="bg-card">
                 <tr>
                   <th className="px-4 sm:px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">{t('dataSources.name')}</th>
                   <th className="px-4 sm:px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">{t('dataSources.type')}</th>

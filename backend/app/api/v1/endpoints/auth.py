@@ -575,6 +575,7 @@ async def check_email_available(
     email: str = Query(..., description="Email address to check"),
     exclude_user_id: int | None = Query(None, description="User ID to exclude (for update)"),
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """Check if an email is available for use by a local user"""
     if not email:
