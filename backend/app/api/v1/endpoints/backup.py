@@ -38,7 +38,7 @@ def get_backup_service(db: AsyncSession = Depends(get_db)) -> BackupService:
 @router.get("/config", response_model=BackupConfigResponse)
 async def get_backup_config(
     backup_service: BackupService = Depends(get_backup_service),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("backup:read")),
 ):
     """Get current backup configuration"""
     config = await backup_service.load_config()
@@ -171,7 +171,7 @@ async def create_whitelist_backup(
 @router.get("/whitelist/list", response_model=BackupListResponse)
 async def get_whitelist_backups(
     backup_service: BackupService = Depends(get_backup_service),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("backup:read")),
 ):
     """List all whitelist backups"""
     backups = []
@@ -233,7 +233,7 @@ async def restore_whitelist_backup(
 async def get_backup_contents(
     filename: str,
     backup_service: BackupService = Depends(get_backup_service),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("backup:read")),
 ):
     """Get contents/metadata of a backup file"""
     if '..' in filename or filename.startswith('/') or filename.startswith('\\'):
@@ -269,7 +269,7 @@ async def get_backup_contents(
 @router.get("/list", response_model=BackupListResponse)
 async def list_backups(
     backup_service: BackupService = Depends(get_backup_service),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("backup:read")),
 ):
     """List all available backups (local + remote)"""
     backups = []

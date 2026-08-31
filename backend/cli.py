@@ -557,16 +557,8 @@ async def _create_mock_data_source_bindings(db):
 
 async def _ensure_rbac_seed(db):
     """Ensure RBAC preset roles and permissions exist in the database."""
-    from sqlalchemy import select, func
+    from sqlalchemy import select
     from app.models.role import Role, Permission, RolePermission
-
-    # Check if roles already exist
-    count_result = await db.execute(select(func.count()).select_from(Role))
-    role_count = count_result.scalar()
-
-    if role_count >= 5:
-        print("RBAC preset data already exists, skipping seed.")
-        return
 
     print("Seeding RBAC preset data...")
 
@@ -623,6 +615,8 @@ async def _ensure_rbac_seed(db):
         {"id": 33, "code": "backup:write", "name": "管理备份", "module": "backup", "description": "创建/恢复备份"},
         {"id": 34, "code": "notification:read", "name": "查看通知", "module": "notification", "description": "查看通知设置"},
         {"id": 35, "code": "notification:write", "name": "管理通知", "module": "notification", "description": "修改通知设置"},
+        {"id": 36, "code": "compliance:read", "name": "查看合规范围", "module": "compliance", "description": "查看合规范围配置"},
+        {"id": 37, "code": "compliance:write", "name": "管理合规范围", "module": "compliance", "description": "创建/编辑/删除合规范围"},
     ]
     for pd in permissions_data:
         existing = await db.execute(select(Permission).where(Permission.code == pd["code"]))
@@ -632,10 +626,10 @@ async def _ensure_rbac_seed(db):
     await db.flush()
 
     # Seed role_permissions
-    admin_perms = [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35]
-    operator_perms = [1, 2, 3, 4, 5, 6, 7, 12, 21, 26]
+    admin_perms = [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37]
+    operator_perms = [1, 3, 4, 5, 6, 7, 12, 21, 26]
     auditor_perms = [1, 3, 5, 7, 12, 21, 22, 26]
-    viewer_perms = [1, 3, 5, 7, 12, 16, 21, 23, 26, 27]
+    viewer_perms = [1, 3, 5, 7, 12, 16, 21, 23, 26, 27, 36]
 
     role_perm_map = {2: admin_perms, 3: operator_perms, 4: auditor_perms, 5: viewer_perms}
     for role_id, perm_ids in role_perm_map.items():
@@ -657,7 +651,7 @@ async def _ensure_rbac_seed(db):
     except Exception:
         pass  # SQLite or sequence not needed
 
-    print(_green("✓ RBAC preset data seeded (5 roles, 29 permissions)"))
+    print(_green(f"✓ RBAC preset data seeded (5 roles, {len(permissions_data)} permissions)"))
 
 
 async def _create_mock_users(db):
