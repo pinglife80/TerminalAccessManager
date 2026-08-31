@@ -6,6 +6,7 @@ import { API_ENDPOINTS } from '@/lib/constants';
 import { getErrorMessage } from '@/lib/utils';
 import { toast } from 'sonner';
 import { PrimaryButton } from '@/components/Button';
+import { Modal } from '@/components/Modal';
 import {
   Activity, Image as ImageIcon, Shield, Gauge, Network, Clock,
   Settings as SettingsIcon, Wrench, Save, Upload, Database, Trash2,
@@ -221,6 +222,7 @@ const GeneralSettings: React.FC = () => {
   const [systemStatus, setSystemStatus] = useState<{ uptime?: string; database?: string; version?: string; environment?: string; platform?: string; python_version?: string } | null>(null);
   const [health, setHealth] = useState<{ status?: string; db?: string; redis?: string } | null>(null);
   const [operationLoading, setOperationLoading] = useState<string | null>(null);
+  const [confirmAction, setConfirmAction] = useState<'seed' | 'invalidate' | 'reconcile' | null>(null);
   const [uploading, setUploading] = useState<string | null>(null);
   const fileBgRef = useRef<HTMLInputElement>(null);
   const fileFaviconRef = useRef<HTMLInputElement>(null);
@@ -336,8 +338,7 @@ const GeneralSettings: React.FC = () => {
     }
   };
 
-  const handleSeed = async () => {
-    if (!window.confirm(t('generalSettings.seedConfirm'))) return;
+  const performSeed = async () => {
     setOperationLoading('seed');
     try {
       const response = await apiClient.post(API_ENDPOINTS.SETTINGS_SEED);
@@ -356,8 +357,7 @@ const GeneralSettings: React.FC = () => {
     }
   };
 
-  const handleInvalidateCache = async () => {
-    if (!window.confirm(t('generalSettings.invalidateConfirm'))) return;
+  const performInvalidateCache = async () => {
     setOperationLoading('invalidate');
     try {
       await apiClient.post(API_ENDPOINTS.SETTINGS_INVALIDATE_CACHE);
@@ -371,8 +371,7 @@ const GeneralSettings: React.FC = () => {
     }
   };
 
-  const handleFirewallReconciliation = async () => {
-    if (!window.confirm(t('generalSettings.firewallReconciliationConfirm'))) return;
+  const performFirewallReconciliation = async () => {
     setOperationLoading('reconcile');
     try {
       const res = await apiClient.post(API_ENDPOINTS.FIREWALL_RECONCILIATION);
@@ -391,6 +390,19 @@ const GeneralSettings: React.FC = () => {
     } finally {
       setOperationLoading(null);
     }
+  };
+
+  const handleSeed = () => setConfirmAction('seed');
+  const handleInvalidateCache = () => setConfirmAction('invalidate');
+  const handleFirewallReconciliation = () => setConfirmAction('reconcile');
+
+  const executeConfirmedAction = async () => {
+    if (!confirmAction) return;
+    const action = confirmAction;
+    setConfirmAction(null);
+    if (action === 'seed') await performSeed();
+    else if (action === 'invalidate') await performInvalidateCache();
+    else if (action === 'reconcile') await performFirewallReconciliation();
   };
 
   const setField = (key: string, value: string) => {
@@ -669,6 +681,42 @@ const GeneralSettings: React.FC = () => {
           </div>
         </SectionCard>
       </div>
+
+      {/* Confirm dialog (replaces native window.confirm for style consistency) */}
+      <Modal
+        isOpen={confirmAction !== null}
+        onClose={() => setConfirmAction(null)}
+        title={
+          confirmAction === 'seed'
+            ? t('generalSettings.seedDefaults')
+            : confirmAction === 'invalidate'
+              ? t('generalSettings.invalidateCache')
+              : t('generalSettings.firewallReconciliation')
+        }
+        size="sm"
+      >
+        <p className="text-sm text-muted-foreground mb-6">
+          {confirmAction === 'seed'
+            ? t('generalSettings.seedConfirm')
+            : confirmAction === 'invalidate'
+              ? t('generalSettings.invalidateConfirm')
+              : t('generalSettings.firewallReconciliationConfirm')}
+        </p>
+        <div className="flex items-center justify-end gap-3">
+          <button
+            onClick={() => setConfirmAction(null)}
+            className="px-4 py-2 text-sm font-medium text-muted-foreground border border-border rounded-lg hover:bg-muted transition-colors"
+          >
+            {t('common.cancel')}
+          </button>
+          <button
+            onClick={executeConfirmedAction}
+            className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors"
+          >
+            {t('common.confirm')}
+          </button>
+        </div>
+      </Modal>
     </div>
   );
 };
