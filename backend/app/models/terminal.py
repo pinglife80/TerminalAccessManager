@@ -38,6 +38,10 @@ class Terminal(Base):
     non_compliant_confirm_count = Column(Integer, default=0)  # Consecutive non_compliant detections during compliant/bypass/unknown→non_compliant transition
     compliant_confirm_count = Column(Integer, default=0)  # Consecutive compliant/bypass detections during non_compliant→compliant transition
     ip_changed_at = Column(DateTime(timezone=True), nullable=True)  # Timestamp of last IP change (for grace period)
+    block_state = Column(String(30), nullable=True, index=True)
+    # None          -> 正常（已封锁 或 不适用）
+    # 'no_firewall' -> non_compliant 且 ARP 源无绑定防火墙（不可封锁）
+    # 'block_failed'-> non_compliant 且封锁失败（可恢复，等待 retry-block）
 
     # Composite index for efficient queries
     # One record per MAC address (network interface); IP is an updatable attribute

@@ -85,6 +85,7 @@ const Terminals: React.FC = () => {
   const [filterCompliance, setFilterCompliance] = useState<string>(() => searchParams.get('compliance_status') || 'all');
   const [filterSource, setFilterSource] = useState<string>('all');
   const [filterFirewallTag, setFilterFirewallTag] = useState<string>('all');
+  const [filterBlockState, setFilterBlockState] = useState<string>(() => searchParams.get('block_state') || 'all');
   const [filterArpEnabledOnly, setFilterArpEnabledOnly] = useState<boolean>(() => searchParams.get('arp_enabled_only') === '1');
   const [selectedTerminal, setSelectedTerminal] = useState<Terminal | null>(null);
   const [showModal, setShowModal] = useState(false);
@@ -100,9 +101,10 @@ const Terminals: React.FC = () => {
     const params = new URLSearchParams();
     if (filterStatus !== 'all') params.set('status', filterStatus);
     if (filterCompliance !== 'all') params.set('compliance_status', filterCompliance);
+    if (filterBlockState !== 'all') params.set('block_state', filterBlockState);
     if (filterArpEnabledOnly) params.set('arp_enabled_only', '1');
     setSearchParams(params, { replace: true });
-  }, [filterStatus, filterCompliance, filterArpEnabledOnly, setSearchParams]);
+  }, [filterStatus, filterCompliance, filterBlockState, filterArpEnabledOnly, setSearchParams]);
 
   // Debounce search term
   const debouncedSearch = useDebounce(searchTerm, 500);
@@ -142,6 +144,7 @@ const Terminals: React.FC = () => {
     compliance_status: filterCompliance !== 'all' ? filterCompliance : undefined,
     source_tag: filterSource !== 'all' ? filterSource : undefined,
     firewall_tag: filterFirewallTag !== 'all' ? filterFirewallTag : undefined,
+    block_state: filterBlockState !== 'all' ? filterBlockState : undefined,
     arp_enabled_only: filterArpEnabledOnly || undefined,
     start_date: startDate || undefined,
     end_date: endDate || undefined,
@@ -414,6 +417,7 @@ const Terminals: React.FC = () => {
     setFilterArpEnabledOnly(false);
     setFilterSource('all');
     setFilterFirewallTag('all');
+    setFilterBlockState('all');
     setStartDate('');
     setEndDate('');
     setCurrentPage(1);
@@ -429,7 +433,9 @@ const Terminals: React.FC = () => {
   const totalTerminals = stats?.total ?? totalFromServer;
   const normalCount = stats?.compliant ?? allTerminals.filter((m) => (m.compliance_status || 'unknown') === 'compliant').length;
   const bypassCount = stats?.bypass ?? allTerminals.filter((m) => m.compliance_status === 'bypass').length;
-  const blockedCount = stats?.blocked ?? allTerminals.filter((m) => m.status === 'blocked').length;
+  // "非合规" card = non_compliant AND blocked terminals (action-state consistent).
+  const nonCompliantBlocked = stats?.non_compliant ?? allTerminals.filter((m) => m.compliance_status === 'non_compliant' && m.status === 'blocked').length;
+  const nonCompliantUnblocked = stats?.non_compliant_unblocked ?? allTerminals.filter((m) => m.compliance_status === 'non_compliant' && m.status !== 'blocked').length;
   const pendingCount = stats?.unknown ?? allTerminals.filter((m) => (m.compliance_status || 'unknown') === 'unknown').length;
 
   // Helper to get status label via i18n
@@ -576,6 +582,23 @@ const Terminals: React.FC = () => {
                 </select>
               </div>
 
+              {/* Block State Filter */}
+              <div className="flex items-center gap-2 bg-background rounded-xl px-3 py-1.5">
+                <ShieldOff className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                <select
+                  value={filterBlockState}
+                  onChange={(e) => {
+                    setFilterBlockState(e.target.value);
+                    setCurrentPage(1);
+                  }}
+                  className="bg-transparent py-1.5 text-sm text-muted-foreground focus:outline-none focus:ring-0 cursor-pointer font-medium min-w-[7rem]"
+                >
+                  <option value="all">{t('terminal.allBlockState')}</option>
+                  <option value="no_firewall">{t('terminal.blockState.no_firewall')}</option>
+                  <option value="block_failed">{t('terminal.blockState.block_failed')}</option>
+                </select>
+              </div>
+
               {/* Source Tag Filter */}
               {sourceTagOptions.length > 0 && (
               <div className="flex items-center gap-2 bg-background rounded-xl px-3 py-1.5">
@@ -701,15 +724,15 @@ const Terminals: React.FC = () => {
         )}
       </div>
 
-      {/* Stats - 4 compliance statuses + Total */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3 mb-6">
+      {/* Stats - 4 compliance statuses + Total + non-compliant unblocked */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3 mb-6">
         <div className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden relative group">
           <div className="absolute top-2 right-2 z-10" title={t('terminal.totalArpEntries')}>
             <Info className="h-3.5 w-3.5 text-gray-300 group-hover:text-muted-foreground transition-colors cursor-help" />
           </div>
           <div className="p-4 text-center">
             <div className="text-xl sm:text-2xl font-bold text-foreground">{totalTerminals}</div>
-            <div className="text-xs sm:text-sm text-muted-foreground mt-1">{t('common.total')}</div>
+            <div className="text-xs sm:text-sm text-muted-foreground mt-1 min-h-10 flex items-center justify-center leading-snug">{t('common.total')}</div>
           </div>
           <div className="h-1 bg-gradient-to-r from-gray-300 to-gray-500" />
         </div>
@@ -719,7 +742,7 @@ const Terminals: React.FC = () => {
           </div>
           <div className="p-4 text-center">
             <div className="text-xl sm:text-2xl font-bold text-green-600">{normalCount}</div>
-            <div className="text-xs sm:text-sm text-muted-foreground mt-1">{t('terminal.complianceStatusValues.compliant')}</div>
+            <div className="text-xs sm:text-sm text-muted-foreground mt-1 min-h-10 flex items-center justify-center leading-snug">{t('terminal.complianceStatusValues.compliant')}</div>
           </div>
           <div className="h-1 bg-gradient-to-r from-green-400 to-green-600" />
         </div>
@@ -729,19 +752,29 @@ const Terminals: React.FC = () => {
           </div>
           <div className="p-4 text-center">
             <div className="text-xl sm:text-2xl font-bold text-blue-600">{bypassCount}</div>
-            <div className="text-xs sm:text-sm text-muted-foreground mt-1">{t('terminal.complianceStatusValues.bypass')}</div>
+            <div className="text-xs sm:text-sm text-muted-foreground mt-1 min-h-10 flex items-center justify-center leading-snug">{t('terminal.complianceStatusValues.bypass')}</div>
           </div>
           <div className="h-1 bg-gradient-to-r from-blue-400 to-blue-600" />
         </div>
         <div className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden relative group">
-          <div className="absolute top-2 right-2 z-10" title={t('terminal.terminalBlockedByBlacklist')}>
+          <div className="absolute top-2 right-2 z-10" title={t('terminal.nonCompliantBlockedHint')}>
             <Info className="h-3.5 w-3.5 text-gray-300 group-hover:text-muted-foreground transition-colors cursor-help" />
           </div>
           <div className="p-4 text-center">
-            <div className="text-xl sm:text-2xl font-bold text-red-600">{blockedCount}</div>
-            <div className="text-xs sm:text-sm text-muted-foreground mt-1">{t('terminal.complianceStatusValues.non_compliant')}</div>
+            <div className="text-xl sm:text-2xl font-bold text-red-600">{nonCompliantBlocked}</div>
+            <div className="text-xs sm:text-sm text-muted-foreground mt-1 min-h-10 flex items-center justify-center leading-snug">{t('terminal.nonCompliantBlocked')}</div>
           </div>
           <div className="h-1 bg-gradient-to-r from-red-400 to-red-600" />
+        </div>
+        <div className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden relative group">
+          <div className="absolute top-2 right-2 z-10" title={t('terminal.nonCompliantUnblockedHint')}>
+            <Info className="h-3.5 w-3.5 text-gray-300 group-hover:text-muted-foreground transition-colors cursor-help" />
+          </div>
+          <div className="p-4 text-center">
+            <div className="text-xl sm:text-2xl font-bold text-orange-600">{nonCompliantUnblocked}</div>
+            <div className="text-xs sm:text-sm text-muted-foreground mt-1 min-h-10 flex items-center justify-center leading-snug">{t('terminal.nonCompliantUnblocked')}</div>
+          </div>
+          <div className="h-1 bg-gradient-to-r from-orange-400 to-orange-600" />
         </div>
         <div className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden relative group">
           <div className="absolute top-2 right-2 z-10" title={t('terminal.complianceNotDetermined')}>
@@ -749,7 +782,7 @@ const Terminals: React.FC = () => {
           </div>
           <div className="p-4 text-center">
             <div className="text-xl sm:text-2xl font-bold text-yellow-600">{pendingCount}</div>
-            <div className="text-xs sm:text-sm text-muted-foreground mt-1">{t('terminal.complianceStatusValues.unknown')}</div>
+            <div className="text-xs sm:text-sm text-muted-foreground mt-1 min-h-10 flex items-center justify-center leading-snug">{t('terminal.complianceStatusValues.unknown')}</div>
           </div>
           <div className="h-1 bg-gradient-to-r from-yellow-400 to-yellow-600" />
         </div>
@@ -823,6 +856,16 @@ const Terminals: React.FC = () => {
                         >
                           {getStatusLabel(mac.status)}
                         </span>
+                        {mac.block_state === 'no_firewall' && (
+                          <span className="ml-1 px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-200">
+                            {t('terminal.blockState.no_firewall')}
+                          </span>
+                        )}
+                        {mac.block_state === 'block_failed' && (
+                          <span className="ml-1 px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200">
+                            {t('terminal.blockState.block_failed')}
+                          </span>
+                        )}
                       </td>
                       <td className="px-4 sm:px-6 py-4 whitespace-nowrap">
                         <span className="text-sm text-muted-foreground capitalize">

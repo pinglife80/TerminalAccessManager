@@ -14,6 +14,7 @@ export interface Terminal {
   compliance_status: string;  // compliant / bypass / non_compliant / unknown
   wl_match_type: string | null;  // "mac" / "ip" / "both" / null
   firewall_tag: string | null;  // from blacklist data
+  block_state: string | null;  // null / no_firewall / block_failed
   black_match_type: string | null;  // from blacklist data: "mac" / "ip" / null
 }
 
@@ -57,8 +58,10 @@ export interface FirewallError {
 export interface BlacklistStats {
   success_blocked: number;
   pending_retry_block: number;
+  unblockable_non_compliant: number;
   success_unblocked: number;
   pending_retry_unblock: number;
+  firewall_ip_count: number;
   firewall_errors: FirewallError[];
   synced_at: string | null;
 }
@@ -71,6 +74,7 @@ export interface DashboardStats {
   compliant: number;
   bypass: number;
   non_compliant: number;
+  non_compliant_unblocked: number;
   unknown: number;
 }
 
@@ -133,6 +137,7 @@ export interface TerminalSearchParams {
   compliance_status?: string;
   source_tag?: string;
   firewall_tag?: string;
+  block_state?: string;
   arp_enabled_only?: boolean;
   start_date?: string;
   end_date?: string;

@@ -223,6 +223,12 @@ class FirewallReconciliationService:
         for t in terminals:
             t.status = TerminalStatus.UNBLOCKED.value
             t.firewall_tag = None
+            if t.compliance_status == "non_compliant":
+                # Lost its blacklist backing but still non_compliant: mark as
+                # block_failed so retry-block can re-block it (not a permanent backlog).
+                t.block_state = "block_failed"
+            else:
+                t.block_state = None
             fixed += 1
         if fixed:
             await self.db.commit()
@@ -306,12 +312,14 @@ class FirewallReconciliationService:
 
         for ip_address in ip_addresses:
             try:
-                # Find terminal by IP address (best effort - prefer most recently updated)
+                # Find terminal by IP address (best effort - prefer most recently updated).
+                # An IP may be shared by multiple terminals (DHCP reuse), so use first()
+                # instead of scalar_one_or_none() which raises MultipleResultsFound.
                 term_stmt = select(Terminal).where(
                     Terminal.ip_address == ip_address
-                ).order_by(Terminal.timestamp.desc())
+                ).order_by(Terminal.timestamp.desc()).limit(1)
                 term_result = await self.db.execute(term_stmt)
-                terminal = term_result.scalar_one_or_none()
+                terminal = term_result.scalars().first()
 
                 mac_address = None
                 mac_norm = None
@@ -399,15 +407,18 @@ class FirewallReconciliationService:
 
         for ip_address in ip_addresses:
             try:
-                # Find the blacklist entry to get reason
+                # Find the blacklist entry to get reason.
+                # An IP may have multiple active entries with different MACs
+                # (DHCP IP reuse across terminals), so use first() instead of
+                # scalar_one_or_none() which raises MultipleResultsFound.
                 bl_stmt = select(Blacklist).where(
                     (Blacklist.ip_address == ip_address) &
                     (Blacklist.firewall_tag == fw_tag) &
                     (Blacklist.unblocked_at.is_(None)) &
                     (Blacklist.auto_unblocked == False)
-                )
+                ).limit(1)
                 bl_result = await self.db.execute(bl_stmt)
-                bl_entry = bl_result.scalar_one_or_none()
+                bl_entry = bl_result.scalars().first()
 
                 reason = "Reconciliation: re-block (DB says should be blocked)"
                 if bl_entry and bl_entry.reason:

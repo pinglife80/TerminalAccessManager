@@ -387,6 +387,8 @@ async def scheduled_compliance_check():
                                 from sqlalchemy import select as sa_select2
                                 retry_blocked = 0
                                 whitelist_fixed = 0
+                                no_firewall_fixed = 0
+                                block_failed = 0
                                 # Load whitelist cache once for authoritative whitelist check
                                 retry_whitelist_data = await service._load_whitelist_cache()
 
@@ -402,6 +404,7 @@ async def scheduled_compliance_check():
                                         terminal.compliance_status = "bypass"
                                         terminal.compliant_confirm_count = 0
                                         terminal.non_compliant_confirm_count = 0
+                                        terminal.block_state = None
                                         whitelist_fixed += 1
                                         logger.info(
                                             f"Retry-block skipped for {ip_addr}/{mac_addr}: whitelist match "
@@ -432,6 +435,8 @@ async def scheduled_compliance_check():
                                     mac_norm = mac_addr.replace('-', '').replace(':', '').replace('.', '').upper() if mac_addr else None
                                     fw_tags = await service._get_bound_firewall_tags(terminal.source_tag)
                                     if not fw_tags:
+                                        terminal.block_state = "no_firewall"
+                                        no_firewall_fixed += 1
                                         continue
                                     # Check if already has active blacklist by MAC (avoid duplicate blocks)
                                     if mac_norm:
@@ -443,6 +448,7 @@ async def scheduled_compliance_check():
                                         existing_bl_r = await db.execute(existing_bl_stmt)
                                         if existing_bl_r.scalars().first():
                                             terminal.status = "blocked"
+                                            terminal.block_state = None
                                             continue
                                     all_success = True
                                     for fw_tag in fw_tags:
@@ -456,6 +462,7 @@ async def scheduled_compliance_check():
                                     if all_success:
                                         terminal.status = "blocked"
                                         terminal.firewall_tag = fw_tags[0] if len(fw_tags) == 1 else ",".join(fw_tags)
+                                        terminal.block_state = None
                                         for fw_tag in fw_tags:
                                             bl_entry = Blacklist(
                                                 ip_address=ip_addr,
@@ -475,6 +482,9 @@ async def scheduled_compliance_check():
                                             db.add(bl_entry)
                                         retry_blocked += 1
                                         logger.info(f"Retry block succeeded for {ip_addr} on firewall(s) '{','.join(fw_tags)}' [source=scheduler]")
+                                    else:
+                                        terminal.block_state = "block_failed"
+                                        block_failed += 1
 
                                 if retry_blocked > 0:
                                     try:
@@ -488,6 +498,28 @@ async def scheduled_compliance_check():
                                         logger.error(
                                             f"Retry-block commit failed for {source.tag} due to IntegrityError, "
                                             f"rolled back to protect scheduler session: {ie} [source=scheduler]"
+                                        )
+
+                                # Commit block_state backfill (no_firewall / block_failed) so legacy
+                                # NULL rows converge even when nothing was actually (re-)blocked.
+                                if no_firewall_fixed > 0 or block_failed > 0:
+                                    try:
+                                        await db.commit()
+                                        if no_firewall_fixed:
+                                            logger.info(
+                                                f"Retry-block marked {no_firewall_fixed} non-compliant "
+                                                f"terminals as no_firewall (unblockable) from {source.tag} [source=scheduler]"
+                                            )
+                                        if block_failed:
+                                            logger.info(
+                                                f"Retry-block marked {block_failed} non-compliant terminals "
+                                                f"as block_failed (awaiting retry) from {source.tag} [source=scheduler]"
+                                            )
+                                    except IntegrityError as ie:
+                                        await db.rollback()
+                                        logger.error(
+                                            f"Retry-block block_state commit failed for {source.tag} due to "
+                                            f"IntegrityError, rolled back: {ie} [source=scheduler]"
                                         )
                         except Exception as re_err:
                             logger.error(f"Error in retry-block for {source.tag}: {type(re_err).__name__}: {re_err} [source=scheduler]")

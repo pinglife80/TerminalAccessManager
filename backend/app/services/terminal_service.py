@@ -296,9 +296,13 @@ class TerminalService:
             blocked = blocked_result.scalar() or 0
 
             # Non-compliant count: ONLY count terminals that are both non_compliant AND blocked,
-            # to enforce the invariant: compliance_status='non_compliant' ⇒ status='blocked'
+            # to enforce the invariant: compliance_status='non_compliant' ⇒ status='blocked'.
+            # Unified caliber: count DISTINCT IP (same as 'blocked') so the card aligns with
+            # the firewall actual blocked-IP count. A DHCP-reused IP shared by multiple MACs
+            # must not be counted multiple times — the firewall blocks by IP (one rule),
+            # regardless of how many terminals currently map to that IP.
             nc_blocked_result = await self.db.execute(
-                select(func.count())
+                select(func.count(func.distinct(Terminal.ip_address)))
                 .select_from(Terminal)
                 .where(
                     _enabled_arp_source_tag_condition() &
@@ -308,6 +312,19 @@ class TerminalService:
             )
             non_compliant = nc_blocked_result.scalar() or 0
 
+            # Non-compliant-unblocked: intermediate-state terminals (non_compliant + unblocked),
+            # exposed separately so the blocked / non_compliant calibers stay unambiguous.
+            nc_unblocked_result = await self.db.execute(
+                select(func.count())
+                .select_from(Terminal)
+                .where(
+                    _enabled_arp_source_tag_condition() &
+                    (Terminal.compliance_status == 'non_compliant') &
+                    (Terminal.status == 'unblocked')
+                )
+            )
+            non_compliant_unblocked = nc_unblocked_result.scalar() or 0
+
             return {
                 "total": total,
                 "whitelisted": whitelisted,
@@ -316,6 +333,7 @@ class TerminalService:
                 "compliant": compliance_counts.get("compliant", 0),
                 "bypass": compliance_counts.get("bypass", 0),
                 "non_compliant": non_compliant,
+                "non_compliant_unblocked": non_compliant_unblocked,
                 "unknown": compliance_counts.get("unknown", 0),
             }
         except Exception as e:
@@ -462,6 +480,9 @@ class TerminalService:
             if query.source_tag:
                 conditions.append(Terminal.source_tag == query.source_tag)
 
+            if query.block_state:
+                conditions.append(Terminal.block_state == query.block_state)
+
             if query.arp_enabled_only:
                 conditions.append(
                     Terminal.source_tag.in_(
@@ -525,6 +546,9 @@ class TerminalService:
 
             if query.source_tag:
                 conditions.append(Terminal.source_tag == query.source_tag)
+
+            if query.block_state:
+                conditions.append(Terminal.block_state == query.block_state)
 
             if query.arp_enabled_only:
                 conditions.append(
@@ -1628,21 +1652,42 @@ class TerminalService:
             )
         ).scalar() or 0
 
-        # ② pending_retry_block: non_compliant terminals still unblocked
-        #    (matches main.py retry-block query: source_tag IN enabled ARP sources
-        #     AND compliance_status='non_compliant' AND status='unblocked')
+        # ② pending_retry_block: non_compliant terminals still unblocked that are
+        #    ACTIONABLE (either not yet classified, or block_failed awaiting retry).
+        #    Matches main.py retry-block query (source IN enabled ARP sources,
+        #    non_compliant, unblocked) excluding no_firewall which is unblockable.
+        nc_unblocked_filter = (
+            Terminal.source_tag.in_(
+                select(DataSource.tag).where(
+                    DataSource.type.in_(["arp_ssh", "arp_api"]) & (DataSource.enabled == True)
+                )
+            ) &
+            (Terminal.compliance_status == "non_compliant") &
+            (Terminal.status == "unblocked")
+        )
         pending_retry_block = (
             await self.db.execute(
                 select(func.count())
                 .select_from(Terminal)
                 .where(
-                    Terminal.source_tag.in_(
-                        select(DataSource.tag).where(
-                            DataSource.type.in_(["arp_ssh", "arp_api"]) & (DataSource.enabled == True)
-                        )
-                    ) &
-                    (Terminal.compliance_status == "non_compliant") &
-                    (Terminal.status == "unblocked")
+                    nc_unblocked_filter &
+                    or_(
+                        Terminal.block_state.is_(None),
+                        Terminal.block_state == "block_failed",
+                    )
+                )
+            )
+        ).scalar() or 0
+
+        # ②b unblockable_non_compliant: non_compliant + unblocked with no bound firewall
+        #     (permanent backlog, cannot be blocked -> reported separately).
+        unblockable_non_compliant = (
+            await self.db.execute(
+                select(func.count())
+                .select_from(Terminal)
+                .where(
+                    nc_unblocked_filter &
+                    (Terminal.block_state == "no_firewall")
                 )
             )
         ).scalar() or 0
@@ -1674,9 +1719,10 @@ class TerminalService:
             )
         ).scalar() or 0
 
-        # ⑤ firewall_errors + synced_at from latest reconciliation cache
+        # ⑤ firewall_errors + firewall_ip_count + synced_at from latest reconciliation cache
         firewall_errors: list[dict] = []
         synced_at: str | None = None
+        firewall_ip_count: int = 0
         try:
             from app.core.security import get_redis_client
             redis_client = await get_redis_client()
@@ -1693,14 +1739,17 @@ class TerminalService:
                     elif isinstance(item, str):
                         firewall_errors.append({"tag": item, "error": ""})
                 synced_at = payload.get("synced_at")
+                firewall_ip_count = int(payload.get("firewall_ip_count", 0) or 0)
         except Exception:
             pass
 
         return {
             "success_blocked": success_blocked,
             "pending_retry_block": pending_retry_block,
+            "unblockable_non_compliant": unblockable_non_compliant,
             "success_unblocked": success_unblocked,
             "pending_retry_unblock": pending_retry_unblock,
+            "firewall_ip_count": firewall_ip_count,
             "firewall_errors": firewall_errors,
             "synced_at": synced_at,
         }
