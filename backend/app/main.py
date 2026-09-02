@@ -367,7 +367,6 @@ async def scheduled_compliance_check():
                             retry_r = await db.execute(retry_stmt)
                             retry_terminals = retry_r.scalars().all()
                             if retry_terminals:
-                                from app.models.blacklist import Blacklist
                                 import re
                                 from datetime import datetime as dt_cls, UTC as utc_cls, timedelta as td_cls
 
@@ -384,7 +383,6 @@ async def scheduled_compliance_check():
                                     elif unit == 'm':
                                         td = td_cls(minutes=value)
 
-                                from sqlalchemy import select as sa_select2
                                 retry_blocked = 0
                                 whitelist_fixed = 0
                                 no_firewall_fixed = 0
@@ -438,18 +436,6 @@ async def scheduled_compliance_check():
                                         terminal.block_state = "no_firewall"
                                         no_firewall_fixed += 1
                                         continue
-                                    # Check if already has active blacklist by MAC (avoid duplicate blocks)
-                                    if mac_norm:
-                                        existing_bl_stmt = sa_select2(Blacklist).where(
-                                            (Blacklist.mac_address_normalized == mac_norm) &
-                                            (Blacklist.auto_unblocked == False) &
-                                            (Blacklist.unblocked_at.is_(None))
-                                        )
-                                        existing_bl_r = await db.execute(existing_bl_stmt)
-                                        if existing_bl_r.scalars().first():
-                                            terminal.status = "blocked"
-                                            terminal.block_state = None
-                                            continue
                                     all_success = True
                                     for fw_tag in fw_tags:
                                         success = await service._block_on_firewall(
@@ -463,23 +449,17 @@ async def scheduled_compliance_check():
                                         terminal.status = "blocked"
                                         terminal.firewall_tag = fw_tags[0] if len(fw_tags) == 1 else ",".join(fw_tags)
                                         terminal.block_state = None
+                                        # Idempotency per firewall: keyed by (ip, firewall).
                                         for fw_tag in fw_tags:
-                                            bl_entry = Blacklist(
+                                            await service._attach_active_blacklist(
                                                 ip_address=ip_addr,
                                                 mac_address=mac_addr,
-                                                mac_address_normalized=mac_norm,
-                                                reason="Auto-blocked: non-compliant (retry)",
-                                                blocked_by="system",
-                                                expires_at=dt_cls.now(utc_cls) + td,
-                                                source_tag=terminal.source_tag,
+                                                mac_norm=mac_norm,
                                                 firewall_tag=fw_tag,
-                                                is_auto_blocked=True,
-                                                auto_unblocked=False,
-                                                last_operation_type="block",
-                                                last_operation_status="success",
-                                                last_operation_at=dt_cls.now(utc_cls),
+                                                reason="Auto-blocked: non-compliant (retry)",
+                                                source_tag=terminal.source_tag,
+                                                expires_at=dt_cls.now(utc_cls) + td,
                                             )
-                                            db.add(bl_entry)
                                         retry_blocked += 1
                                         logger.info(f"Retry block succeeded for {ip_addr} on firewall(s) '{','.join(fw_tags)}' [source=scheduler]")
                                     else:
