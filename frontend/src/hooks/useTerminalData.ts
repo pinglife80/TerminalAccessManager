@@ -57,11 +57,8 @@ export interface FirewallError {
 
 export interface BlacklistStats {
   success_blocked: number;
-  pending_retry_block: number;
-  unblockable_non_compliant: number;
   success_unblocked: number;
   pending_retry_unblock: number;
-  firewall_ip_count: number;
   firewall_errors: FirewallError[];
   synced_at: string | null;
 }
@@ -74,7 +71,6 @@ export interface DashboardStats {
   compliant: number;
   bypass: number;
   non_compliant: number;
-  non_compliant_unblocked: number;
   unknown: number;
 }
 
@@ -137,8 +133,8 @@ export interface TerminalSearchParams {
   compliance_status?: string;
   source_tag?: string;
   firewall_tag?: string;
-  block_state?: string;
-  arp_enabled_only?: boolean;
+  dedup_dim?: 'ip' | 'mac' | 'both';
+  dedup_mode?: 'dedup' | 'duplicates';
   start_date?: string;
   end_date?: string;
   skip?: number;

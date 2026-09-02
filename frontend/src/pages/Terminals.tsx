@@ -85,8 +85,8 @@ const Terminals: React.FC = () => {
   const [filterCompliance, setFilterCompliance] = useState<string>(() => searchParams.get('compliance_status') || 'all');
   const [filterSource, setFilterSource] = useState<string>('all');
   const [filterFirewallTag, setFilterFirewallTag] = useState<string>('all');
-  const [filterBlockState, setFilterBlockState] = useState<string>(() => searchParams.get('block_state') || 'all');
-  const [filterArpEnabledOnly, setFilterArpEnabledOnly] = useState<boolean>(() => searchParams.get('arp_enabled_only') === '1');
+  const [filterDedupDim, setFilterDedupDim] = useState<'' | 'ip' | 'mac' | 'both'>('');
+  const [filterDedupMode, setFilterDedupMode] = useState<'dedup' | 'duplicates'>('dedup');
   const [selectedTerminal, setSelectedTerminal] = useState<Terminal | null>(null);
   const [showModal, setShowModal] = useState(false);
   const [filterCollapsed, setFilterCollapsed] = useState(false);
@@ -96,15 +96,13 @@ const Terminals: React.FC = () => {
   const [endDate, setEndDate] = useState('');
   const [autoRefresh, setAutoRefresh] = useState<number>(0);
 
-  // 将跳转相关的三个筛选状态回写 URL，保证刷新/重复跳转不脱节
+  // 将跳转相关的筛选状态回写 URL，保证刷新/重复跳转不脱节
   useEffect(() => {
     const params = new URLSearchParams();
     if (filterStatus !== 'all') params.set('status', filterStatus);
     if (filterCompliance !== 'all') params.set('compliance_status', filterCompliance);
-    if (filterBlockState !== 'all') params.set('block_state', filterBlockState);
-    if (filterArpEnabledOnly) params.set('arp_enabled_only', '1');
     setSearchParams(params, { replace: true });
-  }, [filterStatus, filterCompliance, filterBlockState, filterArpEnabledOnly, setSearchParams]);
+  }, [filterStatus, filterCompliance, setSearchParams]);
 
   // Debounce search term
   const debouncedSearch = useDebounce(searchTerm, 500);
@@ -144,8 +142,8 @@ const Terminals: React.FC = () => {
     compliance_status: filterCompliance !== 'all' ? filterCompliance : undefined,
     source_tag: filterSource !== 'all' ? filterSource : undefined,
     firewall_tag: filterFirewallTag !== 'all' ? filterFirewallTag : undefined,
-    block_state: filterBlockState !== 'all' ? filterBlockState : undefined,
-    arp_enabled_only: filterArpEnabledOnly || undefined,
+    dedup_dim: (filterDedupDim || undefined) as 'ip' | 'mac' | 'both' | undefined,
+    dedup_mode: filterDedupDim ? filterDedupMode : undefined,
     start_date: startDate || undefined,
     end_date: endDate || undefined,
     skip: (currentPage - 1) * pageSize,
@@ -414,10 +412,10 @@ const Terminals: React.FC = () => {
     setSearchTerm('');
     setFilterStatus('all');
     setFilterCompliance('all');
-    setFilterArpEnabledOnly(false);
     setFilterSource('all');
     setFilterFirewallTag('all');
-    setFilterBlockState('all');
+    setFilterDedupDim('');
+    setFilterDedupMode('dedup');
     setStartDate('');
     setEndDate('');
     setCurrentPage(1);
@@ -433,9 +431,8 @@ const Terminals: React.FC = () => {
   const totalTerminals = stats?.total ?? totalFromServer;
   const normalCount = stats?.compliant ?? allTerminals.filter((m) => (m.compliance_status || 'unknown') === 'compliant').length;
   const bypassCount = stats?.bypass ?? allTerminals.filter((m) => m.compliance_status === 'bypass').length;
-  // "非合规" card = non_compliant AND blocked terminals (action-state consistent).
-  const nonCompliantBlocked = stats?.non_compliant ?? allTerminals.filter((m) => m.compliance_status === 'non_compliant' && m.status === 'blocked').length;
-  const nonCompliantUnblocked = stats?.non_compliant_unblocked ?? allTerminals.filter((m) => m.compliance_status === 'non_compliant' && m.status !== 'blocked').length;
+  // 合规轴·终端数：非合规主数字 = 所有 non_compliant 终端。
+  const nonCompliantTotal = stats?.non_compliant ?? allTerminals.filter((m) => m.compliance_status === 'non_compliant').length;
   const pendingCount = stats?.unknown ?? allTerminals.filter((m) => (m.compliance_status || 'unknown') === 'unknown').length;
 
   // Helper to get status label via i18n
@@ -582,22 +579,7 @@ const Terminals: React.FC = () => {
                 </select>
               </div>
 
-              {/* Block State Filter */}
-              <div className="flex items-center gap-2 bg-background rounded-xl px-3 py-1.5">
-                <ShieldOff className="h-4 w-4 text-muted-foreground flex-shrink-0" />
-                <select
-                  value={filterBlockState}
-                  onChange={(e) => {
-                    setFilterBlockState(e.target.value);
-                    setCurrentPage(1);
-                  }}
-                  className="bg-transparent py-1.5 text-sm text-muted-foreground focus:outline-none focus:ring-0 cursor-pointer font-medium min-w-[7rem]"
-                >
-                  <option value="all">{t('terminal.allBlockState')}</option>
-                  <option value="no_firewall">{t('terminal.blockState.no_firewall')}</option>
-                  <option value="block_failed">{t('terminal.blockState.block_failed')}</option>
-                </select>
-              </div>
+              {/* Block State Filter removed */}
 
               {/* Source Tag Filter */}
               {sourceTagOptions.length > 0 && (
@@ -619,18 +601,6 @@ const Terminals: React.FC = () => {
               </div>
               )}
 
-              {/* Enabled-ARP-Only Filter */}
-              <label className="flex items-center gap-2 bg-background rounded-xl px-3 py-1.5 cursor-pointer">
-                <Server className="h-4 w-4 text-muted-foreground flex-shrink-0" />
-                <span className="text-sm text-muted-foreground font-medium">{t('terminal.onlyEnabledArp')}</span>
-                <input
-                  type="checkbox"
-                  checked={filterArpEnabledOnly}
-                  onChange={(e) => { setFilterArpEnabledOnly(e.target.checked); setCurrentPage(1); }}
-                  className="h-4 w-4 cursor-pointer"
-                />
-              </label>
-
               {/* Firewall Tag Filter */}
               {firewallTagOptions.length > 0 && (
               <div className="flex items-center gap-2 bg-background rounded-xl px-3 py-1.5">
@@ -650,6 +620,41 @@ const Terminals: React.FC = () => {
                 </select>
               </div>
               )}
+
+              {/* Dedup / Duplicates Dimension Filter */}
+              <div className="flex items-center gap-2 bg-background rounded-xl px-3 py-1.5">
+                <Server className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                <select
+                  value={filterDedupDim}
+                  onChange={(e) => {
+                    setFilterDedupDim(e.target.value as '' | 'ip' | 'mac' | 'both');
+                    setCurrentPage(1);
+                  }}
+                  className="bg-transparent py-1.5 text-sm text-muted-foreground focus:outline-none focus:ring-0 cursor-pointer font-medium min-w-[6rem]"
+                >
+                  <option value="">{t('terminal.dedupDimension')}</option>
+                  <option value="ip">{t('terminal.dedupDimIp')}</option>
+                  <option value="mac">{t('terminal.dedupDimMac')}</option>
+                  <option value="both">{t('terminal.dedupDimBoth')}</option>
+                </select>
+              </div>
+
+              {/* Dedup / Duplicates Mode Filter */}
+              <div className="flex items-center gap-2 bg-background rounded-xl px-3 py-1.5">
+                <Filter className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                <select
+                  value={filterDedupMode}
+                  onChange={(e) => {
+                    setFilterDedupMode(e.target.value as 'dedup' | 'duplicates');
+                    setCurrentPage(1);
+                  }}
+                  disabled={!filterDedupDim}
+                  className="bg-transparent py-1.5 text-sm text-muted-foreground focus:outline-none focus:ring-0 cursor-pointer font-medium min-w-[6rem] disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <option value="dedup">{t('terminal.dedupModeDedup')}</option>
+                  <option value="duplicates">{t('terminal.dedupModeDuplicates')}</option>
+                </select>
+              </div>
 
               {/* Date Range Filter */}
               <DateRangeFilter
@@ -724,8 +729,8 @@ const Terminals: React.FC = () => {
         )}
       </div>
 
-      {/* Stats - 4 compliance statuses + Total + non-compliant unblocked */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3 mb-6">
+      {/* Stats - 合规轴·终端数：Total + 4 compliance statuses（非合规合并明细） */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3 mb-6">
         <div className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden relative group">
           <div className="absolute top-2 right-2 z-10" title={t('terminal.totalArpEntries')}>
             <Info className="h-3.5 w-3.5 text-gray-300 group-hover:text-muted-foreground transition-colors cursor-help" />
@@ -757,24 +762,14 @@ const Terminals: React.FC = () => {
           <div className="h-1 bg-gradient-to-r from-blue-400 to-blue-600" />
         </div>
         <div className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden relative group">
-          <div className="absolute top-2 right-2 z-10" title={t('terminal.nonCompliantBlockedHint')}>
+          <div className="absolute top-2 right-2 z-10" title={t('terminal.nonCompliantHint')}>
             <Info className="h-3.5 w-3.5 text-gray-300 group-hover:text-muted-foreground transition-colors cursor-help" />
           </div>
           <div className="p-4 text-center">
-            <div className="text-xl sm:text-2xl font-bold text-red-600">{nonCompliantBlocked}</div>
-            <div className="text-xs sm:text-sm text-muted-foreground mt-1 min-h-10 flex items-center justify-center leading-snug">{t('terminal.nonCompliantBlocked')}</div>
+            <div className="text-xl sm:text-2xl font-bold text-red-600">{nonCompliantTotal}</div>
+            <div className="text-xs sm:text-sm text-muted-foreground mt-1 min-h-10 flex items-center justify-center leading-snug">{t('terminal.nonCompliant')}</div>
           </div>
           <div className="h-1 bg-gradient-to-r from-red-400 to-red-600" />
-        </div>
-        <div className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden relative group">
-          <div className="absolute top-2 right-2 z-10" title={t('terminal.nonCompliantUnblockedHint')}>
-            <Info className="h-3.5 w-3.5 text-gray-300 group-hover:text-muted-foreground transition-colors cursor-help" />
-          </div>
-          <div className="p-4 text-center">
-            <div className="text-xl sm:text-2xl font-bold text-orange-600">{nonCompliantUnblocked}</div>
-            <div className="text-xs sm:text-sm text-muted-foreground mt-1 min-h-10 flex items-center justify-center leading-snug">{t('terminal.nonCompliantUnblocked')}</div>
-          </div>
-          <div className="h-1 bg-gradient-to-r from-orange-400 to-orange-600" />
         </div>
         <div className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden relative group">
           <div className="absolute top-2 right-2 z-10" title={t('terminal.complianceNotDetermined')}>

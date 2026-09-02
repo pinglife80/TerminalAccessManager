@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useNavigate } from 'react-router-dom';
-import { Search, AlertTriangle, Clock, Server, Download, Eye, Shield, RefreshCw, ChevronDown, Unlock, ShieldCheck, ShieldAlert, AlertCircle } from 'lucide-react';
+import { Search, AlertTriangle, Clock, Server, Download, Eye, Shield, RefreshCw, ChevronDown, Unlock, ShieldCheck, AlertCircle } from 'lucide-react';
 import { useBlacklist, useBlacklistStats, useRetryBlacklistEntry, BlacklistEntry } from '@/hooks/useTerminalData';
 import { apiClient } from '@/lib/api';
 import { toast } from 'sonner';
@@ -26,7 +25,6 @@ const REFRESH_OPTIONS: { labelKey?: string; label: string; value: number }[] = [
 
 const Blacklist: React.FC = () => {
   const { t } = useTranslation();
-  const navigate = useNavigate();
   const [searchTerm, setSearchTerm] = useState('');
   const [showDetailsModal, setShowDetailsModal] = useState(false);
   const [showFirewallErrorsModal, setShowFirewallErrorsModal] = useState(false);
@@ -96,14 +94,6 @@ const Blacklist: React.FC = () => {
     setCurrentPage(1);
   };
 
-  const handlePendingRetryBlock = () => {
-    navigate('/terminals?compliance_status=non_compliant&status=unblocked&arp_enabled_only=1');
-  };
-
-  const handleUnblockableNonCompliant = () => {
-    navigate('/terminals?compliance_status=non_compliant&status=unblocked&block_state=no_firewall&arp_enabled_only=1');
-  };
-
   const handleFirewallErrors = () => {
     setShowFirewallErrorsModal(true);
   };
@@ -167,7 +157,7 @@ const Blacklist: React.FC = () => {
       </div>
 
       {/* Stats Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7 gap-4 mb-6">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 mb-6">
         <button
           type="button"
           onClick={() => handleCategorySelect('success_blocked')}
@@ -181,50 +171,6 @@ const Blacklist: React.FC = () => {
               <p className="text-3xl font-bold text-green-600 dark:text-green-400 mt-1">{stats?.success_blocked ?? 0}</p>
             </div>
             <ShieldCheck className="h-8 w-8 text-green-500" />
-          </div>
-        </button>
-
-        <button
-          type="button"
-          title={t('blacklist.statsFirewallBlockedHint')}
-          className="bg-card rounded-2xl border border-border p-5 shadow-sm text-left transition-colors hover:border-purple-300"
-        >
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm text-muted-foreground">{t('blacklist.statsFirewallBlocked')}</p>
-              <p className="text-3xl font-bold text-purple-600 dark:text-purple-400 mt-1">{stats?.firewall_ip_count ?? 0}</p>
-            </div>
-            <Server className="h-8 w-8 text-purple-500" />
-          </div>
-        </button>
-
-        <button
-          type="button"
-          onClick={handlePendingRetryBlock}
-          title={t('blacklist.pendingRetryBlockHint')}
-          className="bg-card rounded-2xl border border-border p-5 shadow-sm text-left transition-colors hover:border-yellow-300"
-        >
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm text-muted-foreground">{t('blacklist.statsPendingRetryBlock')}</p>
-              <p className="text-3xl font-bold text-yellow-600 dark:text-yellow-400 mt-1">{stats?.pending_retry_block ?? 0}</p>
-            </div>
-            <ShieldAlert className="h-8 w-8 text-yellow-500" />
-          </div>
-        </button>
-
-        <button
-          type="button"
-          onClick={handleUnblockableNonCompliant}
-          title={t('blacklist.statsUnblockableHint')}
-          className="bg-card rounded-2xl border border-border p-5 shadow-sm text-left transition-colors hover:border-slate-400"
-        >
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm text-muted-foreground">{t('blacklist.statsUnblockable')}</p>
-              <p className="text-3xl font-bold text-slate-600 dark:text-slate-300 mt-1">{stats?.unblockable_non_compliant ?? 0}</p>
-            </div>
-            <AlertTriangle className="h-8 w-8 text-slate-400" />
           </div>
         </button>
 
