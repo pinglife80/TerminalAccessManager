@@ -12,6 +12,7 @@ import pytz
 from loguru import logger
 from sqlalchemy import and_, desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from app.models.blacklist import Blacklist
 from app.models.data_source import DataSource
@@ -254,13 +255,14 @@ class TerminalService:
     async def get_stats(self) -> dict:
         """Get dashboard statistics with efficient database queries"""
         try:
-            # Total terminals (enabled ARP sources only)
+            # 合规轴·终端数：Terminal 表按 mac_address_normalized 唯一，
+            # count() 即等价于 count(distinct mac)。以下合规序列全部用终端数。
             total_result = await self.db.execute(
                 select(func.count()).select_from(Terminal).where(_enabled_arp_source_tag_condition())
             )
             total = total_result.scalar() or 0
 
-            # Count by compliance_status
+            # Count by compliance_status（合规轴·终端数，可加和）
             compliance_result = await self.db.execute(
                 select(Terminal.compliance_status, func.count())
                 .where(_enabled_arp_source_tag_condition())
@@ -268,7 +270,7 @@ class TerminalService:
             )
             compliance_counts = dict(compliance_result.all())
 
-            # Count by status
+            # Count by status（防火墙封锁状态，blocked/unblocked）
             status_result = await self.db.execute(
                 select(Terminal.status, func.count())
                 .where(_enabled_arp_source_tag_condition())
@@ -279,7 +281,7 @@ class TerminalService:
             # Whitelist count - count terminals with compliance_status='bypass' instead of Whitelist entries
             whitelisted = compliance_counts.get("bypass", 0)
 
-            # Blocked count - unified caliber: count distinct active blacklist IPs.
+            # Blocked count（封锁轴·IP）: count distinct active blacklist IPs.
             # This aligns dashboard with blacklist page total and firewall actual state
             # (synced via reconciliation), including NULL-MAC reconciliation entries
             # that have no corresponding terminal record.
@@ -295,35 +297,10 @@ class TerminalService:
             blocked_result = await self.db.execute(blocked_stmt)
             blocked = blocked_result.scalar() or 0
 
-            # Non-compliant count: ONLY count terminals that are both non_compliant AND blocked,
-            # to enforce the invariant: compliance_status='non_compliant' ⇒ status='blocked'.
-            # Unified caliber: count DISTINCT IP (same as 'blocked') so the card aligns with
-            # the firewall actual blocked-IP count. A DHCP-reused IP shared by multiple MACs
-            # must not be counted multiple times — the firewall blocks by IP (one rule),
-            # regardless of how many terminals currently map to that IP.
-            nc_blocked_result = await self.db.execute(
-                select(func.count(func.distinct(Terminal.ip_address)))
-                .select_from(Terminal)
-                .where(
-                    _enabled_arp_source_tag_condition() &
-                    (Terminal.compliance_status == 'non_compliant') &
-                    (Terminal.status == 'blocked')
-                )
-            )
-            non_compliant = nc_blocked_result.scalar() or 0
-
-            # Non-compliant-unblocked: intermediate-state terminals (non_compliant + unblocked),
-            # exposed separately so the blocked / non_compliant calibers stay unambiguous.
-            nc_unblocked_result = await self.db.execute(
-                select(func.count())
-                .select_from(Terminal)
-                .where(
-                    _enabled_arp_source_tag_condition() &
-                    (Terminal.compliance_status == 'non_compliant') &
-                    (Terminal.status == 'unblocked')
-                )
-            )
-            non_compliant_unblocked = nc_unblocked_result.scalar() or 0
+            # Non-compliant count (合规轴·终端数): non_compliant 与
+            # compliant/bypass/unknown/total 同轴，直接取 compliance_counts，
+            # 不再按「已封锁 distinct IP」统计，保证合规序列可加和。
+            non_compliant = compliance_counts.get("non_compliant", 0)
 
             return {
                 "total": total,
@@ -333,7 +310,6 @@ class TerminalService:
                 "compliant": compliance_counts.get("compliant", 0),
                 "bypass": compliance_counts.get("bypass", 0),
                 "non_compliant": non_compliant,
-                "non_compliant_unblocked": non_compliant_unblocked,
                 "unknown": compliance_counts.get("unknown", 0),
             }
         except Exception as e:
@@ -454,65 +430,112 @@ class TerminalService:
             logger.error(f"Error getting invalid MACs: {str(e)}")
             raise
 
-    async def search_macs(self, query: TerminalQuery) -> list[Terminal]:
-        """Search MAC addresses by various criteria including date range"""
-        try:
-            conditions = []
+    def _terminal_base_conditions(self, query: TerminalQuery) -> list:
+        """Build shared base WHERE conditions for terminal search (excludes dedup/duplicates)."""
+        conditions = []
 
-            # IP and MAC use OR logic with fuzzy matching
-            ip_mac_conditions = []
-            if query.ip:
-                ip_mac_conditions.append(Terminal.ip_address.ilike(f"%{_escape_like(query.ip)}%"))
-            if query.mac:
-                # Strip all separators for format-agnostic MAC matching
-                mac_clean = _normalize_mac(query.mac)
-                ip_mac_conditions.append(Terminal.mac_address_normalized.ilike(f"%{_escape_like(mac_clean)}%"))
+        # IP and MAC use OR logic with fuzzy matching
+        ip_mac_conditions = []
+        if query.ip:
+            ip_mac_conditions.append(Terminal.ip_address.ilike(f"%{_escape_like(query.ip)}%"))
+        if query.mac:
+            # Strip all separators for format-agnostic MAC matching
+            mac_clean = _normalize_mac(query.mac)
+            ip_mac_conditions.append(Terminal.mac_address_normalized.ilike(f"%{_escape_like(mac_clean)}%"))
 
-            if ip_mac_conditions:
-                conditions.append(or_(*ip_mac_conditions))
+        if ip_mac_conditions:
+            conditions.append(or_(*ip_mac_conditions))
 
-            if query.status:
-                conditions.append(Terminal.status == query.status)
+        if query.status:
+            conditions.append(Terminal.status == query.status)
 
-            if query.compliance_status:
-                conditions.append(Terminal.compliance_status == query.compliance_status)
+        if query.compliance_status:
+            conditions.append(Terminal.compliance_status == query.compliance_status)
 
-            if query.source_tag:
-                conditions.append(Terminal.source_tag == query.source_tag)
+        if query.source_tag:
+            conditions.append(Terminal.source_tag == query.source_tag)
 
-            if query.block_state:
-                conditions.append(Terminal.block_state == query.block_state)
-
-            if query.arp_enabled_only:
-                conditions.append(
-                    Terminal.source_tag.in_(
-                        select(DataSource.tag).where(
-                            DataSource.type.in_(["arp_ssh", "arp_api"]) & (DataSource.enabled == True)
-                        )
-                    )
-                )
-
-            # Firewall tag filter via Blacklist subquery
-            if query.firewall_tag:
-                fw_subquery = (
-                    select(Blacklist.ip_address)
-                    .where(Blacklist.firewall_tag == query.firewall_tag)
-                    .correlate(Terminal)
-                )
-                conditions.append(Terminal.ip_address.in_(fw_subquery))
-
-            # Date range filtering
-            date_conditions = _parse_date_range(query.start_date, query.end_date)
-            for dc in date_conditions:
-                conditions.append(dc(Terminal.timestamp))
-
-            stmt = (
-                select(Terminal)
-                .where(and_(*conditions) if conditions else True)
-                .order_by(desc(Terminal.timestamp))
-                .offset(query.skip)
-                .limit(query.limit)
+        # Firewall tag filter via Blacklist subquery
+        if query.firewall_tag:
+            fw_subquery = (
+                select(Blacklist.ip_address)
+                .where(Blacklist.firewall_tag == query.firewall_tag)
+                .correlate(Terminal)
             )
+            conditions.append(Terminal.ip_address.in_(fw_subquery))
+
+        # Date range filtering
+        date_conditions = _parse_date_range(query.start_date, query.end_date)
+        for dc in date_conditions:
+            conditions.append(dc(Terminal.timestamp))
+
+        return conditions
+
+    @staticmethod
+    def _dedup_key_column(dim: str):
+        """Column used as dedup/duplicate key. MAC is unique, so 'both' falls back to IP."""
+        return Terminal.mac_address_normalized if dim == "mac" else Terminal.ip_address
+
+    def _duplicate_conditions(self, base_where, dim: str) -> list:
+        """Conditions selecting terminals whose dedup key repeats within the current filter."""
+        conds = []
+        if dim in ("ip", "both"):
+            dup_ip = (
+                select(Terminal.ip_address)
+                .where(base_where)
+                .group_by(Terminal.ip_address)
+                .having(func.count() > 1)
+            )
+            conds.append(Terminal.ip_address.in_(dup_ip))
+        if dim in ("mac", "both"):
+            dup_mac = (
+                select(Terminal.mac_address_normalized)
+                .where(base_where)
+                .group_by(Terminal.mac_address_normalized)
+                .having(func.count() > 1)
+            )
+            conds.append(Terminal.mac_address_normalized.in_(dup_mac))
+        return conds
+
+    async def search_macs(self, query: TerminalQuery) -> list[Terminal]:
+        """Search terminals by various criteria including date range, with optional dedup/duplicates."""
+        try:
+            base_conditions = self._terminal_base_conditions(query)
+            base_where = and_(*base_conditions) if base_conditions else True
+
+            if query.dedup_mode == "duplicates" and query.dedup_dim:
+                dup_conds = self._duplicate_conditions(base_where, query.dedup_dim)
+                where = and_(base_where, or_(*dup_conds)) if dup_conds else base_where
+                stmt = (
+                    select(Terminal)
+                    .where(where)
+                    .order_by(desc(Terminal.timestamp))
+                    .offset(query.skip)
+                    .limit(query.limit)
+                )
+            elif query.dedup_mode == "dedup" and query.dedup_dim:
+                key_col = self._dedup_key_column(query.dedup_dim)
+                rn = func.row_number().over(
+                    partition_by=key_col,
+                    order_by=(Terminal.timestamp.desc(), Terminal.id.desc()),
+                ).label("rn")
+                sub = select(Terminal, rn).where(base_where).subquery()
+                t_alias = aliased(Terminal, sub)
+                stmt = (
+                    select(t_alias)
+                    .where(sub.c.rn == 1)
+                    .order_by(sub.c.timestamp.desc(), sub.c.id.desc())
+                    .offset(query.skip)
+                    .limit(query.limit)
+                )
+            else:
+                stmt = (
+                    select(Terminal)
+                    .where(base_where)
+                    .order_by(desc(Terminal.timestamp))
+                    .offset(query.skip)
+                    .limit(query.limit)
+                )
 
             result = await self.db.execute(stmt)
             return result.scalars().all()
@@ -522,61 +545,20 @@ class TerminalService:
             raise
 
     async def search_macs_count(self, query: TerminalQuery) -> int:
-        """Get total count of MAC addresses matching search criteria"""
+        """Get total count of terminals matching search criteria, aligned with search_macs."""
         try:
-            conditions = []
+            base_conditions = self._terminal_base_conditions(query)
+            base_where = and_(*base_conditions) if base_conditions else True
 
-            # Same conditions as search_macs
-            ip_mac_conditions = []
-            if query.ip:
-                ip_mac_conditions.append(Terminal.ip_address.ilike(f"%{_escape_like(query.ip)}%"))
-            if query.mac:
-                # Strip all separators for format-agnostic MAC matching
-                mac_clean = _normalize_mac(query.mac)
-                ip_mac_conditions.append(Terminal.mac_address_normalized.ilike(f"%{_escape_like(mac_clean)}%"))
-
-            if ip_mac_conditions:
-                conditions.append(or_(*ip_mac_conditions))
-
-            if query.status:
-                conditions.append(Terminal.status == query.status)
-
-            if query.compliance_status:
-                conditions.append(Terminal.compliance_status == query.compliance_status)
-
-            if query.source_tag:
-                conditions.append(Terminal.source_tag == query.source_tag)
-
-            if query.block_state:
-                conditions.append(Terminal.block_state == query.block_state)
-
-            if query.arp_enabled_only:
-                conditions.append(
-                    Terminal.source_tag.in_(
-                        select(DataSource.tag).where(
-                            DataSource.type.in_(["arp_ssh", "arp_api"]) & (DataSource.enabled == True)
-                        )
-                    )
-                )
-
-            # Firewall tag filter via Blacklist subquery
-            if query.firewall_tag:
-                fw_subquery = (
-                    select(Blacklist.ip_address)
-                    .where(Blacklist.firewall_tag == query.firewall_tag)
-                    .correlate(Terminal)
-                )
-                conditions.append(Terminal.ip_address.in_(fw_subquery))
-
-            # Date range filtering
-            date_conditions = _parse_date_range(query.start_date, query.end_date)
-            for dc in date_conditions:
-                conditions.append(dc(Terminal.timestamp))
-
-            stmt = (
-                select(func.count(Terminal.id))
-                .where(and_(*conditions) if conditions else True)
-            )
+            if query.dedup_mode == "duplicates" and query.dedup_dim:
+                dup_conds = self._duplicate_conditions(base_where, query.dedup_dim)
+                where = and_(base_where, or_(*dup_conds)) if dup_conds else base_where
+                stmt = select(func.count(Terminal.id)).where(where)
+            elif query.dedup_mode == "dedup" and query.dedup_dim:
+                key_col = self._dedup_key_column(query.dedup_dim)
+                stmt = select(func.count(key_col.distinct())).where(base_where)
+            else:
+                stmt = select(func.count(Terminal.id)).where(base_where)
 
             result = await self.db.execute(stmt)
             return result.scalar() or 0
@@ -1628,7 +1610,6 @@ class TerminalService:
 
         Categories:
           - success_blocked: active blacklist entries actually blocked on firewall
-          - pending_retry_block: non_compliant terminals not yet blocked (await retry-block)
           - success_unblocked: entries that have been unblocked on the firewall
           - pending_retry_unblock: still-active entries whose terminal already became
             compliant/bypass (unblock failed, awaiting retry)
@@ -1645,54 +1626,16 @@ class TerminalService:
             ),
         )
 
-        # ① success_blocked: distinct active blacklist IPs (actually blocked on firewall)
+        # ① success_blocked: active blacklist entries (the rows shown in the list below).
+        #    Count raw rows (like the list total) instead of distinct IPs, so the
+        #    card matches the number of entries actually displayed.
         success_blocked = (
             await self.db.execute(
-                select(func.count(func.distinct(Blacklist.ip_address))).where(active_filter)
+                select(func.count(Blacklist.id)).where(active_filter)
             )
         ).scalar() or 0
 
-        # ② pending_retry_block: non_compliant terminals still unblocked that are
-        #    ACTIONABLE (either not yet classified, or block_failed awaiting retry).
-        #    Matches main.py retry-block query (source IN enabled ARP sources,
-        #    non_compliant, unblocked) excluding no_firewall which is unblockable.
-        nc_unblocked_filter = (
-            Terminal.source_tag.in_(
-                select(DataSource.tag).where(
-                    DataSource.type.in_(["arp_ssh", "arp_api"]) & (DataSource.enabled == True)
-                )
-            ) &
-            (Terminal.compliance_status == "non_compliant") &
-            (Terminal.status == "unblocked")
-        )
-        pending_retry_block = (
-            await self.db.execute(
-                select(func.count())
-                .select_from(Terminal)
-                .where(
-                    nc_unblocked_filter &
-                    or_(
-                        Terminal.block_state.is_(None),
-                        Terminal.block_state == "block_failed",
-                    )
-                )
-            )
-        ).scalar() or 0
-
-        # ②b unblockable_non_compliant: non_compliant + unblocked with no bound firewall
-        #     (permanent backlog, cannot be blocked -> reported separately).
-        unblockable_non_compliant = (
-            await self.db.execute(
-                select(func.count())
-                .select_from(Terminal)
-                .where(
-                    nc_unblocked_filter &
-                    (Terminal.block_state == "no_firewall")
-                )
-            )
-        ).scalar() or 0
-
-        # ③ pending_retry_unblock: still-active entry + terminal already compliant/bypass.
+        # ② pending_retry_unblock: still-active entry + terminal already compliant/bypass.
         #    Dedup by terminal identity (MAC-normalized, NULL→IP) so it matches the
         #    list total and list rows (avoids DHCP re-IP missing / same-IP dup).
         pending_retry_unblock = (
@@ -1707,7 +1650,7 @@ class TerminalService:
             )
         ).scalar() or 0
 
-        # ④ success_unblocked: entries that have been unblocked (on firewall)
+        # ③ success_unblocked: entries that have been unblocked (on firewall)
         success_unblocked = (
             await self.db.execute(
                 select(func.count(Blacklist.id)).where(
@@ -1719,10 +1662,9 @@ class TerminalService:
             )
         ).scalar() or 0
 
-        # ⑤ firewall_errors + firewall_ip_count + synced_at from latest reconciliation cache
+        # ④ firewall_errors + synced_at from latest reconciliation cache
         firewall_errors: list[dict] = []
         synced_at: str | None = None
-        firewall_ip_count: int = 0
         try:
             from app.core.security import get_redis_client
             redis_client = await get_redis_client()
@@ -1739,17 +1681,13 @@ class TerminalService:
                     elif isinstance(item, str):
                         firewall_errors.append({"tag": item, "error": ""})
                 synced_at = payload.get("synced_at")
-                firewall_ip_count = int(payload.get("firewall_ip_count", 0) or 0)
         except Exception:
             pass
 
         return {
             "success_blocked": success_blocked,
-            "pending_retry_block": pending_retry_block,
-            "unblockable_non_compliant": unblockable_non_compliant,
             "success_unblocked": success_unblocked,
             "pending_retry_unblock": pending_retry_unblock,
-            "firewall_ip_count": firewall_ip_count,
             "firewall_errors": firewall_errors,
             "synced_at": synced_at,
         }
@@ -1999,16 +1937,10 @@ class TerminalService:
                         count += 1
                         continue
 
-                    # Restore terminal status if this was the last active block for this MAC
-                    if mac_norm and mac_norm not in processed_macs:
-                        terminal = terminal_by_mac.get(mac_norm)
-                        if terminal and terminal.status == "blocked":
-                            terminal.status = TerminalStatus.UNBLOCKED.value
-                            # Reset compliance_status to "unknown" so the next
-                            # scheduled compliance check will re-evaluate it.
-                            terminal.compliance_status = "unknown"
-                            terminal.firewall_tag = None
-                        processed_macs.add(mac_norm)
+                    # NOTE: terminal status is restored only AFTER the firewall unblock
+                    # below has been confirmed successful (see success branch). This fixes
+                    # a bug where status was set to 'unblocked' optimistically before the
+                    # firewall was actually unblocked, leaving the DB and firewall out of sync.
 
                     # Try to unblock on Sangfor (using cached service)
                     fw_tag = entry.firewall_tag
@@ -2049,6 +1981,19 @@ class TerminalService:
                         entry.unblocked_by = "system"
                         entry.reason = "封锁时间到期自动解封"
                         count += 1
+
+                        # Restore terminal status only now that the firewall unblock for
+                        # this MAC's last active block has been confirmed successful.
+                        if mac_norm and mac_norm not in processed_macs:
+                            terminal = terminal_by_mac.get(mac_norm)
+                            if terminal and terminal.status == "blocked":
+                                terminal.status = TerminalStatus.UNBLOCKED.value
+                                # Reset compliance_status to "unknown" so the next
+                                # scheduled compliance check will re-evaluate it.
+                                terminal.compliance_status = "unknown"
+                                terminal.firewall_tag = None
+                                terminal.block_state = None
+                            processed_macs.add(mac_norm)
                     else:
                         # Sangfor unblock failed — do NOT mark as unblocked
                         # to maintain consistency between local DB and firewall.
