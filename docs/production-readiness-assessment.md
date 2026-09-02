@@ -12,6 +12,7 @@
 
 | 文档版本 | 更新日期 | 关联版本 | 更新内容 |
 |---------|---------|---------|---------|
+| v3.18.0 | 2026-09-02 | v3.18.0 | 黑名单唯一口径收敛为（IP, 防火墙）（迁移 038 + _attach_active_blacklist 幂等写入）；对账不再写 block_state 且补封闭回写终端状态；终端去重/查重筛选（新功能）；统计口径收敛与卡片简化（移除 pending_retry_block/unblockable_non_compliant）；会话滑动续期修复 |
 | v3.17.3 | 2026-08-31 | v3.17.3 | 数据状态一致性根治：新增 Terminal.block_state 区分中间态可收敛性、统计口径对齐（non_compliant_unblocked / firewall_ip_count / 拆 block pending retry 与不可封锁）、调度器首轮回填、前端显式化卡片与筛选跳转 |
 | v3.17.2 | 2026-08-31 | v3.17.2 | RBAC 授权加固（新增 compliance:read/write 并幂等补种、接口补授权、去死权限）；备份服务修复；中文日志乱码；角色编辑误报；数据源删除统计修正；会话超时对话框化；i18n 三语补全（1421 leaf key 对齐）；暗色模式统一、终端搜索框独占整行与备份列表分页 |
 | v3.17.1 | 2026-08-28 | v3.17.1 | Pydantic v2 迁移（8 schema + config）；SQLAlchemy 2.0 text()；本地 2FA 验证码生成修复；webhook 测试连接 405 降级修复；compliance scope ip_range 校验重写；防火墙对账元组解包修复；死代码清理；6A–6E 测试补全与覆盖率门槛 |

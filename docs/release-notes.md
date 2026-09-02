@@ -1,12 +1,45 @@
 # 版本跟踪记录
 
-> 文档版本：v3.17.3 | 更新日期：2026-08-31
+> 文档版本：v3.18.0 | 更新日期：2026-09-02
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
 
 ---
+
+## [v3.18.0] - 2026-09-02
+
+### 黑名单唯一口径收敛、终端去重查重筛选与统计口径简化（Minor 版本）
+
+#### 背景
+
+自 v3.17.3 发布以来，围绕数据状态一致性主题继续收敛：其一，黑名单活跃唯一口径由 `(IP, MAC, 防火墙)` 收敛为 `(IP, 防火墙)`，对齐深信服按 IP 封堵、按 IP 幂等的真实行为，解决 DHCP 换 IP 场景下同 IP 多 MAC 产生重复活跃行、进而与防火墙实际封锁数错配并引发封/解振荡的问题；其二，新增终端「去重/查重」筛选能力，便于直接发现 DHCP 换 IP、同 IP 多终端等数据质量问题；其三，收敛统计口径并简化前端统计卡，移除 `pending_retry_block`/`unblockable_non_compliant` 等易混淆的中间口径；其四，修复令牌滑动续期误重置空闲计时器的问题。因含一项面向用户的新能力（终端去重/查重筛选），故以 Minor 发布。
+
+#### 主要变更
+
+| 变更项 | 说明 |
+|--------|------|
+| 黑名单唯一口径收敛（迁移 038） | 活跃唯一索引 `(IP, MAC, 防火墙)` → `(IP, 防火墙)`；去重历史重复活跃行；新增 `_attach_active_blacklist` 幂等写入 |
+| 对账口径与补封闭收敛 | 孤儿重置不再写 `block_state`；active 口径移除 `expires_at` 过期剔除；补封闭成功后回写 `Terminal.status/firewall_tag` 并清 `block_state` |
+| 终端去重/查重筛选（新功能） | 新增「去重/查重维度」(IP/MAC/IP+MAC) 与「去重/查重模式」(去重/查重) 两个下拉框，服务端 SQL 实现 |
+| 统计口径收敛与卡片简化 | `get_blacklist_stats` 移除中间口径；`pending_retry_unblock` MAC 归一化去重；导出 active_filter 补 `expires_at`；前端移除「待封锁/不可封锁非合规」卡 |
+| 终端过滤精简 | 移除 `block_state` 与「仅启用 ARP 源」冗余过滤，统一为去重/查重维度/模式参数 |
+| 会话滑动续期修复 | token 自动续期不再重置 idle 计时器、不关闭 idle 超时警告 |
+
+#### 升级步骤（推荐：一键升级）
+
+```bash
+git checkout main
+git pull origin main
+./manage.sh upgrade
+```
+
+#### 升级注意事项
+
+- 本次含数据库迁移 038（黑名单活跃唯一索引收敛为 `(ip_address, firewall_tag)`），`./manage.sh upgrade` 会自动执行 `alembic upgrade head`。
+- 迁移会去重历史活跃重复行（按 ip+firewall 保留最新、其余标记解封）并重建唯一索引，升级前请按惯例自动备份。
+- 无破坏性变更；终端「去重/查重」筛选为新增能力，移除的 `block_state`/「仅启用 ARP」为冗余过滤项。
 
 ## [v3.17.3] - 2026-08-31
 
