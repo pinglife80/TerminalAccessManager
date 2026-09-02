@@ -1,6 +1,6 @@
 # 更新日志
 
-> 文档版本：v3.17.3  更新日期：2026-08-31
+> 文档版本：v3.18.0  更新日期：2026-09-02
 
 本文件记录 TerminalAccessManager 的所有重要变更。
 
@@ -8,6 +8,26 @@
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ***
+
+## [3.18.0] - 2026-09-02
+
+### 新增
+
+- **终端去重/查重筛选**：终端管理页新增「去重/查重维度」(IP / MAC / IP+MAC) 与「去重/查重模式」(去重 / 查重) 两个下拉框，由服务端 SQL 按维度去重或筛出重复项，便于发现 DHCP 换 IP、同 IP 多终端等数据质量问题
+  - 关联文件：`services/terminal_service.py`、`api/v1/endpoints/terminals.py`、`schemas/terminal.py`、`Terminals.tsx`、`useTerminalData.ts`、`i18n/locales/{en,zh,ja}.ts`
+
+### 修复
+
+- **黑名单唯一口径收敛为 IP+防火墙**（迁移 038）：活跃唯一索引由 `(IP, MAC, 防火墙)` 收敛为 `(IP, 防火墙)`，与深信服按 IP 封堵、按 IP 幂等的真实行为对齐；去重历史重复活跃行；新增 `_attach_active_blacklist` 幂等写入（DHCP 换 IP 原地更新 MAC，仅非空覆盖）
+  - 关联文件：`alembic/versions/038_blacklist_unique_ip_firewall.py`、`models/blacklist.py`、`services/compliance_service.py`、`main.py`
+- **对账口径与补封闭收敛**：移除 `_repair_stale_terminal_status` 写 `block_failed` 的逻辑（`block_state` 归属合规/封堵管线）；active 口径移除 `expires_at` 过期剔除，避免过期窗口误判孤儿导致封/解振荡；补封闭成功后回写 `Terminal.status/firewall_tag` 并清 `block_state`，修复补封闭后终端滞留 unblocked 的不一致
+  - 关联文件：`services/firewall_reconciliation_service.py`
+- **统计口径收敛与卡片简化**：`get_blacklist_stats` 移除 `pending_retry_block`/`unblockable_non_compliant`；`pending_retry_unblock` 用 MAC 归一化去重；黑名单导出 active_filter 补 `expires_at` 检查；前端移除「待封锁/不可封锁非合规」卡片与跳转
+  - 关联文件：`services/terminal_service.py`、`api/v1/endpoints/blacklist.py`、`useTerminalData.ts`、`Blacklist.tsx`、`i18n/locales/{en,zh,ja}.ts`
+- **终端过滤精简**：移除 `block_state` 与「仅启用 ARP 源」冗余过滤，统一为去重/查重维度/模式参数
+  - 关联文件：`schemas/terminal.py`、`api/v1/endpoints/terminals.py`、`Terminals.tsx`
+- **滑动续期不再重置 idle**：token 自动续期仅关闭过期警告，不再重置 idle 计时器、不关闭 idle 超时警告，保证空闲用户仍会在超时后登出
+  - 关联文件：`useTokenExpiration.ts`
 
 ## [3.17.3] - 2026-08-31
 

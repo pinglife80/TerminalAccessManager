@@ -192,15 +192,15 @@ class FirewallReconciliationService:
         reconciliation-created entries (avoid wrongly resetting genuinely-blocked
         terminals whose blacklist entry has no MAC).
         """
-        _now = datetime.now(UTC)
+        # An entry "backs" a blocked terminal until it has actually been unblocked
+        # (unblocked_at IS NULL), regardless of whether expires_at has just passed.
+        # The cleanup_expired_blacklist task owns the unblock + status reset; excluding
+        # just-expired-but-not-yet-cleaned entries here caused terminals to be wrongly
+        # judged as orphans during the expiry window, feeding the block/unblock oscillation.
         active_bl = (
             select(Blacklist.id).where(
                 (Blacklist.auto_unblocked == False) &
                 (Blacklist.unblocked_at.is_(None)) &
-                or_(
-                    Blacklist.expires_at >= _now,
-                    Blacklist.expires_at.is_(None),
-                ) &
                 or_(
                     and_(
                         Blacklist.mac_address_normalized.is_not(None),
@@ -223,12 +223,10 @@ class FirewallReconciliationService:
         for t in terminals:
             t.status = TerminalStatus.UNBLOCKED.value
             t.firewall_tag = None
-            if t.compliance_status == "non_compliant":
-                # Lost its blacklist backing but still non_compliant: mark as
-                # block_failed so retry-block can re-block it (not a permanent backlog).
-                t.block_state = "block_failed"
-            else:
-                t.block_state = None
+            # Do NOT touch block_state here. block_state is owned by the
+            # compliance/block-pipeline logic (retry-block, _apply_compliance_result).
+            # Writing 'block_failed' here was the root cause of stale/incorrect tags on
+            # compliant terminals and the re-block oscillation.
             fixed += 1
         if fixed:
             await self.db.commit()
@@ -407,10 +405,9 @@ class FirewallReconciliationService:
 
         for ip_address in ip_addresses:
             try:
-                # Find the blacklist entry to get reason.
-                # An IP may have multiple active entries with different MACs
-                # (DHCP IP reuse across terminals), so use first() instead of
-                # scalar_one_or_none() which raises MultipleResultsFound.
+                # Find the active blacklist entry to get the reason. Active entries
+                # are keyed by (ip, firewall_tag) unique index, so at most one entry
+                # exists per IP per firewall.
                 bl_stmt = select(Blacklist).where(
                     (Blacklist.ip_address == ip_address) &
                     (Blacklist.firewall_tag == fw_tag) &
@@ -433,6 +430,27 @@ class FirewallReconciliationService:
                 if result.get("code") == 0:
                     reblocked += 1
                     logger.info(f"Re-blocked {ip_address} on firewall '{fw_tag}' during reconciliation")
+                    # Write back Terminal.status to reflect the actual firewall blocked
+                    # state. Previously this re-block never updated the terminal table,
+                    # which left terminals stuck in 'unblocked' + stale block_state.
+                    # Only update firewall-state fields (status/firewall_tag/block_state);
+                    # NEVER touch compliance_status here.
+                    term_query = None
+                    if bl_entry and bl_entry.mac_address_normalized:
+                        term_query = select(Terminal).where(
+                            Terminal.mac_address_normalized == bl_entry.mac_address_normalized
+                        )
+                    else:
+                        term_query = select(Terminal).where(
+                            Terminal.ip_address == ip_address
+                        )
+                    term_result = await self.db.execute(term_query.limit(1))
+                    terminal = term_result.scalars().first()
+                    if terminal and terminal.status != TerminalStatus.BLOCKED.value:
+                        terminal.status = TerminalStatus.BLOCKED.value
+                        if not terminal.firewall_tag:
+                            terminal.firewall_tag = fw_tag
+                        terminal.block_state = None
                 else:
                     error_msg = result.get("message", "unknown error")
                     logger.warning(f"Failed to re-block {ip_address} on firewall '{fw_tag}': {error_msg}")

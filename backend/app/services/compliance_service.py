@@ -614,38 +614,18 @@ class ComplianceService:
                         block_reason = "自动封锁：不合规"
                 
                 for fw_tag in successfully_blocked_fw:
-                    # Check for existing entry (idempotency per firewall)
-                    existing_stmt = select(Blacklist).where(
-                        (Blacklist.ip_address == entry.ip_address) &
-                        (Blacklist.mac_address_normalized == mac_norm) &
-                        (Blacklist.firewall_tag == fw_tag) &
-                        (Blacklist.unblocked_at.is_(None)) &
-                        (Blacklist.auto_unblocked == False)
-                    )
-                    existing_result = await self.db.execute(existing_stmt)
-                    existing_bl = existing_result.scalar_one_or_none()
-                    if existing_bl:
-                        logger.debug(f"Blacklist entry already exists for {entry.ip_address} MAC {entry.mac_address} on firewall '{fw_tag}', skipping")
-                        continue
-
-                    blacklist_entry = Blacklist(
-                        ip_address=entry.ip_address,
-                        mac_address=entry.mac_address,
-                        mac_address_normalized=mac_norm,
-                        reason=block_reason,
-                        blocked_by="system",
-                        expires_at=datetime.now(UTC) + td,
-                        source_tag=arp_source_tag,
-                        firewall_tag=fw_tag,
-                        is_auto_blocked=True,
-                        auto_unblocked=False,
-                        last_operation_type="block",
-                        last_operation_status="success",
-                        last_operation_at=datetime.now(UTC),
-                    )
+                    # Idempotency per firewall: active entries are keyed by (ip, firewall)
+                    # to mirror the firewall's IP-only blocking. Reused IPs update MAC in place.
                     try:
-                        self.db.add(blacklist_entry)
-                        await self.db.flush()
+                        await self._attach_active_blacklist(
+                            ip_address=entry.ip_address,
+                            mac_address=entry.mac_address,
+                            mac_norm=mac_norm,
+                            firewall_tag=fw_tag,
+                            reason=block_reason,
+                            source_tag=arp_source_tag,
+                            expires_at=datetime.now(UTC) + td,
+                        )
                     except IntegrityError:
                         await self.db.rollback()
                         logger.warning(f"Integrity error creating blacklist entry for {entry.ip_address} MAC {entry.mac_address} on firewall '{fw_tag}', skipping")
@@ -1426,6 +1406,74 @@ class ComplianceService:
     # ------------------------------------------------------------------
     # Firewall Operations
     # ------------------------------------------------------------------
+    async def _attach_active_blacklist(
+        self,
+        ip_address: str,
+        mac_address: str | None,
+        mac_norm: str | None,
+        firewall_tag: str,
+        reason: str,
+        source_tag: str | None,
+        expires_at,
+    ) -> str:
+        """Insert or update the active blacklist entry keyed by (ip, firewall_tag).
+
+        The firewall (Sangfor AF) blocks by IP only, so the database must mirror
+        a single active entry per (ip, firewall). When the same IP is reused by a
+        different terminal (DHCP), update the holder's MAC in place instead of
+        inserting a duplicate row that would violate the (ip, firewall) unique index.
+
+        Returns 'created' or 'updated'.
+        """
+        existing_stmt = select(Blacklist).where(
+            (Blacklist.ip_address == ip_address) &
+            (Blacklist.firewall_tag == firewall_tag) &
+            (Blacklist.unblocked_at.is_(None)) &
+            (Blacklist.auto_unblocked == False)
+        )
+        existing_result = await self.db.execute(existing_stmt)
+        existing_bl = existing_result.scalar_one_or_none()
+
+        if existing_bl:
+            # Do not overwrite an existing MAC with None (NULL-MAC request):
+            # _repair_stale_terminal_status and unblock logic rely on a
+            # non-null MAC for precise terminal matching.
+            if mac_address is not None:
+                existing_bl.mac_address = mac_address
+            if mac_norm is not None:
+                existing_bl.mac_address_normalized = mac_norm
+            existing_bl.reason = reason
+            existing_bl.source_tag = source_tag
+            existing_bl.expires_at = expires_at
+            existing_bl.last_operation_type = "block"
+            existing_bl.last_operation_status = "success"
+            existing_bl.last_operation_at = datetime.now(UTC)
+            await self.db.flush()
+            logger.debug(
+                f"Updated active blacklist entry for {ip_address} on firewall '{firewall_tag}' "
+                f"to MAC {mac_address}"
+            )
+            return "updated"
+
+        bl_entry = Blacklist(
+            ip_address=ip_address,
+            mac_address=mac_address,
+            mac_address_normalized=mac_norm,
+            reason=reason,
+            blocked_by="system",
+            expires_at=expires_at,
+            source_tag=source_tag,
+            firewall_tag=firewall_tag,
+            is_auto_blocked=True,
+            auto_unblocked=False,
+            last_operation_type="block",
+            last_operation_status="success",
+            last_operation_at=datetime.now(UTC),
+        )
+        self.db.add(bl_entry)
+        await self.db.flush()
+        return "created"
+
     async def _block_on_firewall(
         self, ip_address: str, firewall_tag: str, block_time: str = "30d",
         reason: str = "Auto-blocked: non-compliant"
@@ -1881,6 +1929,14 @@ class ComplianceService:
                         terminal.block_state = None
                         unblocked = True
 
+            elif new_compliance in ("bypass", "compliant") and terminal.block_state is not None:
+                # Terminal is already unblocked (status may have been reset by
+                # reconciliation/cleanup), but compliance has recovered — clear any
+                # stale block_state left over from a previous non-compliant/block-failed
+                # period. Without this, compliant/bypass terminals could keep a stale
+                # 'block_failed' tag indefinitely.
+                terminal.block_state = None
+
             # Check if terminal needs (re-)block: non-compliant AND no active blacklist entry on ALL required firewalls
             # This handles the case where a terminal was blocked, became compliant (auto-unblocked),
             # then became non-compliant again - the terminal status may still be "blocked" from
@@ -1982,36 +2038,17 @@ class ComplianceService:
                                     td = timedelta(minutes=value)
 
                             for fw_tag in successfully_blocked_fw:
-                                # Double-check idempotency per firewall
-                                existing_check = select(Blacklist).where(
-                                    (Blacklist.ip_address == ip_addr) &
-                                    (Blacklist.mac_address_normalized == mac_norm) &
-                                    (Blacklist.firewall_tag == fw_tag) &
-                                    (Blacklist.unblocked_at.is_(None)) &
-                                    (Blacklist.auto_unblocked == False)
-                                )
-                                existing_result = await self.db.execute(existing_check)
-                                if existing_result.scalar_one_or_none():
-                                    continue
-
-                                bl_entry = Blacklist(
-                                    ip_address=ip_addr,
-                                    mac_address=mac_addr,
-                                    mac_address_normalized=mac_norm,
-                                    reason=block_reason,
-                                    blocked_by="system",
-                                    expires_at=datetime.now(UTC) + td,
-                                    source_tag=terminal.source_tag,
-                                    firewall_tag=fw_tag,
-                                    is_auto_blocked=True,
-                                    auto_unblocked=False,
-                                    last_operation_type="block",
-                                    last_operation_status="success",
-                                    last_operation_at=datetime.now(UTC),
-                                )
+                                # Idempotency per firewall: keyed by (ip, firewall).
                                 try:
-                                    self.db.add(bl_entry)
-                                    await self.db.flush()
+                                    await self._attach_active_blacklist(
+                                        ip_address=ip_addr,
+                                        mac_address=mac_addr,
+                                        mac_norm=mac_norm,
+                                        firewall_tag=fw_tag,
+                                        reason=block_reason,
+                                        source_tag=terminal.source_tag,
+                                        expires_at=datetime.now(UTC) + td,
+                                    )
                                 except IntegrityError:
                                     await self.db.rollback()
                                     logger.warning(f"Integrity error creating blacklist entry for {ip_addr} MAC {mac_addr} on firewall '{fw_tag}' during recalculation")

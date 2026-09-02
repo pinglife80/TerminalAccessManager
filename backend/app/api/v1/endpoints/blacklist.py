@@ -1,5 +1,6 @@
 import csv
 from io import StringIO
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -106,7 +107,11 @@ async def export_blacklist(
 
     _active_filter = and_(
         Blacklist.auto_unblocked == False,
-        Blacklist.unblocked_at.is_(None)
+        Blacklist.unblocked_at.is_(None),
+        or_(
+            Blacklist.expires_at >= datetime.now(UTC),
+            Blacklist.expires_at.is_(None),
+        )
     )
     _unblocked_filter = or_(
         Blacklist.auto_unblocked == True,

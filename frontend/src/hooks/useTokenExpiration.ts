@@ -113,12 +113,16 @@ export const useTokenExpiration = (): SessionWarning => {
       } catch {}
 
       warningShown.current = false;
-      dismissWarning();
-      resetIdleTimer();
+      // Auto-refresh (sliding session) only dismisses the expiry warning. It must
+      // NOT dismiss an idle-timeout warning nor reset the idle timer: a token
+      // refresh is not user activity, so an idle user must still be logged out.
+      if (!idleWarningShown.current) {
+        dismissWarning();
+      }
     } catch {
       await handleExpired();
     }
-  }, [dismissWarning, handleExpired, resetIdleTimer]);
+  }, [dismissWarning, handleExpired]);
 
   useEffect(() => {
     if (!isAuthenticated) return;
