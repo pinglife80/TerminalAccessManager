@@ -54,6 +54,7 @@ class EventType(StrEnum):
     CONFIG_CHANGED = "admin.config_changed"
     ROLE_CHANGED = "admin.role_changed"
     PERMISSION_CHANGED = "admin.permission_changed"
+    WHITELIST_CHANGED = "admin.whitelist_changed"
 
 
 class ChannelType(StrEnum):
@@ -254,6 +255,12 @@ EVENT_METADATA = {
         "severity": "warning",
         "category": "admin",
     },
+    EventType.WHITELIST_CHANGED: {
+        "name": "白名单变更",
+        "description": "白名单条目已新增或删除",
+        "severity": "warning",
+        "category": "admin",
+    },
 }
 
 CHANNEL_METADATA = {
@@ -306,3 +313,10 @@ REALTIME_EVENT_TYPES: set[str] = {
 def is_realtime_event(event_type: str) -> bool:
     """Check if an event type requires immediate delivery (no aggregation)."""
     return event_type in REALTIME_EVENT_TYPES
+
+
+# Default subscription seed: when a channel is created without an explicit
+# ``events`` selection, it subscribes to every defined event type. This
+# prevents "events emitted but no channel subscribed" from silently dropping
+# notifications.
+DEFAULT_SUBSCRIBED_EVENTS: list[str] = [e.value for e in EventType]

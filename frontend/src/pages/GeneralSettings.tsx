@@ -48,7 +48,7 @@ const SECTION_FIELDS: Record<string, string[]> = {
     'scheduler_auto_unblock_interval', 'scheduler_backup_interval',
   ],
   general: ['environment', 'debug', 'log_level'],
-  compliance: ['compliance_confirm_threshold', 'block_time', 'ipguard_stale_threshold_minutes', 'compliance_cooldown_minutes', 'compliance_ip_grace_minutes', 'compliance_whitelist_miss_threshold'],
+  compliance: ['compliance_confirm_threshold', 'block_time', 'ipguard_stale_threshold_minutes', 'compliance_cooldown_minutes', 'compliance_ip_grace_minutes', 'compliance_whitelist_miss_threshold', 'compliance_compliant_downgrade_threshold'],
   cache: ['cache_ipguard_ttl', 'cache_whitelist_ttl'],
   alert: [
     'alert_compliance_rate_threshold', 'alert_compliance_critical_ratio',
@@ -119,6 +119,7 @@ const FIELD_DESC_I18N_KEYS: Record<string, string> = {
   'compliance_cooldown_minutes': 'generalSettings.compliance_cooldown_minutesDesc',
   'compliance_ip_grace_minutes': 'generalSettings.compliance_ip_grace_minutesDesc',
   'compliance_whitelist_miss_threshold': 'generalSettings.compliance_whitelist_miss_thresholdDesc',
+  'compliance_compliant_downgrade_threshold': 'generalSettings.compliance_compliant_downgrade_thresholdDesc',
   'alert_compliance_rate_threshold': 'generalSettings.alert_compliance_rate_thresholdDesc',
   'alert_compliance_critical_ratio': 'generalSettings.alert_compliance_critical_ratioDesc',
   'alert_block_count_threshold': 'generalSettings.alert_block_count_thresholdDesc',

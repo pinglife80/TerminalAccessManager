@@ -1,12 +1,43 @@
 # 版本跟踪记录
 
-> 文档版本：v3.19.0 | 更新日期：2026-09-04
+> 文档版本：v3.20.0 | 更新日期：2026-09-04
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
 
 ---
+
+## [v3.20.0] - 2026-09-04
+
+### MAC+IP 复合唯一键、合规状态转换优化、白名单匹配统一与白名单变更通知补全（Minor 版本）
+
+#### 背景
+
+自 v3.19.0 发布以来，围绕「终端数据完整性」「合规状态稳定性」「通知可靠性」三条主线开展工作：其一，将 `terminals` 唯一标识由 `mac_address_normalized` 改为 `(ip_address, mac_address_normalized)` 复合键，修复同 MAC 多 IP（如桥接虚拟机）终端在 ARP 采集时被折叠、导致漏采的问题；其二，优化合规状态转换——命中 IPGuard 立即升级 `compliant`、手动白名单新增立即 `bypass`（均去掉升级方向的确认次数防抖），并新增独立可配置项 `compliance_compliant_downgrade_threshold` 单独拉长 `compliant → non_compliant` 降级所需连续确认次数，令长期合规终端更稳定；其三，统一白名单匹配逻辑并修正 `wl_match_type` 取值，补全白名单变更通知与渠道默认订阅回填。因含数据库迁移 040 与多项面向用户的新能力/新可配置项，故以 Minor 发布。
+
+#### 主要变更
+
+| 变更项 | 说明 |
+|--------|------|
+| MAC+IP 复合唯一键（迁移 040） | `terminals` 唯一约束 `uq_terminal_mac` → `uq_terminal_mac_ip`(ip_address, mac_address_normalized)；`mac_address_normalized` 置 NOT NULL；采集/对账/统计/黑名单 join 全面改用 (IP, MAC) 复合口径 |
+| 合规状态转换优化 | IPGuard 命中立即升级 `compliant`、手动白名单新增立即 `bypass`；新增 `compliance_compliant_downgrade_threshold`（默认 6，2-20）独立控制合规降级 |
+| 白名单匹配逻辑统一 | `add_to_whitelist` 统一 `scalars().all()` 循环 apply，`wl_match_type` 修正为 `mac`/`ip`/`both`，修复同 MAC 多 IP 场景匹配不完整 |
+| 白名单变更通知补全 | 新增事件类型 `admin.whitelist_changed` 与发射器 `emit_whitelist_changed`；渠道创建/启动时幂等回填默认订阅 |
+| 黑名单统计口径 UI 说明 | 成功封锁 / 待解封卡片新增 tooltip，说明 `pending_retry_unblock ⊆ success_blocked` 子集关系 |
+
+#### 升级步骤（推荐：一键升级）
+
+```bash
+git checkout main
+git pull origin main
+./manage.sh upgrade
+```
+
+#### 升级注意事项
+
+- 本次含数据库迁移 040（`terminals` 唯一约束由 `mac_address_normalized` 改为 `(ip_address, mac_address_normalized)`，并删除历史 NULL-MAC 行），`./manage.sh upgrade` 会自动执行 `alembic upgrade head`。
+- 迁移前建议先备份数据库；该迁移会引入同 MAC 多 IP 的独立终端记录行，采集与合规判定口径随之切换为复合键。
 
 ## [v3.19.0] - 2026-09-04
 

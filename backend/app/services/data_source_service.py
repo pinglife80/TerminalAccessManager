@@ -546,25 +546,25 @@ class DataSourceService:
 
         # Step 2: Update terminal status
         for bl_entry in bl_entries:
-            # Match by unified mac_address_normalized (not raw MAC string equality)
-            # so casing/separator differences can't leave orphaned 'blocked' terminals.
-            mac_norm = (
-                bl_entry.mac_address.replace('-', '').replace(':', '').replace('.', '').upper()
-                if bl_entry.mac_address else None
-            )
+            # Match by (MAC, IP) composite identity so a MAC shared by multiple
+            # IPs (e.g., bridged VMs) resolves to the correct terminal row, and a
+            # NULL-MAC reconciliation entry falls back to IP-only matching.
+            mac_norm = bl_entry.mac_address_normalized
             terminal_stmt = select(Terminal)
             if mac_norm:
-                terminal_stmt = terminal_stmt.where(Terminal.mac_address_normalized == mac_norm)
+                terminal_stmt = terminal_stmt.where(
+                    (Terminal.mac_address_normalized == mac_norm) &
+                    (Terminal.ip_address == bl_entry.ip_address)
+                )
             else:
                 terminal_stmt = terminal_stmt.where(Terminal.ip_address == bl_entry.ip_address)
             t_result = await self.db.execute(terminal_stmt)
-            terminal = t_result.scalar_one_or_none()
+            terminal = t_result.scalars().first()
             if terminal:
-                # Check if terminal is blocked on other firewalls too (use normalized MAC)
-                mac_norm = terminal.mac_address.replace('-', '').replace(':', '').replace('.', '').upper() if terminal.mac_address else None
+                # Check if terminal is blocked on other firewalls too
                 other_bl_stmt = select(Blacklist).where(
                     (Blacklist.ip_address == terminal.ip_address) &
-                    (Blacklist.mac_address_normalized == mac_norm) &
+                    (Blacklist.mac_address_normalized == terminal.mac_address_normalized) &
                     (Blacklist.firewall_tag != fw_tag)
                 )
                 other_bl_result = await self.db.execute(other_bl_stmt)

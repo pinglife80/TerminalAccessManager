@@ -174,28 +174,20 @@ const Terminals: React.FC = () => {
   const blackListItems = blackListCheckData ?? [];
 
   // Build blacklist lookup sets for MAC and IP matching
-  const { blackMacSet, blackIpSet, blackEntryMap } = useMemo(() => {
+  const { blackMacSet, blackIpSet } = useMemo(() => {
     const macSet = new Set<string>();
     const ipSet = new Set<string>();
-    const entryMap = new Map<string, string | null>();  // key -> firewall_tag
 
     (blackListItems || []).forEach((item) => {
       if (item.mac_address) {
-        const key = item.mac_address.toLowerCase();
-        macSet.add(key);
-        entryMap.set(key, item.firewall_tag);
+        macSet.add(item.mac_address.toLowerCase());
       }
       if (item.ip_address) {
         ipSet.add(item.ip_address);
-        // MAC 优先：如果 IP 对应的 key 已存在（同一个条目同时有 MAC 和 IP），
-        // 不覆盖；否则用 IP 作为 key
-        if (!entryMap.has(item.ip_address)) {
-          entryMap.set(item.ip_address, item.firewall_tag);
-        }
       }
     });
 
-    return { blackMacSet: macSet, blackIpSet: ipSet, blackEntryMap: entryMap };
+    return { blackMacSet: macSet, blackIpSet: ipSet };
   }, [blackListItems]);
 
   // Merge ARP data with blacklist data (no whitelist-only entries)
@@ -204,20 +196,16 @@ const Terminals: React.FC = () => {
       const macInBlacklist = blackMacSet.has(mac.mac_address?.toLowerCase());
       const ipInBlacklist = blackIpSet.has(mac.ip_address);
 
-      // Determine blacklist info
+      // IP 优先命中：防火墙封堵基于 IP，(MAC, IP) 复合唯一键下 IP 是权威维度。
+      // 同 MAC 不同 IP（如桥接虚拟机）不应共享封堵状态，因此不再产生纯 'mac'
+      // 命中，避免宿主机被误判为已封堵。
       let blackMatchType: string | null = null;
 
-      if (macInBlacklist && ipInBlacklist) {
-        blackMatchType = 'both';
-      } else if (macInBlacklist) {
-        blackMatchType = 'mac';
-      } else if (ipInBlacklist) {
-        blackMatchType = 'ip';
+      if (ipInBlacklist) {
+        blackMatchType = macInBlacklist ? 'both' : 'ip';
       }
 
       // 后端 compliance_status 是合规判定的唯一数据源，前端不再做二次覆盖。
-      // 桥接虚拟机场景下同 MAC 不同 IP 的终端不应共享封堵状态，
-      // 防火墙封堵基于 IP 而非 MAC，前端黑名单 MAC 匹配会导致宿主机被误判。
       const complianceStatus = mac.compliance_status || 'unknown';
 
       return {
@@ -228,7 +216,7 @@ const Terminals: React.FC = () => {
         black_match_type: blackMatchType,
       };
     });
-  }, [macAddresses, blackMacSet, blackIpSet, blackEntryMap]);
+  }, [macAddresses, blackMacSet, blackIpSet]);
 
   // Extract unique source_tags from ARP data sources only
   const sourceTagOptions = useMemo(() => {
@@ -354,7 +342,7 @@ const Terminals: React.FC = () => {
 
   const confirmRemoveFromBlacklist = async () => {
     if (!blRemoveTarget) return;
-    const identifier = blRemoveTarget.black_match_type === 'ip' ? blRemoveTarget.ip_address : blRemoveTarget.mac_address;
+    const identifier = blRemoveTarget.ip_address || blRemoveTarget.mac_address;
     setRemovingBlId(blRemoveTarget.id);
     try {
       await apiClient.delete(`${API_ENDPOINTS.BLACKLIST}${identifier}`);

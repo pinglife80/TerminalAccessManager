@@ -23,7 +23,7 @@ class Terminal(Base):
     id = Column(Integer, primary_key=True, index=True)
     ip_address = Column(String(45), nullable=False, index=True)
     mac_address = Column(String(17), nullable=False, index=True)
-    mac_address_normalized = Column(String(12), nullable=True, index=True)
+    mac_address_normalized = Column(String(12), nullable=False, index=True)
     status = Column(
         String(20), default=TerminalStatus.UNBLOCKED.value, index=True
     )  # blocked, unblocked
@@ -45,9 +45,10 @@ class Terminal(Base):
     non_compliant_type = Column(String(10), nullable=True)  # "ip" / "mac" / "both" / null（真实不合规因素）
 
     # Composite index for efficient queries
-    # One record per MAC address (network interface); IP is an updatable attribute
+    # One record per (IP, MAC) pair; a single MAC may appear on multiple IPs
+    # (e.g. bridged VMs), so identity is the composite key.
     __table_args__ = (
-        UniqueConstraint('mac_address_normalized', name='uq_terminal_mac'),
+        UniqueConstraint('ip_address', 'mac_address_normalized', name='uq_terminal_mac_ip'),
         Index('idx_mac_timestamp', 'mac_address', 'timestamp'),
         Index('idx_ip_status', 'ip_address', 'status'),
     )

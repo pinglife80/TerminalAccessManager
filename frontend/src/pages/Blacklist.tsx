@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Search, AlertTriangle, Clock, Server, Download, Eye, Shield, RefreshCw, ChevronDown, Unlock, ShieldCheck, AlertCircle } from 'lucide-react';
+import { Search, AlertTriangle, Clock, Server, Download, Eye, Shield, RefreshCw, ChevronDown, Unlock, ShieldCheck, AlertCircle, Info } from 'lucide-react';
 import { useBlacklist, useBlacklistStats, useRetryBlacklistEntry, BlacklistEntry } from '@/hooks/useTerminalData';
 import { apiClient } from '@/lib/api';
 import { toast } from 'sonner';
@@ -167,7 +167,12 @@ const Blacklist: React.FC = () => {
         >
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm text-muted-foreground">{t('blacklist.statsSuccessBlocked')}</p>
+              <div className="flex items-center gap-1">
+                <p className="text-sm text-muted-foreground">{t('blacklist.statsSuccessBlocked')}</p>
+                <span className="inline-flex cursor-help" title={t('blacklist.statsSuccessBlockedHint')}>
+                  <Info className="h-3.5 w-3.5 text-muted-foreground" />
+                </span>
+              </div>
               <p className="text-3xl font-bold text-green-600 dark:text-green-400 mt-1">{stats?.success_blocked ?? 0}</p>
             </div>
             <ShieldCheck className="h-8 w-8 text-green-500" />
@@ -199,7 +204,12 @@ const Blacklist: React.FC = () => {
         >
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm text-muted-foreground">{t('blacklist.statsPendingRetryUnblock')}</p>
+              <div className="flex items-center gap-1">
+                <p className="text-sm text-muted-foreground">{t('blacklist.statsPendingRetryUnblock')}</p>
+                <span className="inline-flex cursor-help" title={t('blacklist.statsPendingRetryUnblockHint')}>
+                  <Info className="h-3.5 w-3.5 text-muted-foreground" />
+                </span>
+              </div>
               <p className="text-3xl font-bold text-orange-600 mt-1">{stats?.pending_retry_unblock ?? 0}</p>
             </div>
             <Clock className="h-8 w-8 text-orange-500" />

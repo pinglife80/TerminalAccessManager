@@ -276,7 +276,7 @@ class ArpCollectorService:
         added = 0
         updated = 0
         errors = []
-        seen_macs: set[str] = set()
+        seen_pairs: set[tuple[str, str]] = set()
 
         for entry in entries:
             ip_addr = entry.get("ip_address", "").strip()
@@ -292,36 +292,26 @@ class ArpCollectorService:
 
             mac_norm_key = mac_normalized.replace('-', '').replace(':', '').replace('.', '').upper()
 
-            # Deduplicate within this batch by MAC
-            if mac_norm_key in seen_macs:
+            # Deduplicate within this batch by (MAC, IP) composite identity.
+            pair_key = (mac_norm_key, ip_addr)
+            if pair_key in seen_pairs:
                 continue
-            seen_macs.add(mac_norm_key)
+            seen_pairs.add(pair_key)
 
             try:
-                # Upsert: check if MAC already exists (one record per MAC/network interface)
+                # Upsert by (MAC, IP) composite identity; IP is part of the key.
                 stmt = select(Terminal).where(
-                    Terminal.mac_address_normalized == mac_norm_key
+                    (Terminal.mac_address_normalized == mac_norm_key) &
+                    (Terminal.ip_address == ip_addr)
                 )
                 result = await self.db.execute(stmt)
                 existing = result.scalar_one_or_none()
 
                 if existing:
                     from datetime import datetime
-                    # Update IP if changed (DHCP renewal etc.)
-                    ip_changed = existing.ip_address != ip_addr
-                    existing.ip_address = ip_addr
                     existing.updated_at = datetime.now(UTC)
                     existing.source_tag = source_tag
                     existing.source = "arp"
-                    if ip_changed:
-                        # Record IP change timestamp for grace-period handling.
-                        # Do NOT immediately reset compliance_status to unknown;
-                        # the compliance recalculation logic will apply a grace
-                        # period to avoid immediate false blocks during DHCP renewal.
-                        existing.ip_changed_at = datetime.now(UTC)
-                        # Reset both confirm counters on IP change for clean re-evaluation
-                        existing.non_compliant_confirm_count = 0
-                        existing.compliant_confirm_count = 0
                     updated += 1
                 else:
                     # Create new entry
@@ -369,26 +359,27 @@ class ArpCollectorService:
 
                 check_result = await compliance_service.batch_check_compliance(check_entries)
 
-                # Build lookup maps for compliance results (keyed by normalized MAC for uniqueness)
+                # Build lookup maps for compliance results, keyed by (normalized MAC, IP)
+                # to prevent same-MAC different-IP results from overwriting each other.
                 result_lookup = {}
                 if check_result.details:
                     for item in check_result.details.get("bypass", []):
                         mac_key = self._normalize_mac(item.get("mac_address", "")).replace('-', '').replace(':', '').replace('.', '').upper()
-                        result_lookup[mac_key] = {
+                        result_lookup[(mac_key, item.get("ip_address", ""))] = {
                             "compliance_status": "bypass",
                             "wl_match_type": item.get("wl_match_type"),
                             "wl_comments": item.get("wl_comments"),
                         }
                     for item in check_result.details.get("compliant", []):
                         mac_key = self._normalize_mac(item.get("mac_address", "")).replace('-', '').replace(':', '').replace('.', '').upper()
-                        result_lookup[mac_key] = {
+                        result_lookup[(mac_key, item.get("ip_address", ""))] = {
                             "compliance_status": "compliant",
                             "wl_match_type": None,
                             "wl_comments": None,
                         }
                     for item in check_result.details.get("non_compliant", []):
                         mac_key = self._normalize_mac(item.get("mac_address", "")).replace('-', '').replace(':', '').replace('.', '').upper()
-                        result_lookup[mac_key] = {
+                        result_lookup[(mac_key, item.get("ip_address", ""))] = {
                             "compliance_status": "non_compliant",
                             "wl_match_type": None,
                             "wl_comments": None,
@@ -398,7 +389,7 @@ class ArpCollectorService:
                 # with confirm-threshold protection against immediate false blocks.
                 for entry in unchecked_entries:
                     mac_key = entry.mac_address_normalized or ""
-                    result = result_lookup.get(mac_key)
+                    result = result_lookup.get((mac_key, entry.ip_address or ""))
                     if result:
                         await compliance_service.apply_initial_compliance_result(
                             entry,
@@ -442,8 +433,9 @@ class ArpCollectorService:
             newly_offline = 0
 
             for terminal in all_terminals:
-                # Check if MAC was seen in this collection (one record per MAC, so check by MAC)
-                if terminal.mac_address_normalized not in seen_macs and terminal.updated_at:
+                # Check if the (MAC, IP) pair was seen in this collection.
+                pair_key = (terminal.mac_address_normalized, terminal.ip_address)
+                if pair_key not in seen_pairs and terminal.updated_at:
                     last_seen = terminal.updated_at.timestamp() if terminal.updated_at.tzinfo else terminal.updated_at.replace(tzinfo=None).timestamp()
                     if (now_ts - last_seen) > offline_threshold_seconds:
                         newly_offline += 1
