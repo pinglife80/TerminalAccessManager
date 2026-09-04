@@ -875,8 +875,8 @@ const Terminals: React.FC = () => {
                           {mac.compliance_status === 'bypass' && mac.wl_match_type && (
                             <span className="ml-1 text-xs opacity-75">({mac.wl_match_type.toUpperCase()})</span>
                           )}
-                          {mac.compliance_status === 'non_compliant' && mac.black_match_type && (
-                            <span className="ml-1 text-xs opacity-75">({mac.black_match_type.toUpperCase()})</span>
+                          {mac.compliance_status === 'non_compliant' && mac.non_compliant_type && (
+                            <span className="ml-1 text-xs opacity-75">({mac.non_compliant_type.toUpperCase()})</span>
                           )}
                         </span>
                       </td>
@@ -1011,10 +1011,10 @@ const Terminals: React.FC = () => {
                 <span className="text-foreground">{selectedTerminal.wl_match_type.toUpperCase()}</span>
               </div>
               )}
-              {selectedTerminal?.compliance_status === 'non_compliant' && selectedTerminal?.black_match_type && (
+              {selectedTerminal?.compliance_status === 'non_compliant' && selectedTerminal?.non_compliant_type && (
               <div className="flex justify-between">
-                <span className="text-muted-foreground">{t('terminal.blacklistMatch')}</span>
-                <span className="text-foreground">{selectedTerminal.black_match_type.toUpperCase()}</span>
+                <span className="text-muted-foreground">{t('terminal.nonCompliantType')}</span>
+                <span className="text-foreground">{selectedTerminal.non_compliant_type.toUpperCase()}</span>
               </div>
               )}
               {selectedTerminal?.status === 'blocked' && selectedTerminal?.firewall_tag && (

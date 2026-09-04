@@ -43,6 +43,9 @@ const ComplianceScope: React.FC = () => {
       case 'ip_range': return t('complianceScope.typeIpRange');
       case 'mac_prefix_arp': return t('complianceScope.typeMacPrefixArp');
       case 'mac_prefix_ipguard': return t('complianceScope.typeMacPrefixIpguard');
+      case 'ip_cidr_any': return t('complianceScope.typeIpCidrAny');
+      case 'ip_range_any': return t('complianceScope.typeIpRangeAny');
+      case 'mac_prefix_any': return t('complianceScope.typeMacPrefixAny');
       default: return type;
     }
   };
@@ -53,16 +56,24 @@ const ComplianceScope: React.FC = () => {
       case 'ip_range': return t('complianceScope.ipRangeDesc');
       case 'mac_prefix_arp': return t('complianceScope.macPrefixArpDesc');
       case 'mac_prefix_ipguard': return t('complianceScope.macPrefixIpguardDesc');
+      case 'ip_cidr_any': return t('complianceScope.ipCidrAnyDesc');
+      case 'ip_range_any': return t('complianceScope.ipRangeAnyDesc');
+      case 'mac_prefix_any': return t('complianceScope.macPrefixAnyDesc');
       default: return '';
     }
   };
 
   const getScopePlaceholder = (type: string) => {
     switch (type) {
-      case 'ip_cidr': return t('complianceScope.valuePlaceholderCidr');
-      case 'ip_range': return t('complianceScope.valuePlaceholderRange');
+      case 'ip_cidr':
+      case 'ip_cidr_any':
+        return t('complianceScope.valuePlaceholderCidr');
+      case 'ip_range':
+      case 'ip_range_any':
+        return t('complianceScope.valuePlaceholderRange');
       case 'mac_prefix_arp':
       case 'mac_prefix_ipguard':
+      case 'mac_prefix_any':
         return t('complianceScope.valuePlaceholderMac');
       default: return '';
     }
@@ -295,6 +306,9 @@ const ComplianceScope: React.FC = () => {
               <option value="ip_range">{t('complianceScope.typeIpRange')}</option>
               <option value="mac_prefix_arp">{t('complianceScope.typeMacPrefixArp')}</option>
               <option value="mac_prefix_ipguard">{t('complianceScope.typeMacPrefixIpguard')}</option>
+              <option value="ip_cidr_any">{t('complianceScope.typeIpCidrAny')}</option>
+              <option value="ip_range_any">{t('complianceScope.typeIpRangeAny')}</option>
+              <option value="mac_prefix_any">{t('complianceScope.typeMacPrefixAny')}</option>
             </select>
             <p className="mt-1 text-xs text-muted-foreground">{getScopeTypeDesc(scopeType)}</p>
           </div>
@@ -366,6 +380,9 @@ const ComplianceScope: React.FC = () => {
               <option value="ip_range">{t('complianceScope.typeIpRange')}</option>
               <option value="mac_prefix_arp">{t('complianceScope.typeMacPrefixArp')}</option>
               <option value="mac_prefix_ipguard">{t('complianceScope.typeMacPrefixIpguard')}</option>
+              <option value="ip_cidr_any">{t('complianceScope.typeIpCidrAny')}</option>
+              <option value="ip_range_any">{t('complianceScope.typeIpRangeAny')}</option>
+              <option value="mac_prefix_any">{t('complianceScope.typeMacPrefixAny')}</option>
             </select>
             <p className="mt-1 text-xs text-muted-foreground">{getScopeTypeDesc(scopeType)}</p>
           </div>
