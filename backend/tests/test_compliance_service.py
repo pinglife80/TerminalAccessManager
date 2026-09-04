@@ -737,7 +737,7 @@ class TestCleanupExpiredBlacklist:
             expires_at=now + timedelta(days=1),
         )
         active_result_mock = MagicMock()
-        active_result_mock.all.return_value = [("AABBCCDDEEFF",)]
+        active_result_mock.all.return_value = [("AABBCCDDEEFF", "192.168.1.100")]
 
         call_count = {"n": 0}
 
@@ -976,6 +976,7 @@ class TestRecalculateCompliance:
              patch.object(service, "_load_scope_cache", return_value=[]), \
              patch.object(service, "_is_ipguard_cache_stale", return_value=False), \
              patch.object(service, "_get_confirm_threshold", return_value=1), \
+             patch.object(service, "_get_compliant_downgrade_threshold", return_value=1), \
              patch.object(service, "_get_cooldown_minutes", return_value=10), \
              patch.object(service, "_get_bound_firewall_tags", return_value=["fw1"]), \
              patch.object(service, "_block_on_firewall", return_value=True), \
@@ -2820,6 +2821,131 @@ class TestRecalculateComplianceEdges:
         assert result["non_compliant"] == 0
         assert terminal.compliance_status == "bypass"
         assert terminal.non_compliant_confirm_count == 1
+
+    @pytest.mark.asyncio
+    async def test_recalculate_upgrade_to_compliant_is_immediate(self, service, mock_db):
+        """非合规终端一旦命中 IPGuard，单次重算即升级为 compliant（无需确认次数）。
+
+        升级方向无封锁风险，因此优化后移除了确认次数防抖：一次性 flip 并清零双计数器。
+        """
+        terminal = create_mock_terminal(
+            ip="192.168.1.100",
+            mac="AA:BB:CC:DD:EE:FF",
+            status="unblocked",
+            compliance_status="non_compliant",
+        )
+        terminal.non_compliant_confirm_count = 5
+        terminal.compliant_confirm_count = 3
+
+        mock_db.execute = scripted_execute([
+            make_result(scalars_all=[terminal]),  # select(Terminal)
+            make_result(all_rows=[]),             # active firewall tags -> {}
+        ])
+
+        ig_data = {"lab": [{"ip_address": "10.0.0.99", "mac_address": "11-22-33-44-55-66"}]}
+
+        emit_compliant = AsyncMock()
+
+        with patch("app.services.compliance_service._acquire_compliance_lock", new=AsyncMock(return_value="tok")), \
+             patch("app.services.compliance_service._release_compliance_lock"), \
+             patch.object(service, "_load_whitelist_cache", return_value=[]), \
+             patch.object(service, "_load_all_ipguard_cache", return_value=ig_data), \
+             patch.object(service, "_load_scope_cache", return_value=[]), \
+             patch.object(service, "_is_ipguard_cache_stale", return_value=False), \
+             patch.object(service, "_get_confirm_threshold", return_value=2), \
+             patch.object(service, "_match_ipguard_in_memory", return_value=(True, True, True)), \
+             patch("app.services.event_emitter.emit_terminal_compliant", emit_compliant):
+            result = await service.recalculate_all_compliance()
+
+        assert result["total"] == 1
+        assert result["compliant"] == 1
+        assert result["non_compliant"] == 0
+        assert terminal.compliance_status == "compliant"
+        assert terminal.non_compliant_confirm_count == 0
+        assert terminal.compliant_confirm_count == 0
+        emit_compliant.assert_awaited_once_with("192.168.1.100", "AA:BB:CC:DD:EE:FF")
+
+    @pytest.mark.asyncio
+    async def test_recalculate_compliant_downgrade_uses_dedicated_threshold_held(self, service, mock_db):
+        """compliant → non_compliant 使用独立阈值（默认 6），未达标时保持 compliant。
+
+        标准确认阈值为 2，若误用标准阈值，累计 3 次后即会降级；这里验证在达到独立阈值
+        6 之前始终 hold，证明 dedicated threshold 确实被读取并生效。
+        """
+        terminal = create_mock_terminal(
+            ip="192.168.1.100",
+            mac="AA:BB:CC:DD:EE:FF",
+            status="unblocked",
+            compliance_status="compliant",
+        )
+        terminal.non_compliant_confirm_count = 3
+
+        mock_db.execute = scripted_execute([
+            make_result(scalars_all=[terminal]),
+        ])
+
+        ig_data = {"lab": [{"ip_address": "10.0.0.99", "mac_address": "11-22-33-44-55-66"}]}
+
+        with patch("app.services.compliance_service._acquire_compliance_lock", new=AsyncMock(return_value="tok")), \
+             patch("app.services.compliance_service._release_compliance_lock"), \
+             patch.object(service, "_load_whitelist_cache", return_value=[]), \
+             patch.object(service, "_load_all_ipguard_cache", return_value=ig_data), \
+             patch.object(service, "_load_scope_cache", return_value=[]), \
+             patch.object(service, "_is_ipguard_cache_stale", return_value=False), \
+             patch.object(service, "_get_confirm_threshold", return_value=2), \
+             patch.object(service, "_get_compliant_downgrade_threshold", return_value=6), \
+             patch.object(service, "_match_ipguard_in_memory", return_value=(False, False, False)):
+            result = await service.recalculate_all_compliance()
+
+        assert result["total"] == 1
+        assert result["unchanged"] == 1
+        assert result["non_compliant"] == 0
+        assert terminal.compliance_status == "compliant"
+        assert terminal.non_compliant_confirm_count == 4
+
+    @pytest.mark.asyncio
+    async def test_recalculate_compliant_downgrades_when_dedicated_threshold_reached(self, service, mock_db):
+        """累计达到独立阈值后，compliant 终端才真正降级为 non_compliant。"""
+        terminal = create_mock_terminal(
+            ip="192.168.1.100",
+            mac="AA:BB:CC:DD:EE:FF",
+            status="unblocked",
+            compliance_status="compliant",
+        )
+        terminal.non_compliant_confirm_count = 5
+
+        mock_db.execute = scripted_execute([
+            make_result(scalars_all=[terminal]),
+        ])
+
+        ig_data = {"lab": [{"ip_address": "10.0.0.99", "mac_address": "11-22-33-44-55-66"}]}
+
+        applied = {}
+
+        async def fake_apply(terminal, new_compliance, new_wl_match_type, wl_comments, ip_addr, mac_addr):
+            # 模拟 _apply_compliance_result 的核心副作用，隔离封锁机制，聚焦阈值逻辑。
+            applied["new_compliance"] = new_compliance
+            terminal.compliance_status = new_compliance
+            return {"status_changed": True, "new_compliance": new_compliance, "unblocked": False}
+
+        with patch("app.services.compliance_service._acquire_compliance_lock", new=AsyncMock(return_value="tok")), \
+             patch("app.services.compliance_service._release_compliance_lock"), \
+             patch.object(service, "_load_whitelist_cache", return_value=[]), \
+             patch.object(service, "_load_all_ipguard_cache", return_value=ig_data), \
+             patch.object(service, "_load_scope_cache", return_value=[]), \
+             patch.object(service, "_is_ipguard_cache_stale", return_value=False), \
+             patch.object(service, "_get_confirm_threshold", return_value=2), \
+             patch.object(service, "_get_compliant_downgrade_threshold", return_value=6), \
+             patch.object(service, "_match_ipguard_in_memory", return_value=(False, False, False)), \
+             patch.object(service, "_apply_compliance_result", new=fake_apply):
+            result = await service.recalculate_all_compliance()
+
+        assert result["total"] == 1
+        assert result["non_compliant"] == 1
+        assert result["unchanged"] == 0
+        assert applied["new_compliance"] == "non_compliant"
+        assert terminal.compliance_status == "non_compliant"
+        assert terminal.non_compliant_confirm_count == 0
 
 
 # ===========================================================================

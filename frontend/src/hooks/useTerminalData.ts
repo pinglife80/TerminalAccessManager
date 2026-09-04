@@ -388,6 +388,7 @@ export interface ComplianceConfig {
   compliance_cooldown_minutes: number;
   compliance_ip_grace_minutes: number;
   compliance_whitelist_miss_threshold: number;
+  compliance_compliant_downgrade_threshold: number;
 }
 
 export const BLOCK_TIME_PRESETS = ['1h', '6h', '12h', '1d', '3d', '7d', '15d', '30d'];

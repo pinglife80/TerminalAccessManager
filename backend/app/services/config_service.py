@@ -159,6 +159,9 @@ class ConfigService:
         {"key": "compliance_whitelist_miss_threshold", "value": "6", "category": "compliance",
          "value_type": "int", "description": "Consecutive whitelist misses before bypass downgrade (2-20)",
          "is_readonly": False},
+        {"key": "compliance_compliant_downgrade_threshold", "value": "6", "category": "compliance",
+         "value_type": "int", "description": "Consecutive non-compliant detections before a compliant terminal downgrades (2-20)",
+         "is_readonly": False},
         # Cache
         {"key": "cache_ipguard_ttl", "value": "900", "category": "cache",
          "value_type": "int", "description": "IPGuard data cache TTL in seconds (60-7200)",
@@ -548,6 +551,7 @@ class ConfigService:
                 compliance_cooldown_minutes=_val("compliance_cooldown_minutes", 10),
                 compliance_ip_grace_minutes=_val("compliance_ip_grace_minutes", 10),
                 compliance_whitelist_miss_threshold=_val("compliance_whitelist_miss_threshold", 6),
+                compliance_compliant_downgrade_threshold=_val("compliance_compliant_downgrade_threshold", 6),
             ),
             cache=CacheConfigResponse(
                 cache_ipguard_ttl=_val("cache_ipguard_ttl", 900),
