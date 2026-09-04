@@ -42,6 +42,7 @@ class Terminal(Base):
     # None          -> 正常（已封锁 或 不适用）
     # 'no_firewall' -> non_compliant 且 ARP 源无绑定防火墙（不可封锁）
     # 'block_failed'-> non_compliant 且封锁失败（可恢复，等待 retry-block）
+    non_compliant_type = Column(String(10), nullable=True)  # "ip" / "mac" / "both" / null（真实不合规因素）
 
     # Composite index for efficient queries
     # One record per MAC address (network interface); IP is an updatable attribute
