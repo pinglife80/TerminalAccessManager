@@ -242,8 +242,14 @@ async def scheduled_ipguard_sync():
                     baselines = result.scalars().all()
                     for baseline in baselines:
                         try:
-                            await service.sync_ipguard_data(baseline.tag)
+                            sync_result = await service.sync_ipguard_data(baseline.tag)
                             logger.info(f"Synced IPGuard data for baseline: {baseline.tag} [source=scheduler]")
+                            from app.services.event_emitter import emit_datasource_sync_success
+                            await emit_datasource_sync_success(
+                                source_name=baseline.tag,
+                                source_tag=baseline.tag,
+                                record_count=sync_result.get("entries", 0),
+                            )
                             # NOTE: Do NOT immediately trigger full compliance recalculation here.
                             # This causes race conditions with ARP collection (IPGuard updated but ARP not yet refreshed).
                             # The next scheduled compliance check / ARP collection will pick up the new cache naturally.
