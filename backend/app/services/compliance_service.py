@@ -125,10 +125,13 @@ class ComplianceService:
         # 2. Check scope conditions (strategy selection)
         scope_data = await self._load_scope_cache()
         use_ip_only = self._check_terminal_in_arp_scope(scope_data, ip_address, mac_address)
+        use_or_match = self._check_terminal_in_or_scope(scope_data, ip_address, mac_address)
         ipguard_mac_prefixes = self._extract_ipguard_mac_prefixes(scope_data)
 
         # 3. Check IPGuard baseline (with scope-determined strategy)
-        if use_ip_only:
+        if use_or_match:
+            ipguard_match = await self._check_ipguard_or(ip_address, mac_address)
+        elif use_ip_only:
             ipguard_match = await self._check_ipguard_ip_only(ip_address)
         else:
             ipguard_match = await self._check_ipguard(ip_address, mac_address, ipguard_mac_prefixes)
@@ -181,9 +184,16 @@ class ComplianceService:
 
             # Check scope conditions (strategy selection)
             use_ip_only = self._check_terminal_in_arp_scope(scope_data, ip_addr, mac_addr)
+            use_or_match = self._check_terminal_in_or_scope(scope_data, ip_addr, mac_addr)
 
             # Check IPGuard (with scope-determined strategy)
-            if use_ip_only:
+            if use_or_match:
+                ig_match = self._match_ipguard_or_in_memory(ipguard_data, ip_addr, mac_addr)
+                entry["use_ip_only"] = False
+                _, ip_found, mac_found = self._match_ipguard_in_memory(ipguard_data, ip_addr, mac_addr, ipguard_mac_prefixes)
+                entry["ip_found"] = ip_found
+                entry["mac_found"] = mac_found
+            elif use_ip_only:
                 ig_match = self._match_ipguard_ip_only_in_memory(ipguard_data, ip_addr)
                 entry["use_ip_only"] = True
             else:
@@ -594,9 +604,10 @@ class ComplianceService:
                 block_reason = "自动封锁：不合规"
                 scope_data = await self._load_scope_cache()
                 use_ip_only = self._check_terminal_in_arp_scope(scope_data, entry.ip_address, entry.mac_address)
+                use_or_match = self._check_terminal_in_or_scope(scope_data, entry.ip_address, entry.mac_address)
                 ipguard_mac_prefixes = self._extract_ipguard_mac_prefixes(scope_data)
 
-                if use_ip_only:
+                if use_ip_only and not use_or_match:
                     block_reason = "IP 不合规"
                 else:
                     ipguard_data = await self._load_all_ipguard_cache()
@@ -642,17 +653,12 @@ class ComplianceService:
                 })
 
                 # Emit terminal.blocked event for notification dispatch.
-                from app.services.event_emitter import emit_terminal_blocked, emit_auto_block_triggered
+                from app.services.event_emitter import emit_terminal_blocked
                 await emit_terminal_blocked(
                     ip_address=entry.ip_address,
                     mac_address=entry.mac_address or "",
                     reason=f"Auto-blocked: non-compliant (source={arp_source_tag})",
                     blocked_by="system",
-                )
-                await emit_auto_block_triggered(
-                    ip_address=entry.ip_address,
-                    mac_address=entry.mac_address or "",
-                    reason=f"Non-compliant (source={arp_source_tag})",
                 )
             else:
                 skipped += 1
@@ -781,7 +787,10 @@ class ComplianceService:
             # Check if now compliant using CURRENT IP (important after DHCP change)
             wl_match = self._match_whitelist_in_memory(whitelist_data, current_ip, current_mac)
             use_ip_only = self._check_terminal_in_arp_scope(scope_data, current_ip, current_mac)
-            if use_ip_only:
+            use_or_match = self._check_terminal_in_or_scope(scope_data, current_ip, current_mac)
+            if use_or_match:
+                ig_match = self._match_ipguard_or_in_memory(ipguard_data, current_ip, current_mac)
+            elif use_ip_only:
                 ig_match = self._match_ipguard_ip_only_in_memory(ipguard_data, current_ip)
             else:
                 ig_match, _, _ = self._match_ipguard_in_memory(ipguard_data, current_ip, current_mac, ipguard_mac_prefixes)
@@ -881,7 +890,7 @@ class ComplianceService:
                 # All firewalls unblocked — update Terminal and mark all entries
                 # Determine unblock reason (IP/MAC combination, consistent with block)
                 unblock_reason = self._build_unblock_reason(
-                    bool(wl_match), use_ip_only, ipguard_data, current_ip, current_mac, ipguard_mac_prefixes
+                    bool(wl_match), use_ip_only, use_or_match, ipguard_data, current_ip, current_mac, ipguard_mac_prefixes
                 )
                 
                 logger.info(
@@ -955,7 +964,7 @@ class ComplianceService:
                 # still hold the block
                 # Determine unblock reason for partial success (IP/MAC combination, consistent with block)
                 partial_unblock_reason = self._build_unblock_reason(
-                    bool(wl_match), use_ip_only, ipguard_data, current_ip, current_mac, ipguard_mac_prefixes
+                    bool(wl_match), use_ip_only, use_or_match, ipguard_data, current_ip, current_mac, ipguard_mac_prefixes
                 ) + "（部分成功）"
                 
                 logger.info(
@@ -979,9 +988,8 @@ class ComplianceService:
 
         if unblocked > 0:
             # Emit auto-unblock event for notification
-            from app.services.event_emitter import emit_auto_unblock_triggered, emit_terminal_unblocked
+            from app.services.event_emitter import emit_terminal_unblocked
             for entry in successfully_unblocked_entries:
-                await emit_auto_unblock_triggered(entry.ip_address, entry.mac_address or "")
                 await emit_terminal_unblocked(entry.ip_address, entry.mac_address or "", "system")
 
             # Audit log for auto-unblock (before commit so it's persisted in the same transaction)
@@ -1162,6 +1170,11 @@ class ComplianceService:
         ipguard_data = await self._load_all_ipguard_cache()
         return self._match_ipguard_ip_only_in_memory(ipguard_data, ip_address)
 
+    async def _check_ipguard_or(self, ip_address: str, mac_address: str) -> bool:
+        """Check OR match (IP or MAC, either matches) against IPGuard baseline data"""
+        ipguard_data = await self._load_all_ipguard_cache()
+        return self._match_ipguard_or_in_memory(ipguard_data, ip_address, mac_address)
+
     def _match_ipguard_ip_only_in_memory(
         self, ipguard_data: dict[str, list[dict]], ip_address: str
     ) -> bool:
@@ -1172,10 +1185,18 @@ class ComplianceService:
                     return True
         return False
 
+    def _match_ipguard_or_in_memory(
+        self, ipguard_data: dict[str, list[dict]], ip_address: str, mac_address: str
+    ) -> bool:
+        """OR match: compliant if IP OR MAC is found anywhere in the IPGuard baseline."""
+        _, ip_found, mac_found = self._match_ipguard_in_memory(ipguard_data, ip_address, mac_address)
+        return ip_found or mac_found
+
     def _build_unblock_reason(
         self,
         wl_match: bool,
         use_ip_only: bool,
+        use_or_match: bool,
         ipguard_data: dict[str, list[dict]],
         current_ip: str,
         current_mac: str,
@@ -1189,7 +1210,7 @@ class ComplianceService:
         """
         if wl_match:
             return "加入白名单"
-        if use_ip_only:
+        if use_ip_only and not use_or_match:
             return "IP 合规"
         _, ip_found, mac_found = self._match_ipguard_in_memory(
             ipguard_data, current_ip, current_mac, ipguard_mac_prefixes
@@ -1295,6 +1316,48 @@ class ComplianceService:
                     continue
 
             elif scope_type == "mac_prefix_arp":
+                try:
+                    if self._mac_matches_any_prefix(mac_address, [scope_value]):
+                        return True
+                except (ValueError, TypeError):
+                    continue
+
+        return False
+
+    def _check_terminal_in_or_scope(self, scope_data: list[dict], ip_address: str, mac_address: str) -> bool:
+        """
+        Check if terminal falls within any OR-level scope condition
+        (ip_cidr_any, ip_range_any, mac_prefix_any).
+        Returns True if the terminal should use OR strategy (IP or MAC, either matches).
+        """
+        if not scope_data:
+            return False
+
+        for scope in scope_data:
+            scope_type = scope.get("scope_type", "")
+            scope_value = scope.get("scope_value", "")
+
+            if scope_type == "ip_cidr_any":
+                try:
+                    network = ipaddress.ip_network(scope_value, strict=False)
+                    ip = ipaddress.ip_address(ip_address)
+                    if ip in network:
+                        return True
+                except (ValueError, TypeError):
+                    continue
+
+            elif scope_type == "ip_range_any":
+                try:
+                    start_ip_str, end_ip_str = scope_value.split("-")
+                    start_ip = int(ipaddress.IPv4Address(start_ip_str))
+                    end_ip = int(ipaddress.IPv4Address(end_ip_str))
+                    ip_val = int(ipaddress.IPv4Address(ip_address))
+                    if start_ip <= ip_val <= end_ip:
+                        return True
+                except (ValueError, TypeError):
+                    continue
+
+            elif scope_type == "mac_prefix_any":
                 try:
                     if self._mac_matches_any_prefix(mac_address, [scope_value]):
                         return True
@@ -1684,14 +1747,17 @@ class ComplianceService:
         
         # Get detailed match info for non-compliant terminals
         block_reason = "自动封锁：不合规"
+        non_compliant_type = None
         if new_compliance == "non_compliant":
             scope_data = await self._load_scope_cache()
             use_ip_only = self._check_terminal_in_arp_scope(scope_data, ip_addr, mac_addr)
+            use_or_match = self._check_terminal_in_or_scope(scope_data, ip_addr, mac_addr)
             ipguard_mac_prefixes = self._extract_ipguard_mac_prefixes(scope_data)
             
-            if use_ip_only:
+            if use_ip_only and not use_or_match:
                 # IP-only scope, just say IP is non-compliant
                 block_reason = "IP 不合规"
+                non_compliant_type = "ip"
             else:
                 # Get detailed match info
                 ipguard_data = await self._load_all_ipguard_cache()
@@ -1699,10 +1765,13 @@ class ComplianceService:
                 
                 if not ip_found and not mac_found:
                     block_reason = "IP 和 MAC 都不合规"
+                    non_compliant_type = "both"
                 elif not ip_found and mac_found:
                     block_reason = "IP 不合规，MAC 合规"
+                    non_compliant_type = "ip"
                 elif ip_found and not mac_found:
                     block_reason = "MAC 不合规，IP 合规"
+                    non_compliant_type = "mac"
                 else:
                     block_reason = "自动封锁：不合规"
 
@@ -1767,6 +1836,7 @@ class ComplianceService:
 
         terminal.compliance_status = new_compliance
         terminal.wl_match_type = new_wl_match_type
+        terminal.non_compliant_type = non_compliant_type
 
         if status_changed:
             await self.log_action("system", "compliance_status_changed", "terminal",
@@ -1782,42 +1852,11 @@ class ComplianceService:
             if new_compliance == "bypass":
                 pass
             elif new_compliance == "compliant":
-                from app.services.notification_aggregator import get_notification_aggregator
-                from app.services.notification_channels.base import NotificationEvent
-                import uuid
-                aggregator = await get_notification_aggregator()
-                event = NotificationEvent(
-                    id=str(uuid.uuid4()),
-                    type="terminal.compliant",
-                    timestamp=datetime.now(),
-                    data={"ip_address": ip_addr, "mac_address": mac_addr},
-                    source="system",
-                    severity="info",
-                )
-                await aggregator.add_event(event)
+                from app.services.event_emitter import emit_terminal_compliant
+                await emit_terminal_compliant(ip_addr, mac_addr)
             else:
-                from app.services.notification_aggregator import get_notification_aggregator
-                from app.services.notification_channels.base import NotificationEvent
-                import uuid
-                aggregator = await get_notification_aggregator()
-                event1 = NotificationEvent(
-                    id=str(uuid.uuid4()),
-                    type="alert.policy_violation",
-                    timestamp=datetime.now(),
-                    data={"policy_name": "Terminal Compliance Policy", "terminal_ip": ip_addr, "mac_address": mac_addr, "source_tag": terminal.source_tag},
-                    source="system",
-                    severity="error",
-                )
-                event2 = NotificationEvent(
-                    id=str(uuid.uuid4()),
-                    type="terminal.non_compliant",
-                    timestamp=datetime.now(),
-                    data={"ip_address": ip_addr, "mac_address": mac_addr, "reasons": ["Non-compliant terminal detected"]},
-                    source="system",
-                    severity="warning",
-                )
-                await aggregator.add_event(event1)
-                await aggregator.add_event(event2)
+                from app.services.event_emitter import emit_terminal_non_compliant
+                await emit_terminal_non_compliant(ip_addr, mac_addr, ["Non-compliant terminal detected"])
 
             if terminal.status == "blocked" and new_compliance in ("bypass", "compliant"):
                 # Cooldown protection: skip auto-unblock if this MAC was recently auto-blocked
@@ -1885,10 +1924,11 @@ class ComplianceService:
                             else:
                                 scope_data = await self._load_scope_cache()
                                 use_ip_only = self._check_terminal_in_arp_scope(scope_data, ip_addr, mac_addr)
+                                use_or_match = self._check_terminal_in_or_scope(scope_data, ip_addr, mac_addr)
                                 ipguard_mac_prefixes = self._extract_ipguard_mac_prefixes(scope_data)
                                 ipguard_data = await self._load_all_ipguard_cache()
                                 compliance_unblock_reason = self._build_unblock_reason(
-                                    False, use_ip_only, ipguard_data, ip_addr, mac_addr, ipguard_mac_prefixes
+                                    False, use_ip_only, use_or_match, ipguard_data, ip_addr, mac_addr, ipguard_mac_prefixes
                                 )
                             
                             logger.info(
@@ -2086,6 +2126,7 @@ class ComplianceService:
                                 # old value, leaving no intermediate non_compliant+unblocked state.
                                 terminal.compliance_status = old_compliance
                                 terminal.block_state = None
+                                terminal.non_compliant_type = None
                                 logger.warning(
                                     f"Rollback compliance status to {old_compliance} for {ip_addr}/{mac_addr} - "
                                     f"failed to block on all required firewalls"
@@ -2186,7 +2227,10 @@ class ComplianceService:
 
                     wl_result = self._match_whitelist_in_memory(whitelist_data, ip_addr, mac_addr)
                     use_ip_only = self._check_terminal_in_arp_scope(scope_data, ip_addr, mac_addr)
-                    if use_ip_only:
+                    use_or_match = self._check_terminal_in_or_scope(scope_data, ip_addr, mac_addr)
+                    if use_or_match:
+                        ig_match = self._match_ipguard_or_in_memory(ipguard_data, ip_addr, mac_addr)
+                    elif use_ip_only:
                         ig_match = self._match_ipguard_ip_only_in_memory(ipguard_data, ip_addr)
                     else:
                         ig_match, _, _ = self._match_ipguard_in_memory(ipguard_data, ip_addr, mac_addr, ipguard_mac_prefixes)

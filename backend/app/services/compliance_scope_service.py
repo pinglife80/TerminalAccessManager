@@ -104,7 +104,7 @@ class ComplianceScopeService:
             raise ValueError("Scope value cannot be empty")
         scope_value = scope_value.strip()
 
-        if scope_type == "ip_cidr":
+        if scope_type in ("ip_cidr", "ip_cidr_any"):
             try:
                 network = ipaddress.ip_network(scope_value, strict=False)
                 if network.prefixlen < 24:
@@ -114,7 +114,7 @@ class ComplianceScopeService:
             except (ValueError, TypeError) as e:
                 raise ValueError(f"Invalid IP CIDR format: '{scope_value}': {e}")
 
-        elif scope_type == "ip_range":
+        elif scope_type in ("ip_range", "ip_range_any"):
             # Format: "192.168.1.1-255" = prefix "192.168.1" with start/end last octets.
             # This matches _parse_ip_range / _ip_in_range convention elsewhere.
             match = re.match(r"^(\d{1,3}\.\d{1,3}\.\d{1,3})\.(\d{1,3})-(\d{1,3})$", scope_value)
@@ -139,7 +139,7 @@ class ComplianceScopeService:
             if end > 255:
                 raise ValueError(f"IP range end ({end}) exceeds 255")
 
-        elif scope_type in ("mac_prefix_arp", "mac_prefix_ipguard"):
+        elif scope_type in ("mac_prefix_arp", "mac_prefix_ipguard", "mac_prefix_any"):
             segments = scope_value.upper().split(":")
             if len(segments) < 3 or len(segments) > 5:
                 raise ValueError(

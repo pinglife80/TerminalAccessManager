@@ -4,13 +4,19 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
-ScopeType = Literal["ip_cidr", "ip_range", "mac_prefix_arp", "mac_prefix_ipguard"]
+ScopeType = Literal[
+    "ip_cidr", "ip_range", "mac_prefix_arp", "mac_prefix_ipguard",
+    "ip_cidr_any", "ip_range_any", "mac_prefix_any",
+]
 
 
 class ComplianceScopeBase(BaseModel):
     scope_type: ScopeType = Field(
         ...,
-        description="Scope type: ip_cidr, ip_range, mac_prefix_arp, or mac_prefix_ipguard"
+        description=(
+            "Scope type: ip_cidr, ip_range, mac_prefix_arp, mac_prefix_ipguard, "
+            "ip_cidr_any, ip_range_any, or mac_prefix_any"
+        )
     )
     scope_value: str = Field(
         ...,
