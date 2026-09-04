@@ -36,7 +36,7 @@ from app.services.notification_channels import (
     NotificationResult,
     get_channel,
 )
-from app.services.notification_channels.event_types import CHANNEL_METADATA, EVENT_METADATA, EventType
+from app.services.notification_channels.event_types import CHANNEL_METADATA, DEFAULT_SUBSCRIBED_EVENTS, EVENT_METADATA, EventType
 
 
 class NotificationService:
@@ -134,6 +134,35 @@ class NotificationService:
                 self._workers._channels = self._channels
                 self._workers._channel_configs = self._channel_configs
 
+    async def ensure_default_subscriptions(self) -> int:
+        """Backfill missing event subscriptions for enabled channels (idempotent).
+
+        Only adds missing event types to each enabled channel's ``events``
+        list; never removes existing entries, so admin-cancelled subscriptions
+        are preserved. Returns the number of channels updated.
+        """
+        updated = 0
+        async with self._session_scope() as db:
+            stmt = select(NotificationChannel).where(NotificationChannel.enabled == True)
+            result = await db.execute(stmt)
+            channels = result.scalars().all()
+
+            default_set = set(DEFAULT_SUBSCRIBED_EVENTS)
+            for channel in channels:
+                current = set(channel.events or [])
+                missing = default_set - current
+                if not missing:
+                    continue
+                channel.events = sorted(current | missing)
+                updated += 1
+
+            if updated:
+                await db.commit()
+
+        if updated:
+            logger.info(f"Backfilled default event subscriptions for {updated} channel(s)")
+        return updated
+
     async def get_channels(self) -> list[NotificationChannel]:
         """Get all notification channels from database"""
         stmt = select(NotificationChannel).order_by(NotificationChannel.id)
@@ -157,6 +186,8 @@ class NotificationService:
         enabled: bool = True,
     ) -> NotificationChannel:
         """Create a new notification channel"""
+        if not events:
+            events = DEFAULT_SUBSCRIBED_EVENTS
         channel = NotificationChannel(
             name=name,
             type=channel_type,

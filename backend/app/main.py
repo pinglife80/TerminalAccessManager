@@ -772,6 +772,9 @@ async def lifespan(app: FastAPI):
     from app.services.notification_service import NotificationService
 
     notification_service = NotificationService(db=None)
+    # Backfill default event subscriptions BEFORE loading channels so the
+    # in-memory channel cache reflects any newly-added subscription entries.
+    await notification_service.ensure_default_subscriptions()
     await notification_service.initialize_channels()
     await notification_service.start_workers()
     set_notification_service(notification_service)

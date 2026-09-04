@@ -703,3 +703,32 @@ async def emit_terminal_offline(
         source="system",
         severity="warning",
     )
+
+
+async def emit_whitelist_changed(
+    action: str,
+    identifier: str,
+    operator: str,
+    details: dict | None = None,
+) -> list[Any]:
+    """Emit whitelist changed event.
+
+    Args:
+        action: The change action ("add" or "remove").
+        identifier: The affected terminal (MAC or IP pattern).
+        operator: The operator who performed the change.
+        details: Optional extra context (e.g., pattern_type).
+    """
+    data: dict[str, Any] = {
+        "action": action,
+        "identifier": identifier,
+        "operator": operator,
+    }
+    if details:
+        data.update(details)
+    return await emit_event(
+        event_type="admin.whitelist_changed",
+        data=data,
+        source="system",
+        severity="warning",
+    )
