@@ -1,6 +1,6 @@
 # TerminalAccessManager 业务流程文档
 
-> 文档版本：v3.19.0  更新日期：2026-09-04
+> 文档版本：v3.20.0  更新日期：2026-09-04
 >
 > 本文档详细说明 TerminalAccessManager 的核心业务流程，包括数据采集、合规判定、封锁/解封的完整生命周期。
 
@@ -79,7 +79,7 @@ TerminalAccessManager 的核心业务流程由以下环节组成：
 class Terminal(Base):
     ip_address = Column(String(45), nullable=False, index=True)
     mac_address = Column(String(17), nullable=False, index=True)
-    mac_address_normalized = Column(String(12), nullable=False, index=True)  # Unique per MAC (v3.12+)
+    mac_address_normalized = Column(String(12), nullable=False, index=True)  # NOT NULL, unique per (IP, MAC) (v3.20+)
     status = Column(String(20), default="unblocked", index=True)
     compliance_status = Column(String(20), default="unknown", index=True)
     source_tag = Column(String(50), nullable=True, index=True)
@@ -89,11 +89,13 @@ class Terminal(Base):
     ip_changed_at = Column(DateTime(timezone=True), nullable=True)  # Last IP change timestamp (v3.12+)
 
     __table_args__ = (
-        UniqueConstraint('mac_address_normalized', name='uq_terminal_mac'),  # MAC is unique key (v3.12+)
+        UniqueConstraint('ip_address', 'mac_address_normalized', name='uq_terminal_mac_ip'),  # (IP, MAC) is unique key (v3.20+)
     )
 ```
 
 > **v3.12 重要变更**：终端记录以 MAC 地址为唯一标识，不再以 (IP, MAC) 联合主键。DHCP 换 IP 时更新现有记录而非新建，双网卡终端每个 MAC 独立一条记录。
+>
+> **v3.20 重要变更**：终端唯一标识由 MAC 改为 **(IP, MAC) 复合键**（`uq_terminal_mac_ip`），同 MAC 多 IP（如桥接虚拟机）独立成行，消除 ARP 采集折叠漏采。
 
 ---
 
@@ -188,6 +190,9 @@ v3.12 引入三层防震荡保护彻底解决该问题：
 | `compliance_cooldown_minutes` | 10 | 1-60 | 自动封禁/解封后的最小冷却间隔（v3.17.0 起可配置） |
 | `compliance_ip_grace_minutes` | 10 | 1-60 | DHCP 换 IP 后等待 IPGuard 基线同步的宽限期（v3.17.0 起可配置） |
 | `compliance_whitelist_miss_threshold` | 6 | 2-20 | 白名单终端连续未命中多少次后才降级 non_compliant（v3.17.0 起可配置） |
+| `compliance_compliant_downgrade_threshold` | 6 | 2-20 | compliant → non_compliant 独立降级确认阈值（v3.20.0 起可配置） |
+
+> **v3.20.0 变更**：升级方向（IPGuard 命中→ `compliant`、手动白名单→ `bypass`）**立即生效**（去除升级方向确认次数防抖）；降级方向新增独立阈值 `compliance_compliant_downgrade_threshold`。故上文「第一层：对称确认计数」仅保留降级方向（任意状态→ non_compliant、compliant→ non_compliant 需累计确认）。
 
 #### 相关数据
 
@@ -719,6 +724,7 @@ async def cleanup_expired_blacklist(self) -> int:
 | `compliance_cooldown_minutes` | int | 自动封禁/解封后的最小冷却间隔（默认10，范围1-60，v3.17.0新增可配置） |
 | `compliance_ip_grace_minutes` | int | DHCP 换 IP 后等待 IPGuard 基线同步的宽限期（默认10，范围1-60，v3.17.0新增可配置） |
 | `compliance_whitelist_miss_threshold` | int | 白名单终端连续未命中多少次后才降级 non_compliant（默认6，范围2-20，v3.17.0新增可配置） |
+| `compliance_compliant_downgrade_threshold` | int | compliant → non_compliant 独立降级确认阈值（默认6，范围2-20，v3.20.0新增可配置） |
 | `non_compliant_confirm_count` | int | 终端连续判定为 non_compliant 的计数器（数据库字段，v3.7.0新增） |
 | `IPGUARD_CACHE_TTL` | int | IPGuard 缓存 TTL（v3.7.0 调整为 900 秒，1.5 倍同步间隔） |
 

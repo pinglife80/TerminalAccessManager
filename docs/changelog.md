@@ -1,6 +1,6 @@
 # 更新日志
 
-> 文档版本：v3.19.0  更新日期：2026-09-04
+> 文档版本：v3.20.0  更新日期：2026-09-04
 
 本文件记录 TerminalAccessManager 的所有重要变更。
 
@@ -8,6 +8,26 @@
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ***
+
+## [3.20.0] - 2026-09-04
+
+### 新增
+
+- **MAC+IP 复合唯一键（迁移 040）**：`terminals` 唯一标识由 `mac_address_normalized` 改为 `(ip_address, mac_address_normalized)`，同 MAC 多 IP（如桥接虚拟机）独立成行，消除 ARP 折叠导致的漏采；`mac_address_normalized` 置 NOT NULL
+  - 关联文件：`alembic/versions/040_terminal_mac_ip_unique.py`、`models/terminal.py`、`services/arp_collector_service.py`、`services/data_source_service.py`、`services/firewall_reconciliation_service.py`、`services/terminal_service.py`、`Terminals.tsx`
+- **合规状态转换优化**：命中 IPGuard 立即升级 `compliant`、白名单手动新增立即 `bypass`（均去确认次数防抖）；新增可配置项 `compliance_compliant_downgrade_threshold`（默认 6，2-20）独立控制 `compliant → non_compliant` 降级，合规终端更稳定
+  - 关联文件：`services/compliance_service.py`、`services/config_service.py`、`schemas/system_config.py`、`useTerminalData.ts`、`GeneralSettings.tsx`、`i18n/locales/{en,zh,ja}.ts`
+- **白名单变更通知**：新增事件类型 `admin.whitelist_changed` 与发射器 `emit_whitelist_changed`；通知渠道创建/启动时幂等回填默认订阅，避免「已发射但无渠道订阅」静默丢信
+  - 关联文件：`services/event_emitter.py`、`services/notification_channels/event_types.py`、`services/notification_service.py`、`main.py`
+- **黑名单统计口径 UI 说明**：成功封锁 / 待解封卡片增加 tooltip，说明 `pending_retry_unblock ⊆ success_blocked` 子集关系
+  - 关联文件：`Blacklist.tsx`、`i18n/locales/{en,zh,ja}.ts`
+
+### 修复
+
+- **白名单匹配逻辑统一**：`add_to_whitelist` 统一 `scalars().all()` 循环 apply，`wl_match_type` 修正为 `"mac"/"ip"/"both"`，修复同 MAC 多 IP 场景匹配不完整
+  - 关联文件：`services/terminal_service.py`、`services/compliance_service.py`
+- **前端黑名单匹配 IP 优先**：移除纯 `mac` 命中，仅生成 `both`/`ip`，解封标识符改用 `ip_address`，避免同 MAC 不同 IP 终端被误判为已封堵
+  - 关联文件：`Terminals.tsx`
 
 ## [3.19.0] - 2026-09-04
 

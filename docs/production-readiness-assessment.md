@@ -12,6 +12,7 @@
 
 | 文档版本 | 更新日期 | 关联版本 | 更新内容 |
 |---------|---------|---------|---------|
+| v3.20.0 | 2026-09-04 | v3.20.0 | MAC+IP 复合唯一键（迁移 040）；合规状态转换优化（IPGuard 命中即时 compliant、手动白名单即时 bypass、独立降级阈值 compliance_compliant_downgrade_threshold）；白名单匹配统一（scalars().all() 循环 apply、wl_match_type 修正）；白名单变更通知补全（admin.whitelist_changed + 默认订阅回填）；黑名单统计口径 UI 说明 |
 | v3.19.0 | 2026-09-04 | v3.19.0 | 合规作用域 OR 匹配策略（新增 ip_cidr_any/ip_range_any/mac_prefix_any，IP 或 MAC 任一命中即合规）；通知事件系统审计修复（退役 legacy 聚合器、重试按渠道隔离、统一 send() 返回类型、修复发射器签名）；非合规原因标记 non_compliant_type（迁移 039） |
 | v3.18.0 | 2026-09-02 | v3.18.0 | 黑名单唯一口径收敛为（IP, 防火墙）（迁移 038 + _attach_active_blacklist 幂等写入）；对账不再写 block_state 且补封闭回写终端状态；终端去重/查重筛选（新功能）；统计口径收敛与卡片简化（移除 pending_retry_block/unblockable_non_compliant）；会话滑动续期修复 |
 | v3.17.3 | 2026-08-31 | v3.17.3 | 数据状态一致性根治：新增 Terminal.block_state 区分中间态可收敛性、统计口径对齐（non_compliant_unblocked / firewall_ip_count / 拆 block pending retry 与不可封锁）、调度器首轮回填、前端显式化卡片与筛选跳转 |
