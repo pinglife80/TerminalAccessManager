@@ -109,7 +109,8 @@ async def update_configs(
 
     from app.services.event_emitter import emit_config_changed
     changes = [{"key": u.key, "old_value": old_values.get(u.key), "new_value": u.value} for u in updates]
-    await emit_config_changed(current_user.username, changes)
+    for c in changes:
+        await emit_config_changed(c["key"], current_user.username, c.get("old_value"), c.get("new_value"))
 
     return results
 
@@ -142,7 +143,7 @@ async def update_single_config(
                         resource_name=key)
 
     from app.services.event_emitter import emit_config_changed
-    await emit_config_changed(current_user.username, [{"key": key, "old_value": old_value, "new_value": update.value}])
+    await emit_config_changed(key, current_user.username, old_value, update.value)
 
     return result
 

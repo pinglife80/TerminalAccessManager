@@ -812,7 +812,7 @@ async def admin_update_user(
 
         # Emit role changed event for notification
         from app.services.event_emitter import emit_role_changed
-        await emit_role_changed(user.username, current_user.username, old_role, new_role)
+        await emit_role_changed(user.username, current_user.username, "assigned", {"old_role": old_role, "new_role": new_role})
 
         # Dedicated audit log for role change
         from app.services.terminal_service import TerminalService

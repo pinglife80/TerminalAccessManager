@@ -581,6 +581,7 @@ class NotificationService:
                     "queued_at": datetime.utcnow().isoformat(),
                     "_manual_retry": True,
                     "_log_id": log_id,
+                    "_channel_name": log.channel_name,
                 })
                 await redis.lpush("notify:queue:main", payload)
                 log.status = "pending"

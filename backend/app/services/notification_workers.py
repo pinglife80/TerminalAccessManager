@@ -254,7 +254,13 @@ class NotificationWorkers:
             severity=payload.get("severity", "info"),
         )
 
-        subscribed_channels = self._get_subscribed_channels(event_type)
+        retry_channel = payload.get("_channel_name")
+        if retry_channel:
+            # Retry is scoped to the single failed channel to avoid
+            # re-delivering to channels that already succeeded.
+            subscribed_channels = [retry_channel] if retry_channel in self._channels else []
+        else:
+            subscribed_channels = self._get_subscribed_channels(event_type)
         if not subscribed_channels:
             logger.debug(f"No subscribers for {event_type}, dropping")
             return

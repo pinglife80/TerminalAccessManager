@@ -34,6 +34,7 @@ class TerminalResponse(TerminalBase):
     wl_match_type: str | None = Field(None, description="Whitelist match type: mac/ip/both/null")
     firewall_tag: str | None = Field(None, description="Firewall tag from block operation")
     block_state: str | None = Field(None, description="Blockable state: null/no_firewall/block_failed")
+    non_compliant_type: str | None = Field(None, description="Non-compliant factor: ip/mac/both/null")
 
     model_config = ConfigDict(from_attributes=True)
 

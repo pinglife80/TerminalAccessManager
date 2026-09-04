@@ -1679,6 +1679,19 @@ async def _scheduler_trigger(args):
     from sqlalchemy import select
 
     task = args.task_name
+
+    # Initialize the global notification service so events emitted by this
+    # scheduler trigger (compliance_check, ipguard_sync, etc.) are actually
+    # enqueued to Redis and delivered by the running app's notification
+    # workers. Without this, emit_event() silently no-ops with
+    # "Notification service not initialized" in this separate CLI process.
+    from app.services.event_emitter import set_notification_service
+    from app.services.notification_service import NotificationService
+
+    notification_service = NotificationService(db=None)
+    await notification_service.initialize_channels()
+    set_notification_service(notification_service)
+
     async with async_session_maker() as db:
         if task == "arp_collection":
             service = ArpCollectorService(db)

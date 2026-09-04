@@ -15,10 +15,13 @@ class ComplianceScope(Base):
       - 'ip_range': Terminal IP in range → IP-only match
       - 'mac_prefix_arp': Terminal MAC matches prefix (ARP source) → IP-only match
       - 'mac_prefix_ipguard': IPGuard baseline MAC matches prefix → IP-only match for that entry
+      - 'ip_cidr_any': Terminal IP in CIDR → OR match (IP or MAC, either matches)
+      - 'ip_range_any': Terminal IP in range → OR match (IP or MAC, either matches)
+      - 'mac_prefix_any': Terminal MAC matches prefix (ARP source) → OR match (IP or MAC, either matches)
     scope_value:
-      - ip_cidr: '192.168.0.0/16'
-      - ip_range: '192.168.1.1-255'
-      - mac_prefix_arp / mac_prefix_ipguard: 'AA:BB:CC'
+      - ip_cidr / ip_cidr_any: '192.168.0.0/16'
+      - ip_range / ip_range_any: '192.168.1.1-255'
+      - mac_prefix_arp / mac_prefix_ipguard / mac_prefix_any: 'AA:BB:CC'
     """
 
     __tablename__ = "compliance_scope"

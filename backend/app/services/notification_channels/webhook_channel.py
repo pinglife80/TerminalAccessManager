@@ -120,14 +120,36 @@ class WebhookChannel(NotificationChannelBase):
                     elif method == "PUT":
                         response = await client.put(url, content=payload_json, headers=headers)
                     else:
-                        return {"success": False, "message": f"Unsupported HTTP method: {method}"}
+                        return NotificationResult(
+                            success=False,
+                            message=f"Unsupported HTTP method: {method}",
+                            channel=self.channel_type,
+                            event_id=event.id if event else None,
+                        )
 
                     if response.status_code < 400:
-                        return {"success": True}
-                    else:
-                        return {"success": False, "message": f"HTTP {response.status_code}"}
+                        return NotificationResult(
+                            success=True,
+                            message="Webhook sent",
+                            channel=self.channel_type,
+                            event_id=event.id if event else None,
+                            recipient=url,
+                        )
+                    return NotificationResult(
+                        success=False,
+                        message=f"HTTP {response.status_code}",
+                        channel=self.channel_type,
+                        event_id=event.id if event else None,
+                        error_code="HTTP_ERROR",
+                    )
             except Exception as e:
-                return {"success": False, "message": str(e)}
+                return NotificationResult(
+                    success=False,
+                    message=str(e),
+                    channel=self.channel_type,
+                    event_id=event.id if event else None,
+                    error_code="SEND_ERROR",
+                )
 
         if event is None:
             raise ValueError("Either event or subject is required")

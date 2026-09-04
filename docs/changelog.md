@@ -1,6 +1,6 @@
 # 更新日志
 
-> 文档版本：v3.18.0  更新日期：2026-09-02
+> 文档版本：v3.19.0  更新日期：2026-09-04
 
 本文件记录 TerminalAccessManager 的所有重要变更。
 
@@ -8,6 +8,20 @@
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ***
+
+## [3.19.0] - 2026-09-04
+
+### 新增
+
+- **合规作用域 OR 匹配策略**：新增 `ip_cidr_any` / `ip_range_any` / `mac_prefix_any` 三种作用域类型，指定网段/前缀内的终端「IP 或 MAC 任一命中合规基线即判定 compliant」，缓解 DHCP 换 IP / 同 MAC 多 IP 场景下的误降级
+  - 关联文件：`services/compliance_service.py`、`models/compliance_scope.py`、`services/compliance_scope_service.py`、`schemas/compliance_scope.py`、`ComplianceScope.tsx`、`complianceScope.ts`、`i18n/locales/{en,zh,ja}.ts`
+- **非合规原因标记 `non_compliant_type`**（迁移 039）：`terminals` 新增结构化字段记录真实不合规因素（IP / MAC / BOTH），前端非合规徽标由误导性的 `black_match_type` 改为该字段展示
+  - 关联文件：`alembic/versions/039_terminal_non_compliant_type.py`、`models/terminal.py`、`schemas/terminal.py`、`services/compliance_service.py`、`useTerminalData.ts`、`Terminals.tsx`、`i18n/locales/{en,zh,ja}.ts`
+
+### 修复
+
+- **通知事件系统审计修复**：退役绕过通知管道且无有效收件人的 legacy 聚合器（删除 `notification_aggregator.py`）；重试按 `_channel_name` 隔离，避免向全部订阅渠道重复发送；统一 5 类渠道 `send()` 返回 `NotificationResult`；修复 `emit_role_changed` / `emit_config_changed` / `emit_permission_changed` 调用签名错乱；补 `system.datasource_sync_success` 触发点；清理无触发点事件并归正 `security.user_*` 分类
+  - 关联文件：`event_emitter.py`、`endpoints/{auth,roles,settings}.py`、`main.py`、`notification_service.py`、`notification_workers.py`、`notification_channels/*`、`cli.py`
 
 ## [3.18.0] - 2026-09-02
 

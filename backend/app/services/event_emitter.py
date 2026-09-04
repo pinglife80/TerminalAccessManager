@@ -235,20 +235,29 @@ async def emit_password_changed(
 
 
 async def emit_role_changed(
-    username: str,
+    subject: str,
     changed_by: str,
-    old_role: str,
-    new_role: str,
+    action: str,
+    details: dict | None = None,
 ) -> list[Any]:
-    """Emit role changed event"""
+    """Emit role changed event.
+
+    Args:
+        subject: The affected user or role name.
+        changed_by: The operator who performed the change.
+        action: The action performed (assigned/created/updated/deleted).
+        details: Optional extra context (e.g., old_role/new_role).
+    """
+    data: dict[str, Any] = {
+        "subject": subject,
+        "changed_by": changed_by,
+        "action": action,
+    }
+    if details:
+        data.update(details)
     return await emit_event(
         event_type="admin.role_changed",
-        data={
-            "username": username,
-            "changed_by": changed_by,
-            "old_role": old_role,
-            "new_role": new_role,
-        },
+        data=data,
         source="system",
         severity="warning",
     )

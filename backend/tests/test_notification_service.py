@@ -159,7 +159,7 @@ class TestWebhookChannel:
             message="Test message"
         )
 
-        assert result["success"] is True
+        assert result.success is True
         mock_client.post.assert_called_once()
 
 
@@ -188,7 +188,7 @@ class TestFeishuChannel:
             message="Test message"
         )
 
-        assert result["success"] is True
+        assert result.success is True
         mock_client.post.assert_called_once()
 
 
@@ -217,7 +217,7 @@ class TestDingTalkChannel:
             message="Test message"
         )
 
-        assert result["success"] is True
+        assert result.success is True
         mock_client.post.assert_called_once()
 
 
@@ -246,7 +246,7 @@ class TestWeComChannel:
             message="Test message"
         )
 
-        assert result["success"] is True
+        assert result.success is True
         mock_client.post.assert_called_once()
 
 
@@ -822,6 +822,7 @@ class TestRetryFailedNotification:
             status="failed", event_id="e1", event_type="terminal.blocked",
             details={"event_data": {"ip": "1.2.3.4"}}, sent_at=datetime(2026, 1, 1),
             error_message="old", next_retry_at=datetime(2026, 1, 2), retry_count=2,
+            channel_name="email",
         )
         mock_db.get = AsyncMock(return_value=log)
         redis = MagicMock()

@@ -15,6 +15,7 @@ export interface Terminal {
   wl_match_type: string | null;  // "mac" / "ip" / "both" / null
   firewall_tag: string | null;  // from blacklist data
   block_state: string | null;  // null / no_firewall / block_failed
+  non_compliant_type: string | null;  // "ip" / "mac" / "both" / null（真实不合规因素）
   black_match_type: string | null;  // from blacklist data: "mac" / "ip" / null
 }
 

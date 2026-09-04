@@ -1,12 +1,41 @@
 # 版本跟踪记录
 
-> 文档版本：v3.18.0 | 更新日期：2026-09-02
+> 文档版本：v3.19.0 | 更新日期：2026-09-04
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
 
 ---
+
+## [v3.19.0] - 2026-09-04
+
+### 合规作用域 OR 匹配策略、通知事件系统修复与非合规原因标记（Minor 版本）
+
+#### 背景
+
+自 v3.18.0 发布以来，围绕合规判定与通知可靠性展开三项工作：其一，新增合规作用域「OR 匹配策略」——指定网段/前缀内终端「IP 或 MAC 任一命中合规基线即判定 compliant」，缓解既有 AND 逻辑在 DHCP 换 IP / 同 MAC 多 IP 场景下的误降级；其二，审计通知事件系统，退役绕过管道、永不真正送达的 legacy 聚合器，并修复重试向全部渠道重复发送、渠道 `send()` 返回类型不一致、发射器调用签名错乱等缺陷；其三，新增 `non_compliant_type` 结构化字段，将前端非合规徽标从误导性的 `black_match_type`（封锁后恒为 BOTH）改为真实不合规因素（IP / MAC / BOTH）。因含面向用户的新能力（OR 匹配策略），故以 Minor 发布。
+
+#### 主要变更
+
+| 变更项 | 说明 |
+|--------|------|
+| 合规作用域 OR 匹配策略（新功能） | 新增 `ip_cidr_any` / `ip_range_any` / `mac_prefix_any` 三种作用域类型，IP 或 MAC 任一命中即合规 |
+| 通知事件系统审计修复 | 退役 legacy 聚合器、重试按渠道隔离、统一 `send()` 返回类型、修复发射器签名、补缺失触发点 |
+| 非合规原因标记（迁移 039） | `terminals` 新增 `non_compliant_type` 列，前端徽标改按真实因素（IP/MAC/BOTH）展示 |
+
+#### 升级步骤（推荐：一键升级）
+
+```bash
+git checkout main
+git pull origin main
+./manage.sh upgrade
+```
+
+#### 升级注意事项
+
+- 本次含数据库迁移 039（`terminals` 新增 `non_compliant_type` 列），`./manage.sh upgrade` 会自动执行 `alembic upgrade head`。
+- 无破坏性变更；OR 匹配为新增作用域能力，默认 AND 与既有 IP-only 作用域行为不变。
 
 ## [v3.18.0] - 2026-09-02
 

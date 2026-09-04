@@ -149,7 +149,8 @@ def apply_result_mocks(service, mock_db, results, **kw):
         scope_data ([])                -> _load_scope_cache
         ipguard_data ({})              -> _load_all_ipguard_cache
 
-    Yields the notification aggregator MagicMock (add_event is an AsyncMock).
+    Yields a namespace whose emit_compliant / emit_non_compliant attributes are
+    AsyncMocks patched onto app.services.event_emitter.
     """
     bound_fw_tags = kw.get("bound_fw_tags", ["fw1"])
     unblock = kw.get("unblock_on_firewall", True)
@@ -161,8 +162,8 @@ def apply_result_mocks(service, mock_db, results, **kw):
 
     mock_db.execute = scripted_execute(results)
 
-    aggregator = MagicMock()
-    aggregator.add_event = AsyncMock()
+    emit_compliant = AsyncMock()
+    emit_non_compliant = AsyncMock()
 
     unblock_patch = (
         patch.object(service, "_unblock_on_firewall", side_effect=unblock)
@@ -183,9 +184,12 @@ def apply_result_mocks(service, mock_db, results, **kw):
          patch.object(service, "_load_all_ipguard_cache", return_value=ipguard), \
          unblock_patch, \
          block_patch, \
-         patch("app.services.notification_aggregator.get_notification_aggregator",
-               return_value=aggregator):
-        yield aggregator
+         patch("app.services.event_emitter.emit_terminal_compliant", emit_compliant), \
+         patch("app.services.event_emitter.emit_terminal_non_compliant", emit_non_compliant):
+        events = MagicMock()
+        events.emit_compliant = emit_compliant
+        events.emit_non_compliant = emit_non_compliant
+        yield events
 
 
 def created_blacklists(mock_db):
@@ -1157,7 +1161,8 @@ class TestApplyResultTransitions:
         assert terminal.compliance_status == "bypass"
         assert terminal.wl_match_type == "mac"
         assert terminal.comments == "Whitelist: test device"
-        assert agg.add_event.await_count == 0
+        agg.emit_compliant.assert_not_awaited()
+        agg.emit_non_compliant.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_compliant_transition_emits_single_event(self, service, mock_db):
@@ -1178,13 +1183,13 @@ class TestApplyResultTransitions:
 
         assert result == {"status_changed": True, "new_compliance": "compliant", "unblocked": False}
         assert terminal.compliance_status == "compliant"
-        assert agg.add_event.await_count == 1
-        emitted = agg.add_event.call_args_list[0][0][0]
-        assert emitted.type == "terminal.compliant"
+        assert agg.emit_compliant.call_count == 1
+        agg.emit_compliant.assert_awaited_once_with("192.168.1.100", "AA:BB:CC:DD:EE:FF")
+        agg.emit_non_compliant.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_non_compliant_transition_blocks_and_emits_two_events(self, service, mock_db):
-        """compliant -> non_compliant blocks on fw1, creates blacklist, emits 2 events."""
+    async def test_non_compliant_transition_blocks_and_emits_event(self, service, mock_db):
+        """compliant -> non_compliant blocks on fw1, creates blacklist, emits single event."""
         terminal = create_mock_terminal(
             ip="192.168.1.100",
             mac="AA:BB:CC:DD:EE:FF",
@@ -1209,7 +1214,11 @@ class TestApplyResultTransitions:
         assert result["unblocked"] is False
         assert terminal.status == "blocked"
         assert terminal.firewall_tag == "fw1"
-        assert agg.add_event.await_count == 2
+        assert agg.emit_non_compliant.call_count == 1
+        agg.emit_non_compliant.assert_awaited_once_with(
+            "192.168.1.100", "AA:BB:CC:DD:EE:FF", ["Non-compliant terminal detected"]
+        )
+        agg.emit_compliant.assert_not_awaited()
 
         bls = created_blacklists(mock_db)
         assert len(bls) == 1

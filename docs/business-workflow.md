@@ -1,6 +1,6 @@
 # TerminalAccessManager 业务流程文档
 
-> 文档版本：v3.18.0  更新日期：2026-09-02
+> 文档版本：v3.19.0  更新日期：2026-09-04
 >
 > 本文档详细说明 TerminalAccessManager 的核心业务流程，包括数据采集、合规判定、封锁/解封的完整生命周期。
 
@@ -115,13 +115,14 @@ class Terminal(Base):
 |------|---------|------|
 | 匹配白名单 | `bypass` | 终端在白名单中，跳过合规检查 |
 | 在Scope范围内 + IP匹配IPGuard | `compliant` | 命中Scope条件，忽略MAC仅用IP匹配IPGuard基线 |
+| 在OR作用域内 + IP或MAC任一命中IPGuard | `compliant` | IP或MAC任一命中合规基线即合规（v3.19 新增） |
 | MAC匹配IPGuard + IP匹配 | `compliant` | 正常IP+MAC双重匹配IPGuard基线 |
 | 不匹配任何 | `non_compliant` | 终端不在白名单和IPGuard中，不合规 |
 | 未检查/IP变更宽限期 | `unknown`/保持原状态 | 终端刚采集或在IP变更宽限期内 |
 
 ### 3.4 合规范围条件（Scope）类型
 
-v3.11 新增，v3.12 拆分 MAC 前缀类型：
+v3.11 新增，v3.12 拆分 MAC 前缀类型，v3.19 新增 OR 类型：
 
 | Scope类型 | 匹配对象 | 命中后行为 |
 |-----------|---------|-----------|
@@ -129,6 +130,9 @@ v3.11 新增，v3.12 拆分 MAC 前缀类型：
 | `ip_range` | 终端IP（范围） | 忽略MAC，仅用IP匹配IPGuard |
 | `mac_prefix_arp` | ARP采集的终端MAC前缀 | 忽略MAC，仅用IP匹配IPGuard |
 | `mac_prefix_ipguard` | IPGuard基线中的MAC前缀 | 正常IP+MAC匹配，用于区分IPGuard基线中的特定设备类型 |
+| `ip_cidr_any` | 终端IP（CIDR） | IP 或 MAC 任一命中基线即合规（OR） |
+| `ip_range_any` | 终端IP（范围） | IP 或 MAC 任一命中基线即合规（OR） |
+| `mac_prefix_any` | 终端MAC前缀 | IP 或 MAC 任一命中基线即合规（OR） |
 
 ### 3.5 三层防震荡机制（v3.12 增强）
 

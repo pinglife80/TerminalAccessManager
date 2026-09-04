@@ -207,8 +207,15 @@ class FeishuChannel(NotificationChannelBase):
         if subject and message:
             text_content = f"{subject}\n{message}"
             if self._is_app_mode():
-                return await self._send_app_text(text_content, event)
-            return await self._send_webhook_text(text_content, event)
+                res = await self._send_app_text(text_content, event)
+            else:
+                res = await self._send_webhook_text(text_content, event)
+            return NotificationResult(
+                success=bool(res.get("success")),
+                message=res.get("message", ""),
+                channel=self.channel_type,
+                event_id=event.id if event else None,
+            )
 
         if event is None:
             raise ValueError("Either event or subject is required")

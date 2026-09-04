@@ -42,7 +42,7 @@ class EventType(StrEnum):
     SYSTEM_WARNING = "system.warning"
     SYSTEM_ALERT = "system.alert"
 
-    # Compliance events
+    # Alert events
     COMPLIANCE_RATE_LOW = "alert.compliance_rate_low"
     COMPLIANCE_RATE_CRITICAL = "alert.compliance_rate_critical"
     BLOCK_THRESHOLD_EXCEEDED = "alert.block_threshold"
@@ -146,29 +146,23 @@ EVENT_METADATA = {
         "severity": "info",
         "category": "security",
     },
-    EventType.EMAIL_VERIFIED: {
-        "name": "邮箱验证",
-        "description": "用户邮箱已验证",
-        "severity": "info",
-        "category": "security",
-    },
     EventType.USER_CREATED: {
         "name": "用户创建",
         "description": "新用户已创建",
         "severity": "info",
-        "category": "admin",
+        "category": "security",
     },
     EventType.USER_DELETED: {
         "name": "用户删除",
         "description": "用户已被删除",
         "severity": "warning",
-        "category": "admin",
+        "category": "security",
     },
     EventType.USER_UPDATED: {
         "name": "用户更新",
         "description": "用户信息已更新",
         "severity": "info",
-        "category": "admin",
+        "category": "security",
     },
     EventType.DATASOURCE_SYNC_FAILED: {
         "name": "数据源同步失败",
@@ -203,24 +197,6 @@ EVENT_METADATA = {
     EventType.BACKUP_FAILED: {
         "name": "备份失败",
         "description": "数据备份失败",
-        "severity": "error",
-        "category": "system",
-    },
-    EventType.SYSTEM_ERROR: {
-        "name": "系统错误",
-        "description": "系统发生错误",
-        "severity": "error",
-        "category": "system",
-    },
-    EventType.SYSTEM_WARNING: {
-        "name": "系统警告",
-        "description": "系统发出警告",
-        "severity": "warning",
-        "category": "system",
-    },
-    EventType.SYSTEM_ALERT: {
-        "name": "系统告警",
-        "description": "系统发出告警通知",
         "severity": "error",
         "category": "system",
     },
