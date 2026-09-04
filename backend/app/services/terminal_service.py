@@ -35,16 +35,14 @@ def _normalize_mac(mac: str) -> str:
 
 
 def _blacklist_terminal_join():
-    """Join condition linking a Blacklist entry to its Terminal by identity.
-
-    Primary key is normalized MAC; falls back to IP for NULL-MAC
-    (reconciliation-created) entries. Avoids IP-only joins that miss DHCP
-    re-addressed terminals or duplicate same-IP multi-terminal results.
-    """
+    """Join condition linking a Blacklist entry to its Terminal by
+    (MAC, IP) composite identity, falling back to IP-only for NULL-MAC
+    (reconciliation-created) entries."""
     return or_(
         and_(
             Blacklist.mac_address_normalized.is_not(None),
             Blacklist.mac_address_normalized == Terminal.mac_address_normalized,
+            Blacklist.ip_address == Terminal.ip_address,
         ),
         and_(
             Blacklist.mac_address_normalized.is_(None),
@@ -55,8 +53,12 @@ def _blacklist_terminal_join():
 
 def _blacklist_terminal_key():
     """Distinct-able identity key for a blacklist entry's terminal:
-    MAC-normalized when known, otherwise IP address."""
-    return func.coalesce(Blacklist.mac_address_normalized, Blacklist.ip_address)
+    composite (normalized MAC | IP), with empty MAC for NULL-MAC entries."""
+    return func.concat(
+        func.coalesce(Blacklist.mac_address_normalized, ''),
+        '|',
+        Blacklist.ip_address,
+    )
 
 
 def _enabled_arp_source_tag_condition():
@@ -255,8 +257,8 @@ class TerminalService:
     async def get_stats(self) -> dict:
         """Get dashboard statistics with efficient database queries"""
         try:
-            # 合规轴·终端数：Terminal 表按 mac_address_normalized 唯一，
-            # count() 即等价于 count(distinct mac)。以下合规序列全部用终端数。
+            # 合规轴·终端数：Terminal 一行 = 一个 (IP, MAC) 终端。
+            # 同 MAC 多 IP（如桥接虚拟机）计为多行，与终端管理列表一致。
             total_result = await self.db.execute(
                 select(func.count()).select_from(Terminal).where(_enabled_arp_source_tag_condition())
             )
@@ -734,69 +736,68 @@ class TerminalService:
                 resource_id = normalized_mac or ip_pattern
                 await self.log_action(username, "whitelist_create", "whitelist", resource_id, log_details)
 
-            # After creating/updating whitelist entry: handle based on pattern type
+            # After creating/updating the whitelist entry: apply it immediately to
+            # every terminal whose identity matches the entry's semantics.
+            #   mac_only         -> all terminals sharing this MAC
+            #   single_ip (ip)   -> all terminals with this IP
+            #   both             -> the terminal with this MAC+IP
+            # CIDR / IP-range patterns still go through full recalculation.
             from app.services.compliance_service import ComplianceService
             compliance_svc = ComplianceService(self.db)
+            await compliance_svc.invalidate_whitelist_cache()
 
-            if normalized_mac:
-                # Single MAC whitelist (terminal management page scenario):
-                # Process only this one terminal immediately, no full recalculation
-                await compliance_svc.invalidate_whitelist_cache()
+            mac_norm_for_lookup = _normalize_mac(normalized_mac) if normalized_mac else None
 
-                # Find the terminal by normalized MAC
-                from app.models.terminal import Terminal
-                mac_norm_for_lookup = _normalize_mac(normalized_mac)
-                stmt = select(Terminal).where(
-                    Terminal.mac_address_normalized == mac_norm_for_lookup
-                ).order_by(desc(Terminal.updated_at))
+            if normalized_mac and ip_pattern:
+                match_cond = and_(
+                    Terminal.mac_address_normalized == mac_norm_for_lookup,
+                    Terminal.ip_address == ip_pattern,
+                )
+                wl_match_type = "both"
+            elif normalized_mac:
+                match_cond = Terminal.mac_address_normalized == mac_norm_for_lookup
+                wl_match_type = "mac"
+            elif pattern_type == "single_ip" and ip_pattern:
+                match_cond = Terminal.ip_address == ip_pattern
+                wl_match_type = "ip"
+            else:
+                match_cond = None
+                wl_match_type = None
+
+            if match_cond is not None:
+                stmt = select(Terminal).where(match_cond)
                 result = await self.db.execute(stmt)
-                terminal = result.scalar_one_or_none()
+                matched_terminals = result.scalars().all()
 
-                if terminal:
-                    # Determine wl_match_type
-                    if ip_pattern:
-                        wl_match_type = "both"
-                    else:
-                        wl_match_type = "mac_only"
-
-                    # For MAC+IP ("both") whitelist, only apply immediately if the
-                    # terminal's CURRENT IP actually matches ip_pattern. Otherwise
-                    # skip immediate bypass and let the next recalculate_all_compliance
-                    # evaluate it correctly (avoids transient misclassification).
-                    _ip_matches = True
-                    if wl_match_type == "both":
-                        _ip_matches = compliance_svc._ip_matches_pattern(
-                            terminal.ip_address or "", ip_pattern, "both"
-                        )
-
-                    if _ip_matches:
-                        # Apply manual whitelist immediately (bypasses cooldown)
-                        apply_result = await compliance_svc.apply_manual_whitelist_for_terminal(
-                            terminal,
-                            wl_match_type=wl_match_type,
-                            username=username,
-                        )
-                        logger.info(f"Manual whitelist applied immediately for MAC {normalized_mac}: {apply_result}")
-                    else:
-                        logger.info(
-                            f"Whitelist added for MAC {normalized_mac} + IP pattern {ip_pattern} but "
-                            f"terminal current IP {terminal.ip_address} does not match - will take "
-                            f"effect via next compliance recalculation."
-                        )
-                else:
-                    # Terminal not yet discovered by ARP - will be handled on first ARP collection
+                for terminal in matched_terminals:
+                    apply_result = await compliance_svc.apply_manual_whitelist_for_terminal(
+                        terminal,
+                        wl_match_type=wl_match_type,
+                        username=username,
+                    )
                     logger.info(
-                        f"Whitelist added for MAC {normalized_mac} but no terminal record found yet - "
-                        f"will take effect when ARP discovers the terminal."
+                        f"Manual whitelist applied immediately ({wl_match_type}) for "
+                        f"{terminal.ip_address or ''}/{terminal.mac_address or ''}: {apply_result}"
+                    )
+
+                if not matched_terminals:
+                    logger.info(
+                        f"Whitelist added ({wl_match_type}, pattern_type={pattern_type}) but no "
+                        f"terminal matched yet - will take effect on next discovery/recalculation."
                     )
             else:
-                # IP-only whitelist (CIDR/range/single IP without MAC):
-                # May match multiple terminals, need full recalculation
-                await compliance_svc.invalidate_whitelist_cache()
                 recalc_result = await compliance_svc.recalculate_all_compliance()
                 logger.info(f"Whitelist add (IP pattern) triggered full compliance recalculation: {recalc_result}")
 
             await self.db.commit()
+
+            from app.services.event_emitter import emit_whitelist_changed
+            await emit_whitelist_changed(
+                action="add",
+                identifier=normalized_mac or ip_pattern or "",
+                operator=username,
+                details={"pattern_type": pattern_type},
+            )
 
             return {
                 "success": True,
@@ -910,6 +911,15 @@ class TerminalService:
                     await self.log_action(username, "whitelist_delete", "whitelist", resource_id, log_details)
 
                 await self.db.commit()
+
+                from app.services.event_emitter import emit_whitelist_changed
+                await emit_whitelist_changed(
+                    action="remove",
+                    identifier=identifier,
+                    operator=username,
+                    details={"entries": len(deleted_entries)},
+                )
+
                 return True
 
             return False
@@ -1784,6 +1794,13 @@ class TerminalService:
         entry.last_operation_at = datetime.now(UTC)
         await self.db.commit()
 
+        from app.services.event_emitter import emit_terminal_unblocked
+        await emit_terminal_unblocked(
+            ip_address=ip_address,
+            mac_address=entry.mac_address or "",
+            unblocked_by=username,
+        )
+
         await self.log_action(
             username,
             "firewall_unblock",
@@ -1882,22 +1899,23 @@ class TerminalService:
 
             # --- Batch-load all data upfront to avoid N+1 queries ---
 
-            # 1. Batch-load all affected Terminals by MAC (1 query instead of N)
-            # MAC is the stable identifier (IP may change due to DHCP)
+            # 1. Batch-load all affected Terminals by (MAC, IP) composite identity.
             all_mac_norms = list(set(e.mac_address_normalized for e in expired_entries if e.mac_address_normalized))
-            terminal_by_mac = {}  # mac_norm -> Terminal
+            terminal_by_pair = {}  # (mac_norm, ip) -> Terminal
             if all_mac_norms:
                 t_stmt = select(Terminal).where(Terminal.mac_address_normalized.in_(all_mac_norms))
                 t_result = await self.db.execute(t_stmt)
                 for t in t_result.scalars().all():
                     if t.mac_address_normalized:
-                        terminal_by_mac[t.mac_address_normalized] = t
+                        terminal_by_pair[(t.mac_address_normalized, t.ip_address)] = t
 
-            # 2. Batch-check for active blocks per MAC (1 query instead of N)
-            # A terminal should only be unblocked if it has NO active entries on ANY firewall
-            active_block_macs = set()
+            # 2. Batch-check for active blocks per (MAC, IP) (1 query instead of N).
+            # A terminal should only be unblocked if it has NO active entries on ANY firewall.
+            active_block_pairs = set()
             if all_mac_norms:
-                active_stmt = select(Blacklist.mac_address_normalized).where(
+                active_stmt = select(
+                    Blacklist.mac_address_normalized, Blacklist.ip_address
+                ).where(
                     (Blacklist.mac_address_normalized.in_(all_mac_norms)) &
                     (Blacklist.unblocked_at.is_(None)) &
                     (Blacklist.auto_unblocked == False) &
@@ -1907,7 +1925,7 @@ class TerminalService:
                     ))
                 )
                 active_result = await self.db.execute(active_stmt)
-                active_block_macs = set(row[0] for row in active_result.all() if row[0])
+                active_block_pairs = {(row[0], row[1]) for row in active_result.all() if row[0]}
 
             # 3. Pre-resolve SangforService instances by firewall_tag
             #    (1 query per unique tag instead of 1 query per entry)
@@ -1919,14 +1937,15 @@ class TerminalService:
             # --- Process entries using pre-loaded data ---
             count = 0
             failed_unblock_ips = set()  # Track IPs where Sangfor unblock failed
-            processed_macs = set()  # Track which terminals we've already updated to avoid duplicate work
+            processed_pairs = set()  # Track which (mac_norm, ip) terminals we've already updated
 
             try:
                 for entry in expired_entries:
                     mac_norm = entry.mac_address_normalized
+                    pair_key = (mac_norm, entry.ip_address)
 
-                    # Check if this MAC still has active blocks on ANY firewall (using pre-loaded set)
-                    has_other_active = mac_norm in active_block_macs if mac_norm else False
+                    # Check if this (MAC, IP) still has active blocks on ANY firewall.
+                    has_other_active = pair_key in active_block_pairs if mac_norm else False
 
                     if has_other_active:
                         # This MAC still has other active block entries — don't unblock on firewall,
@@ -1984,8 +2003,8 @@ class TerminalService:
 
                         # Restore terminal status only now that the firewall unblock for
                         # this MAC's last active block has been confirmed successful.
-                        if mac_norm and mac_norm not in processed_macs:
-                            terminal = terminal_by_mac.get(mac_norm)
+                        if mac_norm and pair_key not in processed_pairs:
+                            terminal = terminal_by_pair.get(pair_key)
                             if terminal and terminal.status == "blocked":
                                 terminal.status = TerminalStatus.UNBLOCKED.value
                                 # Reset compliance_status to "unknown" so the next
@@ -1993,7 +2012,7 @@ class TerminalService:
                                 terminal.compliance_status = "unknown"
                                 terminal.firewall_tag = None
                                 terminal.block_state = None
-                            processed_macs.add(mac_norm)
+                            processed_pairs.add(pair_key)
                     else:
                         # Sangfor unblock failed — do NOT mark as unblocked
                         # to maintain consistency between local DB and firewall.

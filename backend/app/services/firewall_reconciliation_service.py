@@ -205,6 +205,7 @@ class FirewallReconciliationService:
                     and_(
                         Blacklist.mac_address_normalized.is_not(None),
                         Blacklist.mac_address_normalized == Terminal.mac_address_normalized,
+                        Blacklist.ip_address == Terminal.ip_address,
                     ),
                     and_(
                         Blacklist.mac_address_normalized.is_(None),
@@ -438,7 +439,8 @@ class FirewallReconciliationService:
                     term_query = None
                     if bl_entry and bl_entry.mac_address_normalized:
                         term_query = select(Terminal).where(
-                            Terminal.mac_address_normalized == bl_entry.mac_address_normalized
+                            (Terminal.mac_address_normalized == bl_entry.mac_address_normalized) &
+                            (Terminal.ip_address == ip_address)
                         )
                     else:
                         term_query = select(Terminal).where(
