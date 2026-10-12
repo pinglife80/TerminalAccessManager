@@ -3536,26 +3536,68 @@ cmd_role() {
 # Command: scheduler — Scheduler task management
 ###############################################################################
 
-# Scheduler task name mapping
-_SCHEDULER_TASKS="arp_collection,ipguard_sync,firewall_query,compliance_check,auto_unblock"
-
 # Get scheduler control key for a task
 _sched_ctrl_key() {
     local task="$1"
     echo "scheduler:ctrl:${task}"
 }
 
-# Get task display name
-_sched_display_name() {
+# Fetch the authoritative task list + real-time status from the backend endpoint.
+# Prints a JSON array of task objects on stdout, or empty string on failure.
+_scheduler_fetch_tasks() {
+    local token
+    token=$(_config_get_admin_token) 2>/dev/null || true
+    if [ -z "$token" ]; then
+        return 1
+    fi
+
+    local response
+    response=$(curl -sk -X GET "$(_api_base_url)/system/scheduler/tasks" \
+        -H "Authorization: Bearer ${token}" 2>/dev/null)
+
+    echo "$response" | python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    print(json.dumps(data.get('tasks', [])))
+except Exception:
+    pass
+"
+}
+
+# Validate a task name against the backend registry and print its display name.
+# Exit 0 + print display name if valid; exit 1 if unknown.
+_scheduler_validate_task() {
     local task="$1"
+    local tasks_json
+    tasks_json=$(_scheduler_fetch_tasks) 2>/dev/null || true
+    if [ -n "$tasks_json" ] && [ "$tasks_json" != "null" ] && [ "$tasks_json" != "" ]; then
+        local display
+        display=$(echo "$tasks_json" | python3 -c "
+import sys, json
+name = sys.argv[1]
+for t in json.load(sys.stdin):
+    if t.get('name') == name:
+        print(t.get('display_name', name))
+        break
+" "$task" 2>/dev/null)
+        if [ -n "$display" ]; then
+            echo "$display"
+            return 0
+        fi
+    fi
+    # Offline fallback to the canonical task names (authoritative: scheduler_registry.py)
     case "$task" in
-        arp_collection)    echo "ARP Data Collection" ;;
-        ipguard_sync)      echo "Compliance Baseline Sync" ;;
-        firewall_query)    echo "Firewall Blacklist Query" ;;
-        compliance_check)  echo "Compliance Check" ;;
-        auto_unblock)      echo "Auto Unblock" ;;
-        *)                 echo "$task" ;;
+        firewall_query)          echo "Blacklist Expiry Cleanup" ; return 0 ;;
+        arp_collection)          echo "ARP Data Collection"     ; return 0 ;;
+        ipguard_sync)            echo "Compliance Baseline Sync"; return 0 ;;
+        compliance_check)        echo "Compliance Check"        ; return 0 ;;
+        auto_unblock)            echo "Auto Unblock"            ; return 0 ;;
+        log_cleanup)             echo "Log Cleanup"             ; return 0 ;;
+        firewall_reconciliation) echo "Firewall Reconciliation" ; return 0 ;;
+        backup)                  echo "Scheduled Backup"        ; return 0 ;;
     esac
+    return 1
 }
 
 cmd_scheduler() {
@@ -3573,115 +3615,101 @@ cmd_scheduler() {
             log_step "Scheduler Task Status"
             echo ""
 
-            # Get intervals from config API
-            local token
-            token=$(_config_get_admin_token) 2>/dev/null || true
+            local tasks_json
+            tasks_json=$(_scheduler_fetch_tasks) 2>/dev/null || true
 
-            local intervals_response
-            intervals_response=$(curl -sk -X GET "$(_api_base_url)/settings/" \
-                -H "Authorization: Bearer ${token}" 2>/dev/null)
+            if [ -z "$tasks_json" ] || [ "$tasks_json" = "null" ]; then
+                log_error "Unable to fetch scheduler tasks from backend"
+                log_error "The backend may not support /system/scheduler/tasks — please upgrade first: ./manage.sh upgrade"
+                return 1
+            fi
 
-            # Display each task
             echo -e "${BOLD}Task                          Interval    Status${NC}"
             echo -e "${DIM}─────────────────────────────────────────────────${NC}"
 
-            for task in $(echo "$_SCHEDULER_TASKS" | tr ',' ' '); do
-                local display_name
-                display_name=$(_sched_display_name "$task")
-
-                # Get interval from config
-                local config_key="scheduler_${task}_interval"
-                local interval_val
-                interval_val=$(echo "$intervals_response" | python3 -c "
+            echo "$tasks_json" | python3 -c "
 import sys, json
-try:
-    data = json.load(sys.stdin)
-    if isinstance(data, dict):
-        for cat, items in data.items():
-            if isinstance(items, dict) and '${config_key}' in items:
-                print(items['${config_key}'])
-                break
-        else:
-            print('?')
+GREEN='\033[92m'; YELLOW='\033[93m'; RED='\033[91m'; CYAN='\033[96m'; NC='\033[0m'
+for t in json.load(sys.stdin):
+    display = t.get('display_name', t.get('name', ''))
+    interval = t.get('interval_seconds', 0) or 0
+    paused = t.get('paused', False)
+    executing = t.get('executing', False)
+    alive = t.get('alive', False)
+    if interval >= 3600:
+        iv = f'{interval // 3600}h'
+    elif interval >= 60:
+        iv = f'{interval // 60}m'
     else:
-        print('?')
-except:
-    print('?')
-" 2>/dev/null || echo "?")
-
-                # Format interval
-                local interval_display
-                if [ "$interval_val" != "?" ] && [ "$interval_val" -eq "$interval_val" ] 2>/dev/null; then
-                    if [ "$interval_val" -ge 3600 ]; then
-                        interval_display="$((interval_val / 3600))h"
-                    elif [ "$interval_val" -ge 60 ]; then
-                        interval_display="$((interval_val / 60))m"
-                    else
-                        interval_display="${interval_val}s"
-                    fi
-                else
-                    interval_display="${interval_val}"
-                fi
-
-                # Check pause state from Redis
-                local ctrl_key
-                ctrl_key=$(_sched_ctrl_key "$task")
-                local is_paused
-                is_paused=$(dc exec -T redis env REDISCLI_AUTH="${redis_pass}" redis-cli GET "$ctrl_key" 2>/dev/null || echo "")
-
-                local status_display
-                if [ "$is_paused" = "paused" ]; then
-                    status_display="${YELLOW}PAUSED${NC}"
-                else
-                    status_display="${GREEN}RUNNING${NC}"
-                fi
-
-                printf "  %-28s %-11s " "$display_name" "$interval_display"
-                echo -e "$status_display"
-            done
-
+        iv = f'{interval}s'
+    if paused:
+        st = YELLOW + 'PAUSED' + NC
+    elif not alive:
+        st = RED + 'DEAD' + NC
+    elif executing:
+        st = CYAN + 'EXECUTING' + NC
+    else:
+        st = GREEN + 'RUNNING' + NC
+    print(f'  {display:28s} {iv:10s} {st}')
+"
             echo ""
             echo -e "${DIM}Pause:   ./manage.sh scheduler pause <task>${NC}"
             echo -e "${DIM}Resume:  ./manage.sh scheduler resume <task>${NC}"
             echo -e "${DIM}Trigger: ./manage.sh scheduler trigger <task>${NC}"
             echo ""
-            echo -e "${DIM}Task names: arp_collection, ipguard_sync, firewall_query, compliance_check, auto_unblock${NC}"
+            echo -e "${DIM}Task names: firewall_query, arp_collection, ipguard_sync, compliance_check, auto_unblock, log_cleanup, firewall_reconciliation, backup${NC}"
             echo ""
             ;;
         pause)
             local task="${1:-}"
             if [ -z "$task" ]; then
                 log_error "Usage: ./manage.sh scheduler pause <task>"
-                echo -e "  Tasks: arp_collection, ipguard_sync, firewall_query, compliance_check, auto_unblock"
+                echo -e "  Tasks: firewall_query, arp_collection, ipguard_sync, compliance_check, auto_unblock, log_cleanup, firewall_reconciliation, backup"
                 return 1
             fi
+            local display_name
+            display_name=$(_scheduler_validate_task "$task") || {
+                log_error "Unknown task: ${task}"
+                echo -e "  Tasks: firewall_query, arp_collection, ipguard_sync, compliance_check, auto_unblock, log_cleanup, firewall_reconciliation, backup"
+                return 1
+            }
             local ctrl_key
             ctrl_key=$(_sched_ctrl_key "$task")
             dc exec -T redis env REDISCLI_AUTH="${redis_pass}" redis-cli SET "$ctrl_key" "paused" 2>/dev/null >/dev/null
-            log_success "Paused: $(_sched_display_name "$task")"
+            log_success "Paused: ${display_name}"
             log_info "Resume with: ./manage.sh scheduler resume ${task}"
             ;;
         resume)
             local task="${1:-}"
             if [ -z "$task" ]; then
                 log_error "Usage: ./manage.sh scheduler resume <task>"
-                echo -e "  Tasks: arp_collection, ipguard_sync, firewall_query, compliance_check, auto_unblock"
+                echo -e "  Tasks: firewall_query, arp_collection, ipguard_sync, compliance_check, auto_unblock, log_cleanup, firewall_reconciliation, backup"
                 return 1
             fi
+            local display_name
+            display_name=$(_scheduler_validate_task "$task") || {
+                log_error "Unknown task: ${task}"
+                echo -e "  Tasks: firewall_query, arp_collection, ipguard_sync, compliance_check, auto_unblock, log_cleanup, firewall_reconciliation, backup"
+                return 1
+            }
             local ctrl_key
             ctrl_key=$(_sched_ctrl_key "$task")
             dc exec -T redis env REDISCLI_AUTH="${redis_pass}" redis-cli DEL "$ctrl_key" 2>/dev/null >/dev/null
-            log_success "Resumed: $(_sched_display_name "$task")"
+            log_success "Resumed: ${display_name}"
             ;;
         trigger)
             local task="${1:-}"
             if [ -z "$task" ]; then
                 log_error "Usage: ./manage.sh scheduler trigger <task>"
-                echo -e "  Tasks: arp_collection, ipguard_sync, firewall_query, compliance_check, auto_unblock"
+                echo -e "  Tasks: firewall_query, arp_collection, ipguard_sync, compliance_check, auto_unblock, log_cleanup, firewall_reconciliation, backup"
                 return 1
             fi
             local display_name
-            display_name=$(_sched_display_name "$task")
+            display_name=$(_scheduler_validate_task "$task") || {
+                log_error "Unknown task: ${task}"
+                echo -e "  Tasks: firewall_query, arp_collection, ipguard_sync, compliance_check, auto_unblock, log_cleanup, firewall_reconciliation, backup"
+                return 1
+            }
             log_info "Triggering: ${display_name}..."
 
             # Trigger via backend CLI
@@ -3699,49 +3727,36 @@ except:
             fi
             ;;
         intervals)
-            log_step "Scheduler Intervals (from config)"
+            log_step "Scheduler Intervals"
             echo ""
 
-            local token
-            token=$(_config_get_admin_token) 2>/dev/null || true
+            local tasks_json
+            tasks_json=$(_scheduler_fetch_tasks) 2>/dev/null || true
 
-            local response
-            response=$(curl -sk -X GET "$(_api_base_url)/settings/" \
-                -H "Authorization: Bearer ${token}" 2>/dev/null)
+            if [ -z "$tasks_json" ] || [ "$tasks_json" = "null" ]; then
+                log_error "Unable to fetch scheduler tasks from backend"
+                log_error "The backend may not support /system/scheduler/tasks — please upgrade first: ./manage.sh upgrade"
+                return 1
+            fi
 
-            echo "$response" | python3 -c "
+            echo "$tasks_json" | python3 -c "
 import sys, json
-try:
-    data = json.load(sys.stdin)
-    if isinstance(data, dict) and 'scheduler' in data:
-        sched = data['scheduler']
-        task_names = {
-            'scheduler_arp_collection_interval': 'ARP Data Collection',
-            'scheduler_ipguard_sync_interval': 'Compliance Baseline Sync',
-            'scheduler_firewall_query_interval': 'Firewall Blacklist Query',
-            'scheduler_compliance_check_interval': 'Compliance Check',
-            'scheduler_auto_unblock_interval': 'Auto Unblock',
-        }
-        for key, label in sorted(task_names.items()):
-            val = sched.get(key, '?')
-            if isinstance(val, int):
-                if val >= 3600:
-                    display = f'{val}s ({val // 3600}h)'
-                elif val >= 60:
-                    display = f'{val}s ({val // 60}m)'
-                else:
-                    display = f'{val}s'
-            else:
-                display = str(val)
-            print(f'  {label:28s} {display}')
-        print()
-        print('  Modify: ./manage.sh config set <key> <seconds>')
-        print('  Range:  30 - 86400 (30s - 1 day)')
+for t in json.load(sys.stdin):
+    display = t.get('display_name', t.get('name', ''))
+    interval = t.get('interval_seconds', 0) or 0
+    key = t.get('interval_key')
+    if interval >= 3600:
+        iv = f'{interval}s ({interval // 3600}h)'
+    elif interval >= 60:
+        iv = f'{interval}s ({interval // 60}m)'
     else:
-        print('  (scheduler config not found)')
-except Exception as e:
-    print(f'  (error: {e})')
-" 2>/dev/null
+        iv = f'{interval}s'
+    configurable = '  (configurable)' if key else '  (fixed)'
+    print(f'  {display:28s} {iv:16s}{configurable}')
+print()
+print('  Configurable intervals: ./manage.sh config set <key> <seconds>')
+print('  Range: 30 - 86400 (30s - 1 day)')
+"
             echo ""
             ;;
         *)
@@ -3755,7 +3770,7 @@ except Exception as e:
             echo -e "  ${CYAN}trigger${NC} <task>      Manually trigger a task"
             echo -e "  ${CYAN}intervals${NC}           Show configured intervals"
             echo ""
-            echo -e "  ${BOLD}Tasks:${NC} arp_collection, ipguard_sync, firewall_query, compliance_check, auto_unblock"
+            echo -e "  ${BOLD}Tasks:${NC} firewall_query, arp_collection, ipguard_sync, compliance_check, auto_unblock, log_cleanup, firewall_reconciliation, backup"
             ;;
     esac
 }
