@@ -125,3 +125,68 @@ async def trigger_firewall_reconciliation(
         "message": "Firewall reconciliation completed",
         **results,
     }
+
+
+@router.get("/scheduler/tasks", response_model=dict)
+async def get_scheduler_tasks(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Get the authoritative scheduler task list with real-time status."""
+    from app.core.scheduler_registry import SCHEDULER_TASKS
+    from app.core.security import get_redis_client
+    from app.services.config_service import ConfigService
+
+    redis_client = None
+    try:
+        redis_client = await get_redis_client()
+    except Exception:
+        redis_client = None
+
+    config_service = ConfigService(db)
+
+    tasks = []
+    for task in SCHEDULER_TASKS:
+        name = task["name"]
+        interval_key = task["interval_key"]
+        default_interval = task["default_interval"]
+
+        # Resolve interval (configurable tasks clamp to 30-86400s, fixed otherwise)
+        interval_seconds = default_interval
+        if interval_key is not None:
+            try:
+                value = await config_service.get_value(interval_key)
+                if value is not None:
+                    interval_seconds = max(30, min(86400, int(value)))
+            except Exception:
+                interval_seconds = default_interval
+
+        paused = False
+        executing = False
+        alive = False
+        last_heartbeat_at = None
+        if redis_client is not None:
+            try:
+                ctrl_val = await redis_client.get(f"scheduler:ctrl:{name}")
+                paused = ctrl_val == b"paused" or ctrl_val == "paused"
+                lock_val = await redis_client.get(f"scheduler:lock:{name}")
+                executing = lock_val is not None
+                hb_val = await redis_client.get(f"scheduler:heartbeat:{name}")
+                if hb_val is not None:
+                    alive = True
+                    last_heartbeat_at = hb_val.decode() if isinstance(hb_val, bytes) else str(hb_val)
+            except Exception:
+                pass
+
+        tasks.append({
+            "name": name,
+            "display_name": task["display_name"],
+            "interval_seconds": interval_seconds,
+            "interval_key": interval_key,
+            "paused": paused,
+            "executing": executing,
+            "alive": alive,
+            "last_heartbeat_at": last_heartbeat_at,
+        })
+
+    return {"tasks": tasks}
