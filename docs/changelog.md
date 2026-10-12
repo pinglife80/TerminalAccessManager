@@ -1,6 +1,6 @@
 # 更新日志
 
-> 文档版本：v3.20.0  更新日期：2026-09-04
+> 文档版本：v3.21.0  更新日期：2026-10-12
 
 本文件记录 TerminalAccessManager 的所有重要变更。
 
@@ -8,6 +8,22 @@
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ***
+
+## [3.21.0] - 2026-10-12
+
+### 新增
+
+- **调度器可观测性**：新增任务注册表 `scheduler_registry.py`（8 个后台任务唯一权威源）与 `GET /system/scheduler/tasks` 端点，返回每个任务真实状态（paused/executing/alive/interval/last_heartbeat_at）；8 个后台任务每轮循环写 Redis 心跳键 `scheduler:heartbeat:{task}`（任务启动即写，重启后立即显示 RUNNING），任务静默死亡时键过期、状态明确显示 DEAD
+  - 关联文件：`core/scheduler_registry.py`、`main.py`、`endpoints/system.py`
+- **调度命令动态化**：`manage.sh scheduler status/intervals/pause/resume/trigger` 改由 `GET /system/scheduler/tasks` 动态拉取，告别硬编码的 5 任务假清单
+  - 关联文件：`manage.sh`
+- **调度触发命令补全**：`cli.py scheduler trigger` 由 5 任务扩展到 8 任务（新增 `log_cleanup`/`firewall_reconciliation`/`backup` 触发分支）
+  - 关联文件：`cli.py`
+
+### 修复
+
+- **`firewall_query` 触发语义修正**：`cli.py scheduler trigger firewall_query` 原为「查询防火墙 blocked IP」，现改为真正的「黑名单过期清理」`cleanup_expired_blacklist`，与后台任务实际职责一致
+  - 关联文件：`cli.py`
 
 ## [3.20.0] - 2026-09-04
 
