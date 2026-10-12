@@ -1723,26 +1723,56 @@ async def _scheduler_trigger(args):
 
         elif task == "firewall_query":
             service = TerminalService(db)
-            sources = (await db.execute(
-                select(DataSource).where(DataSource.type == "sangfor", DataSource.enabled == True)
-            )).scalars().all()
-            if not sources:
-                print(_yellow("No enabled firewall data sources found"))
-                return
-            for source in sources:
-                print(f"  Querying firewall {source.tag}...")
-                sangfor = await service._get_sangfor_service_by_tag(source.tag)
-                if sangfor:
-                    try:
-                        result = await sangfor.get_blocked_ips()
-                        blocked_count = len(result.get("data", {}).get("items", [])) if isinstance(result, dict) else 0
-                        print(f"  {source.tag}: found {blocked_count} blocked IPs")
-                        await sangfor.close()
-                    except Exception as e:
-                        print(f"  {source.tag}: error - {str(e)}")
-                else:
-                    print(f"  {source.tag}: not configured or disabled")
-            print(_green(f"Firewall query completed for {len(sources)} firewall(s)"))
+            print("  Running expired blacklist cleanup...")
+            count = await service.cleanup_expired_blacklist()
+            print(f"  Cleaned up {count} expired blacklist entries")
+            print(_green("Expired blacklist cleanup completed"))
+
+        elif task == "log_cleanup":
+            from sqlalchemy import delete
+            from app.models.log import AuditLog
+            from app.models.notification import NotificationLog
+            from app.services.config_service import ConfigService
+
+            config_service = ConfigService(db)
+            retention_days = await config_service.get_value("audit_log_retention_days")
+            if retention_days is None:
+                retention_days = 90
+            else:
+                retention_days = int(retention_days)
+
+            cutoff_time = datetime.now(timezone.utc) - timedelta(days=retention_days)
+
+            audit_stmt = delete(AuditLog).where(AuditLog.timestamp < cutoff_time)
+            audit_result = await db.execute(audit_stmt)
+            audit_deleted = audit_result.rowcount or 0
+
+            notif_stmt = delete(NotificationLog).where(
+                NotificationLog.sent_at < cutoff_time,
+                NotificationLog.archived == True
+            )
+            notif_result = await db.execute(notif_stmt)
+            notif_deleted = notif_result.rowcount or 0
+
+            await db.commit()
+            print(_green(f"Log cleanup completed: {audit_deleted} audit logs, {notif_deleted} notification logs deleted (retention {retention_days}d)"))
+
+        elif task == "firewall_reconciliation":
+            from app.services.firewall_reconciliation_service import FirewallReconciliationService
+            recon_svc = FirewallReconciliationService(db)
+            results = await recon_svc.reconcile()
+            from app.main import _cache_reconcile_result
+            await _cache_reconcile_result(results)
+            print(_green(
+                f"Firewall reconciliation completed: created_in_db={results.get('created_in_db', 0)}, "
+                f"reblocked_on_firewall={results.get('reblocked_on_firewall', 0)}"
+            ))
+
+        elif task == "backup":
+            from app.services.backup_service import BackupService
+            service = BackupService(db=db)
+            job = await service.run_backup("full")
+            print(_green(f"Scheduled backup completed: status={job.status}, file={job.file_path or 'N/A'}"))
 
         elif task == "compliance_check":
             service = ComplianceService(db)
@@ -1895,7 +1925,7 @@ async def _scheduler_trigger(args):
 
         else:
             print(_red(f"Unknown task: {task}"))
-            print("Valid tasks: arp_collection, ipguard_sync, firewall_query, compliance_check, auto_unblock")
+            print("Valid tasks: firewall_query, arp_collection, ipguard_sync, compliance_check, auto_unblock, log_cleanup, firewall_reconciliation, backup")
 
 
 def cmd_scheduler_trigger(args):
