@@ -1,6 +1,6 @@
 # TerminalAccessManager 数据库设计文档
 
-> 文档版本：v3.12.1  更新日期：2026-08-20
+> 文档版本：v3.21.2  更新日期：2026-10-13
 
 ## 1. 概述
 
@@ -1060,6 +1060,12 @@ docker-compose.yml 中 PostgreSQL 的 `command` 参数列表如下：
 | CREATE INDEX | blacklist | `idx_blacklist_mac_normalized` |
 
 ### Alembic 配置说明
+
+**schema 归属（v3.21.2 起）：**
+
+- PostgreSQL（生产）环境 schema 统一由 Alembic 管理：`init_db()` 在生产下不再 `create_all`，而是以子进程幂等执行 `alembic upgrade head`（已到 head 时 no-op）。
+- `Base.metadata.create_all` 仅保留给 SQLite（开发/测试，含 pytest 与 `conftest.py`）。
+- `manage.sh upgrade` / `migrate` 在执行迁移前会做漂移检测：当检测到「核心表已存在但 `alembic_version` 为空/缺失」（历史 `create_all` 建库未写版本）时，会拦截并给出 `alembic stamp head` 指引，避免重放迁移触发 `DuplicateTableError`。
 
 **env.py 驱动兼容性：**
 

@@ -1894,6 +1894,36 @@ cmd_rebuild() {
 }
 
 ###############################################################################
+# Helper: detect Alembic version-tracking drift before running migrations
+###############################################################################
+# Returns 0 (drift detected) when core schema already exists but
+# alembic_version is empty/missing — the classic "create_all bootstrap without
+# Alembic stamping" state that makes `alembic upgrade head` replay from base
+# and fail with DuplicateTableError.
+_precheck_alembic_drift() {
+    local db_user db_name
+    db_user=$(get_env "DB_USER" || echo "tam_admin")
+    db_name=$(get_env "DB_NAME" || echo "tam_db")
+
+    log_info "Drift check: querying alembic_version and core schema presence (db=${db_name}, user=${db_user})"
+
+    local version_cnt core_cnt
+    version_cnt=$(dc exec -T postgres psql -U "${db_user}" -d "${db_name}" -t -A -c \
+        "SELECT COUNT(*) FROM alembic_version;" 2>/dev/null | tr -d '[:space:]')
+    core_cnt=$(dc exec -T postgres psql -U "${db_user}" -d "${db_name}" -t -A -c \
+        "SELECT COUNT(*) FROM information_schema.tables WHERE table_name='data_sources';" 2>/dev/null | tr -d '[:space:]')
+
+    log_info "Drift check result: alembic_version rows='${version_cnt:-0}', data_sources tables='${core_cnt:-0}'"
+
+    if [[ "$core_cnt" == "1" ]] && [[ -z "$version_cnt" || "$version_cnt" == "0" ]]; then
+        log_warn "Drift DETECTED: core schema exists (data_sources) but alembic_version is empty/missing"
+        return 0
+    fi
+    log_info "Drift check passed: schema and alembic_version are in sync (no drift)"
+    return 1
+}
+
+###############################################################################
 # Command: upgrade — Pull remote code and upgrade with safety checks
 ###############################################################################
 cmd_upgrade() {
@@ -2094,6 +2124,17 @@ cmd_upgrade() {
 
     # Run migrations (unless skipped)
     if ! ${skip_migrate}; then
+        if _precheck_alembic_drift; then
+            log_error "Detected database drift: schema already exists but 'alembic_version' is empty/missing."
+            log_error "This is caused by a prior create_all bootstrap without Alembic version tracking."
+            echo ""
+            echo -e "  ${BOLD}Recommended fix (backup first, then stamp):${NC}"
+            echo -e "    1. ./manage.sh backup"
+            echo -e "    2. docker compose exec backend python -m alembic stamp head"
+            echo -e "    3. Verify: docker compose exec backend python -m alembic current"
+            echo ""
+            exit 1
+        fi
         log_info "Running database migrations..."
         if dc exec -T backend python -m alembic upgrade head 2>&1; then
             log_success "Database migrations completed"
@@ -2207,6 +2248,17 @@ cmd_migrate() {
     echo ""
 
     # Run migration
+    if _precheck_alembic_drift; then
+        log_error "Detected database drift: schema already exists but 'alembic_version' is empty/missing."
+        log_error "This is caused by a prior create_all bootstrap without Alembic version tracking."
+        echo ""
+        echo -e "  ${BOLD}Recommended fix (backup first, then stamp):${NC}"
+        echo -e "    1. ./manage.sh backup"
+        echo -e "    2. docker compose exec backend python -m alembic stamp head"
+        echo -e "    3. Verify: docker compose exec backend python -m alembic current"
+        echo ""
+        exit 1
+    fi
     log_info "Running alembic upgrade ${revision}..."
     if dc exec -T backend python -m alembic upgrade "$revision" 2>&1; then
         log_success "Migration completed"
