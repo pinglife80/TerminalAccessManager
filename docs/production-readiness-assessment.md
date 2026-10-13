@@ -12,6 +12,7 @@
 
 | 文档版本 | 更新日期 | 关联版本 | 更新内容 |
 |---------|---------|---------|---------|
+| v3.21.5 | 2026-10-13 | v3.21.5 | upgrade 后版本号显示上一个版本修复（manage.sh `dc()` 由导出启动时缓存的 VERSION 变量改为每次实时读取磁盘 VERSION 文件） |
 | v3.21.4 | 2026-10-13 | v3.21.4 | 版本号显示异常修复（_load_version 环境变量空值兜底、backend 新增 VERSION 文件挂载）；前端 build-time（branding.ts `|| '0.0.0'`）与运行时（SystemSettings `|| '-'`）版本展示空值兜底 |
 | v3.21.3 | 2026-10-13 | v3.21.3 | 迁移漂移检测盲区修复（init_db 新增兜底漂移预检测、覆盖旧版 manage.sh 首次升级；manage.sh 漂移检测提前到 git pull/rebuild 之前）；get_env 回退语义修复（值非空返回 0）；新增 schema 漂移对比脚本 scripts/schema_compare.py |
 | v3.21.2 | 2026-10-13 | v3.21.2 | 数据库迁移双轨收敛（init_db 生产不再 create_all、改子进程幂等执行 alembic upgrade head；manage.sh upgrade/migrate 迁移前漂移检测拦截 stamp head 指引；关键分支详细日志） |

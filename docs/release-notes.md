@@ -1,12 +1,48 @@
 # 版本跟踪记录
 
-> 文档版本：v3.21.4 | 更新日期：2026-10-13
+> 文档版本：v3.21.5 | 更新日期：2026-10-13
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
 
 ---
+
+## [v3.21.5] - 2026-10-13
+
+### upgrade 后版本号显示上一个版本的修复（Patch 版本）
+
+#### 背景
+
+生产环境执行 `./manage.sh upgrade` 后，Web 端版本号显示的总是升级前的上一个版本（如升级到 3.21.4 但仍显示 3.21.3）。根因在 `manage.sh`：脚本启动时（第 73-79 行）就把 `VERSION` 文件内容读入内存变量 `VERSION`；`cmd_upgrade` 内部执行 `git pull`/`checkout` 更新磁盘代码（含新的 `VERSION` 文件）后，该变量并未被重新读取；随后 `dc() up -d --build` 通过 `export VERSION="${VERSION}"` 把「启动时缓存的旧版本号」注入 docker-compose，容器拿到旧的环境变量 `VERSION`。而 v3.21.4 的 `_load_version()` 在环境变量非空时直接采用环境变量值，文件兜底不会触发，于是新版代码显示出了旧版本号。本版本将 `dc()` 改为每次调用实时读取磁盘 `VERSION` 文件，从根本上消除这一缓存。
+
+#### 主要变更
+
+| 变更项 | 说明 |
+|--------|------|
+| `dc()` 实时读 VERSION | 由「导出启动时缓存的 `VERSION` 变量」改为「每次实时 `cat SCRIPT_DIR/VERSION`」，空值时回退顶层缓存变量 |
+
+#### 升级步骤（推荐：一键升级）
+
+```bash
+git checkout main
+git pull origin main
+./manage.sh upgrade
+```
+
+#### 升级注意事项
+
+- 本次无新增 Alembic 迁移文件。
+- 升级后 Web 端版本号应立即显示为新版本；若仍显示旧版本，请执行 `./manage.sh update` 重建一次，并核对容器 `docker compose exec backend printenv VERSION` 与 `/health` 返回的 `version` 字段。
+
+#### 文件变更清单
+
+| 文件 | 变更类型 | 说明 |
+|------|---------|------|
+| `manage.sh` | 编辑 | `dc()` 改为实时读取 `VERSION` 文件 |
+| `docs/changelog.md` | 编辑 | 新增 v3.21.5 条目 |
+| `docs/release-notes.md` | 编辑 | 新增 v3.21.5 段 |
+| `docs/production-readiness-assessment.md` | 编辑 | 文档版本跟踪表新增 v3.21.5 |
 
 ## [v3.21.4] - 2026-10-13
 
