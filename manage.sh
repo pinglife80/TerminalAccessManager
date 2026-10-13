@@ -270,7 +270,9 @@ release_lock() {
 
 # Run docker compose with .env loaded and VERSION injected from VERSION file
 dc() {
-    (export VERSION="${VERSION}" && docker compose -p "${COMPOSE_PROJECT_NAME}" --env-file "${ENV_FILE}" -f ${SCRIPT_DIR}/docker-compose.yml "$@")
+    local _ver
+    _ver=$(cat "${SCRIPT_DIR}/VERSION" 2>/dev/null | tr -d '[:space:]')
+    (export VERSION="${_ver:-${VERSION}}" && docker compose -p "${COMPOSE_PROJECT_NAME}" --env-file "${ENV_FILE}" -f ${SCRIPT_DIR}/docker-compose.yml "$@")
 }
 
 # Ensure .env file exists and load environment variables (idempotent — never overwrites existing)
