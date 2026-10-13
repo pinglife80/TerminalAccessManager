@@ -1,12 +1,54 @@
 # 版本跟踪记录
 
-> 文档版本：v3.21.3 | 更新日期：2026-10-13
+> 文档版本：v3.21.4 | 更新日期：2026-10-13
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
 
 ---
+
+## [v3.21.4] - 2026-10-13
+
+### 版本号显示异常修复与空值兜底（Patch 版本）
+
+#### 背景
+
+更新 v3.21.3 后 Web 端版本号显示空白。定位根因为后端「版本号唯一读取点」`config.py _load_version()` 采用 `if "VERSION" in os.environ` 判断，环境变量键存在但值为空时直接返回空字符串；而 backend 容器 `VERSION` 环境变量在 compose 插值中可能渲染为空，导致 `/health` 返回 `version:""`。本版本将读取改为「环境变量非空才优先，否则 fallback 读容器内 `VERSION` 文件」，并为前端 build-time 与运行时的版本展示补充空值兜底。因均为缺陷修复、无新增功能、无数据库迁移，故以 Patch 发布。
+
+#### 主要变更
+
+| 变更项 | 说明 |
+|--------|------|
+| `_load_version()` 空值兜底 | 由键存在判断改为 `os.environ.get("VERSION")` 非空判断，空值则读容器内 `VERSION` 文件（`backend/VERSION`） |
+| VERSION 挂载 | `docker-compose.yml` backend 服务新增 `./VERSION:/app/VERSION:ro`，使 fallback 文件读取可用 |
+| 前端 build-time 版本兜底 | `branding.ts` version 字段在 `VITE_APP_VERSION` 为空时回退 `0.0.0` |
+| 前端运行时版本兜底 | `SystemSettings.tsx` 版本项在 `systemConfig.version` 为空时回退 `-` |
+
+#### 升级步骤（推荐：一键升级）
+
+```bash
+git checkout main
+git pull origin main
+./manage.sh upgrade
+```
+
+#### 升级注意事项
+
+- 本次无新增 Alembic 迁移文件。
+- 前端改动需重新构建镜像后生效（`./manage.sh update` 会执行本地重建）。
+
+#### 文件变更清单
+
+| 文件 | 变更类型 | 说明 |
+|------|---------|------|
+| `backend/app/core/config.py` | 编辑 | `_load_version()` 空值非空判断 + 文件兜底 |
+| `docker-compose.yml` | 编辑 | backend 新增 `./VERSION:/app/VERSION:ro` 挂载 |
+| `frontend/src/config/branding.ts` | 编辑 | build-time 版本空值兜底 |
+| `frontend/src/pages/SystemSettings.tsx` | 编辑 | 版本显示空值兜底 |
+| `docs/changelog.md` | 编辑 | 新增 v3.21.4 条目 |
+| `docs/release-notes.md` | 编辑 | 新增 v3.21.4 段 |
+| `docs/production-readiness-assessment.md` | 编辑 | 文档版本跟踪表新增 v3.21.4 |
 
 ## [v3.21.3] - 2026-10-13
 

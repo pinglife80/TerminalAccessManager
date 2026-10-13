@@ -1,6 +1,6 @@
 # 更新日志
 
-> 文档版本：v3.21.3  更新日期：2026-10-13
+> 文档版本：v3.21.4  更新日期：2026-10-13
 
 本文件记录 TerminalAccessManager 的所有重要变更。
 
@@ -8,6 +8,15 @@
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ***
+
+## [3.21.4] - 2026-10-13
+
+### 修复
+
+- **版本号显示异常**：backend `_load_version()` 原用 `if "VERSION" in os.environ`（键存在即返回，空值不兜底），当容器内 `VERSION` 环境变量为空时 `/health` 返回 `version:""`，导致 Web 端版本号空白。改为 `os.environ.get("VERSION")` 非空判断，空值则 fallback 读容器内 `VERSION` 文件（由新增的 `./VERSION:/app/VERSION:ro` 挂载提供）
+  - 关联文件：`core/config.py`、`docker-compose.yml`
+- **前端版本号空值兜底**：`branding.ts` build-time 版本在 `VITE_APP_VERSION` 为空时回退 `0.0.0`；`SystemSettings.tsx` 版本显示在 `systemConfig.version` 为空时回退 `-`，杜绝未来同类空值问题
+  - 关联文件：`config/branding.ts`、`pages/SystemSettings.tsx`
 
 ## [3.21.3] - 2026-10-13
 
