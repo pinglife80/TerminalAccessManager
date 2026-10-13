@@ -255,6 +255,7 @@ class ConfigService:
     async def seed_defaults(self) -> int:
         """Seed default configs into the database. Idempotent - skips existing keys."""
         count = 0
+        skipped = 0
         for cfg in self.DEFAULT_CONFIGS:
             stmt = select(SystemConfig).where(SystemConfig.key == cfg["key"])
             result = await self.db.execute(stmt)
@@ -270,10 +271,16 @@ class ConfigService:
                 self.db.add(entry)
                 count += 1
                 logger.info(f"Seeded config: {cfg['key']} = {cfg['value']}")
+            else:
+                skipped += 1
 
         if count > 0:
             await self.db.commit()
-            logger.info(f"Seeded {count} default configs")
+
+        logger.info(
+            f"seed_defaults: inserted {count} new config key(s), "
+            f"skipped {skipped} existing key(s) (not overwritten)"
+        )
         return count
 
     def _get_env_default(self, key: str) -> str | None:

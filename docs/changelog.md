@@ -1,6 +1,6 @@
 # 更新日志
 
-> 文档版本：v3.21.0  更新日期：2026-10-12
+> 文档版本：v3.21.1  更新日期：2026-10-13
 
 本文件记录 TerminalAccessManager 的所有重要变更。
 
@@ -8,6 +8,19 @@
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ***
+
+## [3.21.1] - 2026-10-13
+
+### 修复
+
+- **通知模板自定义内容保存后不生效**：5 个通知渠道 `send()` 原以 `if subject and message` 判断是否使用自定义模板，但非 email 渠道渲染时 `subject` 为空，导致用户自定义 body 被丢弃、回退内置默认格式化。改为 `if message` 判断；feishu/wecom/dingtalk 在 subject 非空时拼接 `subject\nmessage`；email 渠道 subject 为空时以事件名生成兜底标题 `[TAM] {事件名}`；webhook 区分「测试发送」（event is None）与「真实通知」路径，避免真实通知误入测试分支
+  - 关联文件：`services/notification_channels/{webhook,feishu,wecom,dingtalk,email}_channel.py`
+- **通知渠道事件订阅重启被覆盖**：`ensure_default_subscriptions()` 原无条件把全部默认事件补回所有已启用渠道，导致用户取消勾选的事件在重启后被重新加回。改为仅对 `events` 为空的渠道回填默认全集，已显式勾选部分事件的渠道保持不动，并逐渠道打印「保留/回填」日志
+  - 关联文件：`services/notification_service.py`
+- **系统配置双源读库**：`email_enabled`、`allow_registration` 原直接读 `.env`（Pydantic settings），与前端保存到 `system_config` 表的配置脱节，导致「保存后重启不生效」。改为经 `get_config_value` 读库（`.env` 兜底）
+  - 关联文件：`endpoints/system.py`、`endpoints/auth.py`
+- **启动阶段配置写入点排查日志**：`seed_defaults` 打印 inserted/skipped 统计、legacy 名称迁移打印发现行数，便于后续排查「重启后配置被覆盖」类问题
+  - 关联文件：`services/config_service.py`、`main.py`
 
 ## [3.21.0] - 2026-10-12
 

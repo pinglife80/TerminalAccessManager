@@ -190,10 +190,10 @@ class DingTalkChannel(NotificationChannelBase):
         message: str | None = None,
     ) -> dict | NotificationResult:
         """Send DingTalk notification via webhook or app mode"""
-        if subject and message:
-            text_content = f"{subject}\n{message}"
+        if message:
+            text_content = f"{subject}\n{message}" if subject else message
             if self._is_app_mode():
-                res = await self._send_app_message(subject, text_content, event)
+                res = await self._send_app_message(subject or "", text_content, event)
             else:
                 res = await self._send_webhook_text(text_content)
             return NotificationResult(
