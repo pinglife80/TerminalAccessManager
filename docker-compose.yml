@@ -150,6 +150,7 @@ services:
     volumes:
       - backend-logs:/var/log/tam
       - backend-data:/app/uploads
+      - ./VERSION:/app/VERSION:ro
     logging:
       driver: json-file
       options:
