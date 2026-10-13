@@ -178,8 +178,11 @@ class EmailChannel(NotificationChannelBase):
                 event_id=event.id if event else None,
             )
 
-        if subject and message:
+        if message:
             email_subject = subject
+            if not email_subject and event:
+                from app.services.notification_channels.event_types import EVENT_METADATA
+                email_subject = f"[TAM] {EVENT_METADATA.get(event.type, {}).get('name', event.type)}"
             body = message
         elif event:
             email_subject, body = self.format_email_content(event)

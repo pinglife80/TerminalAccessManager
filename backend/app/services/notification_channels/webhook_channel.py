@@ -93,7 +93,7 @@ class WebhookChannel(NotificationChannelBase):
         message: str | None = None,
     ) -> dict | NotificationResult:
         """Send webhook notification"""
-        if subject and message:
+        if event is None and message:
             url = self.config["url"]
             method = self.config.get("method", "POST").upper()
 
@@ -158,6 +158,11 @@ class WebhookChannel(NotificationChannelBase):
         method = self.config.get("method", "POST").upper()
 
         payload = self._build_payload(event)
+        if message:
+            # Use the custom template body instead of the built-in formatted message
+            payload["message"] = message
+            if subject:
+                payload["data"] = {**(payload.get("data") or {}), "subject": subject}
         payload_json = json.dumps(payload, ensure_ascii=False)
         headers = self._prepare_headers(payload_json)
 

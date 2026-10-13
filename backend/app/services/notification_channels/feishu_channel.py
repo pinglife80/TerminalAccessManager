@@ -204,8 +204,8 @@ class FeishuChannel(NotificationChannelBase):
         message: str | None = None,
     ) -> dict | NotificationResult:
         """Send Feishu notification via webhook or app mode"""
-        if subject and message:
-            text_content = f"{subject}\n{message}"
+        if message:
+            text_content = f"{subject}\n{message}" if subject else message
             if self._is_app_mode():
                 res = await self._send_app_text(text_content, event)
             else:
