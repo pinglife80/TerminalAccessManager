@@ -464,7 +464,13 @@ check_db_connection() {
 # Get the value of an env variable from .env
 get_env() {
     local key="$1"
-    grep "^${key}=" "${ENV_FILE}" 2>/dev/null | cut -d'=' -f2- || echo ""
+    local value
+    value=$(grep "^${key}=" "${ENV_FILE}" 2>/dev/null | cut -d'=' -f2-)
+    if [ -n "$value" ]; then
+        echo "$value"
+        return 0
+    fi
+    return 1
 }
 
 # Get configured ports from .env (with defaults)
