@@ -12,6 +12,7 @@
 
 | 文档版本 | 更新日期 | 关联版本 | 更新内容 |
 |---------|---------|---------|---------|
+| v3.21.4 | 2026-10-13 | v3.21.4 | 版本号显示异常修复（_load_version 环境变量空值兜底、backend 新增 VERSION 文件挂载）；前端 build-time（branding.ts `|| '0.0.0'`）与运行时（SystemSettings `|| '-'`）版本展示空值兜底 |
 | v3.21.3 | 2026-10-13 | v3.21.3 | 迁移漂移检测盲区修复（init_db 新增兜底漂移预检测、覆盖旧版 manage.sh 首次升级；manage.sh 漂移检测提前到 git pull/rebuild 之前）；get_env 回退语义修复（值非空返回 0）；新增 schema 漂移对比脚本 scripts/schema_compare.py |
 | v3.21.2 | 2026-10-13 | v3.21.2 | 数据库迁移双轨收敛（init_db 生产不再 create_all、改子进程幂等执行 alembic upgrade head；manage.sh upgrade/migrate 迁移前漂移检测拦截 stamp head 指引；关键分支详细日志） |
 | v3.21.1 | 2026-10-13 | v3.21.1 | 通知模板自定义内容保存后不生效修复（渠道 send() 判断由 if subject and message 改为 if message）；通知渠道事件订阅重启被默认订阅覆盖修复（ensure_default_subscriptions 仅回填 events 为空的渠道）；系统配置双源读库修复（email_enabled / allow_registration 经 get_config_value 读 system_config）；启动阶段配置写入点排查日志增强（seed_defaults 统计 / legacy 迁移发现行数 / 渠道保留回填） |

@@ -5,8 +5,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 def _load_version() -> str:
-    if "VERSION" in os.environ:
-        return os.environ["VERSION"]
+    env_version = os.environ.get("VERSION")
+    if env_version and env_version.strip():
+        return env_version.strip()
     version_file = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "VERSION")
     if os.path.exists(version_file):
         with open(version_file, "r") as f:
