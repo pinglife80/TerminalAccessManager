@@ -1,6 +1,6 @@
 # 更新日志
 
-> 文档版本：v3.21.1  更新日期：2026-10-13
+> 文档版本：v3.21.2  更新日期：2026-10-13
 
 本文件记录 TerminalAccessManager 的所有重要变更。
 
@@ -8,6 +8,13 @@
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ***
+
+## [3.21.2] - 2026-10-13
+
+### 修复
+
+- **数据库迁移双轨收敛**：`init_db()` 在 PostgreSQL 下不再 `create_all`，改以子进程幂等执行 `alembic upgrade head`（已到 head 时 no-op），仅 SQLite 保留 `create_all`；`manage.sh upgrade/migrate` 迁移前新增漂移检测，拦截「核心表已存在但 `alembic_version` 为空」的历史漂移库并给出 `stamp head` 指引，根治升级 `DuplicateTableError`
+  - 关联文件：`core/database.py`、`manage.sh`
 
 ## [3.21.1] - 2026-10-13
 
