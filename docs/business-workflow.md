@@ -1,6 +1,6 @@
 # TerminalAccessManager 业务流程文档
 
-> 文档版本：v3.20.0  更新日期：2026-09-04
+> 文档版本：v3.21.0  更新日期：2026-10-12
 >
 > 本文档详细说明 TerminalAccessManager 的核心业务流程，包括数据采集、合规判定、封锁/解封的完整生命周期。
 
@@ -568,6 +568,7 @@ class Blacklist(Base):
 - **并发控制**：每轮执行前经两层保护——
   - 暂停开关：Redis 键 `scheduler:ctrl:firewall_query` 为 `paused` 时本轮跳过（`_is_task_paused`）。
   - 分布式锁：Redis 键 `scheduler:lock:firewall_query` 以 `SET NX EX` 抢占，抢不到即跳过，避免多实例重复执行（`_acquire_task_lock`）。
+- **心跳**：每轮 `asyncio.sleep` 前写 Redis 心跳键 `scheduler:heartbeat:firewall_query`（TTL=3×interval）；清理完成后 `count=0` 时打日志心跳 `Scheduler heartbeat: firewall_query alive`、`count>0` 时打 `Cleaned up N expired blacklist entries`，使任务存活状态可观测。
 - **异常隔离**：整体 try/except，出错仅记日志 `[source=scheduler]`，不影响下一轮。
 
 > 该任务名沿用 `firewall_query` 与 `scheduler_firewall_query_interval` 配置键，但实际执行的是「黑名单过期清除」，非防火墙查询。
@@ -861,6 +862,8 @@ async def cleanup_expired_blacklist(self) -> int:
 ## 12. 后台调度任务周期汇总（v3.14 新增）
 
 后台任务全部在 `main.py` lifespan 中通过 `asyncio.create_task` 启动（见 `main.py#L763-L770`），受 Redis 分布式锁与暂停开关保护；配置类间隔经 `_get_scheduler_interval`（clamp 30–86400s）读取。
+
+> **v3.21 新增可观测性**：8 个后台任务的权威定义集中在 `app/core/scheduler_registry.py`（`SCHEDULER_TASKS`，含 `name`/`display_name`/`interval_key`/`default_interval`）；每轮循环写心跳键 `scheduler:heartbeat:{task}`（TTL=3×interval 或固定 TTL），任务静默死亡时键过期。运维侧可通过 `GET /system/scheduler/tasks` 端点或 `./manage.sh scheduler status` 实时查看每个任务的 paused/executing/alive/interval 状态。
 
 | 后台任务 | 默认周期 | 是否可配 | 配置键 / 说明 |
 |---------|---------|---------|--------------|

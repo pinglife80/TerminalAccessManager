@@ -1,12 +1,44 @@
 # 版本跟踪记录
 
-> 文档版本：v3.20.0 | 更新日期：2026-09-04
+> 文档版本：v3.21.0 | 更新日期：2026-10-12
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
 
 ---
+
+## [v3.21.0] - 2026-10-12
+
+### 调度器可观测性改造：任务注册表、心跳机制与动态状态端点（Minor 版本）
+
+#### 背景
+
+自 v3.20.0 发布以来，围绕「调度任务可观测性」开展一项工作：排查「黑名单 `Successfully Blocked` 统计断层」时发现，`cleanup_expired_blacklist` 后台任务已静默死亡近一月无人察觉——日志无任何异常、也没有任务级状态可查询。为此引入统一的调度器可观测性方案：新增任务注册表作为 8 个后台任务的唯一权威源；新增 `GET /system/scheduler/tasks` 端点实时暴露每个任务的暂停 / 执行中 / 存活 / 心跳 / 间隔状态；8 个任务每轮循环写 Redis 心跳键，任务静默死亡时键过期，即可在 `manage.sh scheduler status` 明确看到 `DEAD`。因新增面向运维的新能力（端点 + 心跳监控 + 触发命令扩展），故以 Minor 发布，且无数据库迁移。
+
+#### 主要变更
+
+| 变更项 | 说明 |
+|--------|------|
+| 任务注册表 | 新增 `scheduler_registry.py`，8 个后台任务的 `name`/`display_name`/`interval_key`/`default_interval` 唯一权威源；`firewall_query` 显示名修正为 Blacklist Expiry Cleanup |
+| 心跳机制 | 新增 `_record_task_heartbeat`；8 个任务每轮写 Redis 心跳键 `scheduler:heartbeat:{task}`（TTL=3×interval，固定间隔任务用固定 TTL），任务启动即写 |
+| 动态状态端点 | 新增 `GET /system/scheduler/tasks`，返回每个任务的 paused/executing/alive/interval/last_heartbeat_at |
+| 调度命令动态化 | `manage.sh scheduler status/intervals/pause/resume/trigger` 改由端点动态拉取，删除硬编码 5 任务清单 |
+| 触发命令补全 | `cli.py scheduler trigger` 扩展为 8 任务，新增 log_cleanup/firewall_reconciliation/backup |
+| 触发语义修正 | `firewall_query` 触发由「查询防火墙」改为真正的「过期黑名单清理」 |
+
+#### 升级步骤（推荐：一键升级）
+
+```bash
+git checkout main
+git pull origin main
+./manage.sh upgrade
+```
+
+#### 升级注意事项
+
+- 本次无数据库迁移，`./manage.sh upgrade` 会自动跳过无待执行迁移。
+- 升级后 8 个后台任务开始写心跳键；`./manage.sh scheduler status` 应立即显示 8 个任务为 RUNNING（任务启动即写心跳）。
 
 ## [v3.20.0] - 2026-09-04
 

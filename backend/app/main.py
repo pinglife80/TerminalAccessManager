@@ -82,6 +82,17 @@ async def _get_scheduler_interval(key: str, default: int) -> int:
     return default
 
 
+async def _record_task_heartbeat(task_name: str, ttl_seconds: int) -> None:
+    """Write a liveness heartbeat key to Redis (silent, non-blocking on failure)."""
+    try:
+        from app.core.security import get_redis_client
+        from datetime import datetime, UTC
+        redis_client = await get_redis_client()
+        await redis_client.setex(f"scheduler:heartbeat:{task_name}", ttl_seconds, datetime.now(UTC).isoformat())
+    except Exception:
+        pass  # Redis unavailable: silently degrade, never block the task loop
+
+
 async def _cache_reconcile_result(results: dict) -> None:
     """Cache latest firewall reconciliation result to Redis for stats display.
     Key: reconcile:latest, TTL 1 hour."""
@@ -106,6 +117,7 @@ async def cleanup_expired_blacklist():
     while True:
         interval = await _get_scheduler_interval("scheduler_firewall_query_interval", 3600)
         try:
+            await _record_task_heartbeat("firewall_query", max(300, interval * 3))
             await asyncio.sleep(interval)
             if await _is_task_paused("firewall_query"):
                 continue
@@ -118,6 +130,8 @@ async def cleanup_expired_blacklist():
                     count = await service.cleanup_expired_blacklist()
                     if count > 0:
                         logger.info(f"Cleaned up {count} expired blacklist entries [source=scheduler]")
+                    else:
+                        logger.info(f"Scheduler heartbeat: firewall_query alive (interval={interval}s) [source=scheduler]")
             finally:
                 await _release_task_lock("firewall_query")
         except Exception as e:
@@ -128,6 +142,7 @@ async def cleanup_expired_logs():
     """Background task to periodically clean up expired audit and notification logs"""
     while True:
         try:
+            await _record_task_heartbeat("log_cleanup", 172800)
             await asyncio.sleep(86400)
             if await _is_task_paused("log_cleanup"):
                 continue
@@ -176,6 +191,7 @@ async def firewall_reconciliation():
     """Background task to periodically reconcile firewall blocked IPs with database blacklist"""
     while True:
         try:
+            await _record_task_heartbeat("firewall_reconciliation", 900)
             await asyncio.sleep(300)
             if await _is_task_paused("firewall_reconciliation"):
                 continue
@@ -204,6 +220,7 @@ async def scheduled_arp_collection():
     while True:
         interval = await _get_scheduler_interval("scheduler_arp_collection_interval", 300)
         try:
+            await _record_task_heartbeat("arp_collection", max(300, interval * 3))
             await asyncio.sleep(interval)
             if await _is_task_paused("arp_collection"):
                 continue
@@ -225,6 +242,7 @@ async def scheduled_ipguard_sync():
     while True:
         interval = await _get_scheduler_interval("scheduler_ipguard_sync_interval", 600)
         try:
+            await _record_task_heartbeat("ipguard_sync", max(300, interval * 3))
             await asyncio.sleep(interval)
             if await _is_task_paused("ipguard_sync"):
                 continue
@@ -274,6 +292,7 @@ async def scheduled_compliance_check():
     while True:
         interval = await _get_scheduler_interval("scheduler_compliance_check_interval", 300)
         try:
+            await _record_task_heartbeat("compliance_check", max(300, interval * 3))
             await asyncio.sleep(interval)
             if await _is_task_paused("compliance_check"):
                 continue
@@ -573,6 +592,7 @@ async def scheduled_auto_unblock():
     while True:
         interval = await _get_scheduler_interval("scheduler_auto_unblock_interval", 600)
         try:
+            await _record_task_heartbeat("auto_unblock", max(300, interval * 3))
             await asyncio.sleep(interval)
             if await _is_task_paused("auto_unblock"):
                 continue
@@ -603,6 +623,7 @@ async def scheduled_backup():
 
     while True:
         try:
+            await _record_task_heartbeat("backup", 300)
             await asyncio.sleep(poll_interval)
             if await _is_task_paused("backup"):
                 continue
