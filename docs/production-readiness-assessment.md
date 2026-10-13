@@ -12,6 +12,7 @@
 
 | 文档版本 | 更新日期 | 关联版本 | 更新内容 |
 |---------|---------|---------|---------|
+| v3.21.2 | 2026-10-13 | v3.21.2 | 数据库迁移双轨收敛（init_db 生产不再 create_all、改子进程幂等执行 alembic upgrade head；manage.sh upgrade/migrate 迁移前漂移检测拦截 stamp head 指引；关键分支详细日志） |
 | v3.21.1 | 2026-10-13 | v3.21.1 | 通知模板自定义内容保存后不生效修复（渠道 send() 判断由 if subject and message 改为 if message）；通知渠道事件订阅重启被默认订阅覆盖修复（ensure_default_subscriptions 仅回填 events 为空的渠道）；系统配置双源读库修复（email_enabled / allow_registration 经 get_config_value 读 system_config）；启动阶段配置写入点排查日志增强（seed_defaults 统计 / legacy 迁移发现行数 / 渠道保留回填） |
 | v3.21.0 | 2026-10-12 | v3.21.0 | 调度器可观测性（任务注册表 scheduler_registry.py、8 任务心跳 scheduler:heartbeat:*、GET /system/scheduler/tasks 动态状态端点、manage.sh 调度命令动态化、CLI trigger 扩展到 8 任务并修正 firewall_query 清除语义） |
 | v3.20.0 | 2026-09-04 | v3.20.0 | MAC+IP 复合唯一键（迁移 040）；合规状态转换优化（IPGuard 命中即时 compliant、手动白名单即时 bypass、独立降级阈值 compliance_compliant_downgrade_threshold）；白名单匹配统一（scalars().all() 循环 apply、wl_match_type 修正）；白名单变更通知补全（admin.whitelist_changed + 默认订阅回填）；黑名单统计口径 UI 说明 |

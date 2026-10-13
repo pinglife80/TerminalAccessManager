@@ -1,12 +1,51 @@
 # 版本跟踪记录
 
-> 文档版本：v3.21.1 | 更新日期：2026-10-13
+> 文档版本：v3.21.2 | 更新日期：2026-10-13
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
 
 ---
+
+## [v3.21.2] - 2026-10-13
+
+### 数据库迁移双轨收敛：根治升级 `DuplicateTableError`（Patch 版本）
+
+#### 背景
+
+v3.20.0 通过 `manage.sh` 升级到 v3.21.0 时报 `DuplicateTableError: relation "data_sources" already exists`。根因是「双轨冲突」：应用启动路径用 `create_all` 建表（不写 `alembic_version`），而运维路径用 `alembic upgrade head` 依赖 `alembic_version` 判断进度，两条路径互相打架——`create_all` 建出的表没有版本戳，Alembic 从 base 重放时与已存在的表冲突。因无新增功能、为缺陷修复 + 内部机制收敛，故以 Patch 发布。
+
+#### 主要变更
+
+| 变更项 | 说明 |
+|--------|------|
+| `init_db()` 环境分流 | PostgreSQL 下不再 `create_all`，改以子进程幂等执行 `alembic upgrade head`（已到 head 时 no-op）；仅 SQLite 保留 `create_all` 便于开发/测试 |
+| 迁移漂移检测 | `manage.sh upgrade/migrate` 迁移前新增 `_precheck_alembic_drift`：检测「核心表已存在但 `alembic_version` 为空/缺失」的历史漂移库并拦截给出 `stamp head` 指引，避免重放迁移触发 `DuplicateTableError` |
+| 关键分支日志 | `init_db()` 与漂移检测各分支补充详细日志（后端/子进程输出、漂移判定结果），便于后续排查迁移问题 |
+
+#### 升级步骤（推荐：一键升级）
+
+```bash
+git checkout main
+git pull origin main
+./manage.sh upgrade
+```
+
+#### 升级注意事项
+
+- 本次无新增 Alembic 迁移文件；`init_db()` 在 PostgreSQL 下改为幂等执行 `alembic upgrade head`，已到 head 时为 no-op。
+- 历史「`create_all` 建表但未写 `alembic_version`」的库，在首次 `upgrade`/`migrate` 时会被漂移检测拦截并给出指引。此类库需先 `./manage.sh backup`，再 `docker compose exec backend python -m alembic stamp head` 对齐版本，最后 `docker compose exec backend python -m alembic current` 校验。
+
+#### 文件变更清单
+
+| 文件 | 变更类型 | 说明 |
+|------|---------|------|
+| `backend/app/core/database.py` | 编辑 | `init_db()` 环境分流 + 详细日志 |
+| `manage.sh` | 编辑 | 新增 `_precheck_alembic_drift` + 详细日志 |
+| `docs/database.md` | 编辑 | 新增 schema 归属说明 |
+| `docs/changelog.md` | 编辑 | 新增 v3.21.2 条目 |
+| `docs/production-readiness-assessment.md` | 编辑 | 文档版本跟踪表新增 v3.21.2 |
 
 ## [v3.21.1] - 2026-10-13
 
