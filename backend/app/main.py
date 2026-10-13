@@ -756,9 +756,14 @@ async def lifespan(app: FastAPI):
 
         # Migrate legacy "Terminal Access Platform" → "Terminal Access Manager"
         from sqlalchemy import text
-        legacy_rows = await db.execute(
+        legacy_rows = (await db.execute(
             text("SELECT id, value FROM system_config WHERE value LIKE '%Terminal Access Platform%'")
-        )
+        )).all()
+        if legacy_rows:
+            logger.info(
+                f"Startup migration: found {len(legacy_rows)} system_config row(s) "
+                f"containing legacy platform name"
+            )
         for row in legacy_rows:
             new_value = row[1].replace("Terminal Access Platform", "Terminal Access Manager")
             await db.execute(
