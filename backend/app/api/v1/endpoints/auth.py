@@ -268,8 +268,10 @@ async def register(
     db: AsyncSession = Depends(get_db)
 ):
     """Register a new user (disabled by default in production)"""
-    # Check if registration is allowed
-    if not settings.ALLOW_REGISTRATION:
+    # Check if registration is allowed (hot-reloadable, DB-backed with .env fallback)
+    from app.services.config_service import get_config_value
+    allow_registration = await get_config_value("allow_registration", settings.ALLOW_REGISTRATION)
+    if not allow_registration:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Public registration is disabled. Contact an administrator to create an account."

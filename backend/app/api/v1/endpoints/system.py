@@ -57,12 +57,16 @@ async def get_system_config(
     current_user: User = Depends(get_current_user),
 ):
     """Get current system configuration (safe values only)"""
+    # email_enabled is DB-backed (system_config) with .env fallback, kept
+    # consistent with auth.py's allow_registration to avoid dual-source drift.
+    from app.services.config_service import get_config_value
+    email_enabled = await get_config_value("email_enabled", bool(settings.EMAIL_HOST))
     return {
         "environment": settings.ENVIRONMENT,
         "version": settings.VERSION,
         "debug": settings.DEBUG,
         "log_level": settings.LOG_LEVEL,
-        "email_enabled": settings.EMAIL_HOST is not None,
+        "email_enabled": email_enabled,
         "metrics_enabled": settings.PROMETHEUS_ENABLED,
     }
 
