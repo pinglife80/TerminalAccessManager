@@ -135,32 +135,48 @@ class NotificationService:
                 self._workers._channel_configs = self._channel_configs
 
     async def ensure_default_subscriptions(self) -> int:
-        """Backfill missing event subscriptions for enabled channels (idempotent).
+        """Backfill default event subscriptions for enabled channels that have
+        no explicit selection (idempotent).
 
-        Only adds missing event types to each enabled channel's ``events``
-        list; never removes existing entries, so admin-cancelled subscriptions
-        are preserved. Returns the number of channels updated.
+        Only channels with an empty ``events`` list (None or []) are seeded
+        with the full default set. Channels with an explicit selection — even a
+        subset chosen by the admin — are left untouched, so admin-cancelled
+        subscriptions are preserved across restarts. Returns the number of
+        channels updated.
         """
         updated = 0
+        skipped = 0
         async with self._session_scope() as db:
             stmt = select(NotificationChannel).where(NotificationChannel.enabled == True)
             result = await db.execute(stmt)
             channels = result.scalars().all()
 
-            default_set = set(DEFAULT_SUBSCRIBED_EVENTS)
+            default_set = sorted(DEFAULT_SUBSCRIBED_EVENTS)
             for channel in channels:
-                current = set(channel.events or [])
-                missing = default_set - current
-                if not missing:
+                if channel.events:
+                    # Admin already made an explicit selection; respect it.
+                    skipped += 1
+                    logger.info(
+                        f"ensure_default_subscriptions: channel '{channel.name}' "
+                        f"(id={channel.id}) has {len(channel.events)} explicit event "
+                        f"subscription(s), preserving user selection (no override)"
+                    )
                     continue
-                channel.events = sorted(current | missing)
+                channel.events = list(default_set)
                 updated += 1
+                logger.info(
+                    f"ensure_default_subscriptions: channel '{channel.name}' "
+                    f"(id={channel.id}) had no event subscription, backfilled "
+                    f"{len(default_set)} default event(s)"
+                )
 
             if updated:
                 await db.commit()
 
-        if updated:
-            logger.info(f"Backfilled default event subscriptions for {updated} channel(s)")
+        logger.info(
+            f"ensure_default_subscriptions: backfilled {updated} channel(s), "
+            f"preserved {skipped} channel(s) with explicit subscriptions"
+        )
         return updated
 
     async def get_channels(self) -> list[NotificationChannel]:
