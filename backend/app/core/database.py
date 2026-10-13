@@ -84,6 +84,50 @@ async def init_db():
         "to Alembic (alembic upgrade head)"
     )
 
+    # Drift pre-check: detect the "create_all bootstrap without Alembic stamp"
+    # state (core schema exists but alembic_version is empty/missing) before
+    # running `alembic upgrade head`, which would otherwise replay 001 from
+    # base and fail with DuplicateTableError. Fail fast with actionable
+    # guidance instead — this also protects environments that upgrade from a
+    # version whose manage.sh lacks the drift guard.
+    from sqlalchemy import text
+
+    async with engine.connect() as conn:
+        core_exists = (
+            await conn.execute(
+                text(
+                    "SELECT COUNT(*) FROM information_schema.tables "
+                    "WHERE table_name = 'data_sources'"
+                )
+            )
+        ).scalar()
+        version_tbl = (
+            await conn.execute(
+                text(
+                    "SELECT COUNT(*) FROM information_schema.tables "
+                    "WHERE table_name = 'alembic_version'"
+                )
+            )
+        ).scalar()
+        version_rows = 0
+        if version_tbl:
+            version_rows = (
+                await conn.execute(text("SELECT COUNT(*) FROM alembic_version"))
+            ).scalar()
+        logger.info(
+            "init_db: drift pre-check data_sources=%s alembic_version_rows=%s",
+            core_exists,
+            version_rows,
+        )
+
+    if core_exists and version_rows == 0:
+        raise RuntimeError(
+            "Database drift detected: schema already exists but 'alembic_version' "
+            "is empty or missing (prior create_all bootstrap without Alembic "
+            "tracking). Before upgrading, align the version stamp: "
+            "python -m alembic stamp head  (verify: python -m alembic current)"
+        )
+
     import os
     import subprocess
     import sys

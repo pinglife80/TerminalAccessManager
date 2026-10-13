@@ -2104,6 +2104,20 @@ cmd_upgrade() {
     auto_backup "pre_upgrade"
     log_success "Auto-backup completed"
 
+    # Alembic drift pre-check — run BEFORE pulling code or rebuilding images so
+    # that a drifted database (create_all bootstrap without alembic_version) is
+    # caught before the new backend image boots and fails against it.
+    if _precheck_alembic_drift; then
+        log_error "Detected database drift: schema already exists but 'alembic_version' is empty/missing."
+        log_error "This is caused by a prior create_all bootstrap without Alembic version tracking."
+        echo ""
+        echo -e "  ${BOLD}Recommended fix (backup already done above, then stamp):${NC}"
+        echo -e "    1. docker compose exec backend python -m alembic stamp head"
+        echo -e "    2. Verify: docker compose exec backend python -m alembic current"
+        echo ""
+        exit 1
+    fi
+
     # Pull code
     log_info "Pulling code from ${target_ref}..."
     if [ -n "$target_version" ]; then
@@ -2130,17 +2144,6 @@ cmd_upgrade() {
 
     # Run migrations (unless skipped)
     if ! ${skip_migrate}; then
-        if _precheck_alembic_drift; then
-            log_error "Detected database drift: schema already exists but 'alembic_version' is empty/missing."
-            log_error "This is caused by a prior create_all bootstrap without Alembic version tracking."
-            echo ""
-            echo -e "  ${BOLD}Recommended fix (backup first, then stamp):${NC}"
-            echo -e "    1. ./manage.sh backup"
-            echo -e "    2. docker compose exec backend python -m alembic stamp head"
-            echo -e "    3. Verify: docker compose exec backend python -m alembic current"
-            echo ""
-            exit 1
-        fi
         log_info "Running database migrations..."
         if dc exec -T backend python -m alembic upgrade head 2>&1; then
             log_success "Database migrations completed"
