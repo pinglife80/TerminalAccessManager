@@ -144,7 +144,7 @@ const SystemSettings: React.FC = () => {
             <CardSkeleton />
           ) : systemConfig ? (
             <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-              <ConfigItem label={t('systemSettings.version')} value={systemConfig.version} />
+              <ConfigItem label={t('systemSettings.version')} value={systemConfig.version || '-'} />
               <ConfigItem label={t('systemSettings.environment')} value={systemConfig.environment} />
               <ConfigItem label={t('systemSettings.debugMode')} value={systemConfig.debug ? t('systemSettings.enabled') : t('systemSettings.disabled')} />
               <ConfigItem label={t('systemSettings.logLevel')} value={systemConfig.log_level} />
