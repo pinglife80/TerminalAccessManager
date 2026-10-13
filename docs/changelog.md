@@ -1,6 +1,6 @@
 # 更新日志
 
-> 文档版本：v3.21.2  更新日期：2026-10-13
+> 文档版本：v3.21.3  更新日期：2026-10-13
 
 本文件记录 TerminalAccessManager 的所有重要变更。
 
@@ -8,6 +8,20 @@
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ***
+
+## [3.21.3] - 2026-10-13
+
+### 新增
+
+- **schema 漂移对比脚本**：新增 `backend/scripts/schema_compare.py`，对比 SQLAlchemy metadata 与实际库的缺失表/列，返回 exit code（0=干净漂移 / 1=半迁移 / 2=错误），作为升级前自查工具
+  - 关联文件：`scripts/schema_compare.py`
+
+### 修复
+
+- **迁移漂移检测盲区**：`init_db()` PostgreSQL 分支在执行 `alembic upgrade head` 前新增漂移预检测（核心表已存在但 `alembic_version` 为空 → fail fast 给出 `stamp head` 指引），覆盖旧版 `manage.sh` 首次升级环境；`manage.sh` 漂移检测由迁移前提前到 build 前，确保漂移库在被新镜像启动前即被拦截
+  - 关联文件：`core/database.py`、`manage.sh`
+- **get_env 回退语义**：`get_env()` 由 `grep ... || echo ""` 改为值非空输出并返回 0 / 否则返回 1；`.env.example` 补充 `BACKUP_RETAIN_COUNT=10`
+  - 关联文件：`manage.sh`、`.env.example`
 
 ## [3.21.2] - 2026-10-13
 

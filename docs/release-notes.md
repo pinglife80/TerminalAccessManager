@@ -1,12 +1,56 @@
 # 版本跟踪记录
 
-> 文档版本：v3.21.2 | 更新日期：2026-10-13
+> 文档版本：v3.21.3 | 更新日期：2026-10-13
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
 
 ---
+
+## [v3.21.3] - 2026-10-13
+
+### 迁移漂移检测盲区修复与 schema 对比工具固化（Patch 版本）
+
+#### 背景
+
+v3.21.2 已根治 PostgreSQL 双轨冲突（`init_db` 改子进程幂等执行 `alembic upgrade head`，`manage.sh` 迁移前漂移检测）。但仍有两处盲区：其一，旧版 `manage.sh`（无 `_precheck_alembic_drift`）执行 `upgrade` 时，`git pull` 更新磁盘文件后当前 shell 进程仍是旧版脚本，漂移检测对「旧版首次升级」天然不生效，新 backend 镜像启动后仍会对漂移库重放 001 迁移触发 `DuplicateTableError`；其二，缺少固化可复用的 schema 对比工具，用于升级前判定库是「干净漂移」还是「半迁移」。本版本在新版 backend 启动路径（`init_db`）补齐漂移预检测作为兜底，将 `manage.sh` 漂移检测提前到 build 之前，并固化 schema 对比脚本。因均为缺陷修复 / 工具固化、无数据库迁移、无新增功能，故以 Patch 发布。
+
+#### 主要变更
+
+| 变更项 | 说明 |
+|--------|------|
+| `init_db` 漂移预检测 | PostgreSQL 分支在执行 `alembic upgrade head` 前先查 `data_sources` / `alembic_version`，检测到「核心表已存在但版本戳为空/缺失」即 fail fast 并给出 `stamp head` 指引，覆盖任何旧版 `manage.sh` 的首次升级环境 |
+| `manage.sh` 漂移检测前置 | `_precheck_alembic_drift` 调用点由「迁移前」提前到「自动备份后、`git pull`/rebuild 之前」，确保漂移库在被新镜像启动前即被拦截 |
+| `get_env` 回退语义修复 | `get_env()` 由 `grep ... \|\| echo ""` 改为值非空时输出并返回 0、否则返回 1；`.env.example` 补充 `BACKUP_RETAIN_COUNT=10` |
+| schema 对比脚本 | 新增 `backend/scripts/schema_compare.py`，对比 SQLAlchemy metadata 与实际库，输出缺失表/列并返回 exit code（0=干净漂移 / 1=半迁移 / 2=错误），作为升级前自查工具 |
+
+#### 升级步骤（推荐：一键升级）
+
+```bash
+git checkout main
+git pull origin main
+./manage.sh upgrade
+```
+
+#### 升级注意事项
+
+- 本次无新增 Alembic 迁移文件。
+- 历史漂移库在升级前会被 `init_db` 兜底预检测或 `manage.sh` build 前检测拦截；需先 `./manage.sh backup`，再 `docker compose exec backend python -m alembic stamp head` 对齐版本，最后 `docker compose exec backend python -m alembic current` 校验。
+- 升级前可在容器内运行 `python -m scripts.schema_compare` 自查 schema 状态。
+
+#### 文件变更清单
+
+| 文件 | 变更类型 | 说明 |
+|------|---------|------|
+| `backend/app/core/database.py` | 编辑 | `init_db()` 新增漂移预检测 |
+| `manage.sh` | 编辑 | 漂移检测提前到 build 前 + `get_env` 回退语义修复 |
+| `backend/scripts/schema_compare.py` | 新增 | schema 漂移对比脚本 |
+| `.env.example` | 编辑 | 新增 `BACKUP_RETAIN_COUNT` |
+| `.gitignore` | 编辑 | 忽略 `.trae/` 内部产物 |
+| `docs/changelog.md` | 编辑 | 新增 v3.21.3 条目 |
+| `docs/database.md` | 编辑 | 头部版本 + schema 对比工具说明 |
+| `docs/production-readiness-assessment.md` | 编辑 | 文档版本跟踪表新增 v3.21.3 |
 
 ## [v3.21.2] - 2026-10-13
 
