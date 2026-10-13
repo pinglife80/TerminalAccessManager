@@ -1,12 +1,42 @@
 # 版本跟踪记录
 
-> 文档版本：v3.21.0 | 更新日期：2026-10-12
+> 文档版本：v3.21.1 | 更新日期：2026-10-13
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
 
 ---
+
+## [v3.21.1] - 2026-10-13
+
+### 通知系统与系统配置「保存后不生效 / 重启被覆盖」系列修复（Patch 版本）
+
+#### 背景
+
+自 v3.21.0 发布后，收到两类「配置保存后无效」问题反馈：一是通知管理中修改通知内容保存后实际未生效；二是通知渠道的事件勾选与「系统设置」的邮箱开关等配置在重启后被覆盖或回退。经排查定位为三个独立根因：（1）通知渠道 `send()` 以 `if subject and message` 判断是否使用自定义模板，但非 email 渠道渲染时 `subject` 恒为空，导致用户自定义 body 被丢弃；（2）启动阶段 `ensure_default_subscriptions()` 无条件把全部默认事件补回所有已启用渠道，覆盖用户取消勾选的事件；（3）`email_enabled`/`allow_registration` 直接读 `.env`（Pydantic settings），与前端保存到 `system_config` 表的配置脱节。因全部为缺陷修复、无数据库迁移，故以 Patch 发布。
+
+#### 主要变更
+
+| 变更项 | 说明 |
+|--------|------|
+| 通知模板内容生效 | 5 个渠道 `send()` 判断由 `if subject and message` 改为 `if message`；非 email 渠道 subject 非空时拼接；email 渠道事件名兜底标题；webhook 区分测试/真实通知路径 |
+| 事件订阅不覆盖 | `ensure_default_subscriptions()` 仅对 `events` 为空的渠道回填默认全集，已显式勾选部分事件的渠道保持不动 |
+| 系统配置读库 | `email_enabled`、`allow_registration` 改为经 `get_config_value` 读 `system_config` 表（`.env` 兜底） |
+| 启动写入点排查日志 | `seed_defaults` / legacy 迁移 / `ensure_default_subscriptions` 增加 inserted/skipped、发现行数、保留/回填等详细日志 |
+
+#### 升级步骤（推荐：一键升级）
+
+```bash
+git checkout main
+git pull origin main
+./manage.sh upgrade
+```
+
+#### 升级注意事项
+
+- 本次无数据库迁移；升级后需在「通知管理 → 通知项目」重新勾选一次期望事件并保存（此前历次重启已将部分渠道 `events` 补成默认全集，本版本起不再覆盖，但已写入的历史数据需手动订正一次）。
+- 升级后 `email_enabled`/`allow_registration` 以 `system_config` 表中保存值为准。
 
 ## [v3.21.0] - 2026-10-12
 
