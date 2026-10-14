@@ -349,6 +349,29 @@ class FirewallReconciliationService:
                             f"to prevent oscillation - will be unblocked by compliance recalculation."
                         )
                         continue
+
+                    # Convergence: an 'unknown' (待检查) terminal already blocked on the firewall
+                    # is de-facto non-compliant. Sync its compliance_status so the terminal list
+                    # and blacklist stay consistent (avoids a stuck "pending check + successfully
+                    # blocked" state). Whitelisted terminals are handled above; 'compliant' keeps
+                    # its own auto-unblock path and must not be overwritten here.
+                    if terminal.compliance_status == "unknown":
+                        if wl_match:
+                            terminal.compliance_status = "bypass"
+                            terminal.wl_match_type = wl_match.get("match_type") if wl_match else None
+                            terminal.non_compliant_confirm_count = 0
+                            terminal.compliant_confirm_count = 0
+                            logger.info(
+                                f"Reconciliation: IP {ip_address} matched whitelist but terminal was "
+                                f"'unknown'; converged to bypass and skipped Blacklist creation."
+                            )
+                            continue
+                        terminal.compliance_status = "non_compliant"
+                        terminal.wl_match_type = None
+                        logger.info(
+                            f"Reconciliation: converged 'unknown' terminal {ip_address} to "
+                            f"'non_compliant' (already blocked on firewall '{fw_tag}')."
+                        )
                 else:
                     logger.warning(
                         f"Reconciliation: IP {ip_address} blocked on firewall '{fw_tag}' "
@@ -448,11 +471,20 @@ class FirewallReconciliationService:
                         )
                     term_result = await self.db.execute(term_query.limit(1))
                     terminal = term_result.scalars().first()
-                    if terminal and terminal.status != TerminalStatus.BLOCKED.value:
-                        terminal.status = TerminalStatus.BLOCKED.value
-                        if not terminal.firewall_tag:
-                            terminal.firewall_tag = fw_tag
-                        terminal.block_state = None
+                    if terminal:
+                        if terminal.status != TerminalStatus.BLOCKED.value:
+                            terminal.status = TerminalStatus.BLOCKED.value
+                            if not terminal.firewall_tag:
+                                terminal.firewall_tag = fw_tag
+                            terminal.block_state = None
+                        # Convergence: keep the invariant "blocked ⟺ non_compliant".
+                        # Applies to any terminal that is (now) blocked on this firewall --
+                        # including one already marked 'blocked' but left 'unknown' by a
+                        # legacy reset (e.g. its ARP data source was disabled). Such a
+                        # terminal re-blocked here is de-facto non-compliant.
+                        if terminal.compliance_status == "unknown":
+                            terminal.compliance_status = "non_compliant"
+                            terminal.wl_match_type = None
                 else:
                     error_msg = result.get("message", "unknown error")
                     logger.warning(f"Failed to re-block {ip_address} on firewall '{fw_tag}': {error_msg}")
