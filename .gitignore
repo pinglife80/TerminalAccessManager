@@ -83,5 +83,5 @@ docs/todos.md
 # Trae internal
 .trae/
 
-# Temporary test scripts
-test_*.py
+# Temporary test scripts (root-level only)
+/test_*.py

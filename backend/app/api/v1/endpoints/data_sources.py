@@ -228,7 +228,8 @@ async def update_data_source(
                 # Count affected terminals before reset
                 terminal_stmt = select(Terminal).where(
                     Terminal.source_tag == current_source.tag,
-                    Terminal.compliance_status != "unknown"
+                    Terminal.compliance_status != "unknown",
+                    Terminal.status != "blocked",
                 )
                 t_result = await db.execute(terminal_stmt)
                 affected_terminals = t_result.scalars().all()

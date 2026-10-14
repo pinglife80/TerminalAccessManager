@@ -1,6 +1,6 @@
 # 更新日志
 
-> 文档版本：v3.21.5  更新日期：2026-10-13
+> 文档版本：v3.21.6  更新日期：2026-10-14
 
 本文件记录 TerminalAccessManager 的所有重要变更。
 
@@ -8,6 +8,18 @@
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ***
+
+## [3.21.6] - 2026-10-14
+
+### 修复
+
+- **终端 blocked 状态一致性**：封堵三处可形成 `unknown + blocked` 非法态的入口 —— ① 禁用 ARP 数据源时不再把已封锁（blocked）终端重置为 unknown，仅重置未封锁的受影响终端；② 防火墙对账补建黑名单条目时将触及的 unknown 终端收敛为 non_compliant（白名单命中则 bypass）；③ 对账重封锁时将收敛逻辑提到 status 守卫之外，覆盖「已 blocked 但 unknown」的历史脏数据
+  - 关联文件：`endpoints/data_sources.py`、`services/firewall_reconciliation_service.py`
+
+### 其他
+
+- **测试文件入库**：修正 `.gitignore` 的 `test_*.py` 规则为 `/test_*.py`（仅忽略根目录临时脚本），将 23 个被误隐藏的后端测试文件纳入版本控制；同步更新 arp_collector 陈旧测试到复合 (MAC, IP) 身份模型、修复 data_source 测试 mock helper、新增防火墙对账收敛回归测试
+  - 关联文件：`.gitignore`、`backend/tests/*`
 
 ## [3.21.5] - 2026-10-13
 
