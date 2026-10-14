@@ -1,12 +1,54 @@
 # 版本跟踪记录
 
-> 文档版本：v3.21.5 | 更新日期：2026-10-13
+> 文档版本：v3.21.6 | 更新日期：2026-10-14
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
 
 ---
+
+## [v3.21.6] - 2026-10-14
+
+### 终端 blocked 状态一致性修复与测试入库（Patch 版本）
+
+#### 背景
+
+审计发现终端合规状态与封锁状态可形成「unknown 但已 blocked」的非法中间态，使终端列表、黑名单与防火墙三方口径不一致。根因有三处入口：禁用 ARP 数据源时会把已封锁终端强制重置为 unknown；防火墙对账补建黑名单条目时对触及的 unknown 终端未做状态收敛；对账重封锁逻辑把收敛动作置于 `status != blocked` 守卫内部，导致「已 blocked 但 unknown」的历史脏数据无法被自愈。本版本封堵三处入口并把 unknown 收敛为 non_compliant（或白名单命中则 bypass），同时将此前被 `.gitignore` 误隐藏的测试文件入库、同步陈旧测试到复合身份模型。因均为缺陷修复、无新增功能、无数据库迁移，故以 Patch 发布。
+
+#### 主要变更
+
+| 变更项 | 说明 |
+|--------|------|
+| 禁用 ARP 源状态保护 | 禁用 arp_ssh/arp_api 时仅重置未封锁终端，已封锁（blocked）终端保持 non_compliant |
+| 对账补建收敛 | `_create_db_entries_for_firewall` 将触及的 unknown 终端收敛为 non_compliant，白名单命中则 bypass |
+| 对账重封锁收敛 | `_reblock_on_firewall` 将收敛逻辑提到 status 守卫外，覆盖已 blocked 但 unknown 的历史脏数据 |
+| 测试文件入库 | `.gitignore` 规则 `test_*.py` → `/test_*.py`，23 个后端测试文件纳入跟踪；同步陈旧测试到 (MAC, IP) 复合身份模型 |
+
+#### 升级步骤（推荐：一键升级）
+
+```bash
+git checkout main
+git pull origin main
+./manage.sh upgrade
+```
+
+#### 升级注意事项
+
+- 本次无新增 Alembic 迁移文件。
+- 本次为后端业务逻辑 + 测试变更，无前端资产改动，无需重建前端镜像（`./manage.sh upgrade` 会重建后端）。
+
+#### 文件变更清单
+
+| 文件 | 变更类型 | 说明 |
+|------|---------|------|
+| `backend/app/api/v1/endpoints/data_sources.py` | 编辑 | 禁用 ARP 源时保护 blocked 终端状态 |
+| `backend/app/services/firewall_reconciliation_service.py` | 编辑 | 补建/重封锁路径 unknown → non_compliant/bypass 收敛 |
+| `.gitignore` | 编辑 | `test_*.py` → `/test_*.py` |
+| `backend/tests/*`（24 个） | 新增/编辑 | 测试文件入库 + 复合身份模型同步 + 收敛回归测试 |
+| `docs/changelog.md` | 编辑 | 新增 3.21.6 条目 |
+| `docs/release-notes.md` | 编辑 | 新增 v3.21.6 段 |
+| `docs/production-readiness-assessment.md` | 编辑 | 文档版本跟踪表新增 v3.21.6 |
 
 ## [v3.21.5] - 2026-10-13
 
