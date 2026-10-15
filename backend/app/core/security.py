@@ -52,9 +52,13 @@ async def get_redis_client() -> aioredis.Redis:
             settings.REDIS_URL,
             encoding="utf-8",
             decode_responses=True,
+            # 约束：socket_timeout 必须大于通知 worker 的 brpop 阻塞时长 WORKER_POLL_INTERVAL
+            # （notification_workers 中当前为 1 秒）。否则阻塞读取会在 socket 层超时并触发
+            # 连接关闭重建。调大 polling 间隔时需同步调大本值，避免两者隐性耦合导致偶发断连。
             socket_timeout=5,
             socket_connect_timeout=5,
             retry_on_timeout=True,
+            health_check_interval=30,
         )
     return _redis_client
 
