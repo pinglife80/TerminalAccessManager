@@ -84,6 +84,8 @@ class NotificationWorkers:
         logger.info("Notification workers started")
 
     async def stop_workers(self) -> None:
+        import asyncio
+
         self._worker_running = False
         for task in (
             self._main_worker_task,
@@ -94,6 +96,8 @@ class NotificationWorkers:
                 task.cancel()
                 try:
                     await task
+                except asyncio.CancelledError:
+                    pass
                 except Exception:
                     pass
         logger.info("Notification workers stopped")
@@ -212,8 +216,16 @@ class NotificationWorkers:
                 if result is None:
                     continue
                 _, payload_str = result
-                payload = json.loads(payload_str)
-                await self._deliver_notification(payload)
+                try:
+                    payload = json.loads(payload_str)
+                except Exception as e:
+                    logger.error(f"Main worker: malformed payload dropped: {e}")
+                    continue
+                try:
+                    await self._deliver_notification(payload)
+                except Exception as e:
+                    logger.error(f"Main worker delivery error: {e}")
+                    await self._requeue(payload, str(e))
             except Exception as e:
                 logger.error(f"Main worker error: {e}")
                 await asyncio.sleep(WORKER_POLL_INTERVAL)
@@ -228,11 +240,20 @@ class NotificationWorkers:
                 items = await redis.zrangebyscore(RETRY_KEY, 0, now_ts)
                 for member in items:
                     try:
+                        payload = json.loads(member)
+                    except Exception as e:
+                        logger.error(f"Retry worker: malformed payload dropped: {e}")
+                        await redis.zrem(RETRY_KEY, member)
+                        continue
+                    try:
                         removed = await redis.zrem(RETRY_KEY, member)
                         if removed == 0:
                             continue
-                        payload = json.loads(member)
-                        await self._deliver_notification(payload)
+                        try:
+                            await self._deliver_notification(payload)
+                        except Exception as e:
+                            logger.error(f"Retry worker delivery error: {e}")
+                            await self._requeue(payload, str(e))
                     except Exception as e:
                         logger.error(f"Retry worker item error: {e}")
                 if not items:
@@ -367,6 +388,36 @@ class NotificationWorkers:
         delay = RETRY_BASE_DELAY * (2 ** retry_count)
         return min(delay, 3600)
 
+    async def _requeue(self, payload: dict[str, Any], error: str) -> None:
+        """兜底重入队：投递阶段整体异常时，把消息重新放回重试队列，避免丢弃。
+
+        与 _schedule_retry 的差异：后者针对单个通道 send 失败（保留 _channel_name 作用域），
+        本方法针对 deliver 阶段更外层的异常（规则引擎/Redis 抖动等），整条消息重新投递。
+        递增 retry_count 并保持指数退避，超过 MAX_RETRIES 后放弃以防无限重试。
+        """
+        try:
+            redis = await self._get_redis()
+            retry_count = int(payload.get("retry_count", 0))
+            new_retry_count = retry_count + 1
+            if new_retry_count > MAX_RETRIES:
+                logger.error(
+                    f"Drop notification {payload.get('event_type')}/"
+                    f"{str(payload.get('event_id', ''))[:8]} after {MAX_RETRIES} requeues: {error}"
+                )
+                return
+            delay = self._retry_delay(retry_count)
+            next_retry_ts = now_utc() + timedelta(seconds=delay)
+            new_payload = {**payload, "retry_count": new_retry_count}
+            member = json.dumps(new_payload, sort_keys=True)
+            await redis.zadd(RETRY_KEY, {member: next_retry_ts.timestamp()})
+            logger.warning(
+                f"Requeued notification {payload.get('event_type')}/"
+                f"{str(payload.get('event_id', ''))[:8]} (retry #{new_retry_count}) "
+                f"after delivery error: {error}"
+            )
+        except Exception as e:
+            logger.error(f"Failed to requeue notification after error: {e}")
+
     async def _schedule_retry(
         self,
         payload: dict[str, Any],
@@ -387,6 +438,10 @@ class NotificationWorkers:
                 f"Scheduled retry #{new_retry_count} for {payload['event_type']}/"
                 f"{channel_name} in {delay}s"
             )
+        except Exception as e:
+            logger.error(f"Failed to schedule retry: {e}")
+            return
+        try:
             event = NotificationEvent(
                 id=payload["event_id"],
                 type=payload["event_type"],
@@ -400,4 +455,4 @@ class NotificationWorkers:
                 event, channel_name, result, new_retry_count, next_retry_ts
             )
         except Exception as e:
-            logger.error(f"Failed to schedule retry: {e}")
+            logger.warning(f"Retry scheduled but logging failed: {e}")

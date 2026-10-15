@@ -1,6 +1,6 @@
 # 更新日志
 
-> 文档版本：v3.21.6  更新日期：2026-10-14
+> 文档版本：v3.21.7  更新日期：2026-10-15
 
 本文件记录 TerminalAccessManager 的所有重要变更。
 
@@ -8,6 +8,22 @@
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ***
+
+## [3.21.7] - 2026-10-15
+
+### 修复
+
+- **Redis 连接健康检查**：`get_redis_client` 增加 `health_check_interval=30` 主动探测连接健康、及时剔除静默死连接，减少偶发 `ConnectionError`；并加注释约束 `socket_timeout` 必须大于通知 worker 的 `brpop` 阻塞时长（`WORKER_POLL_INTERVAL`），避免调大 polling 间隔时触发 socket 层超时断连
+  - 关联文件：`core/security.py`
+
+- **DB 插入竞态消除（ON CONFLICT DO NOTHING）**：`_attach_active_blacklist` 与防火墙对账补建黑名单两处「创建 active 黑名单」由 SELECT-then-INSERT 改为 PostgreSQL `INSERT ... ON CONFLICT DO NOTHING`（按 partial unique index `(ip_address, firewall_tag) WHERE unblocked_at IS NULL AND auto_unblocked = false`），消除并发下的 duplicate key 错误
+  - 关联文件：`services/compliance_service.py`、`services/firewall_reconciliation_service.py`
+
+- **Sangfor 防火墙幂等**：新增 `is_already_exists_message()` 识别防火墙业务码「已存在」；`block_ip`/`_execute_block` 命中「已存在」时记为 skipped（幂等成功）而非 error，消除批量封锁的「已存在」误报；`unblock_ip` success 判断补 `skipped>0`，消除解封跳过场景的误报
+  - 关联文件：`services/sangfor_service.py`
+
+- **通知投递健壮性**：`stop_workers` 显式捕获 `asyncio.CancelledError`（BaseException 子类，原 `except Exception` 无法捕获），修复服务关机时 `Application shutdown failed` 崩溃；`_main_worker`/`_retry_worker` 对「解析 + 投递」加兜底 try/except，坏数据丢弃留痕、投递异常经新增 `_requeue` 重新入重试队列（递增 retry_count + 指数退避，超 `MAX_RETRIES` 放弃），消除消息丢失；`_schedule_retry` 将 zadd 与 log_retrying 分离，后者失败仅 warning 不再误报
+  - 关联文件：`services/notification_workers.py`
 
 ## [3.21.6] - 2026-10-14
 

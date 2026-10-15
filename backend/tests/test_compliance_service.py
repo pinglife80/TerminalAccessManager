@@ -8,6 +8,7 @@ do NOT require Docker, PostgreSQL, or Redis to be running.
 import contextlib
 import json
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -193,8 +194,20 @@ def apply_result_mocks(service, mock_db, results, **kw):
 
 
 def created_blacklists(mock_db):
-    """Return Blacklist instances passed to db.add during a test."""
-    return [c[0][0] for c in mock_db.add.call_args_list if isinstance(c[0][0], Blacklist)]
+    """Return value objects for Blacklist INSERTs passed to db.execute.
+
+    The production code now inserts via ``pg_insert(Blacklist).values(...)``
+    executed through ``db.execute`` instead of ``db.add``. Each returned object
+    exposes the inserted column values as attributes (e.g. ``.reason``).
+    """
+    entries = []
+    for call in mock_db.execute.call_args_list:
+        stmt = call.args[0] if call.args else None
+        table = getattr(stmt, "table", None)
+        if table is None or getattr(table, "name", None) != "blacklist":
+            continue
+        entries.append(SimpleNamespace(**dict(stmt.compile().params)))
+    return entries
 
 
 # ---------------------------------------------------------------------------
@@ -367,9 +380,8 @@ class TestAutoBlockTerminal:
 
         assert result.blocked == 1
 
-        # Verify db.add was called with a Blacklist that has mac_address_normalized
-        add_calls = mock_db.add.call_args_list
-        blacklist_entries = [c[0][0] for c in add_calls if isinstance(c[0][0], Blacklist)]
+        # Verify a Blacklist INSERT with mac_address_normalized was executed
+        blacklist_entries = created_blacklists(mock_db)
         assert len(blacklist_entries) >= 1
         bl_entry = blacklist_entries[0]
         assert bl_entry.mac_address_normalized == "AABBCCDDEEFF"
@@ -475,9 +487,8 @@ class TestAutoBlockTerminal:
 
         assert result.blocked == 1
 
-        # Verify two Blacklist entries were added (one per firewall)
-        add_calls = mock_db.add.call_args_list
-        blacklist_entries = [c[0][0] for c in add_calls if isinstance(c[0][0], Blacklist)]
+        # Verify two Blacklist INSERTs were executed (one per firewall)
+        blacklist_entries = created_blacklists(mock_db)
         assert len(blacklist_entries) == 2
         fw_tags_in_entries = {e.firewall_tag for e in blacklist_entries}
         assert fw_tags_in_entries == {"fw1", "fw2"}
@@ -986,9 +997,8 @@ class TestRecalculateCompliance:
 
         assert result["non_compliant"] == 1
 
-        # Verify Blacklist entry was added with mac_address_normalized
-        add_calls = mock_db.add.call_args_list
-        blacklist_entries = [c[0][0] for c in add_calls if isinstance(c[0][0], Blacklist)]
+        # Verify Blacklist INSERT was executed with mac_address_normalized
+        blacklist_entries = created_blacklists(mock_db)
         assert len(blacklist_entries) >= 1
         assert blacklist_entries[0].mac_address_normalized == "AABBCCDDEEFF"
         assert blacklist_entries[0].is_auto_blocked is True
@@ -3219,7 +3229,7 @@ class TestAutoBlockEdges:
 
         assert result.blocked == 1
 
-        bl_entries = [c[0][0] for c in mock_db.add.call_args_list if isinstance(c[0][0], Blacklist)]
+        bl_entries = created_blacklists(mock_db)
         assert len(bl_entries) == 1
         assert bl_entries[0].reason == "IP 不合规，MAC 合规"
 
