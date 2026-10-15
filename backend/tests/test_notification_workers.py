@@ -135,6 +135,16 @@ class _BadAwaitTask(_Task):
         return _inner().__await__()
 
 
+class _CancellingAwaitTask(_Task):
+    def __init__(self):
+        super().__init__(False)
+
+    def __await__(self):
+        async def _inner():
+            raise asyncio.CancelledError()
+        return _inner().__await__()
+
+
 def _workers(channels=None, configs=None):
     return NotificationWorkers(channels or {}, configs or {})
 
@@ -542,6 +552,17 @@ class TestStopWorkers:
         await w.stop_workers()
         assert w._worker_running is False
 
+    @pytest.mark.asyncio
+    async def test_stop_workers_swallows_cancelled_error(self):
+        w = _workers()
+        w._worker_running = True
+        w._main_worker_task = _CancellingAwaitTask()
+        w._retry_worker_task = None
+        w._supervisor_task = None
+        # CancelledError must not propagate out of stop_workers
+        await w.stop_workers()
+        assert w._worker_running is False
+
 
 class TestMainWorker:
     @pytest.mark.asyncio
@@ -599,6 +620,47 @@ class TestMainWorker:
 
         with patch("asyncio.sleep", side_effect=_sleep):
             await w._main_worker()
+
+    @pytest.mark.asyncio
+    async def test_malformed_payload_dropped(self):
+        w = _workers()
+        redis = AsyncMock()
+
+        async def _brpop(*a, **k):
+            w._worker_running = False
+            return ("main", "not-json{{")
+
+        redis.brpop = AsyncMock(side_effect=_brpop)
+        w._redis = redis
+        w._worker_running = True
+        w._deliver_notification = AsyncMock()
+        w._requeue = AsyncMock()
+
+        await w._main_worker()
+
+        w._deliver_notification.assert_not_called()
+        w._requeue.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_delivery_error_requeues(self):
+        w = _workers()
+        redis = AsyncMock()
+        payload_str = json.dumps(_payload())
+
+        async def _brpop(*a, **k):
+            w._worker_running = False
+            return ("main", payload_str)
+
+        redis.brpop = AsyncMock(side_effect=_brpop)
+        w._redis = redis
+        w._worker_running = True
+        w._deliver_notification = AsyncMock(side_effect=RuntimeError("boom"))
+        w._requeue = AsyncMock()
+
+        await w._main_worker()
+
+        w._requeue.assert_awaited_once()
+        assert w._requeue.call_args.args[0]["event_id"] == "evt-1"
 
 
 class TestRetryWorker:
@@ -692,6 +754,82 @@ class TestRetryWorker:
 
         with patch("asyncio.sleep", side_effect=_sleep):
             await w._retry_worker()
+
+    @pytest.mark.asyncio
+    async def test_malformed_payload_dropped(self):
+        w = _workers()
+        redis = AsyncMock()
+        redis.zrangebyscore = AsyncMock(return_value=["not-json{{"])
+
+        async def _zrem(*a, **k):
+            w._worker_running = False
+            return 1
+
+        redis.zrem = AsyncMock(side_effect=_zrem)
+        w._redis = redis
+        w._worker_running = True
+        w._deliver_notification = AsyncMock()
+
+        await w._retry_worker()
+
+        redis.zrem.assert_awaited_once()  # 移除坏数据
+        w._deliver_notification.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_delivery_error_requeues(self):
+        w = _workers()
+        redis = AsyncMock()
+        member = json.dumps(_payload())
+        redis.zrangebyscore = AsyncMock(return_value=[member])
+
+        async def _zrem(*a, **k):
+            w._worker_running = False
+            return 1
+
+        redis.zrem = AsyncMock(side_effect=_zrem)
+        w._redis = redis
+        w._worker_running = True
+        w._deliver_notification = AsyncMock(side_effect=RuntimeError("boom"))
+        w._requeue = AsyncMock()
+
+        await w._retry_worker()
+
+        w._requeue.assert_awaited_once()
+
+
+class TestRequeue:
+    @pytest.mark.asyncio
+    async def test_requeue_increments_retry_count(self):
+        w = _workers()
+        redis = AsyncMock()
+        w._redis = redis
+
+        await w._requeue(_payload(), "boom")
+
+        redis.zadd.assert_awaited_once()
+        _, mapping = redis.zadd.call_args.args
+        new_payload = json.loads(next(iter(mapping)))
+        assert new_payload["retry_count"] == 1
+        assert new_payload["event_id"] == "evt-1"
+
+    @pytest.mark.asyncio
+    async def test_requeue_drops_when_exhausted(self):
+        w = _workers()
+        redis = AsyncMock()
+        w._redis = redis
+
+        await w._requeue(_payload(retry_count=MAX_RETRIES), "boom")
+
+        redis.zadd.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_requeue_redis_error_swallowed(self):
+        w = _workers()
+        redis = AsyncMock()
+        redis.zadd = AsyncMock(side_effect=RuntimeError("boom"))
+        w._redis = redis
+
+        await w._requeue(_payload(), "boom")  # 不应抛出
 
 
 class TestWorkerSupervisor:
