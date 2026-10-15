@@ -17,6 +17,7 @@ from datetime import datetime, timedelta, UTC
 
 from loguru import logger
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import func
@@ -1524,12 +1525,13 @@ class ComplianceService:
             )
             return "updated"
 
-        bl_entry = Blacklist(
+        stmt = pg_insert(Blacklist).values(
             ip_address=ip_address,
             mac_address=mac_address,
             mac_address_normalized=mac_norm,
             reason=reason,
             blocked_by="system",
+            blocked_at=datetime.now(UTC),
             expires_at=expires_at,
             source_tag=source_tag,
             firewall_tag=firewall_tag,
@@ -1539,8 +1541,11 @@ class ComplianceService:
             last_operation_status="success",
             last_operation_at=datetime.now(UTC),
         )
-        self.db.add(bl_entry)
-        await self.db.flush()
+        stmt = stmt.on_conflict_do_nothing(
+            index_elements=["ip_address", "firewall_tag"],
+            index_where=(Blacklist.unblocked_at.is_(None) & (Blacklist.auto_unblocked == False)),
+        )
+        await self.db.execute(stmt)
         return "created"
 
     async def _block_on_firewall(

@@ -74,6 +74,23 @@ def make_blacklist(ip="10.0.0.1", firewall_tag="fw1", reason=None):
     return b
 
 
+def created_blacklists(mock_db):
+    """Return value objects for Blacklist INSERTs passed to db.execute.
+
+    The production code inserts via ``pg_insert(Blacklist).values(...)`` executed
+    through ``db.execute`` instead of ``db.add``. Each returned object exposes the
+    inserted column values as attributes (e.g. ``.mac_address``).
+    """
+    entries = []
+    for call in mock_db.execute.call_args_list:
+        stmt = call.args[0] if call.args else None
+        table = getattr(stmt, "table", None)
+        if table is None or getattr(table, "name", None) != "blacklist":
+            continue
+        entries.append(SimpleNamespace(**dict(stmt.compile().params)))
+    return entries
+
+
 def blocked_ips_response(ips):
     """Build a Sangfor get_blocked_ips response dict."""
     return {"code": 0, "data": {"items": [{"url": ip} for ip in ips]}}
@@ -275,14 +292,13 @@ class TestCreateDbEntriesForFirewall:
         assert created == 1
         assert terminal.status == TerminalStatus.BLOCKED.value
 
-        bl_objs = [c[0][0] for c in mock_db.add.call_args_list if isinstance(c[0][0], Blacklist)]
+        bl_objs = created_blacklists(mock_db)
         assert len(bl_objs) == 1
         entry = bl_objs[0]
         assert entry.mac_address == "AA:BB:CC:DD:EE:FF"
         assert entry.mac_address_normalized == "AABBCCDDEEFF"
         assert entry.source_tag == "lab"
         assert entry.firewall_tag == "fw1"
-        mock_db.flush.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_creates_entry_without_terminal(self, service, mock_db):
@@ -302,7 +318,7 @@ class TestCreateDbEntriesForFirewall:
             created = await service._create_db_entries_for_firewall("fw1", {"10.0.0.1"})
 
         assert created == 1
-        bl_objs = [c[0][0] for c in mock_db.add.call_args_list if isinstance(c[0][0], Blacklist)]
+        bl_objs = created_blacklists(mock_db)
         assert len(bl_objs) == 1
         entry = bl_objs[0]
         assert entry.mac_address is None
