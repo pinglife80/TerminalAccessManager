@@ -288,6 +288,13 @@ class SangforService:
         """
         return bool(description and description.startswith(TAM_DESCRIPTION_PREFIX))
 
+    @staticmethod
+    def is_already_exists_message(message: str) -> bool:
+        """判断防火墙返回的业务错误 message 是否表示条目已存在（幂等场景）。"""
+        if not message:
+            return False
+        return "已存在" in message or "already exist" in message.lower()
+
     async def block_ip(
         self,
         ip_list: list[str],
@@ -358,8 +365,12 @@ class SangforService:
                     results["blocked"].append(ip)
                 else:
                     error_msg = data.get("message", "unknown error")
-                    logger.error(f"Failed to block IP {ip} on Sangfor AF: {error_msg}")
-                    results["errors"].append({"ip": ip, "error": error_msg})
+                    if self.is_already_exists_message(error_msg):
+                        logger.info(f"IP {ip} already in AF blacklist (reported by API), skipping")
+                        results["skipped"].append(ip)
+                    else:
+                        logger.error(f"Failed to block IP {ip} on Sangfor AF: {error_msg}")
+                        results["errors"].append({"ip": ip, "error": error_msg})
 
             except Exception as e:
                 logger.error(f"Error blocking IP {ip} on Sangfor AF: {str(e)}")
@@ -429,7 +440,7 @@ class SangforService:
                 logger.error(f"Error unblocking IP {ip} on Sangfor AF: {str(e)}")
                 results["errors"].append({"ip": ip, "error": str(e)})
 
-        success = len(results["unblocked"]) > 0
+        success = len(results["unblocked"]) > 0 or len(results["skipped"]) > 0
         return {
             "code": 0 if success else 1,
             "message": f"Unblocked {len(results['unblocked'])}, skipped {len(results['skipped'])}, errors {len(results['errors'])}",
@@ -795,6 +806,8 @@ class SangforService:
 
                 if data.get("code") == 0:
                     logger.info(f"Blocked IP {ip} on Sangfor AF (blacklist)")
+                elif self.is_already_exists_message(data.get("message", "")):
+                    logger.info(f"IP {ip} already in AF blacklist (reported by API), skipping")
                 else:
                     logger.error(f"Failed to block IP {ip}: {data.get('message', 'unknown')}")
                 return

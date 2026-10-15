@@ -579,6 +579,20 @@ class TestBlockIp:
         assert result["code"] == 1
 
     @pytest.mark.asyncio
+    async def test_already_exists_nonzero_code_skips(self, service):
+        service._find_blacklist_entry = AsyncMock(return_value=None)
+        service._request_with_backoff = AsyncMock(
+            return_value=make_response(200, {"code": 1, "message": '黑白名单["1.1.1.1"] 已存在'})
+        )
+
+        result = await service.block_ip(["1.1.1.1"])
+
+        assert result["code"] == 0
+        assert result["data"]["skipped"] == ["1.1.1.1"]
+        assert result["data"]["errors"] == []
+        assert result["data"]["blocked"] == []
+
+    @pytest.mark.asyncio
     async def test_empty_list_returns_failure(self, service):
         result = await service.block_ip([])
         assert result["code"] == 1
@@ -600,6 +614,7 @@ class TestUnblockIp:
         result = await service.unblock_ip([{"srcIP": "1.1.1.1"}])
 
         assert result["data"]["skipped"] == ["1.1.1.1"]
+        assert result["code"] == 0
         service._request_with_backoff.assert_not_called()
 
     @pytest.mark.asyncio
@@ -612,6 +627,7 @@ class TestUnblockIp:
         result = await service.unblock_ip([{"srcIP": "1.1.1.1"}])
 
         assert result["data"]["skipped"] == ["1.1.1.1"]
+        assert result["code"] == 0
         service._request_with_backoff.assert_not_called()
 
     @pytest.mark.asyncio
