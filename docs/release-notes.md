@@ -1,12 +1,61 @@
 # 版本跟踪记录
 
-> 文档版本：v3.21.6 | 更新日期：2026-10-14
+> 文档版本：v3.21.7 | 更新日期：2026-10-15
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
 
 ---
+
+## [v3.21.7] - 2026-10-15
+
+### Redis 连接与消息投递健壮性修复（Patch 版本）
+
+#### 背景
+
+本版本集中修复四类缺陷，均无新功能、无数据库迁移：
+
+1. **Redis 连接偶发断连**：`get_redis_client` 未设置 `health_check_interval`，连接静默死亡后要到下次 `brpop` 才触发 `ConnectionError`；且 `socket_timeout` 与通知 worker 的 `brpop` 阻塞时长存在隐性耦合，调大 polling 间隔会触发 socket 超时断连。
+2. **并发插入竞态**：`_attach_active_blacklist` 与防火墙对账补建黑名单沿用 SELECT-then-INSERT，并发下触发 duplicate key 错误（单次可达 8 条）。
+3. **Sangfor 幂等误报**：防火墙对「已存在」条目返回非 0 业务码，代码记为 error，产生大量「Failed to block/unblock」误报日志。
+4. **通知消息丢失与关机崩溃**：`_main_worker`/`_retry_worker` 解析/投递异常时消息直接丢弃；`_retry_worker` 先 `zrem` 后投递，异常即永久丢失；`stop_workers` 用 `except Exception` 无法捕获 `asyncio.CancelledError`（BaseException 子类），关机时 `Application shutdown failed`。
+
+#### 主要变更
+
+| 变更项 | 说明 |
+|--------|------|
+| Redis 连接健康检查 | `get_redis_client` 增加 `health_check_interval=30`，主动剔除静默死连接 |
+| DB 插入竞态消除 | 两处黑名单建条改 `INSERT ... ON CONFLICT DO NOTHING`，消除 duplicate key |
+| Sangfor 幂等 | 识别「已存在」→ skipped，block/unblock success 判断修正 |
+| 通知投递兜底 | 坏数据丢弃留痕、投递异常 `_requeue` 重入队；stop_workers 显式捕获 CancelledError |
+
+#### 升级步骤（推荐：一键升级）
+
+```bash
+git checkout main
+git pull origin main
+./manage.sh upgrade
+```
+
+#### 升级注意事项
+
+- 本次无新增 Alembic 迁移文件。
+- 本次为后端业务逻辑 + 测试变更，无前端资产改动，无需重建前端镜像（`./manage.sh upgrade` 会重建后端）。
+
+#### 文件变更清单
+
+| 文件 | 变更类型 | 说明 |
+|------|---------|------|
+| `backend/app/core/security.py` | 编辑 | Redis 客户端增加 health_check_interval + socket_timeout 约束注释 |
+| `backend/app/services/compliance_service.py` | 编辑 | `_attach_active_blacklist` 改 ON CONFLICT DO NOTHING |
+| `backend/app/services/firewall_reconciliation_service.py` | 编辑 | 补建黑名单改 ON CONFLICT DO NOTHING |
+| `backend/app/services/sangfor_service.py` | 编辑 | 新增 is_already_exists_message + block/unblock 幂等 |
+| `backend/app/services/notification_workers.py` | 编辑 | stop_workers CancelledError + 投递兜底 _requeue + _schedule_retry 日志一致性 |
+| `backend/tests/*`（4 个） | 编辑 | ON CONFLICT 断言适配、sangfor 幂等、通知兜底 7 用例 |
+| `docs/changelog.md` | 编辑 | 新增 3.21.7 条目 |
+| `docs/release-notes.md` | 编辑 | 新增 v3.21.7 段 |
+| `docs/production-readiness-assessment.md` | 编辑 | 跟踪表新增 v3.21.7 |
 
 ## [v3.21.6] - 2026-10-14
 
