@@ -12,6 +12,7 @@ Core compliance checking logic:
 import contextlib
 import ipaddress
 import json
+import re
 import uuid
 from datetime import datetime, timedelta, UTC
 
@@ -47,6 +48,14 @@ SCOPE_CACHE_TTL = 300  # 5 minutes
 # Distributed lock for compliance recalculation
 COMPLIANCE_RECALC_LOCK_KEY = "compliance:recalc:lock"
 COMPLIANCE_RECALC_LOCK_TTL = 60  # 60 seconds
+
+# Matches Auto-blocked / Auto-unblocked terminal comments for semantic dedup.
+# dir ("on"/"from") is implied by action ("blocked"/"unblocked") and ignored;
+# the optional "(failed on: ...)" suffix is execution detail and not part of the key.
+_AUTO_COMMENT_RE = re.compile(
+    r"^Auto-(?P<action>blocked|unblocked) by TAM (?:on|from) firewall "
+    r"\[(?P<tags>[^\]]*)\](?:\s*\(failed on:\s*(?P<failed>[^)]*)\))?$"
+)
 
 
 async def _get_redis():
@@ -543,6 +552,7 @@ class ComplianceService:
             # Per-entry: track success per firewall independently
             entry_errors = []
             successfully_blocked_fw = []
+            newly_blocked_fw = []
             for fw_tag in firewall_tags:
                 svc = sangfor_services.get(fw_tag)
                 if not svc:
@@ -556,8 +566,11 @@ class ComplianceService:
                         source_tag=fw_tag,
                         reason=f"Auto-blocked: non-compliant (source={arp_source_tag})"
                     )
-                    if result.get("code") == 0:
+                    is_blocked, newly_blocked = self._block_outcome(result)
+                    if is_blocked:
                         successfully_blocked_fw.append(fw_tag)
+                        if newly_blocked:
+                            newly_blocked_fw.append(fw_tag)
                         logger.debug(f"Blocked {entry.ip_address} on firewall '{fw_tag}'")
                     else:
                         error_msg = result.get("message", "unknown error")
@@ -574,15 +587,14 @@ class ComplianceService:
             if any_success:
                 # Update MAC status
                 entry.status = "blocked"
-                entry.firewall_tag = successfully_blocked_fw[0] if len(successfully_blocked_fw) == 1 else ",".join(successfully_blocked_fw)
+                entry.firewall_tag = successfully_blocked_fw[0] if len(successfully_blocked_fw) == 1 else ",".join(sorted(successfully_blocked_fw))
                 entry.block_state = None
-                # Update comments with block info
-                fw_info = ",".join(successfully_blocked_fw)
-                block_comment = f"Auto-blocked by TAM on firewall [{fw_info}]"
-                if entry.comments:
-                    entry.comments = f"{entry.comments}; {block_comment}"
-                else:
-                    entry.comments = block_comment
+                # Update comments only for genuinely new firewall blocks
+                if newly_blocked_fw:
+                    self._append_terminal_comment(
+                        entry,
+                        f"Auto-blocked by TAM on firewall [{','.join(sorted(newly_blocked_fw))}]",
+                    )
 
                 # Create a separate Blacklist record only for firewalls that succeeded
                 import re
@@ -653,14 +665,15 @@ class ComplianceService:
                     "errors": entry_errors if entry_errors else None,
                 })
 
-                # Emit terminal.blocked event for notification dispatch.
-                from app.services.event_emitter import emit_terminal_blocked
-                await emit_terminal_blocked(
-                    ip_address=entry.ip_address,
-                    mac_address=entry.mac_address or "",
-                    reason=f"Auto-blocked: non-compliant (source={arp_source_tag})",
-                    blocked_by="system",
-                )
+                # Emit terminal.blocked event only for genuinely new blocks.
+                if newly_blocked_fw:
+                    from app.services.event_emitter import emit_terminal_blocked
+                    await emit_terminal_blocked(
+                        ip_address=entry.ip_address,
+                        mac_address=entry.mac_address or "",
+                        reason=f"Auto-blocked: non-compliant (source={arp_source_tag})",
+                        blocked_by="system",
+                    )
             else:
                 skipped += 1
                 entry.block_state = "block_failed"
@@ -950,13 +963,13 @@ class ComplianceService:
                     terminal_record.wl_match_type = wl_match.get("match_type") if isinstance(wl_match, dict) else None
                     # Reset confirm count so next check will properly re-evaluate
                     terminal_record.non_compliant_confirm_count = 0
-                    # Update comments with unblock info
-                    resolved_fw = entries[0].firewall_tag or "N/A"
-                    unblock_comment = f"Auto-unblocked by TAM from firewall [{resolved_fw}]"
-                    if terminal_record.comments:
-                        terminal_record.comments = f"{terminal_record.comments}; {unblock_comment}"
-                    else:
-                        terminal_record.comments = unblock_comment
+                    # Update comments with unblock info (all successfully unblocked firewalls)
+                    resolved_fw_tags = sorted({e.firewall_tag for e in entries if e.firewall_tag})
+                    resolved_fw = ",".join(resolved_fw_tags) if resolved_fw_tags else "N/A"
+                    self._append_terminal_comment(
+                        terminal_record,
+                        f"Auto-unblocked by TAM from firewall [{resolved_fw}]",
+                    )
 
                 unblocked += 1
                 details.append({
@@ -1548,11 +1561,52 @@ class ComplianceService:
         await self.db.execute(stmt)
         return "created"
 
-    async def _block_on_firewall(
+    @staticmethod
+    def _block_outcome(result: dict) -> tuple[bool, bool]:
+        """Parse a Sangfor ``block_ip`` result into flag tuple.
+
+        Returns ``(is_blocked, newly_blocked)``:
+        - ``is_blocked`` is True when the IP is now present on the firewall
+          (either newly added or already existed / skipped).
+        - ``newly_blocked`` is True only when a brand-new firewall entry was
+          actually created this call (``blocked`` list non-empty).
+        """
+        data = result.get("data") or {}
+        newly_blocked = len(data.get("blocked", [])) > 0
+        is_blocked = result.get("code") == 0
+        return is_blocked, newly_blocked
+
+    @staticmethod
+    def _comment_dedupe_key(comment: str):
+        """返回注释的去重键：Auto-* 注释按「动作 + 防火墙集合(排序)」归一化；
+        其它注释退化为精确匹配。"""
+        c = (comment or "").strip()
+        m = _AUTO_COMMENT_RE.match(c)
+        if not m:
+            return ("exact", c)
+        tags = tuple(sorted(t.strip() for t in m.group("tags").split(",") if t.strip()))
+        return ("auto", m.group("action"), tags)
+
+    @staticmethod
+    def _append_terminal_comment(terminal: Terminal, comment: str) -> None:
+        """幂等追加一条分号分隔的注释；Auto-* 注释按语义去重，其它注释按精确匹配去重。"""
+        if not comment:
+            return
+        target_key = ComplianceService._comment_dedupe_key(comment)
+        existing = [c.strip() for c in (terminal.comments or "").split(";") if c.strip()]
+        for ex in existing:
+            if ComplianceService._comment_dedupe_key(ex) == target_key:
+                return
+        terminal.comments = f"{terminal.comments}; {comment}" if terminal.comments else comment
+
+    async def _block_on_firewall_detailed(
         self, ip_address: str, firewall_tag: str, block_time: str = "30d",
         reason: str = "Auto-blocked: non-compliant"
-    ) -> bool:
-        """Block an IP on the specified firewall via permanent blacklist (synchronous)"""
+    ) -> tuple[bool, bool]:
+        """Block an IP and return ``(is_blocked, newly_blocked)``.
+
+        See :meth:`_block_outcome` for flag semantics.
+        """
         try:
             stmt = select(DataSource).where(
                 (DataSource.tag == firewall_tag) & (DataSource.type == "sangfor")
@@ -1569,14 +1623,14 @@ class ComplianceService:
                     "success": False,
                     "error": "firewall_not_found_or_disabled",
                 }, ip_address="System")
-                return False
+                return False, False
 
             from app.core.crypto import decrypt_config
             from app.services.sangfor_service import SangforService
             config = fw_source.config
             if config:
                 config = decrypt_config(config)
-            
+
             svc = await SangforService.get_cached_service(
                 base_url=config.get("base_url", ""),
                 username=config.get("username", ""),
@@ -1590,19 +1644,20 @@ class ComplianceService:
                 source_tag=firewall_tag,
                 reason=reason,
             )
-            success = result.get("code") == 0
-            if success:
-                logger.info(f"Blocked {ip_address} on firewall '{firewall_tag}'")
+            is_blocked, newly_blocked = self._block_outcome(result)
+            if is_blocked:
+                logger.info(f"Blocked {ip_address} on firewall '{firewall_tag}' (newly_blocked={newly_blocked})")
             else:
                 logger.error(f"Failed to block {ip_address} on firewall '{firewall_tag}': {result.get('message', 'unknown error')}")
             await self.log_action("system", "firewall_block", "firewall", firewall_tag, {
-                "message": f"Blocked IP {ip_address} on firewall {firewall_tag}" if success else f"Failed to block IP {ip_address} on firewall {firewall_tag}: {result.get('message', 'unknown error')}",
+                "message": f"Blocked IP {ip_address} on firewall {firewall_tag}" if is_blocked else f"Failed to block IP {ip_address} on firewall {firewall_tag}: {result.get('message', 'unknown error')}",
                 "ip_address": ip_address,
                 "firewall_tag": firewall_tag,
-                "success": success,
+                "success": is_blocked,
+                "newly_blocked": newly_blocked,
                 "reason": reason,
             }, ip_address="System")
-            return success
+            return is_blocked, newly_blocked
         except Exception as e:
             logger.error(f"Failed to block {ip_address} on firewall '{firewall_tag}': {str(e)}")
             await self.log_action("system", "firewall_block", "firewall", firewall_tag, {
@@ -1612,7 +1667,20 @@ class ComplianceService:
                 "success": False,
                 "error": str(e),
             }, ip_address="System")
-            return False
+            return False, False
+
+    async def _block_on_firewall(
+        self, ip_address: str, firewall_tag: str, block_time: str = "30d",
+        reason: str = "Auto-blocked: non-compliant"
+    ) -> bool:
+        """Block an IP on the specified firewall via permanent blacklist (synchronous).
+
+        Returns True when the IP is now present on the firewall (including idempotent skips).
+        """
+        is_blocked, _ = await self._block_on_firewall_detailed(
+            ip_address, firewall_tag, block_time=block_time, reason=reason
+        )
+        return is_blocked
 
     async def _unblock_on_firewall(self, ip_address: str, firewall_tag: str) -> bool:
         """Unblock an IP on the specified firewall (synchronous)"""
@@ -1921,14 +1989,11 @@ class ComplianceService:
                             terminal.firewall_tag = None
                             terminal.block_state = None
                             unblocked = True
-                            fw_info = ",".join(successful_fw_tags)
+                            fw_info = ",".join(sorted(successful_fw_tags))
                             unblock_comment = f"Auto-unblocked by TAM from firewall [{fw_info}]"
                             if failed_fw_tags:
-                                unblock_comment += f" (failed on: {','.join(failed_fw_tags)})"
-                            if terminal.comments:
-                                terminal.comments = f"{terminal.comments}; {unblock_comment}"
-                            else:
-                                terminal.comments = unblock_comment
+                                unblock_comment += f" (failed on: {','.join(sorted(failed_fw_tags))})"
+                            self._append_terminal_comment(terminal, unblock_comment)
                             
                             # Determine unblock reason based on new compliance status
                             # (IP/MAC combination, consistent with block)
@@ -1972,7 +2037,7 @@ class ComplianceService:
                                 )
                             
                             if failed_fw_tags:
-                                logger.warning(f"Partially auto-unblocked {ip_addr} (now {new_compliance}): succeeded on [{fw_info}], failed on [{','.join(failed_fw_tags)}]")
+                                logger.warning(f"Partially auto-unblocked {ip_addr} (now {new_compliance}): succeeded on [{fw_info}], failed on [{','.join(sorted(failed_fw_tags))}]")
                             else:
                                 logger.info(f"Auto-unblocked {ip_addr} (now {new_compliance}) from firewall(s) '{fw_info}'")
                         else:
@@ -2050,10 +2115,12 @@ class ComplianceService:
 
                     if not _cooldown_skip_block:
                         successfully_blocked_fw = []
+                        newly_blocked_fw = []
                         block_errors = []
                         for fw_tag in missing_fw_tags:
                             try:
-                                # Check if actually already blocked on firewall (terminal status may be stale)
+                                # Short-circuit: DB already marks this firewall blocked;
+                                # just record it (no new comment / event).
                                 already_blocked_on_fw = (
                                     terminal.status == "blocked" and
                                     terminal.firewall_tag and fw_tag in terminal.firewall_tag.split(",")
@@ -2063,12 +2130,14 @@ class ComplianceService:
                                     logger.debug(f"Terminal {ip_addr} already marked blocked on firewall '{fw_tag}'")
                                     continue
 
-                                success = await self._block_on_firewall(
+                                is_blocked, newly_blocked = await self._block_on_firewall_detailed(
                                     ip_addr, fw_tag,
                                     reason="Auto-blocked: compliance recalculation"
                                 )
-                                if success:
+                                if is_blocked:
                                     successfully_blocked_fw.append(fw_tag)
+                                    if newly_blocked:
+                                        newly_blocked_fw.append(fw_tag)
                                 else:
                                     block_errors.append(f"Failed to block {ip_addr} on firewall '{fw_tag}'")
                                     logger.warning(f"Failed to auto-block {ip_addr} on firewall '{fw_tag}'")
@@ -2111,30 +2180,31 @@ class ComplianceService:
                                     continue
 
                             # Update terminal status with ALL active firewalls
-                            all_active_fw = list(active_fw_tags | set(successfully_blocked_fw))
+                            all_active_fw = sorted(active_fw_tags | set(successfully_blocked_fw))
                             terminal.status = "blocked"
                             terminal.firewall_tag = all_active_fw[0] if len(all_active_fw) == 1 else ",".join(all_active_fw)
                             terminal.block_state = None
-                            fw_info = ",".join(successfully_blocked_fw)
-                            block_comment = f"Auto-blocked by TAM on firewall [{fw_info}]"
-                            if terminal.comments:
-                                terminal.comments = f"{terminal.comments}; {block_comment}"
-                            else:
-                                terminal.comments = block_comment
+                            fw_info = ",".join(sorted(successfully_blocked_fw))
+                            if newly_blocked_fw:
+                                self._append_terminal_comment(
+                                    terminal,
+                                    f"Auto-blocked by TAM on firewall [{','.join(sorted(newly_blocked_fw))}]",
+                                )
 
                             if block_errors:
                                 logger.warning(f"Partial block for {ip_addr}: succeeded on {successfully_blocked_fw}, failed: {block_errors}")
                             else:
                                 logger.info(f"Auto-blocked {ip_addr} (now non_compliant) on firewall(s) '{fw_info}'")
 
-                            # Emit terminal.blocked event for notification dispatch (retry-block path).
-                            from app.services.event_emitter import emit_terminal_blocked
-                            await emit_terminal_blocked(
-                                ip_address=ip_addr,
-                                mac_address=mac_addr or "",
-                                reason=block_reason,
-                                blocked_by="system",
-                            )
+                            # Emit terminal.blocked event only for genuinely new blocks.
+                            if newly_blocked_fw:
+                                from app.services.event_emitter import emit_terminal_blocked
+                                await emit_terminal_blocked(
+                                    ip_address=ip_addr,
+                                    mac_address=mac_addr or "",
+                                    reason=block_reason,
+                                    blocked_by="system",
+                                )
                         else:
                             # All firewall blocks failed.
                             if old_compliance == "non_compliant":
