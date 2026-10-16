@@ -12,6 +12,7 @@
 
 | 文档版本 | 更新日期 | 关联版本 | 更新内容 |
 |---------|---------|---------|---------|
+| v3.21.8 | 2026-10-16 | v3.21.8 | 终端 Auto-* 注释重复追加修复（_block_outcome 区分 newly_blocked、_append_terminal_comment 语义归一化去重、tag 列表排序一致化）；新增 scripts/cleanup_duplicate_comments.py 订正脚本 |
 | v3.21.7 | 2026-10-15 | v3.21.7 | Redis 连接健康检查（health_check_interval=30 + socket_timeout 约束）；黑名单插入竞态 ON CONFLICT DO NOTHING 消除 duplicate key（compliance_service / firewall_reconciliation_service）；Sangfor 幂等（已存在→skipped、unblock success 补 skipped>0）；通知投递兜底（_requeue 重入队、stop_workers 显式捕获 CancelledError、_schedule_retry 日志一致性） |
 | v3.21.6 | 2026-10-14 | v3.21.6 | 终端 blocked 状态一致性修复（禁用 ARP 源保护 blocked 状态、对账补建/重封锁 unknown→non_compliant 收敛、白名单命中 bypass）；测试文件入库（.gitignore `test_*.py`→`/test_*.py`、23 个后端测试入库、复合身份模型测试同步） |
 | v3.21.5 | 2026-10-13 | v3.21.5 | upgrade 后版本号显示上一个版本修复（manage.sh `dc()` 由导出启动时缓存的 VERSION 变量改为每次实时读取磁盘 VERSION 文件） |
