@@ -1,6 +1,6 @@
 # 更新日志
 
-> 文档版本：v3.21.7  更新日期：2026-10-15
+> 文档版本：v3.21.8  更新日期：2026-10-16
 
 本文件记录 TerminalAccessManager 的所有重要变更。
 
@@ -8,6 +8,18 @@
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ***
+
+## [3.21.8] - 2026-10-16
+
+### 修复
+
+- **终端 Auto-* 注释重复追加**：Sangfor `block_ip` 把「已存在（skipped）」一并计为成功（code 0），导致每次合规重算都把「已封锁」误判为「新封锁」反复追加 `Auto-blocked` 注释。新增 `_block_outcome` 拆出 `is_blocked` / `newly_blocked`，仅真正新建防火墙条目时才追加注释并触发 `terminal.blocked` 事件；`_append_terminal_comment` 由精确匹配升级为「动作 + 防火墙集合（排序）」语义归一化去重，覆盖 Auto-blocked / Auto-unblocked 的多防火墙顺序漂移与 `(failed on: ...)` 后缀差异
+  - 关联文件：`services/compliance_service.py`
+
+### 其他
+
+- **新增数据订正脚本**：`scripts/cleanup_duplicate_comments.py`（dry-run / `--apply` 双模式），清理历史遗留的重复 Auto-blocked / Auto-unblocked 注释，每个「动作 + 防火墙集合」仅保留首条
+  - 关联文件：`scripts/cleanup_duplicate_comments.py`
 
 ## [3.21.7] - 2026-10-15
 

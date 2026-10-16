@@ -1,12 +1,54 @@
 # 版本跟踪记录
 
-> 文档版本：v3.21.7 | 更新日期：2026-10-15
+> 文档版本：v3.21.8 | 更新日期：2026-10-16
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
 
 ---
+
+## [v3.21.8] - 2026-10-16
+
+### 终端 Auto-* 注释重复追加修复（Patch 版本）
+
+#### 背景
+
+终端管理 `comments` 字段出现大量重复的 `Auto-blocked by TAM on firewall [hq]` 与 `Auto-unblocked by TAM from firewall [hq]` 追加记录。根因有二：① Sangfor `block_ip` 把「防火墙已存在（skipped）」一并计为成功（code 0），使合规重算把「已封锁」误判为「新封锁」反复追加 Auto-blocked 注释；② 注释追加仅精确字符串匹配，无法覆盖多防火墙 tag 顺序漂移与 `(failed on: ...)` 后缀差异，语义等价注释重复累积。本版本拆出 `newly_blocked` 仅记录真实新封锁事件、将注释追加升级为「动作 + 防火墙集合」语义归一化去重，并新增订正脚本清理历史遗留数据。因均为缺陷修复、无新增功能、无迁移，故以 Patch 发布。
+
+#### 主要变更
+
+| 变更项 | 说明 |
+|--------|------|
+| `newly_blocked` 区分 | `_block_outcome` 拆出 `is_blocked`/`newly_blocked`，仅真实新建防火墙条目时追加注释/触发事件 |
+| 语义归一化去重 | `_append_terminal_comment` 按「动作 + 防火墙集合（排序）」去重，忽略 `(failed on: ...)` 后缀 |
+| 注释排序确定 | Auto-blocked/Auto-unblocked 及 `firewall_tag` 字段的防火墙 tag 列表统一 `sorted` |
+| 数据订正脚本 | 新增 `scripts/cleanup_duplicate_comments.py`，dry-run/`--apply` 清理历史重复注释 |
+
+#### 升级步骤（推荐：一键升级）
+
+```bash
+git checkout main
+git pull origin main
+./manage.sh upgrade
+```
+
+#### 升级注意事项
+
+- 本次无新增 Alembic 迁移文件。
+- 本次为后端业务逻辑 + 测试 + 脚本变更，无前端资产改动，无需重建前端镜像（`./manage.sh upgrade` 会重建后端）。
+- 历史重复注释如需清理，可在容器内手动执行：`docker exec -w /app -e PYTHONPATH=/app tam_backend python scripts/cleanup_duplicate_comments.py --apply`（dry-run 缺省）。
+
+#### 文件变更清单
+
+| 文件 | 变更类型 | 说明 |
+|------|---------|------|
+| `backend/app/services/compliance_service.py` | 编辑 | `_block_outcome`/`_block_on_firewall_detailed`/`_comment_dedupe_key` 新增；`_append_terminal_comment` 语义去重重写；`newly_blocked` 区分；tag 列表排序 |
+| `backend/tests/test_compliance_service.py` | 编辑 | 新增 `TestBlockOutcome`/`TestAppendTerminalComment`/`TestBlockOnFirewallDetailed` + 归一化用例 |
+| `backend/scripts/cleanup_duplicate_comments.py` | 新增 | 重复 Auto-* 注释数据订正脚本 |
+| `docs/changelog.md` | 编辑 | 新增 3.21.8 条目 |
+| `docs/release-notes.md` | 编辑 | 新增 v3.21.8 段 |
+| `docs/production-readiness-assessment.md` | 编辑 | 文档版本跟踪表新增 v3.21.8 |
 
 ## [v3.21.7] - 2026-10-15
 
