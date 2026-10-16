@@ -134,6 +134,15 @@ def scripted_execute(results):
     return AsyncMock(side_effect=side_effect)
 
 
+def _make_block_side_effect(block):
+    """Wrap an async block callable into an ``(is_blocked, newly_blocked)`` side-effect."""
+    async def side_effect(ip, fw_tag, block_time="30d", reason="auto"):
+        r = await block(ip, fw_tag, reason=reason)
+        return (r, r)
+
+    return side_effect
+
+
 @contextlib.contextmanager
 def apply_result_mocks(service, mock_db, results, **kw):
     """Patch _apply_compliance_result collaborators and script db.execute.
@@ -172,9 +181,10 @@ def apply_result_mocks(service, mock_db, results, **kw):
         else patch.object(service, "_unblock_on_firewall", return_value=unblock)
     )
     block_patch = (
-        patch.object(service, "_block_on_firewall", side_effect=block)
+        patch.object(service, "_block_on_firewall_detailed",
+                     side_effect=_make_block_side_effect(block))
         if callable(block)
-        else patch.object(service, "_block_on_firewall", return_value=block)
+        else patch.object(service, "_block_on_firewall_detailed", return_value=(block, block))
     )
 
     with patch.object(service, "log_action", return_value=None), \
@@ -990,7 +1000,7 @@ class TestRecalculateCompliance:
              patch.object(service, "_get_compliant_downgrade_threshold", return_value=1), \
              patch.object(service, "_get_cooldown_minutes", return_value=10), \
              patch.object(service, "_get_bound_firewall_tags", return_value=["fw1"]), \
-             patch.object(service, "_block_on_firewall", return_value=True), \
+             patch.object(service, "_block_on_firewall_detailed", return_value=(True, True)), \
              patch.object(service, "_get_block_time", return_value="30d"):
 
             result = await service.recalculate_all_compliance()
@@ -2189,6 +2199,112 @@ class TestBlockOnFirewall:
         m["svc"].block_ip.assert_awaited_once_with(
             ["192.168.1.100"], source_tag="fw1", reason="custom reason"
         )
+
+
+class TestBlockOutcome:
+    """Tests for `_block_outcome` (blocked vs skipped semantics)."""
+
+    def test_newly_blocked(self):
+        result = {"code": 0, "data": {"blocked": [{"ip": "x"}], "skipped": [], "errors": []}}
+        assert ComplianceService._block_outcome(result) == (True, True)
+
+    def test_skipped_only(self):
+        result = {"code": 0, "data": {"blocked": [], "skipped": [{"ip": "x"}], "errors": []}}
+        assert ComplianceService._block_outcome(result) == (True, False)
+
+    def test_failure(self):
+        result = {"code": 1, "data": {"blocked": [], "skipped": [], "errors": [{"ip": "x"}]}}
+        assert ComplianceService._block_outcome(result) == (False, False)
+
+    def test_missing_data_field(self):
+        result = {"code": 0}
+        assert ComplianceService._block_outcome(result) == (True, False)
+
+
+class TestAppendTerminalComment:
+    """Tests for `_append_terminal_comment` (idempotent, dedup append)."""
+
+    def _term(self, comments=""):
+        return create_mock_terminal(comments=comments)
+
+    def test_noop_on_empty_comment(self):
+        t = self._term()
+        ComplianceService._append_terminal_comment(t, "")
+        assert t.comments == ""
+
+    def test_append_when_empty(self):
+        t = self._term()
+        ComplianceService._append_terminal_comment(t, "Auto-blocked by TAM on firewall [hq]")
+        assert t.comments == "Auto-blocked by TAM on firewall [hq]"
+
+    def test_append_when_existing_other_comment(self):
+        t = self._term(comments="some existing")
+        ComplianceService._append_terminal_comment(t, "Auto-blocked by TAM on firewall [hq]")
+        assert t.comments == "some existing; Auto-blocked by TAM on firewall [hq]"
+
+    def test_dedup_skips_existing(self):
+        t = self._term(comments="Auto-blocked by TAM on firewall [hq]")
+        ComplianceService._append_terminal_comment(t, "Auto-blocked by TAM on firewall [hq]")
+        assert t.comments == "Auto-blocked by TAM on firewall [hq]"
+
+    def test_dedup_skips_existing_among_many(self):
+        t = self._term(comments="a; Auto-blocked by TAM on firewall [hq]; b")
+        ComplianceService._append_terminal_comment(t, "Auto-blocked by TAM on firewall [hq]")
+        assert t.comments == "a; Auto-blocked by TAM on firewall [hq]; b"
+
+    def test_dedup_skips_unblock_multi_fw_order(self):
+        t = self._term(comments="Auto-unblocked by TAM from firewall [hq,bj]")
+        ComplianceService._append_terminal_comment(t, "Auto-unblocked by TAM from firewall [bj,hq]")
+        assert t.comments == "Auto-unblocked by TAM from firewall [hq,bj]"
+
+    def test_dedup_skips_unblock_failed_suffix(self):
+        t = self._term(comments="Auto-unblocked by TAM from firewall [hq] (failed on: bj)")
+        ComplianceService._append_terminal_comment(t, "Auto-unblocked by TAM from firewall [hq]")
+        assert t.comments == "Auto-unblocked by TAM from firewall [hq] (failed on: bj)"
+
+    def test_append_unblock_different_fw_set(self):
+        t = self._term(comments="Auto-unblocked by TAM from firewall [hq]")
+        ComplianceService._append_terminal_comment(t, "Auto-unblocked by TAM from firewall [bj]")
+        assert t.comments == "Auto-unblocked by TAM from firewall [hq]; Auto-unblocked by TAM from firewall [bj]"
+
+    def test_dedup_skips_block_multi_fw_order(self):
+        t = self._term(comments="Auto-blocked by TAM on firewall [hq,bj]")
+        ComplianceService._append_terminal_comment(t, "Auto-blocked by TAM on firewall [bj,hq]")
+        assert t.comments == "Auto-blocked by TAM on firewall [hq,bj]"
+
+
+class TestBlockOnFirewallDetailed:
+    """Tests for `_block_on_firewall_detailed` returning (is_blocked, newly_blocked)."""
+
+    @pytest.mark.asyncio
+    async def test_skipped_returns_blocked_without_newly_blocked(self, service, mock_db):
+        fw = create_mock_fw_source(enabled=True, config={"enc": "x"})
+        with firewall_ops_mocks(service, mock_db, fw) as m:
+            m["svc"].block_ip = AsyncMock(return_value={
+                "code": 0,
+                "data": {"blocked": [], "skipped": [{"ip": "192.168.1.100"}], "errors": []},
+            })
+            is_blocked, newly_blocked = await service._block_on_firewall_detailed(
+                "192.168.1.100", "fw1"
+            )
+
+        assert is_blocked is True
+        assert newly_blocked is False
+
+    @pytest.mark.asyncio
+    async def test_new_block_returns_newly_blocked(self, service, mock_db):
+        fw = create_mock_fw_source(enabled=True, config={"enc": "x"})
+        with firewall_ops_mocks(service, mock_db, fw) as m:
+            m["svc"].block_ip = AsyncMock(return_value={
+                "code": 0,
+                "data": {"blocked": [{"ip": "192.168.1.100"}], "skipped": [], "errors": []},
+            })
+            is_blocked, newly_blocked = await service._block_on_firewall_detailed(
+                "192.168.1.100", "fw1"
+            )
+
+        assert is_blocked is True
+        assert newly_blocked is True
 
 
 class TestUnblockOnFirewall:
