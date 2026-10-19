@@ -101,17 +101,34 @@ class ComplianceScopeService:
     def _validate_scope_value(scope_type: str, scope_value: str) -> None:
         """Validate the scope value format."""
         if not scope_value or not scope_value.strip():
+            logger.warning(
+                "Compliance scope validation failed | scope_type='%s' "
+                "scope_value='%s' error='scope value is empty'",
+                scope_type, scope_value,
+            )
             raise ValueError("Scope value cannot be empty")
         scope_value = scope_value.strip()
 
         if scope_type in ("ip_cidr", "ip_cidr_any"):
             try:
-                network = ipaddress.ip_network(scope_value, strict=False)
-                if network.prefixlen < 24:
-                    raise ValueError(
-                        f"CIDR prefix /{network.prefixlen} is too broad (min /24)"
-                    )
+                if "/" not in scope_value:
+                    raise ValueError("missing prefix length (expected e.g. 192.168.1.0/24)")
+                ip_part, prefix_str = scope_value.rsplit("/", 1)
+                if not prefix_str.isdigit() or not (0 <= int(prefix_str) <= 32):
+                    raise ValueError("prefix length must be an integer in 0-32")
+                prefix = int(prefix_str)
+                network = ipaddress.IPv4Network(scope_value, strict=False)
+                logger.info(
+                    "Compliance scope CIDR validation passed | scope_type='%s' "
+                    "scope_value='%s' ip_part='%s' prefix=%d normalized_network='%s'",
+                    scope_type, scope_value, ip_part, prefix, str(network),
+                )
             except (ValueError, TypeError) as e:
+                logger.warning(
+                    "Compliance scope CIDR validation failed | scope_type='%s' "
+                    "scope_value='%s' error='%s'",
+                    scope_type, scope_value, e,
+                )
                 raise ValueError(f"Invalid IP CIDR format: '{scope_value}': {e}")
 
         elif scope_type in ("ip_range", "ip_range_any"):
