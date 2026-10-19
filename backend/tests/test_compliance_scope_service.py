@@ -126,7 +126,7 @@ class TestCreateScope:
 
     @pytest.mark.asyncio
     async def test_invalid_value_raises(self, service, mock_db):
-        data = ComplianceScopeCreate(scope_type="ip_cidr", scope_value="10.0.0.0/16")
+        data = ComplianceScopeCreate(scope_type="ip_cidr", scope_value="192.168.1.0/33")
         with patch("app.services.compliance_scope_service.invalidate_scope_cache") as inval:
             with pytest.raises(ValueError):
                 await service.create_scope(data, "admin")
@@ -177,7 +177,7 @@ class TestUpdateScope:
     async def test_invalid_value_raises(self, service, mock_db):
         scope = make_scope(1)
         mock_db.execute = AsyncMock(return_value=make_result(scalar=scope))
-        data = ComplianceScopeUpdate(scope_type="ip_cidr", scope_value="10.0.0.0/16")
+        data = ComplianceScopeUpdate(scope_type="ip_cidr", scope_value="192.168.1.0/33")
 
         with pytest.raises(ValueError):
             await service.update_scope(1, data)
@@ -237,9 +237,33 @@ class TestValidateScopeValue:
     def test_ip_cidr_valid(self):
         assert ComplianceScopeService._validate_scope_value("ip_cidr", "192.168.1.0/24") is None
 
-    def test_ip_cidr_too_broad(self):
-        with pytest.raises(ValueError, match="too broad"):
-            ComplianceScopeService._validate_scope_value("ip_cidr", "10.0.0.0/16")
+    def test_ip_cidr_broad_valid(self):
+        assert ComplianceScopeService._validate_scope_value("ip_cidr", "10.0.0.0/16") is None
+
+    def test_ip_cidr_full_range_valid(self):
+        assert ComplianceScopeService._validate_scope_value("ip_cidr", "0.0.0.0/0") is None
+
+    def test_ip_cidr_class_a_valid(self):
+        assert ComplianceScopeService._validate_scope_value("ip_cidr", "10.0.0.0/8") is None
+
+    def test_ip_cidr_host_route_valid(self):
+        assert ComplianceScopeService._validate_scope_value("ip_cidr", "192.168.1.5/32") is None
+
+    def test_ip_cidr_prefix_too_large(self):
+        with pytest.raises(ValueError, match="Invalid IP CIDR format"):
+            ComplianceScopeService._validate_scope_value("ip_cidr", "192.168.1.0/33")
+
+    def test_ip_cidr_prefix_negative(self):
+        with pytest.raises(ValueError, match="Invalid IP CIDR format"):
+            ComplianceScopeService._validate_scope_value("ip_cidr", "192.168.1.0/-1")
+
+    def test_ip_cidr_prefix_non_integer(self):
+        with pytest.raises(ValueError, match="Invalid IP CIDR format"):
+            ComplianceScopeService._validate_scope_value("ip_cidr", "192.168.1.0/abc")
+
+    def test_ip_cidr_missing_prefix(self):
+        with pytest.raises(ValueError, match="Invalid IP CIDR format"):
+            ComplianceScopeService._validate_scope_value("ip_cidr", "192.168.1.0")
 
     def test_ip_cidr_invalid(self):
         with pytest.raises(ValueError, match="Invalid IP CIDR format"):
@@ -286,9 +310,15 @@ class TestValidateScopeValue:
     def test_ip_cidr_any_valid(self):
         assert ComplianceScopeService._validate_scope_value("ip_cidr_any", "192.168.1.0/24") is None
 
-    def test_ip_cidr_any_too_broad(self):
-        with pytest.raises(ValueError, match="too broad"):
-            ComplianceScopeService._validate_scope_value("ip_cidr_any", "10.0.0.0/16")
+    def test_ip_cidr_any_broad_valid(self):
+        assert ComplianceScopeService._validate_scope_value("ip_cidr_any", "10.0.0.0/16") is None
+
+    def test_ip_cidr_any_host_route_valid(self):
+        assert ComplianceScopeService._validate_scope_value("ip_cidr_any", "192.168.1.5/32") is None
+
+    def test_ip_cidr_any_prefix_invalid(self):
+        with pytest.raises(ValueError, match="Invalid IP CIDR format"):
+            ComplianceScopeService._validate_scope_value("ip_cidr_any", "192.168.1.0/33")
 
     def test_ip_cidr_any_invalid(self):
         with pytest.raises(ValueError, match="Invalid IP CIDR format"):
