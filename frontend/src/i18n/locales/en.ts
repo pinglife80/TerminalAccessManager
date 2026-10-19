@@ -1521,7 +1521,7 @@ const en = {
     activeLabel: 'Active',
     createdAt: 'Created At',
     createdBy: 'Created By',
-    ipCidrDesc: 'CIDR format (min /24). Terminals in this network use IP-only matching against baseline',
+    ipCidrDesc: 'CIDR format, prefix 0-32 (/32 equals a single IP). Terminals in this network use IP-only matching against baseline',
     ipRangeDesc: 'Start-end IP, e.g., 192.168.1.1-255. Terminals in this range use IP-only matching',
     macPrefixArpDesc: '3-5 segment MAC prefix, e.g., AA:BB:CC. Terminals matching this prefix use IP-only matching',
     macPrefixIpguardDesc: '3-5 segment MAC prefix, e.g., AA:BB:CC. Baseline entries with matching MAC accept IP-only match',

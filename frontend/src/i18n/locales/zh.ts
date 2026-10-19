@@ -1521,7 +1521,7 @@ const zh = {
     activeLabel: '启用',
     createdAt: '创建时间',
     createdBy: '创建者',
-    ipCidrDesc: 'CIDR 格式，最小 /24 网段。终端 IP 在此网段时仅用 IP 匹配合规基线',
+    ipCidrDesc: 'CIDR 格式，掩码 0~32（/32 等价单个 IP）。终端 IP 在此网段时仅用 IP 匹配合规基线',
     ipRangeDesc: '起止 IP 格式，如 192.168.1.1-255。终端 IP 在此范围时仅用 IP 匹配合规基线',
     macPrefixArpDesc: '3-5 段 MAC 前缀，如 AA:BB:CC。终端 MAC 匹配此前缀时仅用 IP 匹配合规基线',
     macPrefixIpguardDesc: '3-5 段 MAC 前缀，如 AA:BB:CC。合规基线中 MAC 匹配此前缀的条目，终端 IP 匹配即可视为合规',

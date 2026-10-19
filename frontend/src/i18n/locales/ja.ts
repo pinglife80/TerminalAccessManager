@@ -1521,7 +1521,7 @@ const ja = {
     activeLabel: '有効',
     createdAt: '作成日時',
     createdBy: '作成者',
-    ipCidrDesc: 'CIDR形式（最小/24）。このネットワーク内の端末はIP-onlyでベースラインとマッチング',
+    ipCidrDesc: 'CIDR形式、プレフィックス0~32（/32は単一IP相当）。このネットワーク内の端末はIP-onlyでベースラインとマッチング',
     ipRangeDesc: '開始-終了IP形式、例：192.168.1.1-255。この範囲内の端末はIP-onlyマッチングを使用',
     macPrefixArpDesc: '3-5セグメントMACプレフィックス、例：AA:BB:CC。このプレフィックスに一致する端末はIP-onlyマッチングを使用',
     macPrefixIpguardDesc: '3-5セグメントMACプレフィックス、例：AA:BB:CC。一致するMACを持つベースラインエントリはIPのみでマッチング',
