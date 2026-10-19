@@ -180,6 +180,16 @@ class TestIPAddressParser:
     def test_detect_ip_range(self):
         assert IPAddressParser.detect_pattern_type("192.168.1.1-10") == "ip_range"
 
+    # ---- normalize_pattern ----
+    def test_normalize_host_route(self):
+        assert IPAddressParser.normalize_pattern("192.168.1.5/32") == "192.168.1.5"
+
+    def test_normalize_cidr_unchanged(self):
+        assert IPAddressParser.normalize_pattern("192.168.1.0/24") == "192.168.1.0/24"
+
+    def test_normalize_single_ip_unchanged(self):
+        assert IPAddressParser.normalize_pattern("192.168.1.1") == "192.168.1.1"
+
 
 class TestTerminalServiceValidation:
     """Test TerminalService validation and encoding helpers."""

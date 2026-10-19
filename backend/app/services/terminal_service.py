@@ -210,6 +210,20 @@ class IPAddressParser:
         else:
             return "single_ip"
 
+    @staticmethod
+    def normalize_pattern(ip_input: str) -> str:
+        """Normalize /32 CIDR to a bare single IP; otherwise return as-is."""
+        ip_input = ip_input.strip()
+        if ip_input.endswith("/32"):
+            normalized = ip_input[:-3]
+            logger.info(
+                f"[whitelist] pattern normalization: /32 host route -> single_ip | "
+                f"input={ip_input!r} output={normalized!r}"
+            )
+            return normalized
+        logger.info(f"[whitelist] pattern normalization: no change | input={ip_input!r}")
+        return ip_input
+
 
 class TerminalService:
     """Service for terminal management operations"""
@@ -656,8 +670,9 @@ class TerminalService:
             pattern_type = "single_ip"
 
             if ip_address:
-                ip_pattern = ip_address.strip()
-                pattern_type = IPAddressParser.detect_pattern_type(ip_address)
+                raw = ip_address.strip()
+                ip_pattern = IPAddressParser.normalize_pattern(raw)
+                pattern_type = IPAddressParser.detect_pattern_type(raw)
 
             # MAC-only entry
             if normalized_mac and not ip_address:
