@@ -1,12 +1,55 @@
 # 版本跟踪记录
 
-> 文档版本：v3.21.8 | 更新日期：2026-10-16
+> 文档版本：v3.21.9 | 更新日期：2026-10-19
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
 
 ---
+
+## [v3.21.9] - 2026-10-19
+
+### IP CIDR 掩码解析统一与 /32 边界识别修复（Patch 版本）
+
+#### 背景
+
+两处 IP CIDR 解析识别不一致：白名单支持 /0~/32 全掩码，合规作用域（Compliance Scope）却强制「最小 /24」；且白名单单条添加 `/32` 时被 `detect_pattern_type` 判为 `single_ip`，但存储仍保留原始 `x.x.x.x/32` 串，导致 `_ip_matches_pattern` 的字符串全等比较永远不命中。本版本统一 CIDR 语义（掩码 0~32 整数全合法、非法掩码统一拒绝），并将 `/32` 边界精准识别为单个 IP，同时补充解析日志便于排查。
+
+#### 主要变更
+
+| 变更项 | 说明 |
+|--------|------|
+| 移除 min /24 | Scope 的 `_validate_scope_value` 不再限制最小前缀，全掩码合法 |
+| 掩码 0~32 校验 | 前缀必须是 0~32 整数；/33、/-1、/abc、缺前缀均报 `Invalid IP CIDR format` |
+| /32 归一化 | `IPAddressParser.normalize_pattern` 将 /32 归一化为纯 IP，修复单条 /32 匹配失效 |
+| i18n 文案 | `ipCidrDesc` 去掉「最小 /24」，说明 0~32 掩码与 /32 等价单 IP |
+| 解析日志 | `_validate_scope_value` / `normalize_pattern` 补充 info/warning 日志 |
+
+#### 升级步骤（推荐：一键升级）
+
+```bash
+git checkout main
+git pull origin main
+./manage.sh upgrade
+```
+
+#### 升级注意事项
+
+- 本次无新增 Alembic 迁移文件。
+- 本次为后端业务逻辑 + 前端 i18n 文案 + 测试变更，需重建后端与前端镜像（`./manage.sh upgrade` 会同时重建）。
+
+#### 文件变更清单
+
+| 文件 | 变更类型 | 说明 |
+|------|---------|------|
+| `backend/app/services/compliance_scope_service.py` | 编辑 | 移除 min /24；掩码 0~32 校验；校验日志 |
+| `backend/app/services/terminal_service.py` | 编辑 | 新增 normalize_pattern + add_to_whitelist 归一化；日志 |
+| `backend/tests/test_compliance_scope_service.py` | 编辑 | /16 翻转合法 + 掩码边界用例 |
+| `backend/tests/test_terminal_service.py` | 编辑 | normalize_pattern 用例 |
+| `frontend/src/i18n/locales/zh.ts` | 编辑 | ipCidrDesc 文案 |
+| `frontend/src/i18n/locales/en.ts` | 编辑 | ipCidrDesc 文案 |
+| `frontend/src/i18n/locales/ja.ts` | 编辑 | ipCidrDesc 文案 |
 
 ## [v3.21.8] - 2026-10-16
 

@@ -12,6 +12,7 @@
 
 | 文档版本 | 更新日期 | 关联版本 | 更新内容 |
 |---------|---------|---------|---------|
+| v3.21.9 | 2026-10-19 | v3.21.9 | IP CIDR 掩码解析统一（移除 Scope min /24、掩码 0~32 整数校验）；白名单 /32 归一化为纯 IP（normalize_pattern）；i18n ipCidrDesc 文案同步；解析分支日志增强 |
 | v3.21.8 | 2026-10-16 | v3.21.8 | 终端 Auto-* 注释重复追加修复（_block_outcome 区分 newly_blocked、_append_terminal_comment 语义归一化去重、tag 列表排序一致化）；新增 scripts/cleanup_duplicate_comments.py 订正脚本 |
 | v3.21.7 | 2026-10-15 | v3.21.7 | Redis 连接健康检查（health_check_interval=30 + socket_timeout 约束）；黑名单插入竞态 ON CONFLICT DO NOTHING 消除 duplicate key（compliance_service / firewall_reconciliation_service）；Sangfor 幂等（已存在→skipped、unblock success 补 skipped>0）；通知投递兜底（_requeue 重入队、stop_workers 显式捕获 CancelledError、_schedule_retry 日志一致性） |
 | v3.21.6 | 2026-10-14 | v3.21.6 | 终端 blocked 状态一致性修复（禁用 ARP 源保护 blocked 状态、对账补建/重封锁 unknown→non_compliant 收敛、白名单命中 bypass）；测试文件入库（.gitignore `test_*.py`→`/test_*.py`、23 个后端测试入库、复合身份模型测试同步） |

@@ -1,6 +1,6 @@
 # 更新日志
 
-> 文档版本：v3.21.8  更新日期：2026-10-16
+> 文档版本：v3.21.9  更新日期：2026-10-19
 
 本文件记录 TerminalAccessManager 的所有重要变更。
 
@@ -8,6 +8,23 @@
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ***
+
+## [3.21.9] - 2026-10-19
+
+### 修复
+
+- **IP CIDR 掩码解析统一**：白名单（/0~/32）与合规作用域（min /24）对 IP CIDR 的支持范围不一致。移除 Scope 的「min /24」硬限制，全掩码 0~32 均合法；校验改为显式要求「掩码为 0~32 的整数」，非法掩码（/33、/-1、/abc、缺前缀）统一报 `Invalid IP CIDR format`
+  - 关联文件：`services/compliance_scope_service.py`
+
+- **白名单 /32 边界识别失效**：`detect_pattern_type` 将 `/32` 判为 `single_ip`，但 `add_to_whitelist` 仍存原始 `x.x.x.x/32` 串，`_ip_matches_pattern` 的 `single_ip` 分支字符串全等比较导致 `/32` 条目永不匹配。新增 `IPAddressParser.normalize_pattern` 将 `/32` 归一化为纯 IP，彻底修复
+  - 关联文件：`services/terminal_service.py`
+
+- **i18n 文案同步**：Scope 的 `ipCidrDesc` 去掉「最小 /24」，改为说明掩码 0~32 及 `/32` 等价单个 IP（zh/en/ja）
+  - 关联文件：`frontend/src/i18n/locales/*.ts`
+
+### 其他
+
+- **解析日志增强**：`_validate_scope_value`（空值/成功/非法掩码等分支）与 `normalize_pattern` 补充 `logger.info` / `logger.warning`，记录输入、归一化结果与失败原因，便于线上排查
 
 ## [3.21.8] - 2026-10-16
 
