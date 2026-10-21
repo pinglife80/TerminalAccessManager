@@ -559,6 +559,13 @@ class ComplianceService:
                     msg = f"Failed to block {entry.ip_address} on firewall '{fw_tag}': service not available"
                     entry_errors.append(msg)
                     errors.append(msg)
+                    await self.log_action("system", "firewall_block", "firewall", fw_tag, {
+                        "message": msg,
+                        "ip_address": entry.ip_address,
+                        "firewall_tag": fw_tag,
+                        "success": False,
+                        "error": "service_not_available",
+                    }, ip_address="System")
                     continue
                 try:
                     result = await svc.block_ip(
@@ -572,15 +579,37 @@ class ComplianceService:
                         if newly_blocked:
                             newly_blocked_fw.append(fw_tag)
                         logger.debug(f"Blocked {entry.ip_address} on firewall '{fw_tag}'")
+                        await self.log_action("system", "firewall_block", "firewall", fw_tag, {
+                            "message": f"Blocked IP {entry.ip_address} on firewall {fw_tag}",
+                            "ip_address": entry.ip_address,
+                            "firewall_tag": fw_tag,
+                            "success": True,
+                            "newly_blocked": newly_blocked,
+                            "reason": f"Auto-blocked: non-compliant (source={arp_source_tag})",
+                        }, ip_address="System")
                     else:
                         error_msg = result.get("message", "unknown error")
                         msg = f"Failed to block {entry.ip_address} on firewall '{fw_tag}': {error_msg}"
                         entry_errors.append(msg)
                         errors.append(msg)
+                        await self.log_action("system", "firewall_block", "firewall", fw_tag, {
+                            "message": msg,
+                            "ip_address": entry.ip_address,
+                            "firewall_tag": fw_tag,
+                            "success": False,
+                            "error": error_msg,
+                        }, ip_address="System")
                 except Exception as e:
                     msg = f"Error blocking {entry.ip_address} on firewall '{fw_tag}': {str(e)}"
                     entry_errors.append(msg)
                     errors.append(msg)
+                    await self.log_action("system", "firewall_block", "firewall", fw_tag, {
+                        "message": msg,
+                        "ip_address": entry.ip_address,
+                        "firewall_tag": fw_tag,
+                        "success": False,
+                        "error": str(e),
+                    }, ip_address="System")
 
             any_success = len(successfully_blocked_fw) > 0
 
@@ -694,13 +723,16 @@ class ComplianceService:
                 with contextlib.suppress(Exception):
                     await svc.close()
 
-        if not dry_run and blocked > 0:
-            from app.services.event_emitter import emit_block_threshold_exceeded
-            from app.services.config_service import get_config_value
+        # 汇总审计：只要实际执行过封锁（blocked/skipped/errors 任一非零）就落审计，
+        # 避免"全部失败"（blocked=0）时 retry-block 的成败在审计日志中完全不可见。
+        if not dry_run and (blocked > 0 or skipped > 0 or errors):
+            if blocked > 0:
+                from app.services.event_emitter import emit_block_threshold_exceeded
+                from app.services.config_service import get_config_value
 
-            block_threshold = await get_config_value("alert_block_count_threshold", 50)
-            if blocked > block_threshold:
-                await emit_block_threshold_exceeded(block_threshold, blocked)
+                block_threshold = await get_config_value("alert_block_count_threshold", 50)
+                if blocked > block_threshold:
+                    await emit_block_threshold_exceeded(block_threshold, blocked)
 
             terminal_list = [{"ip_address": d["ip_address"], "mac_address": d["mac_address"]} for d in details]
             await self.log_action("system", "auto_block_terminal", "terminal", None, {
@@ -708,6 +740,7 @@ class ComplianceService:
                 "source_tag": arp_source_tag,
                 "blocked": blocked,
                 "skipped": skipped,
+                "errors": len(errors),
                 "firewall_tags": firewall_tags,
                 "terminals": terminal_list[:50],
                 "total_terminals": len(terminal_list),
@@ -822,7 +855,6 @@ class ComplianceService:
             # within the cooldown period (default 10 minutes), to prevent rapid oscillation.
             # EXCEPTION: If whitelist matches, unblock immediately (bypass cooldown) -
             # whitelist is authoritative admin decision.
-            _cooldown_skip_unblock = False
             if not wl_match:
                 try:
                     cooldown_minutes = await self._get_cooldown_minutes()
@@ -837,7 +869,6 @@ class ComplianceService:
                     recent_block_result = await self.db.execute(bl_recent_block_stmt)
                     recent_block = recent_block_result.scalar_one_or_none()
                     if recent_block:
-                        _cooldown_skip_unblock = True
                         skipped += len(entries)
                         logger.info(
                             f"Cooldown: skipping auto-unblock for MAC {group_mac_norm} - "
@@ -1770,17 +1801,38 @@ class ComplianceService:
         - non_compliant: accumulates non_compliant_confirm_count; only downgrades
           and blocks once the count reaches compliance_confirm_threshold.
         """
+        if new_compliance == "non_compliant" and terminal.ip_changed_at is not None:
+            grace_minutes = await self._get_ip_grace_minutes()
+            grace_cutoff = datetime.now(UTC) - timedelta(minutes=grace_minutes)
+            ip_changed_at = terminal.ip_changed_at
+            if ip_changed_at.tzinfo is None:
+                ip_changed_at = ip_changed_at.replace(tzinfo=UTC)
+            if ip_changed_at >= grace_cutoff:
+                logger.info(
+                    f"First-discovery {ip_addr}/{mac_addr}: IP recently changed "
+                    f"(ip_changed_at={terminal.ip_changed_at.isoformat()}), holding "
+                    f"unknown in grace period ({grace_minutes}min)"
+                )
+                return {"status_changed": False, "new_compliance": terminal.compliance_status, "unblocked": False}
+
         if new_compliance == "non_compliant":
             terminal.non_compliant_confirm_count = (terminal.non_compliant_confirm_count or 0) + 1
             terminal.compliant_confirm_count = 0
+            mac_norm = self._norm_mac_key(mac_addr)
+            confirm_total = await self._mac_non_compliant_total(mac_norm)
             threshold = await self._get_confirm_threshold()
-            if terminal.non_compliant_confirm_count < threshold:
+            if confirm_total < threshold:
                 logger.info(
                     f"First-discovery {ip_addr}/{mac_addr}: non_compliant confirm "
-                    f"{terminal.non_compliant_confirm_count}/{threshold}, holding "
+                    f"{confirm_total}/{threshold} (MAC {mac_norm}), holding "
                     f"(not blocking yet)"
                 )
                 return {"status_changed": False, "new_compliance": terminal.compliance_status, "unblocked": False}
+            logger.info(
+                f"First-discovery {ip_addr}/{mac_addr}: non_compliant confirmed "
+                f"{confirm_total}/{threshold} (MAC {mac_norm}), will block"
+            )
+            await self._reset_mac_non_compliant_counts(mac_norm)
             terminal.non_compliant_confirm_count = 0
         elif new_compliance in ("compliant", "bypass"):
             terminal.non_compliant_confirm_count = 0
@@ -1861,7 +1913,6 @@ class ComplianceService:
                 cooldown_cutoff = datetime.now(UTC) - timedelta(minutes=cooldown_minutes)
                 bl_recent_stmt = select(Blacklist).where(
                     (Blacklist.mac_address_normalized == mac_norm) &
-                    (Blacklist.ip_address == ip_addr) &
                     (Blacklist.auto_unblocked == True) &
                     (Blacklist.unblocked_at.isnot(None)) &
                     (Blacklist.unblocked_at >= cooldown_cutoff)
@@ -1919,25 +1970,6 @@ class ComplianceService:
         terminal.non_compliant_type = non_compliant_type
 
         if status_changed:
-            await self.log_action("system", "compliance_status_changed", "terminal",
-                                f"{ip_addr}_{mac_addr}", {
-                                    "message": f"Terminal compliance status changed from {old_compliance} to {new_compliance}",
-                                    "ip_address": ip_addr,
-                                    "mac_address": mac_addr,
-                                    "old_compliance": old_compliance,
-                                    "new_compliance": new_compliance,
-                                    "wl_match_type": new_wl_match_type,
-                                }, ip_address="System")
-
-            if new_compliance == "bypass":
-                pass
-            elif new_compliance == "compliant":
-                from app.services.event_emitter import emit_terminal_compliant
-                await emit_terminal_compliant(ip_addr, mac_addr)
-            else:
-                from app.services.event_emitter import emit_terminal_non_compliant
-                await emit_terminal_non_compliant(ip_addr, mac_addr, ["Non-compliant terminal detected"])
-
             if terminal.status == "blocked" and new_compliance in ("bypass", "compliant"):
                 # Cooldown protection: skip auto-unblock if this MAC was recently auto-blocked
                 # within the cooldown period (default 10 minutes), to prevent rapid oscillation.
@@ -1949,7 +1981,6 @@ class ComplianceService:
                         cooldown_cutoff = datetime.now(UTC) - timedelta(minutes=cooldown_minutes)
                         bl_recent_block_stmt = select(Blacklist).where(
                             (Blacklist.mac_address_normalized == mac_norm) &
-                            (Blacklist.ip_address == ip_addr) &
                             (Blacklist.is_auto_blocked == True) &
                             (Blacklist.blocked_at >= cooldown_cutoff) &
                             (Blacklist.auto_unblocked == False)
@@ -2096,7 +2127,6 @@ class ComplianceService:
                         cooldown_cutoff = datetime.now(UTC) - timedelta(minutes=cooldown_minutes)
                         bl_recent_stmt = select(Blacklist).where(
                             (Blacklist.mac_address_normalized == mac_norm) &
-                            (Blacklist.ip_address == ip_addr) &
                             (Blacklist.auto_unblocked == True) &
                             (Blacklist.unblocked_at.isnot(None)) &
                             (Blacklist.unblocked_at >= cooldown_cutoff)
@@ -2247,7 +2277,30 @@ class ComplianceService:
         if terminal.status != "blocked":
             terminal.firewall_tag = None
 
-        return {"status_changed": status_changed, "new_compliance": new_compliance, "unblocked": unblocked}
+        # Deferred net-change audit & event: log only the ACTUAL (initial → final)
+        # compliance transition. A failed block that rolls back to old_compliance
+        # must NOT produce a phantom downgrade audit entry.
+        final_compliance = terminal.compliance_status
+        final_changed = final_compliance != old_compliance
+        if final_changed:
+            await self.log_action("system", "compliance_status_changed", "terminal",
+                                  f"{ip_addr}_{mac_addr}", {
+                                      "message": f"Terminal compliance status changed from {old_compliance} to {final_compliance}",
+                                      "ip_address": ip_addr,
+                                      "mac_address": mac_addr,
+                                      "old_compliance": old_compliance,
+                                      "new_compliance": final_compliance,
+                                      "wl_match_type": terminal.wl_match_type,
+                                  }, ip_address="System")
+
+            if final_compliance == "compliant":
+                from app.services.event_emitter import emit_terminal_compliant
+                await emit_terminal_compliant(ip_addr, mac_addr)
+            elif final_compliance == "non_compliant":
+                from app.services.event_emitter import emit_terminal_non_compliant
+                await emit_terminal_non_compliant(ip_addr, mac_addr, ["Non-compliant terminal detected"])
+
+        return {"status_changed": final_changed, "new_compliance": final_compliance, "unblocked": unblocked}
 
     async def recalculate_all_compliance(self) -> dict:
         """Recalculate compliance status for all existing terminals.
@@ -2318,6 +2371,7 @@ class ComplianceService:
             unblocked_count = 0
             corrected_count = 0
             stale_skip_count = 0
+            offline_skip_count = 0
 
             for batch_start in range(0, len(terminals), BATCH_SIZE):
                 batch_terminals = terminals[batch_start:batch_start + BATCH_SIZE]
@@ -2327,6 +2381,17 @@ class ComplianceService:
                 logger.debug(f"Processing batch {batch_num}/{total_batches} ({len(batch_terminals)} terminals)")
 
                 for idx, terminal in enumerate(batch_terminals):
+                    # Skip stale offline records (old IP/MAC no longer seen) so they
+                    # don't accumulate confirm counts or inflate non_compliant stats.
+                    # Blocked records are NOT skipped — their IP-level block still
+                    # needs reconciliation (handled by the reconciliation/retry paths).
+                    if terminal.block_state == "offline" and terminal.status != "blocked":
+                        offline_skip_count += 1
+                        logger.info(
+                            f"Recalc skip offline: {terminal.ip_address}/{terminal.mac_address} "
+                            f"(block_state=offline, status={terminal.status})"
+                        )
+                        continue
                     ip_addr = terminal.ip_address or ""
                     mac_addr = terminal.mac_address or ""
                     old_compliance = terminal.compliance_status
@@ -2347,6 +2412,8 @@ class ComplianceService:
                         terminal.compliant_confirm_count = 0
 
                     new_compliance = old_compliance  # default: stay
+                    new_wl_match_type = None
+                    wl_comments = None
 
                     # ---- IP change grace period ----
                     # If IP was recently changed (within ~10min), do NOT downgrade non-bypass
@@ -2355,8 +2422,16 @@ class ComplianceService:
                     if terminal.ip_changed_at is not None and old_compliance != "bypass":
                         grace_minutes = await self._get_ip_grace_minutes()
                         grace_cutoff = datetime.now(UTC) - timedelta(minutes=grace_minutes)
-                        if terminal.ip_changed_at >= grace_cutoff:
+                        ip_changed_at = terminal.ip_changed_at
+                        if ip_changed_at.tzinfo is None:
+                            ip_changed_at = ip_changed_at.replace(tzinfo=UTC)
+                        if ip_changed_at >= grace_cutoff:
                             in_ip_grace_period = True
+                            logger.info(
+                                f"Recalc {ip_addr}/{mac_addr}: IP-changed grace active "
+                                f"(changed={terminal.ip_changed_at.isoformat()}, "
+                                f"grace={grace_minutes}min), holding downgrade"
+                            )
 
                     # ---- Determine new compliance status ----
                     if wl_result:
@@ -2393,24 +2468,29 @@ class ComplianceService:
 
                             if old_compliance == "bypass":
                                 # SPECIAL PROTECTION: Currently whitelisted but this check missed whitelist.
-                                # Require 6 CONSECUTIVE misses (~30 minutes) before downgrading,
-                                # to avoid false positives from transient cache failures.
+                                # Require consecutive misses before downgrading to avoid false
+                                # positives from transient cache failures. The count is
+                                # aggregated by MAC so whitelist-miss evidence survives an
+                                # IP change on the same device.
                                 terminal.non_compliant_confirm_count += 1
                                 whitelist_miss_threshold = await self._get_whitelist_miss_threshold()
-                                if terminal.non_compliant_confirm_count >= whitelist_miss_threshold:
+                                mac_norm = self._norm_mac_key(mac_addr)
+                                miss_total = await self._mac_non_compliant_total(mac_norm)
+                                if miss_total >= whitelist_miss_threshold:
                                     new_compliance = "non_compliant"
+                                    await self._reset_mac_non_compliant_counts(mac_norm)
                                     terminal.non_compliant_confirm_count = 0
                                     logger.warning(
                                         f"Terminal[{batch_start + idx}] {ip_addr}/{mac_addr}: "
-                                        f"WHITELIST MISS {whitelist_miss_threshold} consecutive times, "
-                                        f"downgrading bypass → non_compliant"
+                                        f"WHITELIST MISS {miss_total} consecutive times "
+                                        f"(MAC {mac_norm}), downgrading bypass → non_compliant"
                                     )
                                 else:
                                     new_compliance = "bypass"  # hold bypass
-                                    logger.debug(
+                                    logger.info(
                                         f"Terminal[{batch_start + idx}] {ip_addr}/{mac_addr}: "
-                                        f"whitelist transient miss ({terminal.non_compliant_confirm_count}/{whitelist_miss_threshold}), "
-                                        f"holding bypass"
+                                        f"whitelist transient miss ({miss_total}/{whitelist_miss_threshold}, "
+                                        f"MAC {mac_norm}), holding bypass"
                                     )
                             else:
                                 # Normal downgrade path. compliant → non_compliant uses a
@@ -2426,15 +2506,24 @@ class ComplianceService:
                                         downgrade_threshold = await self._get_compliant_downgrade_threshold()
                                     terminal.non_compliant_confirm_count += 1
                                     terminal.compliant_confirm_count = 0
-                                    if terminal.non_compliant_confirm_count >= downgrade_threshold:
+                                    mac_norm = self._norm_mac_key(mac_addr)
+                                    downgrade_total = await self._mac_non_compliant_total(mac_norm)
+                                    if downgrade_total >= downgrade_threshold:
                                         new_compliance = "non_compliant"
+                                        await self._reset_mac_non_compliant_counts(mac_norm)
                                         terminal.non_compliant_confirm_count = 0
                                         logger.info(
                                             f"Terminal[{batch_start + idx}] {ip_addr}/{mac_addr}: "
-                                            f"CONFIRMED downgrade {old_compliance} → non_compliant after {downgrade_threshold} checks"
+                                            f"CONFIRMED downgrade {old_compliance} → non_compliant "
+                                            f"after {downgrade_total} checks (MAC {mac_norm})"
                                         )
                                     else:
                                         new_compliance = old_compliance  # hold
+                                        logger.info(
+                                            f"Terminal[{batch_start + idx}] {ip_addr}/{mac_addr}: "
+                                            f"non_compliant confirm hold ({downgrade_total}/{downgrade_threshold}, "
+                                            f"MAC {mac_norm})"
+                                        )
 
                     if old_compliance != new_compliance:
                         logger.info(
@@ -2478,13 +2567,15 @@ class ComplianceService:
                     "message": f"Compliance recalculation: {len(terminals)} total, "
                                f"{bypass_count} → bypass, {compliant_count} → compliant, "
                                f"{non_compliant_count} → non_compliant, {corrected_count} corrected, "
-                               f"{stale_skip_count} stale-held, {unblocked_count} auto-unblocked",
+                               f"{stale_skip_count} stale-held, {offline_skip_count} offline-skipped, "
+                               f"{unblocked_count} auto-unblocked",
                     "total": len(terminals),
                     "bypass": bypass_count,
                     "compliant": compliant_count,
                     "non_compliant": non_compliant_count,
                     "corrected": corrected_count,
                     "stale_skip_count": stale_skip_count,
+                    "offline_skip_count": offline_skip_count,
                     "ipguard_cache_stale": ipguard_cache_stale,
                     "unchanged": unchanged_count,
                     "unblocked": unblocked_count,
@@ -2492,13 +2583,15 @@ class ComplianceService:
                     "whitelist_entries": len(whitelist_data),
                     "ipguard_entries": ipguard_total,
                 }, ip_address="System")
+            await self.db.commit()
 
             logger.info(
                 f"Compliance recalculation complete: {len(terminals)} total, "
                 f"{bypass_count} → bypass, {compliant_count} → compliant, "
                 f"{non_compliant_count} → non_compliant, {corrected_count} corrected, "
-                f"{stale_skip_count} stale-held, {unchanged_count} unchanged, "
-                f"{unblocked_count} auto-unblocked, cache_stale={ipguard_cache_stale}, duration={duration_ms:.2f}ms"
+                f"{stale_skip_count} stale-held, {offline_skip_count} offline-skipped, "
+                f"{unchanged_count} unchanged, {unblocked_count} auto-unblocked, "
+                f"cache_stale={ipguard_cache_stale}, duration={duration_ms:.2f}ms"
             )
 
             return {
@@ -2508,6 +2601,7 @@ class ComplianceService:
                 "non_compliant": non_compliant_count,
                 "corrected": corrected_count,
                 "stale_skip_count": stale_skip_count,
+                "offline_skip_count": offline_skip_count,
                 "ipguard_cache_stale": ipguard_cache_stale,
                 "unchanged": unchanged_count,
                 "unblocked": unblocked_count,
@@ -2562,6 +2656,40 @@ class ComplianceService:
             return await config_service.get("block_time") or "30d"
         except Exception:
             return "30d"
+
+    @staticmethod
+    def _norm_mac_key(mac: str | None) -> str | None:
+        """Normalize a raw MAC string to the compact 12-hex form used for aggregation."""
+        if not mac:
+            return None
+        return mac.replace('-', '').replace(':', '').replace('.', '').upper()
+
+    async def _mac_non_compliant_total(self, mac_norm: str | None) -> int:
+        """MAC-level SUM of non_compliant_confirm_count across all device IP records.
+
+        Selects sibling Terminal entities (not a raw ``SUM`` column) so that
+        identity-mapped objects reflect in-memory increments made earlier in the
+        same batch. With ``autoflush=False`` a literal SQL ``SUM`` would miss those
+        unflushed changes and undercount the device-level confirmation total.
+        """
+        if not mac_norm:
+            return 0
+        stmt = select(Terminal).where(Terminal.mac_address_normalized == mac_norm)
+        result = await self.db.execute(stmt)
+        return sum((t.non_compliant_confirm_count or 0) for t in result.scalars().all())
+
+    async def _reset_mac_non_compliant_counts(self, mac_norm: str | None) -> None:
+        """Batch-reset non_compliant_confirm_count for every record sharing the MAC.
+
+        Mutates identity-mapped entities so the reset survives the eventual commit
+        without a bulk-UPDATE staleness override.
+        """
+        if not mac_norm:
+            return
+        stmt = select(Terminal).where(Terminal.mac_address_normalized == mac_norm)
+        result = await self.db.execute(stmt)
+        for t in result.scalars().all():
+            t.non_compliant_confirm_count = 0
 
     async def _get_confirm_threshold(self) -> int:
         """Get compliance transition confirm threshold from system config.
