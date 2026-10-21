@@ -322,7 +322,7 @@ class DataSourceService:
                                 verify_ssl=fw_config.get("verify_ssl", True),
                                 ca_bundle=fw_config.get("ca_bundle", ""),
                             )
-                            await svc.unblock_ip(ip_list)
+                            await self._unblock_ip_with_audit(svc, ip_list, fw_tag, username, client_ip)
                             await svc.close()
                     except Exception as e:
                         logger.warning(f"Failed to unblock {terminal.ip_address} on {fw_tag}: {e}")
@@ -377,7 +377,7 @@ class DataSourceService:
                 ip_list = [{"srcIP": bl.ip_address} for bl in bl_entries if bl.ip_address]
                 if ip_list:
                     try:
-                        await svc.unblock_ip(ip_list)
+                        await self._unblock_ip_with_audit(svc, ip_list, tag, username, client_ip)
                     except Exception as e:
                         logger.warning(f"Failed to unblock IPs on {tag}: {e}")
 
@@ -424,11 +424,10 @@ class DataSourceService:
         except Exception as e:
             logger.warning(f"Failed to clean Redis cache for {tag}: {e}")
 
-        # Step 5: Delete the data source
+        # Step 5: Delete the data source and write the audit in the same
+        # transaction (log_action only adds; the commit below persists both atomically).
         await self.db.delete(source)
-        await self.db.commit()
 
-        # Step 6: Audit log
         if username:
             ts = TerminalService(self.db)
             await ts.log_action(
@@ -437,6 +436,8 @@ class DataSourceService:
                 ip_address=client_ip,
                 resource_name=source_name,
             )
+
+        await self.db.commit()
 
         logger.info(f"Safely deleted data source: {source_name} (tag={tag}, type={source_type})")
         return True
@@ -537,7 +538,7 @@ class DataSourceService:
                 ip_list = [{"srcIP": bl.ip_address} for bl in bl_entries if bl.ip_address]
                 if ip_list:
                     try:
-                        await svc.unblock_ip(ip_list)
+                        await self._unblock_ip_with_audit(svc, ip_list, fw_tag, username, client_ip)
                     except Exception as e:
                         logger.warning(f"Failed to unblock IPs on {fw_tag}: {e}")
                 await svc.close()
@@ -574,6 +575,8 @@ class DataSourceService:
                     terminal.status = "unblocked"
                     terminal.firewall_tag = None
                     terminal.compliance_status = "unknown"
+                    terminal.non_compliant_confirm_count = 0
+                    terminal.compliant_confirm_count = 0
                     terminal.comments = None
                 else:
                     # Still blocked on other firewalls - just remove this fw_tag
@@ -586,8 +589,19 @@ class DataSourceService:
         for bl_entry in bl_entries:
             await self.db.delete(bl_entry)
 
-        # Step 4: Delete the binding
+        # Step 4: Delete the binding and write the audit in the same transaction
+        # (log_action only adds; the commit below persists both atomically).
         await self.db.delete(binding)
+
+        if username:
+            ts = TerminalService(self.db)
+            await ts.log_action(
+                username, "unbind_datasource", "datasource", str(binding_id),
+                {"message": "Safely deleted datasource binding with cleanup", "arp_source_tag": arp_tag, "firewall_tag": fw_tag},
+                ip_address=client_ip,
+                resource_name=f"{arp_tag} -> {fw_tag}",
+            )
+
         await self.db.commit()
 
         # Step 5: Trigger compliance recalculation
@@ -597,16 +611,6 @@ class DataSourceService:
             await cs.recalculate_all_compliance()
         except Exception as e:
             logger.warning(f"Failed to trigger compliance recalculation after binding deletion: {e}")
-
-        # Step 6: Audit log
-        if username:
-            ts = TerminalService(self.db)
-            await ts.log_action(
-                username, "unbind_datasource", "datasource", str(binding_id),
-                {"message": "Safely deleted datasource binding with cleanup", "arp_source_tag": arp_tag, "firewall_tag": fw_tag},
-                ip_address=client_ip,
-                resource_name=f"{arp_tag} -> {fw_tag}",
-            )
 
         logger.info(f"Safely deleted binding: {arp_tag} -> {fw_tag}")
         return True
@@ -902,6 +906,71 @@ class DataSourceService:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+    async def _unblock_ip_with_audit(
+        self,
+        svc,
+        ip_list: list[dict[str, str]],
+        fw_tag: str,
+        username: str | None,
+        client_ip: str | None,
+    ) -> None:
+        """Unblock a batch of IPs on one firewall and record a firewall_unblock audit.
+
+        Centralizes the cleanup unblock used by data-source / binding deletion so
+        that (1) a Sangfor business-level failure (``code != 0``) is surfaced via
+        a warning instead of being silently swallowed, and (2) the outcome is
+        audited as ``firewall_unblock`` (success flag + unblocked/skipped/errors
+        counts), matching ``_unblock_on_firewall`` in the compliance service.
+        """
+        from app.services.terminal_service import TerminalService
+
+        ips = [item.get("srcIP", "") for item in ip_list]
+        ip_str = ",".join(ips) if len(ips) <= 5 else f"{len(ips)} IPs"
+        ts = TerminalService(self.db)
+
+        unblocked: list = []
+        skipped: list = []
+        errors: list = []
+        try:
+            result = await svc.unblock_ip(ip_list)
+            data = result.get("data", {}) or {}
+            success = result.get("code") == 0
+            unblocked = data.get("unblocked") or []
+            skipped = data.get("skipped") or []
+            errors = data.get("errors") or []
+            message = result.get("message", "")
+        except Exception as e:
+            success = False
+            message = str(e)
+            logger.warning(f"Failed to unblock {len(ip_list)} IP(s) on firewall '{fw_tag}': {e}")
+
+        if not success:
+            logger.warning(
+                f"Failed to unblock {len(ip_list)} IP(s) on firewall '{fw_tag}': {message}"
+            )
+
+        await ts.log_action(
+            username or "system",
+            "firewall_unblock",
+            "firewall",
+            fw_tag,
+            {
+                "message": (
+                    f"Unblocked {len(unblocked)}, skipped {len(skipped)}, "
+                    f"errors {len(errors)} on firewall {fw_tag}"
+                ),
+                "ip_address": ip_str,
+                "firewall_tag": fw_tag,
+                "success": success,
+                "unblocked": len(unblocked),
+                "skipped": len(skipped),
+                "errors": len(errors),
+                "error": None if success else message,
+            },
+            ip_address=client_ip or "System",
+            resource_name=fw_tag,
+        )
+
     async def _get_by_name_or_tag(self, name: str, tag: str) -> DataSource | None:
         """Get a data source by name or tag"""
         stmt = select(DataSource).where(
