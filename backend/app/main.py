@@ -707,7 +707,7 @@ def _should_run_backup_now(cron_expr: str) -> bool:
         minute_str, hour_str, day_str, month_str, dow_str = parts
         current = _now()
 
-        def match_field(field_str: str, current_val: int) -> bool:
+        def match_field(field_str: str, current_val: int, transform=None) -> bool:
             if field_str == "*":
                 return True
             for part in field_str.split(","):
@@ -720,19 +720,60 @@ def _should_run_backup_now(cron_expr: str) -> bool:
                         if current_val % int(step) == 0:
                             return True
                 else:
-                    if int(part) == current_val:
+                    value = int(part)
+                    if transform is not None:
+                        value = transform(value)
+                    if value == current_val:
                         return True
             return False
+
+        def cron_dow_to_weekday(value: int) -> int:
+            # cron day-of-week: 0/7 = Sunday .. 6 = Saturday;
+            # python weekday(): 0 = Monday .. 6 = Sunday.
+            return (value + 6) % 7
 
         return (
             match_field(minute_str, current.minute) and
             match_field(hour_str, current.hour) and
             match_field(day_str, current.day) and
             match_field(month_str, current.month) and
-            match_field(dow_str, current.weekday())
+            match_field(dow_str, current.weekday(), cron_dow_to_weekday)
         )
     except Exception:
         return False
+
+
+async def scheduled_backup_cleanup():
+    """Background task to periodically clean up expired backups (local + remote).
+
+    Decoupled from backup execution so retention is still enforced even when a
+    backup job fails or never triggers. Runs at a fixed hourly interval.
+    """
+    poll_interval = 3600  # 1 hour (fixed interval)
+
+    while True:
+        try:
+            # Heartbeat is written before sleep so the task never appears DEAD
+            # right after a restart (same pattern as the other long-interval tasks).
+            await _record_task_heartbeat("backup_cleanup", 7200)
+            await asyncio.sleep(poll_interval)
+            if await _is_task_paused("backup_cleanup"):
+                continue
+            if not await _acquire_task_lock("backup_cleanup"):
+                continue
+            try:
+                async with async_session_factory() as db:
+                    from app.services.backup_service import BackupService
+                    service = BackupService(db=db)
+                    config = await service.load_config()
+                    if not config.enabled:
+                        continue
+                    await service.cleanup_old_backups()
+                    logger.info("Backup retention cleanup completed [source=scheduler]")
+            finally:
+                await _release_task_lock("backup_cleanup")
+        except Exception as e:
+            logger.error(f"Error in backup cleanup task: {type(e).__name__}: {e} [source=scheduler]")
 
 
 @asynccontextmanager
@@ -817,6 +858,7 @@ async def lifespan(app: FastAPI):
     log_cleanup_task = asyncio.create_task(cleanup_expired_logs())
     firewall_reconciliation_task = asyncio.create_task(firewall_reconciliation())
     backup_task = asyncio.create_task(scheduled_backup())
+    backup_cleanup_task = asyncio.create_task(scheduled_backup_cleanup())
     logger.info("All background scheduler tasks started")
 
     yield
@@ -829,9 +871,9 @@ async def lifespan(app: FastAPI):
     logger.info("Notification workers stopped")
 
     # Cancel background tasks and wait for them to finish
-    for task in [cleanup_task, arp_collection_task, ipguard_sync_task, compliance_check_task, auto_unblock_task, log_cleanup_task, firewall_reconciliation_task, backup_task]:
+    for task in [cleanup_task, arp_collection_task, ipguard_sync_task, compliance_check_task, auto_unblock_task, log_cleanup_task, firewall_reconciliation_task, backup_task, backup_cleanup_task]:
         task.cancel()
-    await asyncio.gather(*[cleanup_task, arp_collection_task, ipguard_sync_task, compliance_check_task, auto_unblock_task, log_cleanup_task, firewall_reconciliation_task, backup_task], return_exceptions=True)
+    await asyncio.gather(*[cleanup_task, arp_collection_task, ipguard_sync_task, compliance_check_task, auto_unblock_task, log_cleanup_task, firewall_reconciliation_task, backup_task, backup_cleanup_task], return_exceptions=True)
     logger.info("Background tasks cancelled")
 
     # Close Redis connections

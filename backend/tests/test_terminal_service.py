@@ -491,6 +491,7 @@ class TestRetryUnblock:
         entry.ip_address = "10.8.18.183"
         entry.firewall_tag = "fw1"
         entry.mac_address = None
+        entry.mac_address_normalized = None
         entry.auto_unblocked = False
         entry.unblocked_at = None
 
@@ -507,6 +508,7 @@ class TestRetryUnblock:
             make_scalar(entry),         # 1) select(Blacklist)
             make_scalar("compliant"),   # 2) terminal compliance join
             make_scalar(fw_source),     # 3) select(DataSource)
+            make_scalar(None),          # 4) select(Terminal) for block-state sync
         ])
 
         svc = MagicMock()
@@ -540,3 +542,126 @@ class TestRetryUnblock:
         assert details["success"] is True
         assert details["ip_address"] == "10.8.18.183"
         assert details["firewall_tag"] == "fw1"
+
+    @pytest.mark.asyncio
+    async def test_success_restores_terminal_status_when_last_active(self, mock_async_session):
+        """解封后若该 (MAC, IP) 无其他 active 条目，同步恢复终端封锁状态。"""
+        from app.models.terminal import TerminalStatus
+        from app.services.sangfor_service import SangforService
+
+        entry = MagicMock()
+        entry.id = 7
+        entry.ip_address = "10.8.18.183"
+        entry.firewall_tag = "fw1"
+        entry.mac_address = None
+        entry.mac_address_normalized = None
+        entry.auto_unblocked = False
+        entry.unblocked_at = None
+
+        fw_source = MagicMock()
+        fw_source.enabled = True
+        fw_source.config = {}
+
+        terminal = MagicMock()
+        terminal.status = "blocked"
+        terminal.firewall_tag = "fw1"
+        terminal.block_state = "block_failed"
+
+        def make_scalar(value):
+            r = MagicMock()
+            r.scalar_one_or_none = MagicMock(return_value=value)
+            return r
+
+        def make_count(value):
+            r = MagicMock()
+            r.scalar = MagicMock(return_value=value)
+            return r
+
+        mock_async_session.execute = AsyncMock(side_effect=[
+            make_scalar(entry),         # 1) select(Blacklist)
+            make_scalar("compliant"),   # 2) terminal compliance join
+            make_scalar(fw_source),     # 3) select(DataSource)
+            make_scalar(terminal),      # 4) select(Terminal)
+            make_count(0),              # 5) count remaining active blocks
+        ])
+
+        svc = MagicMock()
+        svc.unblock_ip = AsyncMock(return_value={
+            "code": 0,
+            "message": "",
+            "data": {"unblocked": [{"ip": "10.8.18.183"}], "skipped": [], "errors": []},
+        })
+
+        mock_async_session.add = MagicMock()
+        mock_async_session.commit = AsyncMock()
+
+        service = TerminalService(mock_async_session)
+        with patch.object(SangforService, "get_cached_service", AsyncMock(return_value=svc)), \
+             patch("app.services.event_emitter.emit_terminal_unblocked", new=AsyncMock()):
+            result = await service.retry_unblock(7, username="admin")
+
+        assert result == {"success": True, "error": None}
+        assert terminal.status == TerminalStatus.UNBLOCKED.value
+        assert terminal.firewall_tag is None
+        assert terminal.block_state is None
+
+    @pytest.mark.asyncio
+    async def test_success_keeps_terminal_blocked_when_other_active(self, mock_async_session):
+        """解封后若仍有其他 active 条目，保持终端封锁状态不变。"""
+        from app.services.sangfor_service import SangforService
+
+        entry = MagicMock()
+        entry.id = 7
+        entry.ip_address = "10.8.18.183"
+        entry.firewall_tag = "fw1"
+        entry.mac_address = None
+        entry.mac_address_normalized = None
+        entry.auto_unblocked = False
+        entry.unblocked_at = None
+
+        fw_source = MagicMock()
+        fw_source.enabled = True
+        fw_source.config = {}
+
+        terminal = MagicMock()
+        terminal.status = "blocked"
+        terminal.firewall_tag = "fw1"
+        terminal.block_state = "block_failed"
+
+        def make_scalar(value):
+            r = MagicMock()
+            r.scalar_one_or_none = MagicMock(return_value=value)
+            return r
+
+        def make_count(value):
+            r = MagicMock()
+            r.scalar = MagicMock(return_value=value)
+            return r
+
+        mock_async_session.execute = AsyncMock(side_effect=[
+            make_scalar(entry),         # 1) select(Blacklist)
+            make_scalar("compliant"),   # 2) terminal compliance join
+            make_scalar(fw_source),     # 3) select(DataSource)
+            make_scalar(terminal),      # 4) select(Terminal)
+            make_count(1),              # 5) count remaining active blocks
+        ])
+
+        svc = MagicMock()
+        svc.unblock_ip = AsyncMock(return_value={
+            "code": 0,
+            "message": "",
+            "data": {"unblocked": [{"ip": "10.8.18.183"}], "skipped": [], "errors": []},
+        })
+
+        mock_async_session.add = MagicMock()
+        mock_async_session.commit = AsyncMock()
+
+        service = TerminalService(mock_async_session)
+        with patch.object(SangforService, "get_cached_service", AsyncMock(return_value=svc)), \
+             patch("app.services.event_emitter.emit_terminal_unblocked", new=AsyncMock()):
+            result = await service.retry_unblock(7, username="admin")
+
+        assert result == {"success": True, "error": None}
+        assert terminal.status == "blocked"
+        assert terminal.firewall_tag == "fw1"
+        assert terminal.block_state == "block_failed"

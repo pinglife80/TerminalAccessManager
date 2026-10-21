@@ -12,6 +12,7 @@
 
 | 文档版本 | 更新日期 | 关联版本 | 更新内容 |
 |---------|---------|---------|---------|
+| v3.21.11 | 2026-10-21 | v3.21.11 | 备份保留周期清理修复（新增独立 backup_cleanup 任务、cron dow 语义修正、FTP 无 MDTM 文件名兜底、SFTP aware UTC）；retry-unblock 解封后同步终端封锁状态与前端 terminals 缓存失效 |
 | v3.21.10 | 2026-10-21 | v3.21.10 | 多 IP/MAC 陈旧记录离线标记（block_state='offline' + naive→UTC 归一化）；合规宽限期归一化与 recalc 跳过 offline；数据源安全删除/手动检查走 apply_initial_compliance_result；retry-unblock 审计原子化；时区去硬编码（settings.TZ + /health timezone + 前端动态获取）；补 NotificationLog/IntegrityError 导入 |
 | v3.21.9 | 2026-10-19 | v3.21.9 | IP CIDR 掩码解析统一（移除 Scope min /24、掩码 0~32 整数校验）；白名单 /32 归一化为纯 IP（normalize_pattern）；i18n ipCidrDesc 文案同步；解析分支日志增强 |
 | v3.21.8 | 2026-10-16 | v3.21.8 | 终端 Auto-* 注释重复追加修复（_block_outcome 区分 newly_blocked、_append_terminal_comment 语义归一化去重、tag 列表排序一致化）；新增 scripts/cleanup_duplicate_comments.py 订正脚本 |

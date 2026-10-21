@@ -1,12 +1,63 @@
 # 版本跟踪记录
 
-> 文档版本：v3.21.10 | 更新日期：2026-10-21
+> 文档版本：v3.21.11 | 更新日期：2026-10-21
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
 
 ---
+
+## [v3.21.11] - 2026-10-21
+
+### 备份保留周期清理修复与 retry-unblock 终端状态同步（Patch 版本）
+
+#### 背景
+
+配置的备份保留周期（`retention_days`）未实际生效：本地与远程 FTP/SFTP 超龄备份数据始终残留。根因有三——清理逻辑仅「被动」依赖一次成功备份后才执行（备份失败/未到备份点即永不清理）、cron `day-of-week` 语义映射错误（`0/7` 未正确对应 Python 周日）、远程备份时间戳解析脆弱（FTP 依赖 `MDTM`、SFTP 返回 naive 时区）。
+
+此外，黑名单页执行「Unblock Pending Retry」手动解封后，终端页的封锁状态未实时同步——后端 `retry_unblock` 解封成功后未恢复 `Terminal.status`，前端亦未失效 `terminals` 查询缓存。
+
+均为缺陷修复，无新增用户功能、无数据库迁移，向后兼容，故以 Patch 发布。
+
+#### 主要变更
+
+| 变更项 | 说明 |
+|--------|------|
+| 独立 `backup_cleanup` 调度任务 | 每小时独立执行超龄备份清理，与「成功备份」解耦；注册进调度器注册表并挂载 lifespan |
+| cron day-of-week 语义修正 | `0/7` 均映射为 Python `weekday()==6`（周日），修复按周定时备份从不触发 |
+| FTP 时间戳兜底 | 无 `MDTM` 时从文件名 `YYYYMMDD_HHMMSS` 兜底解析 `created_at` |
+| SFTP 时间戳归一化 | `created_at` 统一为 aware UTC（`datetime.fromtimestamp(..., tz=timezone.utc)`） |
+| retry-unblock 后端状态同步 | 解封成功且无其他 active 黑名单条目时，恢复 `Terminal.status`/`firewall_tag`/`block_state`（保留 `compliance_status`） |
+| 前端缓存失效 | retry 成功后 `invalidateQueries(['terminals'])`，终端页实时刷新 |
+
+#### 升级步骤（推荐：一键升级）
+
+```bash
+git checkout main
+git pull origin main
+./manage.sh upgrade
+```
+
+#### 升级注意事项
+
+- 本次无新增 Alembic 迁移文件、无数据库 schema 变更，`docs/database.md` 无需改动。
+- `scheduler_registry.py` 新增第 9 个调度任务 `backup_cleanup`（固定 3600s 间隔），升级后 `./manage.sh scheduler status` 将显示 9 个任务。
+- 后端业务逻辑 + 前端资产均有改动，`./manage.sh upgrade` 会同时重建后前端镜像。
+
+#### 文件变更清单
+
+| 文件 | 变更类型 | 说明 |
+|------|---------|------|
+| `backend/app/main.py` | 编辑 | R1-2 cron dow 语义修正；R1-1 新增 `scheduled_backup_cleanup` 协程与 lifespan 挂载/取消 |
+| `backend/app/core/scheduler_registry.py` | 编辑 | 注册 `backup_cleanup` 任务（固定 3600s） |
+| `backend/app/services/backup_service.py` | 编辑 | R1-3 `_parse_timestamp_from_filename` 兜底；R1-4 SFTP aware UTC |
+| `backend/app/services/terminal_service.py` | 编辑 | R2-1 retry_unblock 解封后同步终端封锁状态 |
+| `frontend/src/hooks/useTerminalData.ts` | 编辑 | R2-2 retry 成功后失效 `terminals` 缓存 |
+| `manage.sh` | 编辑 | scheduler 离线 fallback 增加 `backup_cleanup` 显示名 |
+| `backend/tests/test_app.py` | 编辑 | cron dow 映射测试 |
+| `backend/tests/test_backup_service.py` | 编辑 | FTP 兜底/SFTP aware/文件名解析测试 |
+| `backend/tests/test_terminal_service.py` | 编辑 | 更新 mock + 新增状态同步测试 |
 
 ## [v3.21.10] - 2026-10-21
 

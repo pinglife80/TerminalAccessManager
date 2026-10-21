@@ -16,4 +16,5 @@ SCHEDULER_TASKS = [
     {"name": "log_cleanup",             "display_name": "Log Cleanup",               "interval_key": None,                                     "default_interval": 86400},
     {"name": "firewall_reconciliation", "display_name": "Firewall Reconciliation",   "interval_key": None,                                     "default_interval": 300},
     {"name": "backup",                  "display_name": "Scheduled Backup",          "interval_key": None,                                     "default_interval": 60},
+    {"name": "backup_cleanup",          "display_name": "Backup Retention Cleanup",   "interval_key": None,                                     "default_interval": 3600},
 ]

@@ -1839,6 +1839,51 @@ class TerminalService:
         entry.last_operation_status = "success"
         entry.last_operation_at = datetime.now(UTC)
 
+        # Restore the terminal's block state when this was the last active
+        # block for the (MAC, IP) identity, mirroring cleanup_expired_blacklist.
+        # Only clear status once no other active entry remains; compliance_status
+        # is intentionally left untouched (this path requires compliant/bypass).
+        if entry.mac_address_normalized:
+            identity_cond = and_(
+                Blacklist.mac_address_normalized == entry.mac_address_normalized,
+                Blacklist.ip_address == entry.ip_address,
+            )
+            terminal_cond = and_(
+                Terminal.mac_address_normalized == entry.mac_address_normalized,
+                Terminal.ip_address == entry.ip_address,
+            )
+        else:
+            identity_cond = and_(
+                Blacklist.mac_address_normalized.is_(None),
+                Blacklist.ip_address == entry.ip_address,
+            )
+            terminal_cond = Terminal.ip_address == entry.ip_address
+
+        terminal = (
+            await self.db.execute(select(Terminal).where(terminal_cond).limit(1))
+        ).scalar_one_or_none()
+
+        if terminal and terminal.status == TerminalStatus.BLOCKED.value:
+            _now = datetime.now(UTC)
+            remaining = (
+                await self.db.execute(
+                    select(func.count(Blacklist.id)).where(
+                        Blacklist.id != entry.id,
+                        Blacklist.auto_unblocked == False,  # noqa: E712
+                        Blacklist.unblocked_at.is_(None),
+                        or_(
+                            Blacklist.expires_at >= _now,
+                            Blacklist.expires_at.is_(None),
+                        ),
+                        identity_cond,
+                    )
+                )
+            ).scalar() or 0
+            if remaining == 0:
+                terminal.status = TerminalStatus.UNBLOCKED.value
+                terminal.firewall_tag = None
+                terminal.block_state = None
+
         # Audit before commit so it is written in the same transaction as the
         # entry state change (otherwise a later get_db commit failure would
         # leave a successful unblock with no audit record).
