@@ -631,6 +631,80 @@ class TestUnblockIp:
         service._request_with_backoff.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_multiple_all_skipped_returns_success(self, service):
+        """Multiple IPs that are already unblocked are all skipped -> success.
+
+        Regression for commit 8f23f90: ``success`` must count ``skipped`` as a
+        legitimate idempotent outcome, so a pure-skip unblock does not surface
+        as a spurious "unblock failure" alert.
+        """
+        service._find_blacklist_entry = AsyncMock(return_value=None)
+        service._request_with_backoff = AsyncMock()
+
+        result = await service.unblock_ip([
+            {"srcIP": "1.1.1.1"},
+            {"srcIP": "2.2.2.2"},
+            {"srcIP": "3.3.3.3"},
+        ])
+
+        assert result["code"] == 0
+        assert result["data"]["unblocked"] == []
+        assert result["data"]["skipped"] == ["1.1.1.1", "2.2.2.2", "3.3.3.3"]
+        assert result["data"]["errors"] == []
+        service._request_with_backoff.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_skipped_with_error_still_success(self, service):
+        """A mix of skipped and errored IPs is still reported as success.
+
+        Locks the idempotency semantics directly: the presence of at least one
+        ``skipped`` outcome means the operation is not a failure, even when
+        another IP in the same batch errors.
+        """
+        async def find_entry(ip):
+            if ip == "1.1.1.1":
+                return None  # already unblocked -> skipped
+            return {"url": ip, "description": "TAM-lab"}
+
+        service._find_blacklist_entry = AsyncMock(side_effect=find_entry)
+        service._request_with_backoff = AsyncMock(
+            return_value=make_response(200, {"code": 1, "message": "fail"})
+        )
+
+        result = await service.unblock_ip([
+            {"srcIP": "1.1.1.1"},
+            {"srcIP": "2.2.2.2"},
+        ])
+
+        assert result["code"] == 0
+        assert result["data"]["skipped"] == ["1.1.1.1"]
+        assert result["data"]["errors"] == [{"ip": "2.2.2.2", "error": "fail"}]
+        assert result["data"]["unblocked"] == []
+
+    @pytest.mark.asyncio
+    async def test_all_errors_returns_code_one(self, service):
+        """All IPs erroring (no unblock / no skip) is a genuine failure."""
+        service._find_blacklist_entry = AsyncMock(
+            return_value={"url": "1.1.1.1", "description": "TAM-lab"}
+        )
+        service._request_with_backoff = AsyncMock(
+            return_value=make_response(200, {"code": 1, "message": "fail"})
+        )
+
+        result = await service.unblock_ip([
+            {"srcIP": "1.1.1.1"},
+            {"srcIP": "2.2.2.2"},
+        ])
+
+        assert result["code"] == 1
+        assert result["data"]["skipped"] == []
+        assert result["data"]["unblocked"] == []
+        assert result["data"]["errors"] == [
+            {"ip": "1.1.1.1", "error": "fail"},
+            {"ip": "2.2.2.2", "error": "fail"},
+        ]
+
+    @pytest.mark.asyncio
     async def test_success(self, service):
         service._find_blacklist_entry = AsyncMock(
             return_value={"url": "1.1.1.1", "description": "TAM-lab"}

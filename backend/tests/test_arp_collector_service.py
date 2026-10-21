@@ -13,7 +13,7 @@ Methods under test:
 - run_scheduled_collection
 """
 
-from datetime import UTC, datetime, timezone
+from datetime import UTC, datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -75,7 +75,12 @@ def make_exec_result(scalar=None, rows=None):
 
 
 def set_exec_sequence(mock_db, results):
-    """Make mock_db.execute replay a fixed sequence of Result mocks."""
+    """Make mock_db.execute replay a fixed sequence of Result mocks.
+
+    The collector issues a MAC→IP pre-load query before the upsert loop; feed
+    an empty result for it first so callers keep their fixed per-query order.
+    """
+    results = [make_exec_result(rows=[])] + list(results)
     it = iter(results)
 
     async def _side_effect(stmt):
@@ -85,6 +90,16 @@ def set_exec_sequence(mock_db, results):
             return make_exec_result()
 
     mock_db.execute = AsyncMock(side_effect=_side_effect)
+
+
+def assert_logged_any(mock_logger, *substrings):
+    """Assert at least one log call contains all given substrings."""
+    for call in mock_logger.call_args_list:
+        if all(s in str(call) for s in substrings):
+            return
+    raise AssertionError(
+        f"No log entry containing {substrings!r}. Calls: {mock_logger.call_args_list}"
+    )
 
 
 def patch_ds_service():
@@ -135,6 +150,22 @@ class TestNormalizeMac:
 
     def test_empty(self):
         assert ArpCollectorService._normalize_mac("") is None
+
+
+# ===========================================================================
+# TestAsUtcTimestamp
+# ===========================================================================
+
+class TestAsUtcTimestamp:
+    def test_naive_treated_as_utc(self):
+        naive = datetime(2026, 1, 1, 0, 0, 0)
+        utc = datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC)
+        assert ArpCollectorService._as_utc_timestamp(naive) == ArpCollectorService._as_utc_timestamp(utc)
+
+    def test_aware_preserves_offset(self):
+        utc = datetime(2026, 1, 1, 8, 0, 0, tzinfo=timezone.utc)
+        shanghai = datetime(2026, 1, 1, 16, 0, 0, tzinfo=timezone(timedelta(hours=8)))
+        assert ArpCollectorService._as_utc_timestamp(utc) == ArpCollectorService._as_utc_timestamp(shanghai)
 
 
 # ===========================================================================
@@ -281,6 +312,7 @@ class TestProcessArpEntries:
         assert added.status == TerminalStatus.UNBLOCKED.value
         assert added.compliance_status == "unknown"
         assert added.source_tag == "lab"
+        assert added.ip_changed_at is None
 
     @pytest.mark.asyncio
     async def test_updates_existing_terminal_same_ip(self, service, mock_db):
@@ -302,6 +334,44 @@ class TestProcessArpEntries:
         assert result.entries_added == 0
         assert existing.ip_changed_at is None
         online.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_same_mac_new_ip_marks_ip_changed_at(self, service, mock_db):
+        # Same MAC at a different IP is an IP migration: the new record must be
+        # marked ip_changed_at so the compliance grace period holds downgrades.
+        old = make_terminal(ip="10.0.0.1", mac_norm="AABBCCDDEEFF")
+        entries = [{"ip_address": "10.0.0.2", "mac_address": "aa:bb:cc:dd:ee:ff"}]
+
+        results = [
+            make_exec_result(rows=[old]),   # preload: MAC presently at .1
+            make_exec_result(scalar=None),  # upsert (.2) -> new record
+            make_exec_result(rows=[]),      # batch check
+            make_exec_result(rows=[]),      # offline
+        ]
+        it = iter(results)
+
+        async def _side_effect(stmt):
+            try:
+                return next(it)
+            except StopIteration:
+                return make_exec_result()
+
+        mock_db.execute = AsyncMock(side_effect=_side_effect)
+
+        with patch("app.services.event_emitter.emit_terminal_online", AsyncMock()) as online, \
+             patch("app.services.config_service.get_config_value", AsyncMock(side_effect=[300, 3])), \
+             patch("app.services.arp_collector_service.logger.info") as info_logger:
+            result = await service.process_arp_entries(entries, "lab")
+
+        assert result.entries_added == 1
+        added = mock_db.add.call_args.args[0]
+        assert added.ip_address == "10.0.0.2"
+        assert added.ip_changed_at is not None
+        online.assert_called_once()
+        # 多 IP/MAC 震荡排查：IP 迁移必须记录 MAC、新 IP、旧 IP。
+        assert_logged_any(
+            info_logger, "ARP IP-migration", "AABBCCDDEEFF", "10.0.0.2", "10.0.0.1"
+        )
 
     @pytest.mark.asyncio
     async def test_same_mac_new_ip_creates_new_record(self, service, mock_db):
@@ -607,6 +677,90 @@ class TestProcessArpEntries:
             await service.process_arp_entries(entries, "lab")
 
         offline.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_offline_detection_marks_block_state(self, service, mock_db):
+        entries = [{"ip_address": "10.0.0.1", "mac_address": "aa:bb:cc:dd:ee:ff"}]
+        existing = make_terminal(ip="10.0.0.1", mac_norm="AABBCCDDEEFF")
+        stale = make_terminal(ip="10.0.0.2", mac_norm="112233445566")
+        stale.block_state = None
+        stale.updated_at = datetime(2025, 1, 1, tzinfo=timezone.utc)
+
+        set_exec_sequence(
+            mock_db,
+            [
+                make_exec_result(scalar=existing),
+                make_exec_result(rows=[]),
+                make_exec_result(rows=[stale]),
+            ],
+        )
+
+        fixed_now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        with patch("app.core.timezone.now_utc", return_value=fixed_now), \
+             patch("app.services.config_service.get_config_value", AsyncMock(side_effect=[300, 3])), \
+             patch("app.services.event_emitter.emit_terminal_offline", AsyncMock()) as offline, \
+             patch("app.services.arp_collector_service.logger.info") as info_logger:
+            await service.process_arp_entries(entries, "lab")
+
+        assert stale.block_state == "offline"
+        offline.assert_called_once()
+        # 离线标记必须记录 ip/mac 与标记动作，便于排查陈旧记录去向。
+        assert_logged_any(info_logger, "ARP offline", "10.0.0.2", "marked offline")
+
+    @pytest.mark.asyncio
+    async def test_offline_detection_skips_blocked(self, service, mock_db):
+        """Blocked records are not re-marked offline — their block is IP-level and
+        must be left for reconciliation (old-IP release is handled in P1-a)."""
+        entries = [{"ip_address": "10.0.0.1", "mac_address": "aa:bb:cc:dd:ee:ff"}]
+        existing = make_terminal(ip="10.0.0.1", mac_norm="AABBCCDDEEFF")
+        stale = make_terminal(ip="10.0.0.2", mac_norm="112233445566")
+        stale.block_state = None
+        stale.status = "blocked"
+        stale.updated_at = datetime(2025, 1, 1, tzinfo=timezone.utc)
+
+        set_exec_sequence(
+            mock_db,
+            [
+                make_exec_result(scalar=existing),
+                make_exec_result(rows=[]),
+                make_exec_result(rows=[stale]),
+            ],
+        )
+
+        fixed_now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        with patch("app.core.timezone.now_utc", return_value=fixed_now), \
+             patch("app.services.config_service.get_config_value", AsyncMock(side_effect=[300, 3])), \
+             patch("app.services.event_emitter.emit_terminal_offline", AsyncMock()) as offline:
+            await service.process_arp_entries(entries, "lab")
+
+        assert stale.block_state is None
+        offline.assert_called_once()  # still emits offline event, but no block_state mutation
+
+    @pytest.mark.asyncio
+    async def test_online_clears_offline_mark(self, service, mock_db):
+        entries = [{"ip_address": "10.0.0.1", "mac_address": "aa:bb:cc:dd:ee:ff"}]
+        existing = make_terminal(ip="10.0.0.1", mac_norm="AABBCCDDEEFF")
+        existing.block_state = "offline"
+        existing.updated_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+        set_exec_sequence(
+            mock_db,
+            [
+                make_exec_result(scalar=existing),
+                make_exec_result(rows=[]),
+                make_exec_result(rows=[existing]),
+            ],
+        )
+
+        with patch("app.services.config_service.get_config_value", AsyncMock(side_effect=[300, 3])), \
+             patch("app.services.event_emitter.emit_terminal_offline", AsyncMock()) as offline, \
+             patch("app.services.arp_collector_service.logger.info") as info_logger:
+            await service.process_arp_entries(entries, "lab")
+
+        assert existing.block_state is None
+        offline.assert_not_called()
+        # 在线清除 offline 标记必须留痕，便于确认设备重新上线。
+        assert_logged_any(info_logger, "ARP online", "AA-BB-CC-DD-EE-FF", "cleared offline mark")
 
 
 # ===========================================================================

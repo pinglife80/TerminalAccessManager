@@ -5,6 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.core.config import settings
 
 
 @pytest.fixture
@@ -30,6 +31,8 @@ def test_health_check(client):
     data = response.json()
     assert "status" in data
     assert "version" in data
+    # /health must expose the configured timezone (settings.TZ) for the frontend
+    assert data["timezone"] == settings.TZ
 
 
 class TestGlobalExceptionHandler:

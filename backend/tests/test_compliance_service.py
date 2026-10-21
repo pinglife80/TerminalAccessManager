@@ -134,6 +134,16 @@ def scripted_execute(results):
     return AsyncMock(side_effect=side_effect)
 
 
+def assert_logged_any(mock_logger, *substrings):
+    """Assert at least one log call contains all given substrings."""
+    for call in mock_logger.call_args_list:
+        if all(s in str(call) for s in substrings):
+            return
+    raise AssertionError(
+        f"No log entry containing {substrings!r}. Calls: {mock_logger.call_args_list}"
+    )
+
+
 def _make_block_side_effect(block):
     """Wrap an async block callable into an ``(is_blocked, newly_blocked)`` side-effect."""
     async def side_effect(ip, fw_tag, block_time="30d", reason="auto"):
@@ -978,10 +988,14 @@ class TestRecalculateCompliance:
             if call_count["n"] == 1:
                 return term_result_mock      # select(Terminal) -> [terminal]
             elif call_count["n"] == 2:
-                return no_row_result         # downgrade cooldown check -> None
+                return term_result_mock      # MAC confirm total -> [terminal]
             elif call_count["n"] == 3:
-                return empty_all_result      # active blacklist lookup -> []
+                return term_result_mock      # MAC batch reset -> [terminal]
             elif call_count["n"] == 4:
+                return no_row_result         # downgrade cooldown check -> None
+            elif call_count["n"] == 5:
+                return empty_all_result      # active blacklist lookup -> []
+            elif call_count["n"] == 6:
                 return no_row_result         # block cooldown check -> None
             return no_row_result             # idempotency check -> None
 
@@ -1536,6 +1550,178 @@ class TestApplyResultBlock:
         assert created_blacklists(mock_db) == []
 
 
+class TestTimeline10182183:
+    """Regression tests reproducing the 10.8.18.183 oscillation timeline.
+
+    This terminal appeared on two MACs (DHCP IP reuse): ``B0-BE-83-5C-CE-41``
+    (old) and ``92-70-FA-71-63-DB`` (new). Its audit log was dominated by an
+    endless ``compliant -> non_compliant`` oscillation driven by two defects:
+
+    * problem 3④ — ``_apply_compliance_result`` logged the downgrade BEFORE
+      blocking; when every firewall block failed it silently rolled the status
+      back, leaving a phantom ``compliant -> non_compliant`` audit entry with no
+      matching ``non_compliant -> compliant`` transition.
+    * problem 6 — ``recalculate_all_compliance`` added the trailing summary
+      ``recalculate_compliance`` audit entry without committing it, so it was
+      silently dropped by the scheduler path.
+
+    These tests pin the fixes using the real IP / new MAC (verification matrix
+    §5.1.2 and §5.1.1).
+    """
+
+    IP = "10.8.18.183"
+    OLD_MAC = "B0-BE-83-5C-CE-41"     # baseline only knows this MAC
+    NEW_MAC = "92-70-FA-71-63-DB"      # device that DHCP-migrated onto this IP
+    NEW_MAC_NORM = "9270FA7163DB"
+
+    @staticmethod
+    def _compliance_changed_calls(log_action_mock):
+        return [
+            c for c in log_action_mock.await_args_list
+            if c.args and len(c.args) >= 2 and c.args[1] == "compliance_status_changed"
+        ]
+
+    @pytest.mark.asyncio
+    async def test_block_failure_rollback_emits_no_phantom_audit(self, service, mock_db):
+        """A downgrade whose block fails on ALL firewalls rolls back silently.
+
+        Verifies problem 3④: no intermediate ``non_compliant + unblocked``
+        state, and no phantom ``compliance_status_changed`` audit entry or
+        ``non_compliant`` event is emitted for a transition that is rolled back.
+        """
+        terminal = create_mock_terminal(
+            ip=self.IP,
+            mac=self.NEW_MAC,
+            mac_address_normalized=self.NEW_MAC_NORM,
+            status="unblocked",
+            compliance_status="compliant",
+            source_tag="yp",
+        )
+        results = [
+            make_result(one=None),      # downgrade cooldown -> None
+            make_result(all_rows=[]),   # active blacklist -> []
+            make_result(one=None),      # block cooldown -> None
+        ]
+        with apply_result_mocks(service, mock_db, results, bound_fw_tags=["af"],
+                                block_on_firewall=False) as agg:
+            log_action_mock = service.log_action
+            result = await service._apply_compliance_result(
+                terminal, "non_compliant", None, None, self.IP, self.NEW_MAC,
+            )
+
+        # 1) rollback: no non_compliant + unblocked intermediate state
+        assert terminal.compliance_status == "compliant"
+        assert terminal.status == "unblocked"
+        assert created_blacklists(mock_db) == []
+        assert result == {"status_changed": False, "new_compliance": "compliant", "unblocked": False}
+
+        # 2) no phantom compliant -> non_compliant audit entry
+        assert self._compliance_changed_calls(log_action_mock) == []
+
+        # 3) no non_compliant event (block_failed system error is separately emitted)
+        agg.emit_non_compliant.assert_not_awaited()
+        agg.emit_compliant.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_successful_downgrade_emits_single_audit(self, service, mock_db):
+        """Positive control: a genuine downgrade emits exactly one audit entry."""
+        terminal = create_mock_terminal(
+            ip=self.IP,
+            mac=self.NEW_MAC,
+            mac_address_normalized=self.NEW_MAC_NORM,
+            status="unblocked",
+            compliance_status="compliant",
+            source_tag="yp",
+        )
+        results = [
+            make_result(one=None),      # downgrade cooldown -> None
+            make_result(all_rows=[]),   # active blacklist -> []
+            make_result(one=None),      # block cooldown -> None
+            make_result(one=None),      # blacklist upsert (idempotency) -> None
+        ]
+        with apply_result_mocks(service, mock_db, results, bound_fw_tags=["hq"]) as agg:
+            log_action_mock = service.log_action
+            result = await service._apply_compliance_result(
+                terminal, "non_compliant", None, None, self.IP, self.NEW_MAC,
+            )
+
+        assert result["status_changed"] is True
+
+        changed = self._compliance_changed_calls(log_action_mock)
+        assert len(changed) == 1
+        assert changed[0].args[3] == f"{self.IP}_{self.NEW_MAC}"
+        assert changed[0].kwargs["ip_address"] == "System"
+
+        agg.emit_non_compliant.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_recalculate_commits_summary_log(self, service, mock_db):
+        """recalculate_all_compliance commits the trailing summary audit entry.
+
+        Verifies problem 6: the ``recalculate_compliance`` summary log added at
+        the end of the run must be committed (SQLAlchemy 2.0 ``AsyncSession``
+        does NOT auto-commit on ``__aexit__``). Total commits = 1 batch commit
+        + 1 trailing commit for a single-terminal downgrade.
+        """
+        terminal = create_mock_terminal(
+            ip=self.IP,
+            mac=self.NEW_MAC,
+            mac_address_normalized=self.NEW_MAC_NORM,
+            status="unblocked",
+            compliance_status="compliant",
+            source_tag="yp",
+        )
+
+        term_result_mock = MagicMock()
+        term_result_mock.scalars.return_value.all.return_value = [terminal]
+
+        no_row_result = MagicMock()
+        no_row_result.scalar_one_or_none.return_value = None
+        empty_all_result = MagicMock()
+        empty_all_result.all.return_value = []
+
+        call_count = {"n": 0}
+
+        async def execute_side_effect(stmt):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                return term_result_mock
+            elif call_count["n"] == 2:
+                return term_result_mock    # MAC confirm total
+            elif call_count["n"] == 3:
+                return term_result_mock    # MAC batch reset
+            elif call_count["n"] == 4:
+                return no_row_result       # downgrade cooldown
+            elif call_count["n"] == 5:
+                return empty_all_result    # active blacklist
+            elif call_count["n"] == 6:
+                return no_row_result       # block cooldown
+            return no_row_result           # blacklist upsert (idempotency)
+
+        mock_db.execute = AsyncMock(side_effect=execute_side_effect)
+
+        # Baseline holds only the OLD MAC, and this terminal's IP is NOT in the
+        # baseline this cycle -> judged non_compliant -> auto-block succeeds.
+        ig_data = {"yp": [{"ip_address": "10.8.18.100", "mac_address": self.OLD_MAC}]}
+
+        with patch.object(service, "_load_whitelist_cache", return_value=[]), \
+             patch.object(service, "_load_all_ipguard_cache", return_value=ig_data), \
+             patch.object(service, "_load_scope_cache", return_value=[]), \
+             patch.object(service, "_is_ipguard_cache_stale", return_value=False), \
+             patch.object(service, "_get_confirm_threshold", return_value=1), \
+             patch.object(service, "_get_compliant_downgrade_threshold", return_value=1), \
+             patch.object(service, "_get_cooldown_minutes", return_value=10), \
+             patch.object(service, "_get_bound_firewall_tags", return_value=["hq"]), \
+             patch.object(service, "_block_on_firewall_detailed", return_value=(True, True)), \
+             patch.object(service, "_get_block_time", return_value="30d"):
+
+            result = await service.recalculate_all_compliance()
+
+        assert result["non_compliant"] == 1
+        # 1 batch commit + 1 trailing summary commit (the fix under test)
+        assert mock_db.commit.await_count == 2
+
+
 class TestApplyResultBlockReason:
     """Detailed block_reason derivation for non_compliant terminals."""
 
@@ -1826,6 +2012,7 @@ class TestApplyInitialComplianceResult:
     @pytest.mark.asyncio
     async def test_non_compliant_holds_below_threshold(self, service, mock_db):
         terminal = create_mock_terminal(compliance_status="unknown", source_tag="lab")
+        mock_db.execute = scripted_execute([make_result(scalars_all=[terminal])])
         with patch.object(service, "_get_confirm_threshold", return_value=3), \
              patch.object(service, "_apply_compliance_result", return_value={"status_changed": True}) as apply_mock:
             result = await service.apply_initial_compliance_result(
@@ -1840,9 +2027,48 @@ class TestApplyInitialComplianceResult:
         apply_mock.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_non_compliant_holds_during_ip_grace_period(self, service, mock_db):
+        terminal = create_mock_terminal(compliance_status="unknown", source_tag="lab")
+        terminal.ip_changed_at = datetime.now(UTC)  # IP migrated just now
+        with patch.object(service, "_get_ip_grace_minutes", return_value=10), \
+             patch.object(service, "_apply_compliance_result", return_value={"status_changed": True}) as apply_mock:
+            result = await service.apply_initial_compliance_result(
+                terminal, "non_compliant", None, None,
+                "192.168.1.100", "AA:BB:CC:DD:EE:FF",
+            )
+
+        assert result["status_changed"] is False
+        assert result["new_compliance"] == "unknown"
+        assert terminal.non_compliant_confirm_count == 0
+        assert terminal.compliant_confirm_count == 0
+        apply_mock.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_non_compliant_proceeds_after_ip_grace_expires(self, service, mock_db):
+        terminal = create_mock_terminal(compliance_status="unknown", source_tag="lab")
+        terminal.ip_changed_at = datetime.now(UTC) - timedelta(minutes=30)  # grace expired
+        mock_db.execute = scripted_execute([make_result(scalars_all=[terminal])])
+        with patch.object(service, "_get_ip_grace_minutes", return_value=10), \
+             patch.object(service, "_get_confirm_threshold", return_value=3), \
+             patch.object(service, "_apply_compliance_result", return_value={"status_changed": True}) as apply_mock:
+            result = await service.apply_initial_compliance_result(
+                terminal, "non_compliant", None, None,
+                "192.168.1.100", "AA:BB:CC:DD:EE:FF",
+            )
+
+        assert terminal.non_compliant_confirm_count == 1
+        assert result["status_changed"] is False
+        assert result["new_compliance"] == "unknown"
+        apply_mock.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_non_compliant_reaches_threshold_then_applies(self, service, mock_db):
         terminal = create_mock_terminal(compliance_status="unknown", source_tag="lab")
         terminal.non_compliant_confirm_count = 2
+        mock_db.execute = scripted_execute([
+            make_result(scalars_all=[terminal]),   # MAC total
+            make_result(scalars_all=[terminal]),   # MAC batch reset
+        ])
         with patch.object(service, "_get_confirm_threshold", return_value=3), \
              patch.object(service, "_apply_compliance_result", return_value={"status_changed": True}) as apply_mock:
             await service.apply_initial_compliance_result(
@@ -1851,6 +2077,42 @@ class TestApplyInitialComplianceResult:
             )
 
         assert terminal.non_compliant_confirm_count == 0
+        assert apply_mock.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_non_compliant_aggregates_confirm_count_across_siblings(self, service, mock_db):
+        """Same-MAC multi-IP records share one device-level confirm total.
+
+        A sibling record with the same MAC carries its own accumulated count; the
+        MAC-level SUM must include it so an IP change does not reset the device's
+        confirmation progress.
+        """
+        terminal = create_mock_terminal(
+            ip="192.168.1.100", mac="AA:BB:CC:DD:EE:FF",
+            mac_address_normalized="AABBCCDDEEFF",
+            compliance_status="unknown", source_tag="lab",
+        )
+        sibling = create_mock_terminal(
+            ip="192.168.1.101", mac="AA:BB:CC:DD:EE:FF",
+            mac_address_normalized="AABBCCDDEEFF",
+            compliance_status="unknown", source_tag="lab",
+        )
+        sibling.non_compliant_confirm_count = 2
+
+        mock_db.execute = scripted_execute([
+            make_result(scalars_all=[terminal, sibling]),   # MAC total
+            make_result(scalars_all=[terminal, sibling]),   # MAC batch reset
+        ])
+        with patch.object(service, "_get_confirm_threshold", return_value=3), \
+             patch.object(service, "_apply_compliance_result", return_value={"status_changed": True}) as apply_mock:
+            await service.apply_initial_compliance_result(
+                terminal, "non_compliant", None, None,
+                "192.168.1.100", "AA:BB:CC:DD:EE:FF",
+            )
+
+        # 1 (this record) + 2 (sibling) == 3 -> threshold reached, both reset.
+        assert terminal.non_compliant_confirm_count == 0
+        assert sibling.non_compliant_confirm_count == 0
         assert apply_mock.await_count == 1
 
     @pytest.mark.asyncio
@@ -2939,7 +3201,8 @@ class TestRecalculateComplianceEdges:
              patch.object(service, "_load_scope_cache", return_value=[]), \
              patch.object(service, "_is_ipguard_cache_stale", return_value=False), \
              patch.object(service, "_get_confirm_threshold", return_value=2), \
-             patch.object(service, "_get_whitelist_miss_threshold", return_value=6):
+             patch.object(service, "_get_whitelist_miss_threshold", return_value=6), \
+             patch("app.services.compliance_service.logger.info") as info_logger:
             result = await service.recalculate_all_compliance()
 
         assert result["total"] == 1
@@ -2947,6 +3210,10 @@ class TestRecalculateComplianceEdges:
         assert result["non_compliant"] == 0
         assert terminal.compliance_status == "bypass"
         assert terminal.non_compliant_confirm_count == 1
+        # whitelist 瞬时 miss 保持 bypass 必须留痕（含 MAC 聚合键）。
+        assert_logged_any(
+            info_logger, "whitelist transient miss", "holding bypass", "AABBCCDDEEFF"
+        )
 
     @pytest.mark.asyncio
     async def test_recalculate_upgrade_to_compliant_is_immediate(self, service, mock_db):
@@ -3007,7 +3274,8 @@ class TestRecalculateComplianceEdges:
         terminal.non_compliant_confirm_count = 3
 
         mock_db.execute = scripted_execute([
-            make_result(scalars_all=[terminal]),
+            make_result(scalars_all=[terminal]),   # terminal load
+            make_result(scalars_all=[terminal]),   # MAC total
         ])
 
         ig_data = {"lab": [{"ip_address": "10.0.0.99", "mac_address": "11-22-33-44-55-66"}]}
@@ -3020,7 +3288,8 @@ class TestRecalculateComplianceEdges:
              patch.object(service, "_is_ipguard_cache_stale", return_value=False), \
              patch.object(service, "_get_confirm_threshold", return_value=2), \
              patch.object(service, "_get_compliant_downgrade_threshold", return_value=6), \
-             patch.object(service, "_match_ipguard_in_memory", return_value=(False, False, False)):
+             patch.object(service, "_match_ipguard_in_memory", return_value=(False, False, False)), \
+             patch("app.services.compliance_service.logger.info") as info_logger:
             result = await service.recalculate_all_compliance()
 
         assert result["total"] == 1
@@ -3028,6 +3297,43 @@ class TestRecalculateComplianceEdges:
         assert result["non_compliant"] == 0
         assert terminal.compliance_status == "compliant"
         assert terminal.non_compliant_confirm_count == 4
+        # 降级未达标 hold 必须留痕（含进度与 MAC 聚合键）。
+        assert_logged_any(
+            info_logger, "non_compliant confirm hold", "AABBCCDDEEFF"
+        )
+
+    @pytest.mark.asyncio
+    async def test_recalculate_ip_grace_logs(self, service, mock_db):
+        """IP 变化宽限期内必须留痕，便于确认降级被按住。"""
+        terminal = create_mock_terminal(
+            ip="10.8.18.183",
+            mac="AA:BB:CC:DD:EE:FF",
+            status="unblocked",
+            compliance_status="compliant",
+        )
+        terminal.ip_changed_at = datetime.now(UTC) - timedelta(minutes=5)
+
+        term_result_mock = MagicMock()
+        term_result_mock.scalars.return_value.all.return_value = [terminal]
+        mock_db.execute = AsyncMock(return_value=term_result_mock)
+
+        ig_data = {"lab": [{"ip_address": "10.0.0.99", "mac_address": "11-22-33-44-55-66"}]}
+
+        with patch("app.services.compliance_service._acquire_compliance_lock", new=AsyncMock(return_value="tok")), \
+             patch("app.services.compliance_service._release_compliance_lock"), \
+             patch.object(service, "_load_whitelist_cache", return_value=[]), \
+             patch.object(service, "_load_all_ipguard_cache", return_value=ig_data), \
+             patch.object(service, "_load_scope_cache", return_value=[]), \
+             patch.object(service, "_is_ipguard_cache_stale", return_value=False), \
+             patch.object(service, "_get_ip_grace_minutes", return_value=10), \
+             patch("app.services.compliance_service.logger.info") as info_logger:
+            result = await service.recalculate_all_compliance()
+
+        assert result["total"] == 1
+        assert result["unchanged"] == 1
+        assert result["non_compliant"] == 0
+        assert terminal.compliance_status == "compliant"
+        assert_logged_any(info_logger, "IP-changed grace active", "10.8.18.183")
 
     @pytest.mark.asyncio
     async def test_recalculate_compliant_downgrades_when_dedicated_threshold_reached(self, service, mock_db):
@@ -3041,7 +3347,9 @@ class TestRecalculateComplianceEdges:
         terminal.non_compliant_confirm_count = 5
 
         mock_db.execute = scripted_execute([
-            make_result(scalars_all=[terminal]),
+            make_result(scalars_all=[terminal]),   # terminal load
+            make_result(scalars_all=[terminal]),   # MAC total
+            make_result(scalars_all=[terminal]),   # MAC batch reset
         ])
 
         ig_data = {"lab": [{"ip_address": "10.0.0.99", "mac_address": "11-22-33-44-55-66"}]}
@@ -3072,6 +3380,86 @@ class TestRecalculateComplianceEdges:
         assert applied["new_compliance"] == "non_compliant"
         assert terminal.compliance_status == "non_compliant"
         assert terminal.non_compliant_confirm_count == 0
+
+    @pytest.mark.asyncio
+    async def test_recalculate_skips_offline_records(self, service, mock_db):
+        """block_state="offline" 且未封锁的陈旧记录在重算时被跳过，不积累确认计数。
+
+        陈旧 IP/MAC（已不再被 ARP 采集到）不应继续参与合规降级判定，否则会
+        因缓存缺失被误判为 non_compliant 并膨胀统计。被封锁记录不在跳过范围内，
+        仍需走 reconciliation/retry 路径处理其 IP 级封锁（P1-a）。
+        """
+        terminal = create_mock_terminal(
+            ip="10.8.18.183",
+            mac="AA:BB:CC:DD:EE:FF",
+            status="unblocked",
+            compliance_status="unknown",
+        )
+        terminal.block_state = "offline"
+        terminal.non_compliant_confirm_count = 5
+
+        mock_db.execute = AsyncMock(return_value=make_result(scalars_all=[terminal]))
+
+        ig_data = {"lab": [{"ip_address": "10.0.0.99", "mac_address": "11-22-33-44-55-66"}]}
+
+        with patch("app.services.compliance_service._acquire_compliance_lock", new=AsyncMock(return_value="tok")), \
+             patch("app.services.compliance_service._release_compliance_lock"), \
+             patch.object(service, "_load_whitelist_cache", return_value=[]), \
+             patch.object(service, "_load_all_ipguard_cache", return_value=ig_data), \
+             patch.object(service, "_load_scope_cache", return_value=[]), \
+             patch.object(service, "_is_ipguard_cache_stale", return_value=False), \
+             patch("app.services.compliance_service.logger.info") as info_logger:
+            result = await service.recalculate_all_compliance()
+
+        assert result["total"] == 1
+        assert result["offline_skip_count"] == 1
+        assert result["non_compliant"] == 0
+        assert result["unchanged"] == 0
+        assert result["bypass"] == 0
+        assert result["compliant"] == 0
+        assert terminal.compliance_status == "unknown"  # untouched
+        assert terminal.non_compliant_confirm_count == 5  # not accumulated/reset
+        # 离线跳过必须留痕，便于确认陈旧记录未参与判定。
+        assert_logged_any(info_logger, "Recalc skip offline", "10.8.18.183")
+
+    @pytest.mark.asyncio
+    async def test_recalculate_does_not_skip_blocked_offline(self, service, mock_db):
+        """blocked 且标记 offline 的记录不可跳过 —— 其 IP 级封锁仍需 reconciliation 收敛。"""
+        terminal = create_mock_terminal(
+            ip="10.8.18.183",
+            mac="AA:BB:CC:DD:EE:FF",
+            status="blocked",
+            compliance_status="non_compliant",
+        )
+        terminal.block_state = "offline"
+
+        mock_db.execute = AsyncMock(return_value=make_result(scalars_all=[terminal]))
+
+        ig_data = {"lab": [{"ip_address": "10.8.18.183", "mac_address": "AA-BB-CC-DD-EE-FF"}]}
+
+        applied = {}
+
+        async def fake_apply(terminal, new_compliance, new_wl_match_type, wl_comments, ip_addr, mac_addr):
+            applied["new_compliance"] = new_compliance
+            terminal.compliance_status = new_compliance
+            return {"status_changed": True, "new_compliance": new_compliance, "unblocked": False}
+
+        with patch("app.services.compliance_service._acquire_compliance_lock", new=AsyncMock(return_value="tok")), \
+             patch("app.services.compliance_service._release_compliance_lock"), \
+             patch.object(service, "_load_whitelist_cache", return_value=[]), \
+             patch.object(service, "_load_all_ipguard_cache", return_value=ig_data), \
+             patch.object(service, "_load_scope_cache", return_value=[]), \
+             patch.object(service, "_is_ipguard_cache_stale", return_value=False), \
+             patch.object(service, "_get_confirm_threshold", return_value=1), \
+             patch.object(service, "_match_ipguard_in_memory", return_value=(True, True, True)), \
+             patch.object(service, "_apply_compliance_result", new=fake_apply):
+            result = await service.recalculate_all_compliance()
+
+        assert result["total"] == 1
+        assert result["offline_skip_count"] == 0
+        # blocked 命中 IPGuard → 升级 compliant 并触发 auto-unblock 路径。
+        assert applied["new_compliance"] == "compliant"
+        assert result["compliant"] == 1
 
 
 # ===========================================================================
