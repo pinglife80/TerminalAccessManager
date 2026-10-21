@@ -3659,6 +3659,7 @@ for t in json.load(sys.stdin):
         log_cleanup)             echo "Log Cleanup"             ; return 0 ;;
         firewall_reconciliation) echo "Firewall Reconciliation" ; return 0 ;;
         backup)                  echo "Scheduled Backup"        ; return 0 ;;
+        backup_cleanup)          echo "Backup Retention Cleanup"; return 0 ;;
     esac
     return 1
 }
