@@ -7,7 +7,7 @@ processes entries, and triggers compliance checks.
 
 import asyncio
 import re
-from datetime import UTC
+from datetime import UTC, datetime
 from typing import Any
 
 from loguru import logger
@@ -278,6 +278,35 @@ class ArpCollectorService:
         errors = []
         seen_pairs: set[tuple[str, str]] = set()
 
+        # Pre-load existing (MAC, IP) mappings for IP-migration detection.
+        # A MAC appearing under a *new* IP (same MAC, different IP) signals a
+        # DHCP IP change: the new record is marked ip_changed_at so the
+        # compliance grace period can hold downgrades until IPGuard catches up.
+        batch_mac_keys: set[str] = set()
+        for entry in entries:
+            _ip = entry.get("ip_address", "").strip()
+            _mac = entry.get("mac_address", "").strip()
+            if not _ip or not _mac:
+                continue
+            _norm = self._normalize_mac(_mac)
+            if not _norm:
+                continue
+            batch_mac_keys.add(_norm.replace('-', '').replace(':', '').replace('.', '').upper())
+
+        mac_ip_map: dict[str, set[str]] = {}
+        if batch_mac_keys:
+            try:
+                existing_stmt = select(Terminal).where(
+                    Terminal.mac_address_normalized.in_(batch_mac_keys)
+                )
+                existing_result = await self.db.execute(existing_stmt)
+                for t in existing_result.scalars().all():
+                    mac_ip_map.setdefault(t.mac_address_normalized, set()).add(t.ip_address)
+            except Exception:
+                # Pre-load failure must never abort collection; degrade by
+                # skipping ip_changed_at marking for this batch.
+                logger.warning("Failed to pre-load MAC→IP map for IP-migration detection")
+
         for entry in entries:
             ip_addr = entry.get("ip_address", "").strip()
             mac_addr = entry.get("mac_address", "").strip()
@@ -308,7 +337,6 @@ class ArpCollectorService:
                 existing = result.scalar_one_or_none()
 
                 if existing:
-                    from datetime import datetime
                     existing.updated_at = datetime.now(UTC)
                     existing.source_tag = source_tag
                     existing.source = "arp"
@@ -324,6 +352,16 @@ class ArpCollectorService:
                         source_tag=source_tag,
                         compliance_status="unknown",
                     )
+                    # IP migration: same MAC already exists under a different IP.
+                    # Mark ip_changed_at so the compliance grace period holds
+                    # downgrades until the IPGuard baseline catches up.
+                    if mac_norm_key in mac_ip_map and ip_addr not in mac_ip_map[mac_norm_key]:
+                        mac_record.ip_changed_at = datetime.now(UTC)
+                        logger.info(
+                            f"ARP IP-migration: MAC {mac_norm_key} appeared at new IP "
+                            f"{ip_addr} (existing={sorted(mac_ip_map[mac_norm_key])}), "
+                            f"marking ip_changed_at for grace period"
+                        )
                     self.db.add(mac_record)
                     added += 1
                     from app.services.event_emitter import emit_terminal_online
@@ -435,17 +473,39 @@ class ArpCollectorService:
             for terminal in all_terminals:
                 # Check if the (MAC, IP) pair was seen in this collection.
                 pair_key = (terminal.mac_address_normalized, terminal.ip_address)
-                if pair_key not in seen_pairs and terminal.updated_at:
-                    last_seen = terminal.updated_at.timestamp() if terminal.updated_at.tzinfo else terminal.updated_at.replace(tzinfo=None).timestamp()
-                    if (now_ts - last_seen) > offline_threshold_seconds:
-                        newly_offline += 1
-                        try:
-                            await emit_terminal_offline(
-                                ip_address=terminal.ip_address,
-                                mac_address=terminal.mac_address or "",
-                            )
-                        except Exception:
-                            pass
+                if pair_key in seen_pairs:
+                    # Online this cycle: clear any prior offline mark.
+                    if terminal.block_state == "offline":
+                        terminal.block_state = None
+                        logger.info(
+                            f"ARP online: {terminal.ip_address}/{terminal.mac_address} "
+                            f"cleared offline mark"
+                        )
+                    continue
+
+                if not terminal.updated_at:
+                    continue
+
+                last_seen = self._as_utc_timestamp(terminal.updated_at)
+                if (now_ts - last_seen) > offline_threshold_seconds:
+                    newly_offline += 1
+                    # Mark the stale record offline (via block_state) so compliance
+                    # recalculation can skip it and the UI can surface it. Blocked
+                    # records are left alone here — old-IP release is handled in P1-a.
+                    if terminal.status != "blocked" and terminal.block_state is None:
+                        terminal.block_state = "offline"
+                        logger.info(
+                            f"ARP offline: {terminal.ip_address}/{terminal.mac_address} "
+                            f"stale {(now_ts - last_seen):.0f}s (threshold {offline_threshold_seconds}s), "
+                            f"marked offline"
+                        )
+                    try:
+                        await emit_terminal_offline(
+                            ip_address=terminal.ip_address,
+                            mac_address=terminal.mac_address or "",
+                        )
+                    except Exception:
+                        pass
 
             if newly_offline > 0:
                 logger.info(
@@ -639,3 +699,15 @@ class ArpCollectorService:
             return None
         formatted = "-".join(mac_clean[i:i+2] for i in range(0, len(mac_clean), 2))
         return formatted
+
+    @staticmethod
+    def _as_utc_timestamp(dt: datetime) -> float:
+        """Return POSIX timestamp, treating naive datetimes as UTC.
+
+        Naive datetimes (e.g. read back from SQLite) carry no timezone; assume
+        UTC so offline detection stays consistent with aware values written by
+        the collector.
+        """
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=UTC)
+        return dt.timestamp()
