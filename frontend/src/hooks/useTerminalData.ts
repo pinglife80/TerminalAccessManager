@@ -236,6 +236,7 @@ export const useRetryBlacklistEntry = () => {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['blacklist'] });
       queryClient.invalidateQueries({ queryKey: ['blacklist-stats'] });
+      queryClient.invalidateQueries({ queryKey: ['terminals'] });
     },
   });
 };
