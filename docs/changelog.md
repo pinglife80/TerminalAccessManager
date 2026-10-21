@@ -1,6 +1,6 @@
 # 更新日志
 
-> 文档版本：v3.21.9  更新日期：2026-10-19
+> 文档版本：v3.21.10  更新日期：2026-10-21
 
 本文件记录 TerminalAccessManager 的所有重要变更。
 
@@ -8,6 +8,28 @@
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ***
+
+## [3.21.10] - 2026-10-21
+
+### 修复
+
+- **多 IP/MAC 陈旧记录离线标记**：ARP 采集将长期未见的条目显式标记 `block_state='offline'`，上线后自动清除；naive datetime 统一视为 UTC，消除不同进程时区导致的离线阈值漂移
+  - 关联文件：`services/arp_collector_service.py`、`models/terminal.py`、`schemas/terminal.py`
+
+- **合规宽限期归一化与离线跳过**：合规宽限期比较的 naive/aware datetime 统一归一化为 UTC；`recalculate_all_compliance` 跳过 offline 陈旧记录，复位 unknown 时同步重置两个确认计数器
+  - 关联文件：`services/compliance_service.py`
+
+- **数据源安全删除/手动检查规范化**：手动数据源合规检查与安全删除路径改走 `apply_initial_compliance_result`，统一阈值/审计/封锁；删除/解绑审计日志移到 commit 前同事务原子落库，新增 `_unblock_ip_with_audit` 统一解封审计
+  - 关联文件：`services/data_source_service.py`、`api/v1/endpoints/data_sources.py`、`services/firewall_reconciliation_service.py`
+
+- **retry-unblock 审计原子化**：`retry_unblock` 审计日志写于 `db.commit()` 之前，失败/成功场景与 entry 状态同事务原子落库，避免回滚丢审计
+  - 关联文件：`services/terminal_service.py`
+
+- **时区去硬编码**：后端 `format_timestamp` / `_parse_date_range` 改用 `settings.TZ`，`/health` 下发 `timezone`；前端启动 fetch `/health` 动态获取时区（默认 `Asia/Shanghai` 回退）
+  - 关联文件：`services/notification_channels/base.py`、`services/terminal_service.py`、`main.py`、`frontend/src/lib/timezone.ts`、`frontend/src/lib/utils.ts`、`frontend/src/App.tsx`
+
+- **未定义名称修复**：补 `NotificationLog`、`IntegrityError` 导入，消除若干通知/调度路径的潜在 NameError
+  - 关联文件：`api/v1/endpoints/notifications.py`、`main.py`
 
 ## [3.21.9] - 2026-10-19
 

@@ -561,26 +561,32 @@ async def compliance_check(
 
     check_result = await compliance_service.batch_check_compliance(check_entries)
 
-    # Update compliance_status for each entry
-    bypass_ips = set()
-    compliant_ips = set()
-    non_compliant_ips = set()
-
+    # Map each classified result back to its Terminal by (ip, mac), then apply it
+    # through the standard first-discovery path so that threshold-based
+    # de-duplication, audit logging, and blocking all apply consistently.
+    # This replaces the previous direct `entry.compliance_status = ...` write,
+    # which bypassed the confirm threshold, produced no audit log, and never
+    # actually blocked the terminal.
+    decision_by_terminal = {}
     if check_result.details:
-        for item in check_result.details.get("bypass", []):
-            bypass_ips.add(item.get("ip_address"))
-        for item in check_result.details.get("compliant", []):
-            compliant_ips.add(item.get("ip_address"))
-        for item in check_result.details.get("non_compliant", []):
-            non_compliant_ips.add(item.get("ip_address"))
+        for status_key in ("bypass", "compliant", "non_compliant"):
+            for item in check_result.details.get(status_key, []):
+                key = (item.get("ip_address"), item.get("mac_address"))
+                if key not in decision_by_terminal:
+                    decision_by_terminal[key] = item
 
     for entry in entries:
-        if entry.ip_address in bypass_ips:
-            entry.compliance_status = "bypass"
-        elif entry.ip_address in compliant_ips:
-            entry.compliance_status = "compliant"
-        elif entry.ip_address in non_compliant_ips:
-            entry.compliance_status = "non_compliant"
+        item = decision_by_terminal.get((entry.ip_address, entry.mac_address))
+        if not item:
+            continue
+        await compliance_service.apply_initial_compliance_result(
+            entry,
+            item.get("compliance_status"),
+            item.get("wl_match_type"),
+            item.get("wl_comments"),
+            entry.ip_address or "",
+            entry.mac_address or "",
+        )
 
     await db.commit()
 

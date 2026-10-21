@@ -95,6 +95,15 @@ class TestFormatTimestamp:
         out = format_timestamp(datetime(2026, 1, 1, 0, 0, 0, tzinfo=ZoneInfo("UTC")))
         assert out == "2026-01-01 08:00:00"
 
+    def test_timezone_follows_configured_timezone(self, monkeypatch):
+        from zoneinfo import ZoneInfo
+        monkeypatch.setattr(
+            "app.services.notification_channels.base.get_timezone",
+            lambda: ZoneInfo("America/New_York"),
+        )
+        out = format_timestamp(datetime(2026, 1, 1, 0, 0, 0, tzinfo=ZoneInfo("UTC")))
+        assert out == "2025-12-31 19:00:00"
+
 
 class TestNotificationEvent:
     def test_to_dict(self):

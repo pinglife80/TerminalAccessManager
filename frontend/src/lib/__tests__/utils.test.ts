@@ -12,6 +12,7 @@ import {
   isValidCidrOrRange,
   getErrorMessage,
 } from '../utils'
+import { setTimezone, getTimezone } from '../timezone'
 
 describe('formatDate', () => {
   it('should return "-" for null input', () => {
@@ -38,10 +39,11 @@ describe('formatDateTime', () => {
     expect(formatDateTime(null)).toBe('-')
   })
 
-  it('should format a valid date string to ISO format', () => {
+  it('should format a valid date string in the configured timezone', () => {
     const result = formatDateTime('2024-01-15T10:30:00Z')
-    expect(result).toContain('2024-01-15')
-    expect(result).toContain('10:30:00')
+    // Default timezone is Asia/Shanghai (UTC+8): 10:30Z -> 18:30 local.
+    expect(result).toContain('2024/01/15')
+    expect(result).toContain('18:30:00')
   })
 
   it('should return original string for invalid date', () => {
@@ -206,5 +208,24 @@ describe('getErrorMessage', () => {
 
   it('should return custom fallback message', () => {
     expect(getErrorMessage(null, 'Custom fallback')).toBe('Custom fallback')
+  })
+})
+
+describe('timezone', () => {
+  it('defaults to Asia/Shanghai', () => {
+    expect(getTimezone()).toBe('Asia/Shanghai')
+  })
+
+  it('setTimezone updates the cached value', () => {
+    setTimezone('America/New_York')
+    expect(getTimezone()).toBe('America/New_York')
+  })
+
+  it('setTimezone ignores empty values', () => {
+    setTimezone('America/New_York')
+    setTimezone(undefined)
+    setTimezone(null)
+    setTimezone('')
+    expect(getTimezone()).toBe('America/New_York')
   })
 })

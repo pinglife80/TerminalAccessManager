@@ -10,14 +10,14 @@ from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
-TZ_SHANGHAI = ZoneInfo('Asia/Shanghai')
+from app.core.timezone import get_timezone
 
 
 def format_timestamp(dt: datetime) -> str:
-    """Format timestamp to Asia/Shanghai timezone."""
+    """Format timestamp in the configured timezone (settings.TZ)."""
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=ZoneInfo('UTC'))
-    return dt.astimezone(TZ_SHANGHAI).strftime('%Y-%m-%d %H:%M:%S')
+    return dt.astimezone(get_timezone()).strftime('%Y-%m-%d %H:%M:%S')
 
 
 @dataclass

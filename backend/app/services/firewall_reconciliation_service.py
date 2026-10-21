@@ -369,6 +369,16 @@ class FirewallReconciliationService:
                             continue
                         terminal.compliance_status = "non_compliant"
                         terminal.wl_match_type = None
+                        terminal.non_compliant_confirm_count = 0
+                        terminal.compliant_confirm_count = 0
+                        await _svc.log_action("system", "compliance_status_changed", "terminal",
+                                              f"{ip_address}_{mac_address}", {
+                                                  "message": "Reconciliation converged status from unknown to non_compliant",
+                                                  "ip_address": ip_address,
+                                                  "mac_address": mac_address,
+                                                  "old_compliance": "unknown",
+                                                  "new_compliance": "non_compliant",
+                                              }, ip_address="System")
                         logger.info(
                             f"Reconciliation: converged 'unknown' terminal {ip_address} to "
                             f"'non_compliant' (already blocked on firewall '{fw_tag}')."
@@ -430,6 +440,7 @@ class FirewallReconciliationService:
         This handles cases where firewall may have lost blocks due to restart or policy sync.
         """
         reblocked = 0
+        from app.services.terminal_service import TerminalService
 
         for ip_address in ip_addresses:
             try:
@@ -458,6 +469,15 @@ class FirewallReconciliationService:
                 if result.get("code") == 0:
                     reblocked += 1
                     logger.info(f"Re-blocked {ip_address} on firewall '{fw_tag}' during reconciliation")
+                    await TerminalService(self.db).log_action(
+                        "system", "firewall_block", "firewall", fw_tag, {
+                            "message": f"Reconciliation re-blocked IP {ip_address} on firewall {fw_tag}",
+                            "ip_address": ip_address,
+                            "firewall_tag": fw_tag,
+                            "success": True,
+                            "newly_blocked": True,
+                            "reason": reason,
+                        }, ip_address="System")
                     # Write back Terminal.status to reflect the actual firewall blocked
                     # state. Previously this re-block never updated the terminal table,
                     # which left terminals stuck in 'unblocked' + stale block_state.
@@ -489,11 +509,38 @@ class FirewallReconciliationService:
                         if terminal.compliance_status == "unknown":
                             terminal.compliance_status = "non_compliant"
                             terminal.wl_match_type = None
+                            terminal.non_compliant_confirm_count = 0
+                            terminal.compliant_confirm_count = 0
+                            await TerminalService(self.db).log_action(
+                                "system", "compliance_status_changed", "terminal",
+                                f"{ip_address}_{terminal.mac_address}", {
+                                    "message": "Reconciliation re-block converged status from unknown to non_compliant",
+                                    "ip_address": ip_address,
+                                    "mac_address": terminal.mac_address,
+                                    "old_compliance": "unknown",
+                                    "new_compliance": "non_compliant",
+                                }, ip_address="System")
                 else:
                     error_msg = result.get("message", "unknown error")
                     logger.warning(f"Failed to re-block {ip_address} on firewall '{fw_tag}': {error_msg}")
+                    await TerminalService(self.db).log_action(
+                        "system", "firewall_block", "firewall", fw_tag, {
+                            "message": f"Reconciliation failed to re-block IP {ip_address} on firewall {fw_tag}: {error_msg}",
+                            "ip_address": ip_address,
+                            "firewall_tag": fw_tag,
+                            "success": False,
+                            "error": error_msg,
+                        }, ip_address="System")
 
             except Exception as e:
                 logger.error(f"Error re-blocking {ip_address} on firewall '{fw_tag}': {str(e)}")
+                await TerminalService(self.db).log_action(
+                    "system", "firewall_block", "firewall", fw_tag, {
+                        "message": f"Reconciliation error re-blocking IP {ip_address} on firewall {fw_tag}: {str(e)}",
+                        "ip_address": ip_address,
+                        "firewall_tag": fw_tag,
+                        "success": False,
+                        "error": str(e),
+                    }, ip_address="System")
 
         return reblocked

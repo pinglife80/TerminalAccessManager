@@ -7,6 +7,7 @@ import ProtectedRoute from './components/ProtectedRoute';
 import Layout from './components/Layout';
 import ErrorBoundary from './components/ErrorBoundary';
 import { logger } from './lib/logger';
+import { setTimezone } from './lib/timezone';
 import { useTranslation } from 'react-i18next';
 import { X } from 'lucide-react';
 
@@ -82,6 +83,15 @@ const App: React.FC = () => {
     if (link) {
       link.href = branding.favicon;
     }
+  }, []);
+
+  useEffect(() => {
+    // Fetch the server-configured timezone so client-side date formatting
+    // follows the backend TZ setting (fallback: Asia/Shanghai).
+    fetch('/health')
+      .then((r) => r.json())
+      .then((data) => setTimezone(data?.timezone))
+      .catch(() => {});
   }, []);
 
   useEffect(() => {

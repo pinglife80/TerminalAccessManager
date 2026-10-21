@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.security import get_client_ip, get_current_user, require_permission
 from app.services.terminal_service import TerminalService
-from app.models.notification import NotificationRule, NotificationTemplate
+from app.models.notification import NotificationLog, NotificationRule, NotificationTemplate
 from app.models.user import User
 from app.schemas.notification import (
     ChannelMetadata,

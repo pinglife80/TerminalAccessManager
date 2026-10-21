@@ -33,7 +33,7 @@ class TerminalResponse(TerminalBase):
     compliance_status: str = Field("unknown", description="Compliance status: compliant/bypass/non_compliant/unknown")
     wl_match_type: str | None = Field(None, description="Whitelist match type: mac/ip/both/null")
     firewall_tag: str | None = Field(None, description="Firewall tag from block operation")
-    block_state: str | None = Field(None, description="Blockable state: null/no_firewall/block_failed")
+    block_state: str | None = Field(None, description="Blockable state: null/no_firewall/block_failed/offline")
     non_compliant_type: str | None = Field(None, description="Non-compliant factor: ip/mac/both/null")
 
     model_config = ConfigDict(from_attributes=True)

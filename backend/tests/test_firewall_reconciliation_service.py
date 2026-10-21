@@ -266,6 +266,7 @@ class TestCreateDbEntriesForFirewall:
         comp_svc = MagicMock()
         comp_svc._load_whitelist_cache = AsyncMock(return_value=[])
         comp_svc._match_whitelist_in_memory = MagicMock(return_value=whitelist_match)
+        comp_svc.log_action = AsyncMock()
         return (
             patch("app.services.config_service.ConfigService", return_value=config_svc),
             patch("app.services.compliance_service.ComplianceService", return_value=comp_svc),

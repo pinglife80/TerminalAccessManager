@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { getTimezone } from './timezone';
 
 export const formatDateTime = (dateString: string | null | undefined, locale?: string): string => {
   if (!dateString) return '-';
@@ -17,7 +18,7 @@ export const formatDateTime = (dateString: string | null | undefined, locale?: s
       minute: '2-digit',
       second: '2-digit',
       hour12: false,
-      timeZone: 'Asia/Shanghai',
+      timeZone: getTimezone(),
     }).format(date);
   } catch {
     return dateString;

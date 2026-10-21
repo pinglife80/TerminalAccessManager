@@ -21,6 +21,7 @@ from app.models.terminal import Terminal, TerminalStatus
 from app.models.whitelist import Whitelist
 from app.schemas.terminal import AuditLogQuery, BlacklistQuery, TerminalQuery, WhitelistQuery
 from app.core.crypto import decrypt_config
+from app.core.config import settings
 from app.services.sangfor_service import SangforService
 
 
@@ -76,8 +77,7 @@ def _enabled_arp_source_tag_condition():
 def _parse_date_range(start_date: str | None, end_date: str | None):
     """Parse date range strings into datetime objects for filtering"""
     conditions = []
-    tz_name = os.environ.get("TZ", "Asia/Shanghai")
-    tz = pytz.timezone(tz_name)
+    tz = pytz.timezone(settings.TZ)
     
     if start_date:
         try:
@@ -1788,17 +1788,48 @@ class TerminalService:
             entry.last_operation_error = str(e)
             entry.last_operation_at = datetime.now(UTC)
             entry.retry_count = (entry.retry_count or 0) + 1
+            await self.log_action(
+                username,
+                "firewall_unblock",
+                "blacklist",
+                str(entry.id),
+                {
+                    "message": f"Retried unblock IP {ip_address} on firewall {firewall_tag} failed: {e}",
+                    "ip_address": ip_address,
+                    "firewall_tag": firewall_tag,
+                    "success": False,
+                    "error": str(e),
+                },
+                ip_address=ip_address,
+                resource_name=ip_address,
+            )
             await self.db.commit()
             return {"success": False, "error": str(e)}
 
         if not success:
+            error_msg = result.get("message", "unknown error")
             entry.last_operation_type = "unblock"
             entry.last_operation_status = "failed"
-            entry.last_operation_error = result.get("message", "unknown error")
+            entry.last_operation_error = error_msg
             entry.last_operation_at = datetime.now(UTC)
             entry.retry_count = (entry.retry_count or 0) + 1
+            await self.log_action(
+                username,
+                "firewall_unblock",
+                "blacklist",
+                str(entry.id),
+                {
+                    "message": f"Retried unblock IP {ip_address} on firewall {firewall_tag} failed: {error_msg}",
+                    "ip_address": ip_address,
+                    "firewall_tag": firewall_tag,
+                    "success": False,
+                    "error": error_msg,
+                },
+                ip_address=ip_address,
+                resource_name=ip_address,
+            )
             await self.db.commit()
-            return {"success": False, "error": result.get("message", "unknown error")}
+            return {"success": False, "error": error_msg}
 
         entry.auto_unblocked = True
         entry.unblocked_at = datetime.now(UTC)
@@ -1807,15 +1838,10 @@ class TerminalService:
         entry.last_operation_type = "unblock"
         entry.last_operation_status = "success"
         entry.last_operation_at = datetime.now(UTC)
-        await self.db.commit()
 
-        from app.services.event_emitter import emit_terminal_unblocked
-        await emit_terminal_unblocked(
-            ip_address=ip_address,
-            mac_address=entry.mac_address or "",
-            unblocked_by=username,
-        )
-
+        # Audit before commit so it is written in the same transaction as the
+        # entry state change (otherwise a later get_db commit failure would
+        # leave a successful unblock with no audit record).
         await self.log_action(
             username,
             "firewall_unblock",
@@ -1829,6 +1855,15 @@ class TerminalService:
             },
             ip_address=ip_address,
             resource_name=ip_address,
+        )
+
+        await self.db.commit()
+
+        from app.services.event_emitter import emit_terminal_unblocked
+        await emit_terminal_unblocked(
+            ip_address=ip_address,
+            mac_address=entry.mac_address or "",
+            unblocked_by=username,
         )
 
         return {"success": True, "error": None}
@@ -2025,6 +2060,8 @@ class TerminalService:
                                 # Reset compliance_status to "unknown" so the next
                                 # scheduled compliance check will re-evaluate it.
                                 terminal.compliance_status = "unknown"
+                                terminal.non_compliant_confirm_count = 0
+                                terminal.compliant_confirm_count = 0
                                 terminal.firewall_tag = None
                                 terminal.block_state = None
                             processed_pairs.add(pair_key)

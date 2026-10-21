@@ -4,13 +4,13 @@ Covers the module-level helper functions, IPAddressParser, and TerminalService
 validation/encoding methods that previously had no dedicated coverage.
 """
 
-import os
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import pytz
 
+from app.core.config import settings
 from app.services.terminal_service import (
     IPAddressParser,
     TerminalService,
@@ -54,8 +54,7 @@ class TestParseDateRange:
     """Test _parse_date_range condition construction."""
 
     def _aware(self, *args):
-        tz_name = os.environ.get("TZ", "Asia/Shanghai")
-        tz = pytz.timezone(tz_name)
+        tz = pytz.timezone(settings.TZ)
         return tz.localize(datetime(*args))
 
     def test_no_dates_returns_empty(self):
@@ -82,6 +81,19 @@ class TestParseDateRange:
 
     def test_invalid_end_date_is_ignored(self):
         assert _parse_date_range(None, "2026/01/31") == []
+
+    def test_follows_settings_tz_not_hardcoded(self, monkeypatch):
+        # _parse_date_range must read settings.TZ, not a hard-coded Asia/Shanghai.
+        monkeypatch.setattr(settings, "TZ", "UTC")
+        utc = pytz.timezone("UTC")
+        conditions = _parse_date_range("2026-01-15", None)
+        assert len(conditions) == 1
+        # 2026-01-16 00:00 UTC is on/after the UTC start boundary -> True
+        assert conditions[0](utc.localize(datetime(2026, 1, 16, 0, 0, 0))) is True
+        # 2026-01-14 23:59 UTC is before the UTC start boundary -> False.
+        # Under a hard-coded Shanghai boundary this would be True, proving the
+        # configuration value (UTC) is actually honored.
+        assert conditions[0](utc.localize(datetime(2026, 1, 14, 23, 59, 59))) is False
 
 
 class TestIPAddressParser:
@@ -386,3 +398,145 @@ class TestAddToWhitelistMatching:
         call = compliance_mock.apply_manual_whitelist_for_terminal.await_args
         assert call.args[0] is t_32
         assert call.kwargs["wl_match_type"] == "both"
+
+
+class TestRetryUnblock:
+    """Regression tests for retry_unblock failure audit / commit ordering.
+
+    Locks the fix that failure paths must write the ``firewall_unblock`` audit
+    entry in the SAME transaction as the entry state update — i.e. the audit
+    ``db.add(...)`` happens BEFORE ``db.commit()``. Otherwise the endpoint raises
+    ``HTTPException(400)`` and ``get_db()`` rolls back a post-commit audit entry,
+    silently dropping it.
+    """
+
+    @pytest.mark.asyncio
+    async def test_failure_audit_is_committed_with_entry_state(self, mock_async_session):
+        import json
+
+        from app.services.sangfor_service import SangforService
+
+        entry = MagicMock()
+        entry.id = 7
+        entry.ip_address = "10.8.18.183"
+        entry.firewall_tag = "fw1"
+        entry.auto_unblocked = False
+        entry.unblocked_at = None
+        entry.retry_count = None
+
+        fw_source = MagicMock()
+        fw_source.enabled = True
+        fw_source.config = {}
+
+        def make_scalar(value):
+            r = MagicMock()
+            r.scalar_one_or_none = MagicMock(return_value=value)
+            return r
+
+        # retry_unblock issues 3 db.execute calls: entry -> compliance -> firewall source
+        mock_async_session.execute = AsyncMock(side_effect=[
+            make_scalar(entry),         # 1) select(Blacklist)
+            make_scalar("compliant"),   # 2) terminal compliance join
+            make_scalar(fw_source),     # 3) select(DataSource)
+        ])
+
+        svc = MagicMock()
+        svc.unblock_ip = AsyncMock(return_value={
+            "code": 1,
+            "message": "fail",
+            "data": {"unblocked": [], "skipped": [], "errors": [{"ip": "10.8.18.183", "error": "fail"}]},
+        })
+
+        # Track add vs commit ordering to prove they share one transaction.
+        events = []
+        mock_async_session.add = MagicMock(side_effect=lambda *a, **k: events.append("add"))
+        mock_async_session.commit = AsyncMock(side_effect=lambda: events.append("commit"))
+
+        service = TerminalService(mock_async_session)
+        with patch.object(SangforService, "get_cached_service", AsyncMock(return_value=svc)):
+            result = await service.retry_unblock(7, username="admin")
+
+        # 1) business failure propagates
+        assert result == {"success": False, "error": "fail"}
+
+        # 2) entry failure state was updated
+        assert entry.last_operation_status == "failed"
+        assert entry.last_operation_error == "fail"
+        assert entry.retry_count == 1
+
+        # 3) audit add precedes the (single) commit -> same transaction
+        assert events == ["add", "commit"]
+        assert mock_async_session.commit.await_count == 1
+
+        # 4) the audit entry is a firewall_unblock failure on the right target
+        add_call = mock_async_session.add.call_args
+        assert add_call is not None
+        audit_log = add_call.args[0]
+        assert audit_log.action == "firewall_unblock"
+        assert audit_log.resource_type == "blacklist"
+        details = json.loads(audit_log.details)
+        assert details["success"] is False
+        assert details["ip_address"] == "10.8.18.183"
+        assert details["firewall_tag"] == "fw1"
+
+    @pytest.mark.asyncio
+    async def test_success_audit_is_committed_with_entry_state(self, mock_async_session):
+        """成功分支同样必须让审计 db.add 先于 db.commit（同事务）。"""
+        import json
+
+        from app.services.sangfor_service import SangforService
+
+        entry = MagicMock()
+        entry.id = 7
+        entry.ip_address = "10.8.18.183"
+        entry.firewall_tag = "fw1"
+        entry.mac_address = None
+        entry.auto_unblocked = False
+        entry.unblocked_at = None
+
+        fw_source = MagicMock()
+        fw_source.enabled = True
+        fw_source.config = {}
+
+        def make_scalar(value):
+            r = MagicMock()
+            r.scalar_one_or_none = MagicMock(return_value=value)
+            return r
+
+        mock_async_session.execute = AsyncMock(side_effect=[
+            make_scalar(entry),         # 1) select(Blacklist)
+            make_scalar("compliant"),   # 2) terminal compliance join
+            make_scalar(fw_source),     # 3) select(DataSource)
+        ])
+
+        svc = MagicMock()
+        svc.unblock_ip = AsyncMock(return_value={
+            "code": 0,
+            "message": "",
+            "data": {"unblocked": [{"ip": "10.8.18.183"}], "skipped": [], "errors": []},
+        })
+
+        events = []
+        mock_async_session.add = MagicMock(side_effect=lambda *a, **k: events.append("add"))
+        mock_async_session.commit = AsyncMock(side_effect=lambda: events.append("commit"))
+
+        service = TerminalService(mock_async_session)
+        with patch.object(SangforService, "get_cached_service", AsyncMock(return_value=svc)), \
+             patch("app.services.event_emitter.emit_terminal_unblocked", new=AsyncMock()):
+            result = await service.retry_unblock(7, username="admin")
+
+        assert result == {"success": True, "error": None}
+        assert entry.last_operation_status == "success"
+        assert entry.auto_unblocked is True
+
+        # audit add precedes the (single) commit -> same transaction
+        assert events == ["add", "commit"]
+        assert mock_async_session.commit.await_count == 1
+
+        audit_log = mock_async_session.add.call_args.args[0]
+        assert audit_log.action == "firewall_unblock"
+        assert audit_log.resource_type == "blacklist"
+        details = json.loads(audit_log.details)
+        assert details["success"] is True
+        assert details["ip_address"] == "10.8.18.183"
+        assert details["firewall_tag"] == "fw1"

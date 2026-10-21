@@ -729,7 +729,7 @@ class TestSafeDeleteDataSource:
         ])
 
         svc = MagicMock()
-        svc.unblock_ip = AsyncMock()
+        svc.unblock_ip = AsyncMock(return_value={"code": 0, "message": "", "data": {"unblocked": [], "skipped": [], "errors": []}})
         svc.close = AsyncMock()
 
         with patch.object(service, "get_data_source_by_tag", AsyncMock(return_value=fw_source)), \
@@ -760,7 +760,7 @@ class TestSafeDeleteDataSource:
         ])
 
         svc = MagicMock()
-        svc.unblock_ip = AsyncMock()
+        svc.unblock_ip = AsyncMock(return_value={"code": 0, "message": "", "data": {"unblocked": [], "skipped": [], "errors": []}})
         svc.close = AsyncMock()
 
         with patch("app.services.data_source_service.decrypt_config", return_value={"base_url": "https://fw"}), \
@@ -792,6 +792,32 @@ class TestSafeDeleteDataSource:
             assert await service.safe_delete_data_source(1, username="admin", client_ip="1.2.3.4") is True
 
         ts.log_action.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_audit_add_before_commit_atomic(self, service, mock_db, mock_redis):
+        """审计日志的 add 必须发生在 commit 之前（同事务原子提交）。
+
+        防止回归：若 log_action 被移回 commit 之后，审计与删除将拆成两个事务，
+        出现"业务已提交但审计可能丢失"的非原子缺口。
+        """
+        source = make_source(type_="arp_ssh", tag="lab", name="lab-source")
+        mock_redis.keys = AsyncMock(return_value=[])
+        set_exec_sequence(mock_db, [
+            make_result(scalar=source),
+            make_result(rows=[]),  # blocked terminals
+            make_result(),  # delete blacklist
+            make_result(),  # delete terminals
+            make_result(),  # delete bindings
+        ])
+
+        events = []
+        mock_db.add = MagicMock(side_effect=lambda *a, **k: events.append("add"))
+        mock_db.commit = AsyncMock(side_effect=lambda: events.append("commit"))
+
+        with patch("app.services.terminal_service.SangforService"):
+            assert await service.safe_delete_data_source(1, username="admin", client_ip="1.2.3.4") is True
+
+        assert events == ["add", "commit"]
 
 
 # ===========================================================================
@@ -860,7 +886,7 @@ class TestSafeDeleteBinding:
         ])
 
         svc = MagicMock()
-        svc.unblock_ip = AsyncMock()
+        svc.unblock_ip = AsyncMock(return_value={"code": 0, "message": "", "data": {"unblocked": [], "skipped": [], "errors": []}})
         svc.close = AsyncMock()
 
         with patch.object(service, "get_data_source_by_tag", AsyncMock(return_value=fw_source)), \
@@ -877,3 +903,25 @@ class TestSafeDeleteBinding:
         assert terminal.compliance_status == "unknown"
         svc.unblock_ip.assert_called_once()
         cs.recalculate_all_compliance.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_audit_add_before_commit_atomic(self, service, mock_db):
+        """unbind_datasource 审计的 add 必须发生在 commit 之前（同事务原子提交）。"""
+        binding = make_binding(arp_source_tag="lab", firewall_tag="fw1")
+        set_exec_sequence(mock_db, [
+            make_result(scalar=binding),   # binding lookup
+            make_result(rows=[]),           # blacklist entries (none)
+        ])
+
+        events = []
+        mock_db.add = MagicMock(side_effect=lambda *a, **k: events.append("add"))
+        mock_db.commit = AsyncMock(side_effect=lambda: events.append("commit"))
+
+        with patch("app.services.terminal_service.SangforService"), \
+             patch("app.services.compliance_service.ComplianceService") as cs_cls:
+            cs = MagicMock()
+            cs.recalculate_all_compliance = AsyncMock()
+            cs_cls.return_value = cs
+            assert await service.safe_delete_binding(1, username="admin", client_ip="1.2.3.4") is True
+
+        assert events == ["add", "commit"]
