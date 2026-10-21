@@ -1,12 +1,73 @@
 # 版本跟踪记录
 
-> 文档版本：v3.21.9 | 更新日期：2026-10-19
+> 文档版本：v3.21.10 | 更新日期：2026-10-21
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
 
 ---
+
+## [v3.21.10] - 2026-10-21
+
+### 多 IP/MAC 震荡治理、陈旧记录离线标记与时区去硬编码（Patch 版本）
+
+#### 背景
+
+一个 IP 多 MAC / 一个 MAC 多 IP 场景下，ARP 采集与合规重算会出现状态震荡与陈旧记录误判；离线判定依赖进程本地时区导致计时漂移；项目存在多处时区硬编码（后端 `format_timestamp`/`_parse_date_range`、前端 `formatDateTime`）未消费 docker compose 的 `TZ` 环境变量；另有 `NotificationLog`、`IntegrityError` 两处未定义名称。本版本统一治理，均为缺陷修复/重构，无新增用户功能、无迁移，故以 Patch 发布。
+
+#### 主要变更
+
+| 变更项 | 说明 |
+|--------|------|
+| 陈旧记录离线标记 | ARP 采集将长期未见条目显式标记 `block_state='offline'`，上线自动清除 |
+| naive→UTC 归一化 | ARP 离线检测、合规宽限期比较的 naive datetime 统一视为 UTC |
+| 重算跳过离线 | `recalculate_all_compliance` 跳过 offline 陈旧记录，复位 unknown 同步重置确认计数器 |
+| 数据源规范化 | 安全删除/手动检查改走 `apply_initial_compliance_result`，删除/解绑审计同事务原子落库，`_unblock_ip_with_audit` 统一解封审计 |
+| retry-unblock 审计原子化 | 审计日志写于 `db.commit()` 之前 |
+| 时区去硬编码 | 后端 `settings.TZ` 单点 + `/health` 下发 `timezone`；前端启动 fetch `/health` 动态获取（默认 `Asia/Shanghai` 回退） |
+| F821 修复 | 补 `NotificationLog`、`IntegrityError` 导入 |
+
+#### 升级步骤（推荐：一键升级）
+
+```bash
+git checkout main
+git pull origin main
+./manage.sh upgrade
+```
+
+#### 升级注意事项
+
+- 本次无新增 Alembic 迁移文件（`models/terminal.py` 仅注释、`schemas/terminal.py` 仅 `Field(description)` 文案）。
+- 后端业务逻辑 + 前端资产均有改动，`./manage.sh upgrade` 会同时重建后前端镜像。
+
+#### 文件变更清单
+
+| 文件 | 变更类型 | 说明 |
+|------|---------|------|
+| `backend/app/services/arp_collector_service.py` | 编辑 | 陈旧记录 `block_state='offline'` 标记与清除；`_as_utc_timestamp` naive→UTC；ip_changed_at 时间戳 |
+| `backend/app/models/terminal.py` | 编辑 | `block_state` 注释补 `offline` 说明 |
+| `backend/app/schemas/terminal.py` | 编辑 | `block_state` description 补 `offline` |
+| `backend/app/services/compliance_service.py` | 编辑 | 宽限期 naive→UTC 归一化；recalc 跳过 offline；复位同步重置确认计数器 |
+| `backend/app/services/data_source_service.py` | 编辑 | 安全删除/解绑审计同事务原子落库；`_unblock_ip_with_audit` |
+| `backend/app/api/v1/endpoints/data_sources.py` | 编辑 | 手动合规检查改走 `apply_initial_compliance_result` |
+| `backend/app/services/firewall_reconciliation_service.py` | 编辑 | 收敛 unknown→non_compliant 审计补写 |
+| `backend/app/services/terminal_service.py` | 编辑 | retry_unblock 审计原子化；复位重置确认计数器；`_parse_date_range` 走 `settings.TZ` |
+| `backend/app/services/notification_channels/base.py` | 编辑 | `format_timestamp` 改用 `get_timezone()` |
+| `backend/app/main.py` | 编辑 | `/health` 下发 `timezone`；补 `IntegrityError` 导入 |
+| `backend/app/api/v1/endpoints/notifications.py` | 编辑 | 补 `NotificationLog` 导入 |
+| `backend/tests/test_arp_collector_service.py` | 编辑 | 离线/naive 归一化用例 |
+| `backend/tests/test_compliance_service.py` | 编辑 | 宽限期/离线跳过用例 |
+| `backend/tests/test_data_source_service.py` | 编辑 | 删除/解绑审计用例 |
+| `backend/tests/test_firewall_reconciliation_service.py` | 编辑 | 收敛审计用例 |
+| `backend/tests/test_notification_channels.py` | 编辑 | 时区跟随用例 |
+| `backend/tests/test_sangfor_service.py` | 编辑 | 幂等/审计用例 |
+| `backend/tests/test_terminal_service.py` | 编辑 | TZ 跟随 + 解析用例 |
+| `backend/tests/test_app.py` | 编辑 | `/health` timezone 断言 |
+| `frontend/src/App.tsx` | 编辑 | 启动 fetch `/health` 获取时区 |
+| `frontend/src/lib/utils.ts` | 编辑 | `formatDateTime` 走 `getTimezone()` |
+| `frontend/src/lib/timezone.ts` | 新增 | 运行时时区缓存模块 |
+| `frontend/src/lib/__tests__/utils.test.ts` | 编辑 | timezone 单测 + formatDateTime 断言修正 |
 
 ## [v3.21.9] - 2026-10-19
 
