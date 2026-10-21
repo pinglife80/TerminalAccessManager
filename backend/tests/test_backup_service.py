@@ -811,6 +811,49 @@ class TestListRemote:
         assert result[0]["filename"] == "a.zip"
         assert result[0]["file_size"] == 10
 
+    @pytest.mark.asyncio
+    async def test_ftp_fallback_parses_timestamp_from_filename(self):
+        """无 MDTM 时，从带时间戳的文件名兜底解析 created_at。"""
+        svc = BackupService()
+        svc.config.storage_config = {"host": "h", "path": "/bk"}
+        ftp = MagicMock()
+        ftp.nlst.return_value = ["backup_full_20260101_000000.zip"]
+        ftp.size.side_effect = RuntimeError("no size")
+        with patch.object(bs.ftplib, "FTP", return_value=ftp):
+            result = await svc._list_via_ftp()
+
+        assert result[0]["created_at"] is not None
+        # Must be timezone-aware so cleanup's .timestamp() is unambiguous
+        assert result[0]["created_at"].tzinfo is not None
+
+    @pytest.mark.asyncio
+    async def test_sftp_created_at_is_aware(self):
+        """SFTP created_at 必须为 aware datetime（UTC），避免 naive 时区偏移。"""
+        svc = BackupService()
+        svc.config.storage_config = {"host": "h", "username": "u", "path": "/bk"}
+        ssh = MagicMock()
+        sftp = MagicMock()
+        ssh.open_sftp.return_value.__enter__.return_value = sftp
+        ssh.open_sftp.return_value.__exit__.return_value = False
+        entry = MagicMock()
+        entry.filename = "a.zip"
+        entry.st_size = 10
+        entry.st_mtime = 1_700_000_000
+        sftp.listdir_attr.return_value = [entry]
+        with patch.object(bs.paramiko, "SSHClient", return_value=ssh):
+            result = await svc._list_via_sftp()
+
+        assert result[0]["created_at"].tzinfo is not None
+        assert result[0]["created_at"].utcoffset().total_seconds() == 0
+
+    def test_parse_timestamp_from_filename(self):
+        svc = BackupService()
+        assert svc._parse_timestamp_from_filename("a.zip") is None
+        parsed = svc._parse_timestamp_from_filename("backup_full_20260101_000000.zip")
+        assert parsed is not None
+        assert parsed.tzinfo is not None
+        assert (parsed.year, parsed.month, parsed.day) == (2026, 1, 1)
+
 
 # ===========================================================================
 # download_from_remote / _download_via_ftp / _download_via_sftp

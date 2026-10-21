@@ -35,6 +35,32 @@ def test_health_check(client):
     assert data["timezone"] == settings.TZ
 
 
+class TestShouldRunBackupNowDow:
+    """cron day-of-week semantics: 0/7 = Sunday must map to python weekday 6."""
+
+    def test_sunday_cron_matches_sunday(self):
+        from datetime import datetime
+        from unittest.mock import patch
+
+        from app.main import _should_run_backup_now
+
+        sunday = datetime(2026, 10, 25, 2, 0, 0)  # weekday() == 6
+        with patch("app.core.timezone.now", return_value=sunday):
+            assert _should_run_backup_now("0 2 * * 0") is True
+            assert _should_run_backup_now("0 2 * * 7") is True
+
+    def test_monday_cron_matches_monday_not_sunday(self):
+        from datetime import datetime
+        from unittest.mock import patch
+
+        from app.main import _should_run_backup_now
+
+        monday = datetime(2026, 10, 26, 2, 0, 0)  # weekday() == 0
+        with patch("app.core.timezone.now", return_value=monday):
+            assert _should_run_backup_now("0 2 * * 1") is True
+            assert _should_run_backup_now("0 2 * * 0") is False
+
+
 class TestGlobalExceptionHandler:
     """Test global exception handler middleware"""
 
