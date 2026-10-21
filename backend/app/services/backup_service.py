@@ -974,6 +974,25 @@ class BackupService:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         return f"tam_backup_{timestamp}.zip"
 
+    @staticmethod
+    def _parse_timestamp_from_filename(filename: str):
+        """Best-effort parse a backup filename timestamp (``YYYYMMDD_HHMMSS``).
+
+        Returns a timezone-aware datetime (``settings.TZ``) or ``None``. Used as
+        a fallback for FTP servers that do not support the ``MDTM`` command, so
+        remote retention cleanup can still determine file age.
+        """
+        import re
+        match = re.search(r"(\d{8})_(\d{6})", filename)
+        if not match:
+            return None
+        try:
+            naive = datetime.strptime(f"{match.group(1)}_{match.group(2)}", "%Y%m%d_%H%M%S")
+        except ValueError:
+            return None
+        from app.core.timezone import get_timezone
+        return naive.replace(tzinfo=get_timezone())
+
     async def backup_database(self, temp_dir: str) -> str:
         """Backup PostgreSQL database"""
         return await self._backup_database(temp_dir)
@@ -1149,7 +1168,7 @@ class BackupService:
                             "filename": filename,
                             "file_path": f"{remote_path.rstrip('/')}/{filename}",
                             "file_size": None,
-                            "created_at": None,
+                            "created_at": self._parse_timestamp_from_filename(filename),
                             "storage": "remote",
                         })
 
@@ -1191,7 +1210,7 @@ class BackupService:
                             "filename": entry.filename,
                             "file_path": f"{remote_path}/{entry.filename}",
                             "file_size": entry.st_size,
-                            "created_at": datetime.fromtimestamp(entry.st_mtime),
+                            "created_at": datetime.fromtimestamp(entry.st_mtime, tz=timezone.utc),
                             "storage": "remote",
                         })
 
