@@ -1,6 +1,6 @@
 # 更新日志
 
-> 文档版本：v3.21.10  更新日期：2026-10-21
+> 文档版本：v3.21.11  更新日期：2026-10-21
 
 本文件记录 TerminalAccessManager 的所有重要变更。
 
@@ -8,6 +8,19 @@
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ***
+
+## [3.21.11] - 2026-10-21
+
+### 修复
+
+- **备份保留周期清理未生效**：清理原仅随「成功备份」被动触发，备份失败/未到点即不清理。新增独立 `backup_cleanup` 调度任务（每小时）与备份解耦，确保超龄备份定期清理；同时修正 cron `day-of-week` 语义（`0/7` 均为周日，映射 Python `weekday`），修复按周配置的定时备份从不触发的问题
+  - 关联文件：`main.py`、`core/scheduler_registry.py`、`manage.sh`
+
+- **FTP/SFTP 远程备份清理时间戳兜底**：FTP 无 `MDTM` 时从文件名 `YYYYMMDD_HHMMSS` 兜底解析 `created_at`，避免远程超龄备份永不清理；SFTP `created_at` 归一化为 aware UTC，消除 naive 时区偏移
+  - 关联文件：`services/backup_service.py`
+
+- **手动 retry unblock 后终端状态未同步**：`retry_unblock` 解封成功后（当该 MAC/IP 无其他 active 黑名单条目时）同步恢复 `Terminal.status`/`firewall_tag`/`block_state`，保留 `compliance_status`；前端 retry 成功后失效 `terminals` 查询缓存，终端页实时刷新
+  - 关联文件：`services/terminal_service.py`、`hooks/useTerminalData.ts`
 
 ## [3.21.10] - 2026-10-21
 
