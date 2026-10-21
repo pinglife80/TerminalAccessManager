@@ -943,6 +943,7 @@ async def health_check():
         "status": "healthy",
         "version": settings.VERSION,
         "environment": settings.ENVIRONMENT,
+        "timezone": settings.TZ,
         "db": "ok",
         "redis": "ok"
     }
