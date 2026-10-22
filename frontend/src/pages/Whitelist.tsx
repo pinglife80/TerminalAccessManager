@@ -606,7 +606,7 @@ const Whitelist: React.FC = () => {
             </label>
             <input
               type="text"
-              placeholder="192.168.1.1, 192.168.1.0/24, 10.0.1.1-100"
+              placeholder="192.168.1.1-100"
               value={ipAddress}
               onChange={(e) => setIpAddress(e.target.value)}
               className="w-full px-4 py-2.5 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono text-sm"

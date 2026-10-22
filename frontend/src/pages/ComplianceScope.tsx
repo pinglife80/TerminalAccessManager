@@ -81,7 +81,7 @@ const ComplianceScope: React.FC = () => {
 
   const validateForm = (): string => {
     if (!scopeValue.trim()) {
-      return t('complianceScope.valueLabel') + '不能为空';
+      return t('complianceScope.valueRequired');
     }
     return '';
   };
