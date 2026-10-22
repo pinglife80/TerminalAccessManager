@@ -32,14 +32,6 @@ async def get_available_providers(db: AsyncSession = Depends(get_db)):
 
     providers = []
 
-    providers.append({
-        "id": "local",
-        "name": "Local",
-        "provider_type": AuthProviderType.LOCAL.value,
-        "description": "Local account authentication",
-        "enabled": True,
-    })
-
     stmt = select(AuthConfig).where(AuthConfig.enabled == True).order_by(AuthConfig.priority)
     result = await db.execute(stmt)
     configs = result.scalars().all()
@@ -52,6 +44,14 @@ async def get_available_providers(db: AsyncSession = Depends(get_db)):
             "description": config.description or "",
             "enabled": config.enabled,
         })
+
+    providers.append({
+        "id": "local",
+        "name": "Local",
+        "provider_type": AuthProviderType.LOCAL.value,
+        "description": "Local account authentication",
+        "enabled": True,
+    })
 
     return providers
 

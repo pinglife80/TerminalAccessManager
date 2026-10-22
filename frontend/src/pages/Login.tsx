@@ -130,6 +130,9 @@ const Login: React.FC = () => {
       try {
         const response = await apiClient.get(`${API_ENDPOINTS.AUTH_PROVIDERS}available`);
         setAuthProviders(response.data);
+        if (response.data.length > 0) {
+          setSelectedProvider(response.data[0].provider_type);
+        }
       } catch {
         // Fallback to local provider only
         setAuthProviders([{
