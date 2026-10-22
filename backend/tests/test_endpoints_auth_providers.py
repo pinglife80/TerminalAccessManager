@@ -45,6 +45,16 @@ class TestAvailableProviders:
         data = resp.json()
         assert any(p["provider_type"] == "ldap" for p in data)
 
+    @pytest.mark.asyncio
+    async def test_local_ordered_after_configured_providers(self, api_db, api_client):
+        await _seed(api_db, _make_provider(provider_type="ldap", name="Corp LDAP", enabled=True))
+        resp = await api_client.get("/api/v1/auth/providers/available")
+        assert resp.status_code == 200
+        data = resp.json()
+        provider_types = [p["provider_type"] for p in data]
+        assert provider_types[0] == "ldap"
+        assert provider_types[-1] == "local"
+
 
 class TestListProviders:
     @pytest.mark.asyncio

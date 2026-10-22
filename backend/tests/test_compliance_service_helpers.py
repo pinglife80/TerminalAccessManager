@@ -279,11 +279,11 @@ class TestCheckTerminalInArpScope:
         assert service._check_terminal_in_arp_scope(scope, "192.168.1.1", "AA:BB:CC:DD:EE:FF") is False
 
     def test_ip_range_match(self, service):
-        scope = [{"scope_type": "ip_range", "scope_value": "10.0.0.1-10.0.0.100"}]
+        scope = [{"scope_type": "ip_range", "scope_value": "10.0.0.1-100"}]
         assert service._check_terminal_in_arp_scope(scope, "10.0.0.50", "AA:BB:CC:DD:EE:FF") is True
 
     def test_ip_range_mismatch(self, service):
-        scope = [{"scope_type": "ip_range", "scope_value": "10.0.0.1-10.0.0.100"}]
+        scope = [{"scope_type": "ip_range", "scope_value": "10.0.0.1-100"}]
         assert service._check_terminal_in_arp_scope(scope, "10.0.0.200", "AA:BB:CC:DD:EE:FF") is False
 
     def test_mac_prefix_arp_match(self, service):
@@ -316,11 +316,11 @@ class TestCheckTerminalInOrScope:
         assert service._check_terminal_in_or_scope(scope, "192.168.1.1", "AA:BB:CC:DD:EE:FF") is False
 
     def test_ip_range_any_match(self, service):
-        scope = [{"scope_type": "ip_range_any", "scope_value": "10.0.0.1-10.0.0.100"}]
+        scope = [{"scope_type": "ip_range_any", "scope_value": "10.0.0.1-100"}]
         assert service._check_terminal_in_or_scope(scope, "10.0.0.50", "AA:BB:CC:DD:EE:FF") is True
 
     def test_ip_range_any_mismatch(self, service):
-        scope = [{"scope_type": "ip_range_any", "scope_value": "10.0.0.1-10.0.0.100"}]
+        scope = [{"scope_type": "ip_range_any", "scope_value": "10.0.0.1-100"}]
         assert service._check_terminal_in_or_scope(scope, "10.0.0.200", "AA:BB:CC:DD:EE:FF") is False
 
     def test_mac_prefix_any_match(self, service):
@@ -579,3 +579,176 @@ class TestIsIpguardCacheStale:
         ]
         self._setup_db(service, baselines)
         assert await service._is_ipguard_cache_stale() is False
+
+
+# ---------------------------------------------------------------------------
+# Scope 场景：同 IP 多 MAC / 同 MAC 多 IP 验证
+#
+# 用 batch_check_compliance（自包含决策入口）验证分析结论与实际行为一致。
+# 基线约定：
+#   - 10.0.0.10 <-> AA:BB:CC:DD:00:01（精确配对，基线 MAC 前缀 AA:BB:CC）
+#   - 10.0.0.30 / 10.0.0.40 <-> AA:BB:CC:DD:00:03（同一 MAC 漫游两个 IP）
+# ---------------------------------------------------------------------------
+
+def _ipguard_baseline():
+    return {
+        "sg": [
+            {"ip_address": "10.0.0.10", "mac_address": "AA:BB:CC:DD:00:01"},
+            {"ip_address": "10.0.0.30", "mac_address": "AA:BB:CC:DD:00:03"},
+            {"ip_address": "10.0.0.40", "mac_address": "AA:BB:CC:DD:00:03"},
+        ],
+    }
+
+
+async def _run_batch(service, scope, entries, ipguard=None):
+    """Run batch_check_compliance with a fixed whitelist-empty + given scope/baseline."""
+    service._load_whitelist_cache = AsyncMock(return_value=[])
+    service._load_scope_cache = AsyncMock(return_value=scope)
+    service._load_all_ipguard_cache = AsyncMock(return_value=ipguard or _ipguard_baseline())
+    result = await service.batch_check_compliance(entries)
+    statuses = {
+        (e["ip_address"], e["mac_address"].upper()): e["compliance_status"] for e in entries
+    }
+    return result, statuses
+
+
+class TestScopeIpCidr:
+    """ip_cidr -> IP-only：同 IP 全 MAC 同结果；各 IP 独立（忽略 MAC）。"""
+
+    async def test_same_ip_multi_mac_and_same_mac_multi_ip(self, service):
+        scope = [{"scope_type": "ip_cidr", "scope_value": "10.0.0.0/24"}]
+        entries = [
+            {"ip_address": "10.0.0.10", "mac_address": "AA:BB:CC:DD:00:01"},  # IP 在基线 -> compliant
+            {"ip_address": "10.0.0.10", "mac_address": "FF:EE:DD:CC:00:99"},  # 同 IP 假 MAC，仍 compliant
+            {"ip_address": "10.0.0.30", "mac_address": "AA:BB:CC:DD:00:03"},  # IP 在基线 -> compliant
+            {"ip_address": "10.0.0.50", "mac_address": "AA:BB:CC:DD:00:01"},  # MAC 在基线但该 IP 不在 -> non_compliant
+            {"ip_address": "10.0.0.99", "mac_address": "AA:BB:CC:DD:00:03"},  # 同 MAC 漂移到新 IP -> non_compliant
+        ]
+        result, statuses = await _run_batch(service, scope, entries)
+
+        assert result.compliant == 3
+        assert result.non_compliant == 2
+        assert statuses[("10.0.0.10", "AA:BB:CC:DD:00:01")] == "compliant"
+        assert statuses[("10.0.0.10", "FF:EE:DD:CC:00:99")] == "compliant"
+        assert statuses[("10.0.0.30", "AA:BB:CC:DD:00:03")] == "compliant"
+        assert statuses[("10.0.0.50", "AA:BB:CC:DD:00:01")] == "non_compliant"
+        assert statuses[("10.0.0.99", "AA:BB:CC:DD:00:03")] == "non_compliant"
+
+
+class TestScopeIpRange:
+    """ip_range -> IP-only：同 ip_cidr，仅范围由 CIDR 换成区间（前缀.末段格式）。"""
+
+    async def test_same_ip_multi_mac_and_same_mac_multi_ip(self, service):
+        scope = [{"scope_type": "ip_range", "scope_value": "10.0.0.1-100"}]
+        entries = [
+            {"ip_address": "10.0.0.10", "mac_address": "AA:BB:CC:DD:00:01"},  # compliant
+            {"ip_address": "10.0.0.10", "mac_address": "FF:EE:DD:CC:00:99"},  # 同 IP 假 MAC，compliant
+            {"ip_address": "10.0.0.30", "mac_address": "AA:BB:CC:DD:00:03"},  # compliant
+            {"ip_address": "10.0.0.40", "mac_address": "AA:BB:CC:DD:00:03"},  # 兼容 MAC 第二个 IP，compliant
+            {"ip_address": "10.0.0.50", "mac_address": "AA:BB:CC:DD:00:03"},  # 同 MAC 在范围内新 IP -> non_compliant
+        ]
+        result, statuses = await _run_batch(service, scope, entries)
+
+        assert result.compliant == 4
+        assert result.non_compliant == 1
+        assert statuses[("10.0.0.50", "AA:BB:CC:DD:00:03")] == "non_compliant"
+
+
+class TestScopeMacPrefixArp:
+    """mac_prefix_arp -> IP-only（仅命中前缀的 MAC 触发）：同 IP 下分化。"""
+
+    async def test_same_ip_multi_mac_and_same_mac_multi_ip(self, service):
+        scope = [{"scope_type": "mac_prefix_arp", "scope_value": "AA:BB:CC"}]
+        entries = [
+            {"ip_address": "10.0.0.10", "mac_address": "AA:BB:CC:DD:00:01"},  # 前缀命中 + IP 在基线 -> compliant
+            {"ip_address": "10.0.0.10", "mac_address": "AA:BB:CC:DD:00:99"},  # 前缀命中 + IP 在基线 -> compliant
+            {"ip_address": "10.0.0.10", "mac_address": "FF:EE:DD:CC:BB:AA"},  # 前缀不命中 -> 回落 AND -> non_compliant
+            {"ip_address": "10.0.0.30", "mac_address": "AA:BB:CC:DD:00:03"},  # 前缀命中 + IP 在基线 -> compliant
+            {"ip_address": "10.0.0.50", "mac_address": "AA:BB:CC:DD:00:03"},  # 同 MAC 新 IP 不在基线 -> non_compliant
+        ]
+        result, statuses = await _run_batch(service, scope, entries)
+
+        assert result.compliant == 3
+        assert result.non_compliant == 2
+        assert statuses[("10.0.0.10", "FF:EE:DD:CC:BB:AA")] == "non_compliant"
+        assert statuses[("10.0.0.50", "AA:BB:CC:DD:00:03")] == "non_compliant"
+
+
+class TestScopeIpCidrAny:
+    """ip_cidr_any -> OR：IP 或 MAC 任一命中；MAC 跨 IP 命中即合规。"""
+
+    async def test_same_ip_multi_mac_and_same_mac_multi_ip(self, service):
+        scope = [{"scope_type": "ip_cidr_any", "scope_value": "10.0.0.0/24"}]
+        entries = [
+            {"ip_address": "10.0.0.10", "mac_address": "AA:BB:CC:DD:00:01"},  # both -> compliant
+            {"ip_address": "10.0.0.10", "mac_address": "FF:EE:DD:CC:00:99"},  # IP 命中 -> compliant
+            {"ip_address": "10.0.0.50", "mac_address": "AA:BB:CC:DD:00:01"},  # MAC 跨 IP 命中 -> compliant
+            {"ip_address": "10.0.0.99", "mac_address": "AA:BB:CC:DD:00:03"},  # 同 MAC 跨 IP 命中 -> compliant
+            {"ip_address": "10.0.0.99", "mac_address": "FF:EE:DD:CC:00:99"},  # 都不命中 -> non_compliant
+        ]
+        result, statuses = await _run_batch(service, scope, entries)
+
+        assert result.compliant == 4
+        assert result.non_compliant == 1
+        assert statuses[("10.0.0.50", "AA:BB:CC:DD:00:01")] == "compliant"
+        assert statuses[("10.0.0.99", "AA:BB:CC:DD:00:03")] == "compliant"
+
+
+class TestScopeIpRangeAny:
+    """ip_range_any -> OR：同 ip_cidr_any。"""
+
+    async def test_same_ip_multi_mac_and_same_mac_multi_ip(self, service):
+        scope = [{"scope_type": "ip_range_any", "scope_value": "10.0.0.1-100"}]
+        entries = [
+            {"ip_address": "10.0.0.10", "mac_address": "AA:BB:CC:DD:00:01"},  # compliant
+            {"ip_address": "10.0.0.10", "mac_address": "FF:EE:DD:CC:00:99"},  # IP 命中 -> compliant
+            {"ip_address": "10.0.0.40", "mac_address": "AA:BB:CC:DD:00:03"},  # compliant
+            {"ip_address": "10.0.0.50", "mac_address": "AA:BB:CC:DD:00:03"},  # 同 MAC 跨 IP -> compliant
+            {"ip_address": "10.0.0.50", "mac_address": "FF:EE:DD:CC:00:99"},  # 都不命中 -> non_compliant
+        ]
+        result, statuses = await _run_batch(service, scope, entries)
+
+        assert result.compliant == 4
+        assert result.non_compliant == 1
+        assert statuses[("10.0.0.50", "AA:BB:CC:DD:00:03")] == "compliant"
+
+
+class TestScopeMacPrefixAny:
+    """mac_prefix_any -> OR（仅命中前缀的 MAC 触发）。"""
+
+    async def test_same_ip_multi_mac_and_same_mac_multi_ip(self, service):
+        scope = [{"scope_type": "mac_prefix_any", "scope_value": "AA:BB:CC"}]
+        entries = [
+            {"ip_address": "10.0.0.10", "mac_address": "AA:BB:CC:DD:00:01"},  # IP 命中 -> compliant
+            {"ip_address": "10.0.0.50", "mac_address": "AA:BB:CC:DD:00:01"},  # 前缀命中 + MAC 跨 IP -> compliant
+            {"ip_address": "10.0.0.99", "mac_address": "AA:BB:CC:DD:00:03"},  # 前缀命中 + MAC 跨 IP -> compliant
+            {"ip_address": "10.0.0.50", "mac_address": "AA:BB:CC:DD:00:99"},  # 前缀命中但 IP/MAC 都不命中 -> non_compliant
+            {"ip_address": "10.0.0.50", "mac_address": "FF:EE:DD:CC:BB:AA"},  # 前缀不命中 -> 回落 AND -> non_compliant
+        ]
+        result, statuses = await _run_batch(service, scope, entries)
+
+        assert result.compliant == 3
+        assert result.non_compliant == 2
+        assert statuses[("10.0.0.50", "AA:BB:CC:DD:00:99")] == "non_compliant"
+        assert statuses[("10.0.0.50", "FF:EE:DD:CC:BB:AA")] == "non_compliant"
+
+
+class TestScopeMacPrefixIpguard:
+    """mac_prefix_ipguard -> AND 扩展：同 IP 全 MAC 合；同 MAC 跨 IP 不合（与 OR 不同）。"""
+
+    async def test_same_ip_multi_mac_and_same_mac_multi_ip(self, service):
+        scope = [{"scope_type": "mac_prefix_ipguard", "scope_value": "AA:BB:CC"}]
+        entries = [
+            {"ip_address": "10.0.0.10", "mac_address": "AA:BB:CC:DD:00:01"},  # 精确配对 -> compliant
+            {"ip_address": "10.0.0.10", "mac_address": "11:22:33:44:55:66"},  # IP 在基线 + 基线 MAC 前缀命中 -> compliant
+            {"ip_address": "10.0.0.30", "mac_address": "AA:BB:CC:DD:00:03"},  # 精确配对 -> compliant
+            {"ip_address": "10.0.0.30", "mac_address": "22:33:44:55:66:77"},  # IP 在基线 + 基线 MAC 前缀命中 -> compliant
+            {"ip_address": "10.0.0.99", "mac_address": "AA:BB:CC:DD:00:01"},  # 同 MAC 跨 IP 但新 IP 不在基线 -> non_compliant
+            {"ip_address": "10.0.0.99", "mac_address": "FF:EE:DD:CC:BB:AA"},  # 都不命中 -> non_compliant
+        ]
+        result, statuses = await _run_batch(service, scope, entries)
+
+        assert result.compliant == 4
+        assert result.non_compliant == 2
+        assert statuses[("10.0.0.10", "11:22:33:44:55:66")] == "compliant"
+        assert statuses[("10.0.0.99", "AA:BB:CC:DD:00:01")] == "non_compliant"

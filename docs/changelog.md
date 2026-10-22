@@ -1,6 +1,6 @@
 # 更新日志
 
-> 文档版本：v3.21.11  更新日期：2026-10-21
+> 文档版本：v3.21.12  更新日期：2026-10-22
 
 本文件记录 TerminalAccessManager 的所有重要变更。
 
@@ -8,6 +8,22 @@
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ***
+
+## [3.21.12] - 2026-10-22
+
+### 修复
+
+- **Compliance Scope `ip_range`/`ip_range_any` 区间永不命中**：校验接受 `192.168.1.1-100`（前缀+末段），匹配逻辑却按完整 IP 两侧解析导致 `ValueError` 被跳过，区间场景实际永不命中。匹配分支改为复用 `_ip_in_range` 统一解析，使区间作用域按设计生效
+  - 关联文件：`services/compliance_service.py`
+
+- **登录认证方式优先级**：`/auth/providers/available` 原固定把 `local` 置顶，现改为 LDAP 等非本地 provider 按 `priority` 升序在前、`local` 恒在末尾（最低优先级）；前端登录页加载后默认选中首个 provider（即 LDAP），Local 作为兜底
+  - 关联文件：`api/v1/endpoints/auth_providers.py`、`pages/Login.tsx`
+
+- **校验提示歧义修正**：白名单 `invalidIpFormat` 范围示例移除多余的 `/24`（与黑名单侧一致，均为 `192.168.1.1-100`）；白名单 IP 输入 placeholder 去除逗号分隔多值（后端按单条 pattern 解析）；compliance scope 空值提示由硬编码中文拼接改为 i18n `valueRequired`，三语本地化
+  - 关联文件：`i18n/locales/{zh,en,ja}.ts`、`pages/Whitelist.tsx`、`pages/ComplianceScope.tsx`
+
+- **Compliance Scope 语义说明澄清（仅文案）**：`mac_prefix_ipguard` 描述补充「仅在默认精确匹配策略下生效」；`ip_cidr_any`/`ip_range_any`/`mac_prefix_any` 描述补充「MAC 命中不区分 IP（用于 MAC 漫游放行）」，消除 OR 语义歧义（行为不变）
+  - 关联文件：`i18n/locales/{zh,en,ja}.ts`
 
 ## [3.21.11] - 2026-10-21
 

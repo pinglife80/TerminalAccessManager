@@ -1,12 +1,61 @@
 # 版本跟踪记录
 
-> 文档版本：v3.21.11 | 更新日期：2026-10-21
+> 文档版本：v3.21.12 | 更新日期：2026-10-22
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
 
 ---
+
+## [v3.21.12] - 2026-10-22
+
+### Compliance Scope 区间匹配修复、登录认证优先级与校验提示澄清（Patch 版本）
+
+#### 背景
+
+Compliance Scope 的 `ip_range`/`ip_range_any` 作用域在校验与匹配两处格式不一致：校验接受 `192.168.1.1-100`（前缀 + 末段起止），而匹配逻辑按完整 IP 两侧做 `IPv4Address` 解析，导致合法值在匹配时抛 `ValueError` 被 `continue` 跳过，区间场景实际永不命中。此外，登录页认证方式原始终把 `local` 置顶、前端硬编码默认 `local`，与「LDAP 优先、Local 兜底」的预期不符。白名单与 compliance scope 的若干校验提示也存在歧义（范围示例多拼 `/24`、placeholder 逗号多值、空值提示硬编码中文混排）。
+
+本次均为缺陷修复与文案澄清，无新增用户功能、无数据库迁移，向后兼容，故以 Patch 发布。
+
+#### 主要变更
+
+| 变更项 | 说明 |
+|--------|------|
+| `ip_range`/`ip_range_any` 匹配统一 | 匹配分支复用 `_ip_in_range` 统一解析 `前缀.末段-末段`，消除区间永不命中 |
+| 登录认证方式优先级 | `/auth/providers/available` 将 `local` 移至末尾（LDAP 等按 `priority` 升序在前）；前端登录页默认选中首项 |
+| 白名单校验提示修正 | `invalidIpFormat` 范围示例去 `/24`；IP 输入 placeholder 去逗号多值 |
+| compliance scope 空值提示本地化 | 硬编码中文拼接改为 i18n `valueRequired`，三语对齐 |
+| scope 语义文案澄清 | `mac_prefix_ipguard` 补「仅默认精确匹配策略生效」；`*_any` 补「MAC 命中不区分 IP」 |
+
+#### 升级步骤（推荐：一键升级）
+
+```bash
+git checkout main
+git pull origin main
+./manage.sh upgrade
+```
+
+#### 升级注意事项
+
+- 本次无新增 Alembic 迁移文件、无数据库 schema 变更，`docs/database.md` 无需改动。
+- 认证优先级调整仅改变 `/available` 返回顺序与前端默认选中值，不改变 `AuthConfig.priority` 语义；忘记密码链接仅在 `local` 时显示，LDAP 默认下不误显示。
+- compliance scope `ip_range`/`ip_range_any` 行为修复仅影响此前「区间永不命中」的场景，使区间按设计生效，其余 5 种作用域不受影响。
+
+#### 文件变更清单
+
+| 文件 | 变更类型 | 说明 |
+|------|---------|------|
+| `backend/app/services/compliance_service.py` | 编辑 | `ip_range`/`ip_range_any` 分支复用 `_ip_in_range` |
+| `backend/app/api/v1/endpoints/auth_providers.py` | 编辑 | `/available` 中 `local` 移至末尾 |
+| `frontend/src/pages/Login.tsx` | 编辑 | 加载后默认选中首个 provider |
+| `frontend/src/pages/Whitelist.tsx` | 编辑 | IP placeholder 去逗号多值 |
+| `frontend/src/pages/ComplianceScope.tsx` | 编辑 | 空值提示改 i18n `valueRequired` |
+| `frontend/src/i18n/locales/zh.ts` | 编辑 | scope 语义文案 + `invalidIpFormat` 去 `/24` + 新增 `valueRequired` |
+| `frontend/src/i18n/locales/en.ts` | 编辑 | 同上（英文） |
+| `frontend/src/i18n/locales/ja.ts` | 编辑 | 同上（日文） |
+| `backend/tests/test_compliance_service_helpers.py` | 编辑 | 测试数据对齐 + 新增 7 个 scope_type 测试类 |
+| `backend/tests/test_endpoints_auth_providers.py` | 编辑 | 新增 LDAP 排 local 之前的排序断言 |
 
 ## [v3.21.11] - 2026-10-21
 

@@ -1356,15 +1356,8 @@ class ComplianceService:
                     continue
 
             elif scope_type == "ip_range":
-                try:
-                    start_ip_str, end_ip_str = scope_value.split("-")
-                    start_ip = int(ipaddress.IPv4Address(start_ip_str))
-                    end_ip = int(ipaddress.IPv4Address(end_ip_str))
-                    ip_val = int(ipaddress.IPv4Address(ip_address))
-                    if start_ip <= ip_val <= end_ip:
-                        return True
-                except (ValueError, TypeError):
-                    continue
+                if self._ip_in_range(ip_address, scope_value):
+                    return True
 
             elif scope_type == "mac_prefix_arp":
                 try:
@@ -1398,15 +1391,8 @@ class ComplianceService:
                     continue
 
             elif scope_type == "ip_range_any":
-                try:
-                    start_ip_str, end_ip_str = scope_value.split("-")
-                    start_ip = int(ipaddress.IPv4Address(start_ip_str))
-                    end_ip = int(ipaddress.IPv4Address(end_ip_str))
-                    ip_val = int(ipaddress.IPv4Address(ip_address))
-                    if start_ip <= ip_val <= end_ip:
-                        return True
-                except (ValueError, TypeError):
-                    continue
+                if self._ip_in_range(ip_address, scope_value):
+                    return True
 
             elif scope_type == "mac_prefix_any":
                 try:
