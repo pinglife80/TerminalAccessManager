@@ -1,6 +1,6 @@
 # 更新日志
 
-> 文档版本：v3.22.0  更新日期：2026-10-23
+> 文档版本：v3.23.0  更新日期：2026-10-23
 
 本文件记录 TerminalAccessManager 的所有重要变更。
 
@@ -8,6 +8,18 @@
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ***
+
+## [3.23.0] - 2026-10-23
+
+### 新增
+
+- **数据源删除异步化**：删除数据源/绑定由同步改为 202 + task_id 后台执行，新增 `GET /data-sources/delete-tasks/{task_id}` 轮询端点；前端新增 `useAsyncTask` 轮询 hook，三处 Tab（DataSources/OperationSource/Bindings）提交后轮询收尾并显示进行中文案
+  - 关联文件：`backend/app/api/v1/endpoints/data_sources.py`、`backend/app/schemas/data_source.py`、`backend/app/services/task_state.py`、`backend/app/services/data_source_tasks.py`、`frontend/src/hooks/useAsyncTask.ts`、`frontend/src/components/datasources/*`
+
+### 修复
+
+- **scheduler 命令登录限流误报**：`_config_get_admin_token` 捕获 HTTP 状态码并正确分类 429/423/400/401；`_scheduler_validate_task` 离线优先，resume/pause/trigger 不再触发冗余登录
+  - 关联文件：`manage.sh`
 
 ## [3.22.0] - 2026-10-23
 
