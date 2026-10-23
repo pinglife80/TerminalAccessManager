@@ -27,6 +27,7 @@ interface DeletePreviewModalProps {
   previewData: DeletePreviewData | null;
   isLoadingPreview: boolean;
   isDeleting: boolean;
+  deletingLabel?: string;
 }
 
 export function DeletePreviewModal({
@@ -39,6 +40,7 @@ export function DeletePreviewModal({
   previewData,
   isLoadingPreview,
   isDeleting,
+  deletingLabel,
 }: DeletePreviewModalProps) {
   const { t } = useTranslation();
 
@@ -166,7 +168,7 @@ export function DeletePreviewModal({
             {previewData.can_delete && (
               <PrimaryButton
                 icon={Trash2}
-                label={t('common.delete')}
+                label={isDeleting && deletingLabel ? deletingLabel : t('common.delete')}
                 variant="danger"
                 onClick={onConfirm}
                 loading={isDeleting}

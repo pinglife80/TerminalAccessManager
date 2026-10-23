@@ -2824,40 +2824,68 @@ _config_get_admin_token() {
         admin_password="Admin123"
     fi
 
-    local response
-    response=$(curl -sk -X POST "$(_api_base_url)/auth/login" \
+    local resp http_code body
+    resp=$(curl -sk -X POST "$(_api_base_url)/auth/login" \
         -H "Content-Type: application/x-www-form-urlencoded" \
-        -d "username=admin&password=${admin_password}" 2>/dev/null)
+        -d "username=admin&password=${admin_password}" \
+        -w "\n__HTTP_CODE__%{http_code}" 2>/dev/null)
 
-    if [ -z "$response" ]; then
+    if [ -z "$resp" ]; then
         log_error "Failed to connect to backend API"
         log_error "Make sure services are running: ./manage.sh start"
         return 1
     fi
 
-    # Check for authentication error
-    local error_detail
-    error_detail=$(echo "$response" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('detail',''))" 2>/dev/null || echo "")
-    if [ -n "$error_detail" ] && echo "$error_detail" | grep -qi "incorrect\|invalid\|unauthorized\|wrong"; then
-        log_error "Admin login failed (wrong password)"
-        log_error "If you changed the admin password, update ADMIN_PASSWORD in .env:"
-        log_error "  ./manage.sh config ADMIN_PASSWORD <your_password>"
-        log_error "Or reset the admin password:"
-        log_error "  ./manage.sh password reset admin"
-        return 1
-    fi
+    http_code=$(echo "$resp" | sed -n 's/.*__HTTP_CODE__//p' | tail -1)
+    body=$(echo "$resp" | sed 's/__HTTP_CODE__.*//')
 
-    local token
-    token=$(echo "$response" | python3 -c "import sys,json; print(json.load(sys.stdin).get('access_token',''))" 2>/dev/null || echo "")
-
-    if [ -z "$token" ]; then
-        log_error "Failed to obtain admin token"
-        log_error "If you changed the admin password, update ADMIN_PASSWORD in .env:"
-        log_error "  ./manage.sh config ADMIN_PASSWORD <your_password>"
-        return 1
-    fi
-
-    echo "$token"
+    case "$http_code" in
+        200)
+            local token
+            token=$(echo "$body" | python3 -c "import sys,json; print(json.load(sys.stdin).get('access_token',''))" 2>/dev/null || echo "")
+            if [ -z "$token" ]; then
+                log_error "Login succeeded but no access_token returned"
+                return 1
+            fi
+            echo "$token"
+            return 0
+            ;;
+        429)
+            log_error "Admin login rate limited (too many requests per minute)"
+            log_error "Wait a moment and retry; avoid running many scheduler/config commands back-to-back."
+            return 1
+            ;;
+        423)
+            log_error "Admin account is locked due to too many failed login attempts"
+            log_error "Wait for the lockout to expire, or reset: ./manage.sh password reset admin"
+            return 1
+            ;;
+        400)
+            local is_captcha
+            is_captcha=$(echo "$body" | python3 -c "import sys,json; d=json.load(sys.stdin); print('1' if (isinstance(d.get('detail'), dict) and d['detail'].get('captcha_required')) else '')" 2>/dev/null || echo "")
+            if [ -n "$is_captcha" ]; then
+                log_error "Admin login requires captcha verification"
+                log_error "Solve the captcha via the web UI, or reset: ./manage.sh password reset admin"
+            else
+                log_error "Admin login failed (HTTP 400)"
+                if [ -n "$body" ]; then log_error "$body"; fi
+            fi
+            return 1
+            ;;
+        401)
+            log_error "Admin login failed (wrong password)"
+            log_error "If you changed the admin password, update ADMIN_PASSWORD in .env:"
+            log_error "  ./manage.sh config ADMIN_PASSWORD <your_password>"
+            log_error "Or reset the admin password:"
+            log_error "  ./manage.sh password reset admin"
+            return 1
+            ;;
+        *)
+            log_error "Failed to obtain admin token (HTTP ${http_code})"
+            if [ -n "$body" ]; then log_error "$body"; fi
+            return 1
+            ;;
+    esac
 }
 
 # Keys that require service restart to take effect
@@ -3724,6 +3752,24 @@ except Exception:
 # Exit 0 + print display name if valid; exit 1 if unknown.
 _scheduler_validate_task() {
     local task="$1"
+
+    # Offline-first: known canonical task names resolve without any backend
+    # round-trip (and therefore without an admin login). This avoids firing a
+    # login on every `scheduler resume/pause/trigger`, which previously hit the
+    # /auth/login rate limit when several commands ran back-to-back.
+    case "$task" in
+        firewall_query)          echo "Blacklist Expiry Cleanup" ; return 0 ;;
+        arp_collection)          echo "ARP Data Collection"     ; return 0 ;;
+        ipguard_sync)            echo "Compliance Baseline Sync"; return 0 ;;
+        compliance_check)        echo "Compliance Check"        ; return 0 ;;
+        auto_unblock)            echo "Auto Unblock"            ; return 0 ;;
+        log_cleanup)             echo "Log Cleanup"             ; return 0 ;;
+        firewall_reconciliation) echo "Firewall Reconciliation" ; return 0 ;;
+        backup)                  echo "Scheduled Backup"        ; return 0 ;;
+        backup_cleanup)          echo "Backup Retention Cleanup"; return 0 ;;
+    esac
+
+    # Unknown name: consult the backend registry (may include newer task names).
     local tasks_json
     tasks_json=$(_scheduler_fetch_tasks) 2>/dev/null || true
     if [ -n "$tasks_json" ] && [ "$tasks_json" != "null" ] && [ "$tasks_json" != "" ]; then
@@ -3741,18 +3787,6 @@ for t in json.load(sys.stdin):
             return 0
         fi
     fi
-    # Offline fallback to the canonical task names (authoritative: scheduler_registry.py)
-    case "$task" in
-        firewall_query)          echo "Blacklist Expiry Cleanup" ; return 0 ;;
-        arp_collection)          echo "ARP Data Collection"     ; return 0 ;;
-        ipguard_sync)            echo "Compliance Baseline Sync"; return 0 ;;
-        compliance_check)        echo "Compliance Check"        ; return 0 ;;
-        auto_unblock)            echo "Auto Unblock"            ; return 0 ;;
-        log_cleanup)             echo "Log Cleanup"             ; return 0 ;;
-        firewall_reconciliation) echo "Firewall Reconciliation" ; return 0 ;;
-        backup)                  echo "Scheduled Backup"        ; return 0 ;;
-        backup_cleanup)          echo "Backup Retention Cleanup"; return 0 ;;
-    esac
     return 1
 }
 

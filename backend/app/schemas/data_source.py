@@ -151,3 +151,24 @@ class DeletePreviewResponse(BaseModel):
     actions: list[str] = []
     affected: DeletePreviewAffected = DeletePreviewAffected()
     reason: str | None = None
+
+
+# ------------------------------------------------------------------
+# Async delete task schemas
+# ------------------------------------------------------------------
+class DeleteTaskResponse(BaseModel):
+    """Response returned when a deletion is submitted as a background task"""
+    task_id: str
+    status: str = "pending"
+    kind: str = "source"
+
+
+class DeleteTaskStatusResponse(BaseModel):
+    """Status of a submitted background deletion task"""
+    task_id: str
+    status: str
+    kind: str
+    message: str | None = None
+    error: str | None = None
+    submitted_at: str | None = None
+    finished_at: str | None = None

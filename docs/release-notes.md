@@ -1,12 +1,60 @@
 # 版本跟踪记录
 
-> 文档版本：v3.22.0 | 更新日期：2026-10-23
+> 文档版本：v3.23.0 | 更新日期：2026-10-23
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
 
 ---
+
+## [v3.23.0] - 2026-10-23
+
+### 数据源删除异步化与 scheduler 登录限流误报修复（Minor 版本）
+
+#### 背景
+
+删除数据源时，后端需串行对每个被封终端逐台调用防火墙解封 API，耗时可能超过前端 30 秒超时，导致前端报「timeout of 30000ms exceeded」而任务仍在后端执行。另一方面，`manage.sh` 的每个 scheduler 子命令（status/resume/pause/trigger）都会发起一次 `/auth/login`，连续执行多条命令会触发后端登录接口限流（HTTP 429），而 `_config_get_admin_token` 仅按关键字匹配「密码错误」，未识别 429，误报为 `Failed to obtain admin token`。
+
+本次将数据源删除改为异步化（Minor），并修复 scheduler 登录限流误报与冗余登录；向后兼容、无数据库迁移。
+
+#### 主要变更
+
+| 变更项 | 说明 |
+|--------|------|
+| 数据源删除异步化 | 删除数据源/绑定由同步改为 202 + task_id 后台执行，新增 `GET /data-sources/delete-tasks/{task_id}` 轮询端点；前端新增 `useAsyncTask` 轮询 hook，三处 Tab 提交后轮询收尾 |
+| scheduler 登录限流误报修复 | `_config_get_admin_token` 捕获 HTTP 状态码并正确分类 429/423/400/401；`_scheduler_validate_task` 离线优先，resume/pause/trigger 不再触发冗余登录 |
+
+#### 升级步骤（推荐：一键升级）
+
+```bash
+git checkout main
+git pull origin main
+./manage.sh upgrade
+```
+
+#### 升级注意事项
+
+- 本次无新增 Alembic 迁移文件、无数据库 schema 变更，`docs/database.md` 无需改动。
+- 数据源/绑定删除的业务语义不变，仅由「同步等待解封」改为「异步后台执行 + 任务状态轮询」；删除含被封终端的 ARP 源时，前端不再因 30 秒超时误报。
+- scheduler 修复仅作用于 manage.sh CLI 层（登录错误分类与冗余登录消除），不改动后端速率限制阈值与业务行为。
+
+#### 文件变更清单
+
+| 文件 | 变更类型 | 说明 |
+|------|---------|------|
+| `backend/app/api/v1/endpoints/data_sources.py` | 编辑 | 删除数据源/绑定改 202 + 新增 `GET /delete-tasks/{task_id}` 轮询端点 |
+| `backend/app/schemas/data_source.py` | 编辑 | 新增 `DeleteTaskResponse` / `DeleteTaskStatusResponse` |
+| `backend/app/services/task_state.py` | 新增 | Redis 任务状态读写（前缀 `datasource:delete:task:`，TTL 1h） |
+| `backend/app/services/data_source_tasks.py` | 新增 | 后台执行 `safe_delete_data_source` / `safe_delete_binding` |
+| `frontend/src/hooks/useAsyncTask.ts` | 新增 | 异步任务轮询 hook |
+| `frontend/src/lib/constants.ts` | 编辑 | 新增 `DATA_SOURCE_DELETE_TASK` 端点常量 |
+| `frontend/src/components/DeletePreviewModal.tsx` | 编辑 | 新增进行中按钮文案 `deletingLabel` |
+| `frontend/src/components/datasources/DataSourcesTab.tsx` | 编辑 | 删除改为提交 task_id + 轮询收尾 |
+| `frontend/src/components/datasources/OperationSourceTab.tsx` | 编辑 | 删除改为提交 task_id + 轮询收尾 |
+| `frontend/src/components/datasources/BindingsTab.tsx` | 编辑 | 删除改为提交 task_id + 轮询收尾 |
+| `frontend/src/i18n/locales/{zh,en,ja}.ts` | 编辑 | 新增 `deletingInProgress` 文案 |
+| `manage.sh` | 编辑 | `_config_get_admin_token` 状态码分类 + `_scheduler_validate_task` 离线优先 |
 
 ## [v3.22.0] - 2026-10-23
 

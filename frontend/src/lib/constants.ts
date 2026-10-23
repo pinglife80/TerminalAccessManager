@@ -70,6 +70,7 @@ export const API_ENDPOINTS = {
   DATA_SOURCE_BINDINGS: '/data-sources/bindings/',
   DATA_SOURCE_DELETE_PREVIEW: '/data-sources/',
   DATA_SOURCE_BINDING_DELETE_PREVIEW: '/data-sources/bindings/',
+  DATA_SOURCE_DELETE_TASK: '/data-sources/delete-tasks/',
   COMPLIANCE_CHECK: '/data-sources/compliance/check',
   COMPLIANCE_AUTO_BLOCK: '/data-sources/compliance/auto-block',
   COMPLIANCE_AUTO_UNBLOCK: '/data-sources/compliance/auto-unblock',

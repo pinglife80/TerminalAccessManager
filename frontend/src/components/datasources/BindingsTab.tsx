@@ -1,4 +1,4 @@
-import { useState, useMemo, forwardRef, useImperativeHandle } from 'react';
+import { useState, useMemo, useEffect, forwardRef, useImperativeHandle } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Trash2,
@@ -6,6 +6,7 @@ import {
   Link2,
 } from 'lucide-react';
 import { useDataSourceBindings, useDataSources } from '@/hooks/useTerminalData';
+import { useAsyncTask } from '@/hooks/useAsyncTask';
 import { apiClient } from '@/lib/api';
 import { toast } from 'sonner';
 import { API_ENDPOINTS } from '@/lib/constants';
@@ -50,6 +51,11 @@ const BindingsTab = forwardRef<{ openAddModal: () => void }, BindingsTabProps>((
   const [isDeletingBind, setIsDeletingBind] = useState(false);
   const [bindPreviewData, setBindPreviewData] = useState<DeletePreviewData | null>(null);
   const [isLoadingBindPreview, setIsLoadingBindPreview] = useState(false);
+  const [deleteTaskId, setDeleteTaskId] = useState<string | null>(null);
+  const deleteTask = useAsyncTask(
+    deleteTaskId,
+    (id) => apiClient.get(`${API_ENDPOINTS.DATA_SOURCE_DELETE_TASK}${id}`).then((r) => r.data),
+  );
 
   // Derived data
   const bindList = bindings || [];
@@ -121,12 +127,13 @@ const BindingsTab = forwardRef<{ openAddModal: () => void }, BindingsTabProps>((
     if (!deleteBindId) return;
     setIsDeletingBind(true);
     try {
-      await apiClient.delete(`${API_ENDPOINTS.DATA_SOURCE_BINDINGS}${deleteBindId}`);
-      toast.success(t('bindings.bindingDeleted'));
-      bindRefetch();
+      const { data } = await apiClient.delete<{ task_id: string }>(`${API_ENDPOINTS.DATA_SOURCE_BINDINGS}${deleteBindId}`);
+      if (!data?.task_id) {
+        throw new Error('No task id returned');
+      }
+      setDeleteTaskId(data.task_id);
     } catch (error: unknown) {
       toast.error(getErrorMessage(error, t('bindings.failedToDeleteBinding')));
-    } finally {
       setIsDeletingBind(false);
       setShowDeleteBindModal(false);
       setDeleteBindId(null);
@@ -134,6 +141,27 @@ const BindingsTab = forwardRef<{ openAddModal: () => void }, BindingsTabProps>((
       setBindPreviewData(null);
     }
   };
+
+  useEffect(() => {
+    if (deleteTask.status === 'success') {
+      toast.success(t('bindings.bindingDeleted'));
+      bindRefetch();
+      setIsDeletingBind(false);
+      setShowDeleteBindModal(false);
+      setDeleteBindId(null);
+      setDeleteBindInfo(null);
+      setBindPreviewData(null);
+      setDeleteTaskId(null);
+    } else if (deleteTask.status === 'failed') {
+      toast.error(deleteTask.error || t('bindings.failedToDeleteBinding'));
+      setIsDeletingBind(false);
+      setShowDeleteBindModal(false);
+      setDeleteBindId(null);
+      setDeleteBindInfo(null);
+      setBindPreviewData(null);
+      setDeleteTaskId(null);
+    }
+  }, [deleteTask.status]);
 
   return (
     <>
@@ -288,6 +316,7 @@ const BindingsTab = forwardRef<{ openAddModal: () => void }, BindingsTabProps>((
         previewData={bindPreviewData}
         isLoadingPreview={isLoadingBindPreview}
         isDeleting={isDeletingBind}
+        deletingLabel={t('bindings.deletingInProgress')}
       />
     </>
   );
