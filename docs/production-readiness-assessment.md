@@ -12,6 +12,7 @@
 
 | 文档版本 | 更新日期 | 关联版本 | 更新内容 |
 |---------|---------|---------|---------|
+| v3.22.0 | 2026-10-23 | v3.22.0 | 新增选择性数据清理命令（data clear，先解封防火墙再清运营数据/Redis，保留配置）；Sangfor AF 认证失效重认证修复（_is_auth_failure 统一识别 401/400 "request error"/code 1003·1012） |
 | v3.21.12 | 2026-10-22 | v3.21.12 | compliance scope ip_range/ip_range_any 区间匹配统一（_ip_in_range）；登录认证方式优先级（LDAP 优先、local 最低）；白名单/compliance scope 校验提示歧义修正与 scope 语义文案澄清 |
 | v3.21.11 | 2026-10-21 | v3.21.11 | 备份保留周期清理修复（新增独立 backup_cleanup 任务、cron dow 语义修正、FTP 无 MDTM 文件名兜底、SFTP aware UTC）；retry-unblock 解封后同步终端封锁状态与前端 terminals 缓存失效 |
 | v3.21.10 | 2026-10-21 | v3.21.10 | 多 IP/MAC 陈旧记录离线标记（block_state='offline' + naive→UTC 归一化）；合规宽限期归一化与 recalc 跳过 offline；数据源安全删除/手动检查走 apply_initial_compliance_result；retry-unblock 审计原子化；时区去硬编码（settings.TZ + /health timezone + 前端动态获取）；补 NotificationLog/IntegrityError 导入 |
