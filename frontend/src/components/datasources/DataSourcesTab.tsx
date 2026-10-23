@@ -1,4 +1,4 @@
-import { useState, useMemo, forwardRef, useImperativeHandle } from 'react';
+import { useState, useMemo, useEffect, forwardRef, useImperativeHandle } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Plus,
@@ -14,6 +14,7 @@ import {
   AlertTriangle,
 } from 'lucide-react';
 import { useDataSources, useDataSourceBindings, DataSourceItem, DataSourceBindingItem } from '@/hooks/useTerminalData';
+import { useAsyncTask } from '@/hooks/useAsyncTask';
 import { apiClient } from '@/lib/api';
 import { toast } from 'sonner';
 import { API_ENDPOINTS } from '@/lib/constants';
@@ -70,6 +71,11 @@ const DataSourcesTab = forwardRef<{ openAddModal: () => void }, DataSourcesTabPr
   const [isDeletingDs, setIsDeletingDs] = useState(false);
   const [deletePreviewData, setDeletePreviewData] = useState<DeletePreviewData | null>(null);
   const [isLoadingPreview, setIsLoadingPreview] = useState(false);
+  const [deleteTaskId, setDeleteTaskId] = useState<string | null>(null);
+  const deleteTask = useAsyncTask(
+    deleteTaskId,
+    (id) => apiClient.get(`${API_ENDPOINTS.DATA_SOURCE_DELETE_TASK}${id}`).then((r) => r.data),
+  );
 
   // Test connection
   const [testingId, setTestingId] = useState<number | null>(null);
@@ -175,18 +181,38 @@ const DataSourcesTab = forwardRef<{ openAddModal: () => void }, DataSourcesTabPr
     if (!deleteDsItem) return;
     setIsDeletingDs(true);
     try {
-      await apiClient.delete(`${API_ENDPOINTS.DATA_SOURCES}${deleteDsItem.id}`);
-      toast.success(t('dataSources.dataSourceDeleted', { name: deleteDsItem.name }));
-      dsRefetch();
+      const { data } = await apiClient.delete<{ task_id: string }>(`${API_ENDPOINTS.DATA_SOURCES}${deleteDsItem.id}`);
+      if (!data?.task_id) {
+        throw new Error('No task id returned');
+      }
+      setDeleteTaskId(data.task_id);
     } catch (error: unknown) {
       toast.error(getErrorMessage(error, t('dataSources.failedToDelete')));
-    } finally {
       setIsDeletingDs(false);
       setShowDeleteDsModal(false);
       setDeleteDsItem(null);
       setDeletePreviewData(null);
     }
   };
+
+  useEffect(() => {
+    if (deleteTask.status === 'success') {
+      toast.success(t('dataSources.dataSourceDeleted', { name: deleteDsItem?.name ?? '' }));
+      dsRefetch();
+      setIsDeletingDs(false);
+      setShowDeleteDsModal(false);
+      setDeleteDsItem(null);
+      setDeletePreviewData(null);
+      setDeleteTaskId(null);
+    } else if (deleteTask.status === 'failed') {
+      toast.error(deleteTask.error || t('dataSources.failedToDelete'));
+      setIsDeletingDs(false);
+      setShowDeleteDsModal(false);
+      setDeleteDsItem(null);
+      setDeletePreviewData(null);
+      setDeleteTaskId(null);
+    }
+  }, [deleteTask.status]);
 
   const handleTestConnection = async (ds: DataSourceItem) => {
     setTestingId(ds.id);
@@ -615,6 +641,7 @@ const DataSourcesTab = forwardRef<{ openAddModal: () => void }, DataSourcesTabPr
         previewData={deletePreviewData}
         isLoadingPreview={isLoadingPreview}
         isDeleting={isDeletingDs}
+        deletingLabel={t('dataSources.deletingInProgress')}
       />
 
       {/* Edit Data Source Modal */}

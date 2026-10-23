@@ -1,4 +1,6 @@
+import asyncio
 import logging
+import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import select
@@ -22,16 +24,36 @@ from app.schemas.data_source import (
     DataSourceResponse,
     DataSourceUpdate,
     DeletePreviewResponse,
+    DeleteTaskResponse,
+    DeleteTaskStatusResponse,
     SyncResult,
 )
 from app.services.arp_collector_service import ArpCollectorService
 from app.services.compliance_service import ComplianceService
 from app.services.data_source_service import DataSourceService
+from app.services.data_source_tasks import (
+    run_delete_binding_task,
+    run_delete_data_source_task,
+)
+from app.services.task_state import get_task_state, now_iso, set_task_state
 
 logger = logging.getLogger(__name__)
 
 
 router = APIRouter(prefix="/data-sources", tags=["Data Sources"])
+
+# Keep strong references to running background tasks so they are not garbage
+# collected before completion (asyncio only holds weak references).
+_running_tasks: set[asyncio.Task] = set()
+
+
+def _submit_delete_task(coro) -> str:
+    """Schedule a background deletion coroutine and return its task id."""
+    task_id = uuid.uuid4().hex
+    task = asyncio.create_task(coro(task_id))
+    _running_tasks.add(task)
+    task.add_done_callback(_running_tasks.discard)
+    return task_id
 
 
 # ------------------------------------------------------------------
@@ -323,14 +345,14 @@ async def preview_delete_data_source(
     return preview
 
 
-@router.delete("/{source_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{source_id}", response_model=DeleteTaskResponse, status_code=status.HTTP_202_ACCEPTED)
 async def delete_data_source(
     source_id: int,
     request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_permission("datasource:write")),
 ):
-    """Safely delete a data source with automatic cleanup (requires datasource:write permission)"""
+    """Submit a background task to safely delete a data source (requires datasource:write permission)"""
     service = DataSourceService(db)
     source = await service.get_data_source_by_id(source_id)
     if not source:
@@ -339,16 +361,19 @@ async def delete_data_source(
             detail="Data source not found",
         )
 
-    deleted = await service.safe_delete_data_source(
-        source_id,
-        username=current_user.username,
-        client_ip=get_client_ip(request),
+    username = current_user.username
+    client_ip = get_client_ip(request)
+
+    task_id = _submit_delete_task(
+        lambda tid: run_delete_data_source_task(tid, source_id, username, client_ip)
     )
-    if not deleted:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Data source not found",
-        )
+    await set_task_state(task_id, {
+        "status": "pending",
+        "kind": "source",
+        "submitted_at": now_iso(),
+    })
+
+    return DeleteTaskResponse(task_id=task_id, status="pending", kind="source")
 
 
 @router.post("/{source_id}/test", response_model=ConnectionTestResult)
@@ -489,25 +514,57 @@ async def preview_delete_binding(
     return preview
 
 
-@router.delete("/bindings/{binding_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/bindings/{binding_id}", response_model=DeleteTaskResponse, status_code=status.HTTP_202_ACCEPTED)
 async def delete_binding(
     binding_id: int,
     request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_permission("datasource:write")),
 ):
-    """Safely delete a data source binding with automatic cleanup (requires datasource:write permission)"""
-    service = DataSourceService(db)
-    deleted = await service.safe_delete_binding(
-        binding_id,
-        username=current_user.username,
-        client_ip=get_client_ip(request),
-    )
-    if not deleted:
+    """Submit a background task to safely delete a data source binding (requires datasource:write permission)"""
+    binding = await db.get(DataSourceBinding, binding_id)
+    if not binding:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Binding not found",
         )
+
+    username = current_user.username
+    client_ip = get_client_ip(request)
+
+    task_id = _submit_delete_task(
+        lambda tid: run_delete_binding_task(tid, binding_id, username, client_ip)
+    )
+    await set_task_state(task_id, {
+        "status": "pending",
+        "kind": "binding",
+        "submitted_at": now_iso(),
+    })
+
+    return DeleteTaskResponse(task_id=task_id, status="pending", kind="binding")
+
+
+@router.get("/delete-tasks/{task_id}", response_model=DeleteTaskStatusResponse)
+async def get_delete_task_status(
+    task_id: str,
+    current_user: User = Depends(require_permission("datasource:read")),
+):
+    """Poll the status of a submitted background deletion task."""
+    state = await get_task_state(task_id)
+    if state is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Task not found",
+        )
+    return DeleteTaskStatusResponse(
+        task_id=task_id,
+        status=state.get("status", "unknown"),
+        kind=state.get("kind", "source"),
+        message=state.get("message"),
+        error=state.get("error"),
+        submitted_at=state.get("submitted_at"),
+        finished_at=state.get("finished_at"),
+    )
 
 
 # ------------------------------------------------------------------
