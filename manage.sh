@@ -2366,6 +2366,98 @@ cmd_mock() {
 }
 
 ###############################################################################
+# Command: data
+###############################################################################
+# Clear only operational data (terminals, blacklist, logs), unblock firewalls,
+# and clear Redis caches — while keeping whitelist, data sources, users, roles,
+# and system configuration.
+cmd_data() {
+    local subcmd="${1:-}"
+    shift 2>/dev/null || true
+
+    case "$subcmd" in
+        clear)
+            _data_clear "$@"
+            ;;
+        *)
+            log_error "Usage: ./manage.sh data [clear]"
+            echo -e "  ${CYAN}clear${NC} [--resume]  Clear operational data (keeps whitelist/configs)"
+            ;;
+    esac
+}
+
+_data_clear() {
+    local resume_after="${1:-}"
+    ensure_env
+    log_step "Clearing Operational Data"
+    require_services
+
+    echo ""
+    echo -e "${RED}${BOLD}╔═══════════════════════════════════════════════════════╗${NC}"
+    echo -e "${RED}${BOLD}║           OPERATIONAL DATA CLEAR WARNING              ║${NC}"
+    echo -e "${RED}${BOLD}╚═══════════════════════════════════════════════════════╝${NC}"
+    echo ""
+    echo -e "  ${BOLD}Will delete (${RED}irreversible${NC}):"
+    echo -e "    • ${RED}Terminals${NC}          (terminals table)"
+    echo -e "    • ${RED}Blacklist${NC}          block & unblock records (blacklist table)"
+    echo -e "    • ${RED}Audit logs${NC}         (audit_logs table)"
+    echo -e "    • ${RED}LDAP sync logs${NC}     (ldap_sync_log table)"
+    echo -e "    • ${RED}Notification logs${NC}  (notification_logs table)"
+    echo ""
+    echo -e "  ${BOLD}Will also:${NC}"
+    echo -e "    • Unblock active blacklist IPs on their firewalls (Sangfor)"
+    echo -e "    • Clear operational Redis cache keys"
+    echo ""
+    echo -e "  ${GREEN}Kept (not affected)${NC}:"
+    echo -e "    • Whitelist, data sources & bindings, compliance baselines/scopes"
+    echo -e "    • Users, roles & permissions, system configuration"
+    echo ""
+    echo -e "  ${BOLD}Rollback plan${NC}: restore from the auto-backup taken below:"
+    echo -e "    ./manage.sh restore <backup-file>"
+    echo ""
+
+    if ! confirm "Delete operational data AND unblock firewalls? (whitelist/configs kept)"; then
+        log_info "Cancelled"
+        return 0
+    fi
+
+    auto_backup "pre_data_clear"
+
+    # Pause schedulers that would re-populate terminals/blacklist during the clear.
+    local redis_pass task ctrl_key
+    redis_pass=$(get_env "REDIS_PASSWORD")
+    local pause_tasks="firewall_query arp_collection ipguard_sync compliance_check auto_unblock firewall_reconciliation"
+
+    log_step "Pausing scheduler tasks"
+    for task in $pause_tasks; do
+        ctrl_key=$(_sched_ctrl_key "$task")
+        dc exec -T redis env REDISCLI_AUTH="${redis_pass}" redis-cli SET "$ctrl_key" "paused" 2>/dev/null >/dev/null
+        log_info "  Paused: ${task}"
+    done
+
+    log_step "Clearing data (unblock firewall + delete tables + clear Redis)"
+    echo "DELETE" | dc exec -T backend python cli.py data clear
+
+    log_success "Operational data cleared (whitelist/configs kept)"
+
+    if [ "${resume_after}" = "--resume" ]; then
+        log_step "Resuming scheduler tasks"
+        for task in $pause_tasks; do
+            ctrl_key=$(_sched_ctrl_key "$task")
+            dc exec -T redis env REDISCLI_AUTH="${redis_pass}" redis-cli DEL "$ctrl_key" 2>/dev/null >/dev/null
+            log_info "  Resumed: ${task}"
+        done
+        log_success "Scheduler tasks resumed"
+    else
+        echo ""
+        log_info "Schedulers remain paused to prevent re-population. Resume when ready:"
+        for task in $pause_tasks; do
+            echo -e "  ./manage.sh scheduler resume ${task}"
+        done
+    fi
+}
+
+###############################################################################
 # Command: backup
 ###############################################################################
 cmd_backup() {
@@ -3982,6 +4074,7 @@ cmd_help() {
     echo -e "  ${YELLOW}migrate${NC} [revision]        Run database migrations (idempotent)"
     echo -e "  ${YELLOW}mock generate${NC}            Generate demo/mock data"
     echo -e "  ${YELLOW}mock clear${NC}               Clear all mock data (keeps admin)"
+    echo -e "  ${YELLOW}data clear${NC} [--resume]    Clear terminals/blacklist/logs, unblock firewall, clear Redis caches (keeps whitelist/configs)"
     echo -e "  ${YELLOW}backup${NC} [file]             Backup database to SQL file"
     echo -e "  ${YELLOW}backup-schedule${NC}           Configure automatic backup schedule (enable/disable/status)"
     echo -e "  ${YELLOW}restore${NC} <file>            Restore database from SQL file"
@@ -4137,6 +4230,7 @@ main() {
         migrate)      cmd_migrate "$@" ;;
         test)         cmd_test ;;
         mock)         cmd_mock "$@" ;;
+        data)         cmd_data "$@" ;;
         backup)       cmd_backup "$@" ;;
         backup-schedule) cmd_backup_schedule "$@" ;;
         restore)      cmd_restore "$@" ;;

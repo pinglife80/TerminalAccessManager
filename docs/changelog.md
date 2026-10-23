@@ -1,6 +1,6 @@
 # 更新日志
 
-> 文档版本：v3.21.12  更新日期：2026-10-22
+> 文档版本：v3.22.0  更新日期：2026-10-23
 
 本文件记录 TerminalAccessManager 的所有重要变更。
 
@@ -8,6 +8,18 @@
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ***
+
+## [3.22.0] - 2026-10-23
+
+### 新增
+
+- **选择性数据清理命令 `./manage.sh data clear`**：清除终端、黑名单、审计日志、LDAP 同步日志、通知日志五类运营数据；清理前先解封黑名单条目对应的防火墙封锁，再清理运营类 Redis 缓存；保留白名单、数据源及绑定、合规基线/作用域、用户/角色/权限、系统配置等全部配置数据
+  - 关联文件：`backend/cli.py`、`manage.sh`
+
+### 修复
+
+- **Sangfor AF token 失效导致封锁/查询反复失败**：AF 在 token 过期时返回 HTTP 400 "request error"（而非标准 401），原 `_request_with_retry` 仅识别 401，导致 token 过期后永不重认证、block/unblock/对账查询持续 400。现新增 `_is_auth_failure` 统一识别 401、400 "request error"、code 1003/1012 三类认证失效特征，`_request_with_retry` 据此触发重认证；`get_cached_service` 检查 keepalive 返回值，失败时清除 token 强制下次重认证
+  - 关联文件：`services/sangfor_service.py`
 
 ## [3.21.12] - 2026-10-22
 

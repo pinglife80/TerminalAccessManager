@@ -1,12 +1,51 @@
 # 版本跟踪记录
 
-> 文档版本：v3.21.12 | 更新日期：2026-10-22
+> 文档版本：v3.22.0 | 更新日期：2026-10-23
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
 
 ---
+
+## [v3.22.0] - 2026-10-23
+
+### 选择性数据清理命令与 Sangfor 认证失效修复（Minor 版本）
+
+#### 背景
+
+一方面，缺少一个能安全清理运营数据、同时保留系统配置的命令，运维重置环境时需手动逐表删除且容易误删配置。另一方面，线上终端（如 `10.8.14.171`）反复封锁失败，定位为 Sangfor AF 在 token 失效时返回 HTTP 400 "request error"（而非标准 401），原 `_request_with_retry` 仅识别 401，导致 token 过期后永不重认证、block/unblock/对账查询持续 400。
+
+本次新增 `./manage.sh data clear` 选择性数据清理命令（Minor），并修复 Sangfor 认证失效重认证；向后兼容、无数据库迁移。
+
+#### 主要变更
+
+| 变更项 | 说明 |
+|--------|------|
+| 选择性数据清理命令 | 新增 `./manage.sh data clear`：清除终端/黑名单/审计日志/LDAP 同步日志/通知日志五类运营数据，清理前先解封防火墙、再清运营类 Redis 缓存，保留全部配置数据 |
+| Sangfor 认证失效重认证 | 新增 `_is_auth_failure` 统一识别 401、400 "request error"、code 1003/1012；`_request_with_retry` 据此重认证；`get_cached_service` 检查 keepalive 返回值 |
+
+#### 升级步骤（推荐：一键升级）
+
+```bash
+git checkout main
+git pull origin main
+./manage.sh upgrade
+```
+
+#### 升级注意事项
+
+- 本次无新增 Alembic 迁移文件、无数据库 schema 变更，`docs/database.md` 无需改动。
+- `data clear` 为高危命令，已内置结构化告警与不可逆提示，仅在确认后执行。
+- Sangfor 认证修复仅作用于防火墙 API 请求层（token 失效自动重认证），不改动任何业务数据语义。
+
+#### 文件变更清单
+
+| 文件 | 变更类型 | 说明 |
+|------|---------|------|
+| `backend/app/services/sangfor_service.py` | 编辑 | 新增 `_is_auth_failure`，`_request_with_retry` 据此重认证，`get_cached_service` 检查 keepalive 返回值 |
+| `backend/cli.py` | 编辑 | 新增 `_run_data_clear` 命令 + Redis 清理边界收紧 |
+| `manage.sh` | 编辑 | 新增 `cmd_data`/`_data_clear` 子命令分发与危险操作告警 |
 
 ## [v3.21.12] - 2026-10-22
 
