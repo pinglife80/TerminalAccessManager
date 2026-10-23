@@ -189,13 +189,41 @@ class SangforService:
         finally:
             self._authenticating = False
 
+    @staticmethod
+    def _is_auth_failure(response: httpx.Response) -> bool:
+        """判断响应是否为「认证失效」而非业务错误。
+
+        Sangfor AF 在 token 失效/缺失时，对 API 请求返回 HTTP 400 + body 为
+        "request error"（而非标准 HTTP 401），且参数错误走 HTTP 200 + code 22。
+        因此单靠 401 判断会漏掉 token 过期场景，导致重新认证永不触发。
+
+        覆盖以下认证失效特征：
+        - HTTP 401（标准未认证）
+        - HTTP 400 且 body 精确为 "request error"（token 失效/缺失）
+        - HTTP 200 且 code 为 1003（未登陆）/ 1012（登录状态过期）
+        """
+        if response.status_code == 401:
+            return True
+        if response.status_code == 400:
+            text = (response.text or "").strip()
+            if text.lower() == "request error":
+                return True
+        if response.status_code == 200:
+            try:
+                code = response.json().get("code")
+                if code in (1003, 1012):
+                    return True
+            except Exception:
+                pass
+        return False
+
     async def _request_with_retry(self, method: str, url: str, **kwargs) -> httpx.Response:
-        """Make an API request with automatic re-authentication on 401."""
+        """Make an API request with automatic re-authentication on auth failure."""
         session = await self._get_session()
         response = await session.request(method, url, **kwargs)
 
-        if response.status_code == 401:
-            logger.warning("Sangfor AF token expired, re-authenticating...")
+        if self._is_auth_failure(response):
+            logger.warning("Sangfor AF session invalid, re-authenticating...")
             self.token = None
             session = await self._get_session()
             response = await session.request(method, url, **kwargs)
@@ -706,9 +734,18 @@ class SangforService:
                     if expiry and datetime.now() < expiry:
                         logger.debug(f"Reusing cached SangforService for {url_key}")
                         return service
-                    
-                    await service.keepalive()
-                    _token_expiry[url_key] = datetime.now() + timedelta(minutes=8)
+
+                    ok = await service.keepalive()
+                    if ok:
+                        _token_expiry[url_key] = datetime.now() + timedelta(minutes=8)
+                    else:
+                        # keepalive 失败（token 可能已失效），清除 token 迫使下次请求重新认证，
+                        # 避免复用失效 token 且错误刷新 expiry。
+                        service.token = None
+                        logger.warning(
+                            f"Sangfor AF keepalive failed for {url_key}, "
+                            f"will re-authenticate on next request"
+                        )
                     return service
             
             service = cls(
