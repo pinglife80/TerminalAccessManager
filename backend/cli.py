@@ -1412,6 +1412,199 @@ def cmd_mock_clear(_args):
 
 
 # ---------------------------------------------------------------------------
+# data clear
+# ---------------------------------------------------------------------------
+async def _run_data_clear():
+    """Clear operational data while keeping configuration intact.
+
+    Clears termininals, blacklist, audit logs, LDAP sync logs, and notification
+    logs from the database; unblocks active blacklist entries on their
+    firewalls before deletion; and removes operational Redis cache keys.
+    Keeps whitelist, data sources, compliance baselines/scopes, users, roles,
+    and system configuration.
+    """
+    from sqlalchemy import func, select
+    from app.core.database import async_session_maker
+    from app.core.security import get_redis_client
+    from app.models.terminal import Terminal
+    from app.models.blacklist import Blacklist
+    from app.models.log import AuditLog
+    from app.models.ldap_sync_log import LDAPSyncLog
+    from app.models.notification import NotificationLog
+    from app.models.data_source import DataSource
+    from app.core.crypto import decrypt_config
+    from app.services.sangfor_service import SangforService
+
+    print("=" * 70)
+    print("TerminalAccessManager - Clear Operational Data")
+    print("=" * 70)
+    print()
+    print("This will delete the following operational data:")
+    print("  • Terminals (terminals)")
+    print("  • Blacklist block/unblock records (blacklist)")
+    print("  • Audit logs (audit_logs)")
+    print("  • LDAP sync logs (ldap_sync_log)")
+    print("  • Notification logs (notification_logs)")
+    print()
+    print("Firewalls will be unblocked for active blacklist entries before deletion.")
+    print("Operational Redis cache keys will also be cleared.")
+    print()
+    print("The following configuration is KEPT:")
+    print("  • Whitelist, data sources & bindings, compliance baselines/scopes")
+    print("  • Users, roles & permissions, system configuration")
+    print("This action cannot be undone.")
+    print()
+
+    async with async_session_maker() as db:
+        targets = [
+            ("Terminals", Terminal),
+            ("Blacklist Entries", Blacklist),
+            ("Audit Logs", AuditLog),
+            ("LDAP Sync Logs", LDAPSyncLog),
+            ("Notification Logs", NotificationLog),
+        ]
+        counts = {}
+        for label, model in targets:
+            result = await db.execute(select(func.count()).select_from(model))
+            counts[label] = result.scalar()
+
+        active_stmt = select(func.count()).select_from(Blacklist).where(
+            Blacklist.unblocked_at.is_(None),
+            Blacklist.auto_unblocked == False,
+            Blacklist.ip_address.isnot(None),
+        )
+        active_block_count = (await db.execute(active_stmt)).scalar()
+
+        print("Current data:")
+        for category, count in counts.items():
+            print(f"  • {category}: {count}")
+        print(f"  • Active firewall blocks to unblock: {active_block_count}")
+        print()
+
+        total = sum(counts.values())
+        if total == 0 and active_block_count == 0:
+            print("No data to clear. System is already clean.")
+            return
+
+        response = input("Type 'DELETE' to confirm: ")
+        if response != "DELETE":
+            print("Operation cancelled.")
+            return
+
+        print()
+        unblocked = failed = 0
+
+        try:
+            # 1. Unblock active blacklist entries on their firewalls.
+            active_entries = (await db.execute(
+                select(Blacklist).where(
+                    Blacklist.unblocked_at.is_(None),
+                    Blacklist.auto_unblocked == False,
+                    Blacklist.ip_address.isnot(None),
+                )
+            )).scalars().all()
+
+            fw_services = {}
+            for entry in active_entries:
+                if entry.firewall_tag in fw_services:
+                    continue
+                fw = (await db.execute(select(DataSource).where(
+                    DataSource.tag == entry.firewall_tag,
+                    DataSource.type == "sangfor",
+                ))).scalar_one_or_none()
+                if fw and fw.enabled:
+                    cfg = decrypt_config(fw.config) if fw.config else {}
+                    fw_services[entry.firewall_tag] = await SangforService.get_cached_service(
+                        base_url=cfg.get("base_url", ""),
+                        username=cfg.get("username", ""),
+                        password=cfg.get("password", ""),
+                        verify_ssl=cfg.get("verify_ssl", True),
+                        ca_bundle=cfg.get("ca_bundle", ""),
+                    )
+                else:
+                    fw_services[entry.firewall_tag] = None
+
+            for entry in active_entries:
+                svc = fw_services.get(entry.firewall_tag)
+                if not svc:
+                    print(_yellow(f"  ✗ Skipped unblock {entry.ip_address} (firewall '{entry.firewall_tag}' missing/disabled)"))
+                    failed += 1
+                    continue
+                try:
+                    r = await svc.unblock_ip([{"srcIP": entry.ip_address}])
+                    success = (r.get("code") == 0)
+                except Exception as exc:
+                    r = {}
+                    success = False
+                    print(_yellow(f"  ✗ Unblock error for {entry.ip_address}: {exc}"))
+                if success:
+                    unblocked += 1
+                else:
+                    failed += 1
+                    print(_yellow(f"  ✗ Failed to unblock {entry.ip_address}: {r.get('message', 'unknown error')}"))
+
+            print(f"Firewall unblock: {unblocked} succeeded, {failed} failed/skipped")
+            print()
+
+            # 2. Delete the five operational tables.
+            await db.execute(NotificationLog.__table__.delete())
+            print(_green("  ✓ Deleted notification logs"))
+
+            await db.execute(LDAPSyncLog.__table__.delete())
+            print(_green("  ✓ Deleted LDAP sync logs"))
+
+            await db.execute(AuditLog.__table__.delete())
+            print(_green("  ✓ Deleted audit logs"))
+
+            await db.execute(Blacklist.__table__.delete())
+            print(_green("  ✓ Deleted blacklist entries"))
+
+            await db.execute(Terminal.__table__.delete())
+            print(_green("  ✓ Deleted terminals"))
+
+            await db.commit()
+        except Exception as e:
+            await db.rollback()
+            print(f"\n❌ Error clearing data: {e}")
+            raise
+
+    # 3. Clear operational Redis cache keys (keep scheduler:* control keys).
+    redis_cnt = 0
+    try:
+        redis = await get_redis_client()
+        # 仅清理"运营"类缓存；配置/会话类键(sys_config/whitelist/compliance_scope/
+        # user_perms/token_version)依赖 DB 源数据自动重建且非运营数据，故刻意排除，
+        # 避免误伤系统配置与在线会话/鉴权状态。
+        clear_patterns = [
+            "reconcile:latest", "rate_limit:*", "captcha:*",
+            "ipguard:*", "dingtalk:*", "feishu:*", "wecom:*", "compliance:recalc:lock",
+        ]
+        for pat in clear_patterns:
+            async for key in redis.scan_iter(match=pat):
+                await redis.delete(key)
+                redis_cnt += 1
+    except Exception as exc:
+        print(_yellow(f"  ⚠ Redis cache cleanup skipped or incomplete: {exc}"))
+
+    print()
+    print("=" * 70)
+    print("Operational Data Cleared!")
+    print("=" * 70)
+    print(f"  • Firewall: {unblocked} unblocked, {failed} failed/skipped")
+    print(f"  • Redis keys cleared: {redis_cnt}")
+    print()
+    print("Remaining (kept):")
+    print("  • Whitelist, data sources & bindings, compliance baselines/scopes")
+    print("  • Users, roles & permissions, system configuration")
+    print()
+
+
+def cmd_data_clear(_args):
+    """Handle *data clear* sub-command."""
+    asyncio.run(_run_data_clear())
+
+
+# ---------------------------------------------------------------------------
 # validate command
 # ---------------------------------------------------------------------------
 def _run_validate():
@@ -1998,6 +2191,16 @@ def build_parser():
 
     sp_mock_clr = mock_sub.add_parser("clear", help="Clear all mock data")
     sp_mock_clr.set_defaults(func=cmd_mock_clear)
+
+    # data (with sub-subcommands)
+    sp_data = subparsers.add_parser("data", help="Manage operational data")
+    data_sub = sp_data.add_subparsers(dest="data_command", help="Data operations")
+
+    sp_data_clear = data_sub.add_parser(
+        "clear",
+        help="Clear terminals/blacklist/logs, unblock firewall, clear Redis caches",
+    )
+    sp_data_clear.set_defaults(func=cmd_data_clear)
 
     # validate
     sp_validate = subparsers.add_parser("validate", help="Run backend validation checks")
