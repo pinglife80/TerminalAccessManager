@@ -390,6 +390,9 @@ export interface ComplianceConfig {
   compliance_ip_grace_minutes: number;
   compliance_whitelist_miss_threshold: number;
   compliance_compliant_downgrade_threshold: number;
+  compliance_confirm_min_interval_seconds: number;
+  compliance_new_terminal_grace_minutes: number;
+  compliance_compliant_grace_minutes: number;
 }
 
 export const BLOCK_TIME_PRESETS = ['1h', '6h', '12h', '1d', '3d', '7d', '15d', '30d'];
