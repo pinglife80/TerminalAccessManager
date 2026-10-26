@@ -58,6 +58,9 @@ def create_mock_terminal(
     t.non_compliant_confirm_count = 0
     t.compliant_confirm_count = 0
     t.ip_changed_at = None
+    t.timestamp = None
+    t.compliance_checked_at = None
+    t.compliant_checked_at = None
     return t
 
 
@@ -2141,6 +2144,79 @@ class TestApplyInitialComplianceResult:
         assert terminal.non_compliant_confirm_count == 0
         assert apply_mock.await_count == 1
 
+    @pytest.mark.asyncio
+    async def test_new_terminal_grace_holds_unknown(self, service, mock_db):
+        """新发现终端在宽限期内首检不合规时保持 unknown、不累加、不封锁。"""
+        terminal = create_mock_terminal(compliance_status="unknown", source_tag="lab")
+        terminal.timestamp = datetime.now(UTC)  # 刚入库
+        with patch.object(service, "_get_new_terminal_grace_minutes", return_value=10), \
+             patch.object(service, "_apply_compliance_result", return_value={"status_changed": True}) as apply_mock:
+            result = await service.apply_initial_compliance_result(
+                terminal, "non_compliant", None, None,
+                "192.168.1.100", "AA:BB:CC:DD:EE:FF",
+            )
+
+        assert result["status_changed"] is False
+        assert result["new_compliance"] == "unknown"
+        assert terminal.non_compliant_confirm_count == 0
+        assert terminal.compliance_checked_at is None
+        apply_mock.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_new_terminal_grace_expired_proceeds(self, service, mock_db):
+        """新终端宽限期已过则正常累加确认计数。"""
+        terminal = create_mock_terminal(compliance_status="unknown", source_tag="lab")
+        terminal.timestamp = datetime.now(UTC) - timedelta(minutes=30)  # 宽限期已过
+        mock_db.execute = scripted_execute([make_result(scalars_all=[terminal])])
+        with patch.object(service, "_get_new_terminal_grace_minutes", return_value=10), \
+             patch.object(service, "_get_confirm_threshold", return_value=3), \
+             patch.object(service, "_apply_compliance_result", return_value={"status_changed": True}) as apply_mock:
+            result = await service.apply_initial_compliance_result(
+                terminal, "non_compliant", None, None,
+                "192.168.1.100", "AA:BB:CC:DD:EE:FF",
+            )
+
+        assert terminal.non_compliant_confirm_count == 1
+        assert result["status_changed"] is False
+        assert result["new_compliance"] == "unknown"
+        apply_mock.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_min_interval_guard_skips_within_interval(self, service, mock_db):
+        """距上次确认计数不足一个最小间隔时跳过累加。"""
+        terminal = create_mock_terminal(compliance_status="unknown", source_tag="lab")
+        terminal.compliance_checked_at = datetime.now(UTC) - timedelta(seconds=30)
+        with patch.object(service, "_get_confirm_min_interval_seconds", return_value=300), \
+             patch.object(service, "_apply_compliance_result", return_value={"status_changed": True}) as apply_mock:
+            result = await service.apply_initial_compliance_result(
+                terminal, "non_compliant", None, None,
+                "192.168.1.100", "AA:BB:CC:DD:EE:FF",
+            )
+
+        assert result["status_changed"] is False
+        assert result["new_compliance"] == "unknown"
+        assert terminal.non_compliant_confirm_count == 0
+        apply_mock.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_min_interval_guard_allows_after_interval(self, service, mock_db):
+        """已过一个最小间隔则正常累加确认计数。"""
+        terminal = create_mock_terminal(compliance_status="unknown", source_tag="lab")
+        terminal.compliance_checked_at = datetime.now(UTC) - timedelta(seconds=600)
+        mock_db.execute = scripted_execute([make_result(scalars_all=[terminal])])
+        with patch.object(service, "_get_confirm_min_interval_seconds", return_value=300), \
+             patch.object(service, "_get_confirm_threshold", return_value=3), \
+             patch.object(service, "_apply_compliance_result", return_value={"status_changed": True}) as apply_mock:
+            result = await service.apply_initial_compliance_result(
+                terminal, "non_compliant", None, None,
+                "192.168.1.100", "AA:BB:CC:DD:EE:FF",
+            )
+
+        assert terminal.non_compliant_confirm_count == 1
+        assert result["status_changed"] is False
+        assert result["new_compliance"] == "unknown"
+        apply_mock.assert_not_awaited()
+
 
 # ===========================================================================
 # apply_manual_whitelist_for_terminal (manual whitelist + immediate unblock)
@@ -3380,6 +3456,217 @@ class TestRecalculateComplianceEdges:
         assert applied["new_compliance"] == "non_compliant"
         assert terminal.compliance_status == "non_compliant"
         assert terminal.non_compliant_confirm_count == 0
+
+    @pytest.mark.asyncio
+    async def test_recalculate_new_terminal_grace_holds_unknown(self, service, mock_db):
+        """unknown 终端在「新终端宽限期」内 recalc 不累加、保持 unknown。
+
+        IPGuard 瞬时不命中发生在新终端入库后初始化同步的窗口内，此时不应在
+        recalc 降级分支里累计 non_compliant_confirm_count。
+        """
+        terminal = create_mock_terminal(
+            ip="10.8.27.68",
+            mac="68:DA:73:A6:D3:21",
+            status="unblocked",
+            compliance_status="unknown",
+        )
+        terminal.timestamp = datetime.now(UTC) - timedelta(minutes=5)
+        terminal.non_compliant_confirm_count = 0
+
+        mock_db.execute = scripted_execute([make_result(scalars_all=[terminal])])
+
+        ig_data = {"yp": [{"ip_address": "10.0.0.99", "mac_address": "11-22-33-44-55-66"}]}
+
+        applied = {}
+
+        async def fake_apply(terminal, new_compliance, new_wl_match_type, wl_comments, ip_addr, mac_addr):
+            applied["new_compliance"] = new_compliance
+            return {"status_changed": False, "new_compliance": new_compliance, "unblocked": False}
+
+        with patch("app.services.compliance_service._acquire_compliance_lock", new=AsyncMock(return_value="tok")), \
+             patch("app.services.compliance_service._release_compliance_lock"), \
+             patch.object(service, "_load_whitelist_cache", return_value=[]), \
+             patch.object(service, "_load_all_ipguard_cache", return_value=ig_data), \
+             patch.object(service, "_load_scope_cache", return_value=[]), \
+             patch.object(service, "_is_ipguard_cache_stale", return_value=False), \
+             patch.object(service, "_get_confirm_threshold", return_value=2), \
+             patch.object(service, "_get_new_terminal_grace_minutes", return_value=10), \
+             patch.object(service, "_match_ipguard_in_memory", return_value=(False, False, False)), \
+             patch.object(service, "_apply_compliance_result", new=fake_apply), \
+             patch("app.services.compliance_service.logger.info") as info_logger:
+            result = await service.recalculate_all_compliance()
+
+        assert terminal.non_compliant_confirm_count == 0
+        assert applied["new_compliance"] == "unknown"
+        assert_logged_any(info_logger, "[compliance-guard][recalc-new-terminal-grace]", "10.8.27.68")
+
+    @pytest.mark.asyncio
+    async def test_recalculate_compliant_grace_holds_compliant(self, service, mock_db):
+        """compliant 终端最近刚转合规，在宽限期内 recalc 瞬失配不降级、不累加。"""
+        terminal = create_mock_terminal(
+            ip="10.8.27.68",
+            mac="68:DA:73:A6:D3:21",
+            status="unblocked",
+            compliance_status="compliant",
+        )
+        terminal.compliant_checked_at = datetime.now(UTC) - timedelta(minutes=5)
+        terminal.non_compliant_confirm_count = 0
+
+        mock_db.execute = scripted_execute([make_result(scalars_all=[terminal])])
+
+        ig_data = {"yp": [{"ip_address": "10.0.0.99", "mac_address": "11-22-33-44-55-66"}]}
+
+        applied = {}
+
+        async def fake_apply(terminal, new_compliance, new_wl_match_type, wl_comments, ip_addr, mac_addr):
+            applied["new_compliance"] = new_compliance
+            return {"status_changed": False, "new_compliance": new_compliance, "unblocked": False}
+
+        with patch("app.services.compliance_service._acquire_compliance_lock", new=AsyncMock(return_value="tok")), \
+             patch("app.services.compliance_service._release_compliance_lock"), \
+             patch.object(service, "_load_whitelist_cache", return_value=[]), \
+             patch.object(service, "_load_all_ipguard_cache", return_value=ig_data), \
+             patch.object(service, "_load_scope_cache", return_value=[]), \
+             patch.object(service, "_is_ipguard_cache_stale", return_value=False), \
+             patch.object(service, "_get_confirm_threshold", return_value=2), \
+             patch.object(service, "_get_compliant_downgrade_threshold", return_value=6), \
+             patch.object(service, "_get_compliant_grace_minutes", return_value=10), \
+             patch.object(service, "_match_ipguard_in_memory", return_value=(False, False, False)), \
+             patch.object(service, "_apply_compliance_result", new=fake_apply), \
+             patch("app.services.compliance_service.logger.info") as info_logger:
+            result = await service.recalculate_all_compliance()
+
+        assert terminal.non_compliant_confirm_count == 0
+        assert applied["new_compliance"] == "compliant"
+        assert_logged_any(info_logger, "[compliance-guard][recalc-compliant-grace]", "10.8.27.68")
+
+    @pytest.mark.asyncio
+    async def test_recalculate_min_interval_guard_skips_within_interval(self, service, mock_db):
+        """距上次累加不足最小间隔时，recalc 降级跳过本次累加。"""
+        terminal = create_mock_terminal(
+            ip="10.8.27.68",
+            mac="68:DA:73:A6:D3:21",
+            status="unblocked",
+            compliance_status="compliant",
+        )
+        terminal.compliance_checked_at = datetime.now(UTC) - timedelta(seconds=30)
+        terminal.non_compliant_confirm_count = 0
+
+        mock_db.execute = scripted_execute([make_result(scalars_all=[terminal])])
+
+        ig_data = {"yp": [{"ip_address": "10.0.0.99", "mac_address": "11-22-33-44-55-66"}]}
+
+        applied = {}
+
+        async def fake_apply(terminal, new_compliance, new_wl_match_type, wl_comments, ip_addr, mac_addr):
+            applied["new_compliance"] = new_compliance
+            return {"status_changed": False, "new_compliance": new_compliance, "unblocked": False}
+
+        with patch("app.services.compliance_service._acquire_compliance_lock", new=AsyncMock(return_value="tok")), \
+             patch("app.services.compliance_service._release_compliance_lock"), \
+             patch.object(service, "_load_whitelist_cache", return_value=[]), \
+             patch.object(service, "_load_all_ipguard_cache", return_value=ig_data), \
+             patch.object(service, "_load_scope_cache", return_value=[]), \
+             patch.object(service, "_is_ipguard_cache_stale", return_value=False), \
+             patch.object(service, "_get_confirm_threshold", return_value=2), \
+             patch.object(service, "_get_compliant_downgrade_threshold", return_value=6), \
+             patch.object(service, "_get_confirm_min_interval_seconds", return_value=300), \
+             patch.object(service, "_match_ipguard_in_memory", return_value=(False, False, False)), \
+             patch.object(service, "_apply_compliance_result", new=fake_apply), \
+             patch("app.services.compliance_service.logger.info") as info_logger:
+            result = await service.recalculate_all_compliance()
+
+        assert terminal.non_compliant_confirm_count == 0
+        assert applied["new_compliance"] == "compliant"
+        assert_logged_any(info_logger, "[compliance-guard][recalc-min-interval]", "10.8.27.68")
+
+    @pytest.mark.asyncio
+    async def test_recalculate_guards_expired_then_accumulates_to_threshold(self, service, mock_db):
+        """宽限过期 + 间隔已过后，recalc 正常累加并达到阈值降级为 non_compliant。"""
+        terminal = create_mock_terminal(
+            ip="10.8.27.68",
+            mac="68:DA:73:A6:D3:21",
+            status="unblocked",
+            compliance_status="unknown",
+        )
+        terminal.timestamp = datetime.now(UTC) - timedelta(minutes=60)
+        terminal.compliance_checked_at = datetime.now(UTC) - timedelta(seconds=600)
+        terminal.non_compliant_confirm_count = 1
+
+        mock_db.execute = scripted_execute([
+            make_result(scalars_all=[terminal]),   # terminal load
+            make_result(scalars_all=[terminal]),   # MAC total
+            make_result(scalars_all=[terminal]),   # MAC batch reset
+        ])
+
+        ig_data = {"yp": [{"ip_address": "10.0.0.99", "mac_address": "11-22-33-44-55-66"}]}
+
+        applied = {}
+
+        async def fake_apply(terminal, new_compliance, new_wl_match_type, wl_comments, ip_addr, mac_addr):
+            applied["new_compliance"] = new_compliance
+            return {"status_changed": True, "new_compliance": new_compliance, "unblocked": False}
+
+        with patch("app.services.compliance_service._acquire_compliance_lock", new=AsyncMock(return_value="tok")), \
+             patch("app.services.compliance_service._release_compliance_lock"), \
+             patch.object(service, "_load_whitelist_cache", return_value=[]), \
+             patch.object(service, "_load_all_ipguard_cache", return_value=ig_data), \
+             patch.object(service, "_load_scope_cache", return_value=[]), \
+             patch.object(service, "_is_ipguard_cache_stale", return_value=False), \
+             patch.object(service, "_get_confirm_threshold", return_value=2), \
+             patch.object(service, "_get_new_terminal_grace_minutes", return_value=10), \
+             patch.object(service, "_get_confirm_min_interval_seconds", return_value=300), \
+             patch.object(service, "_match_ipguard_in_memory", return_value=(False, False, False)), \
+             patch.object(service, "_apply_compliance_result", new=fake_apply):
+            result = await service.recalculate_all_compliance()
+
+        assert applied["new_compliance"] == "non_compliant"
+        assert terminal.compliance_checked_at is not None  # 累加时刷新了时间戳
+        assert terminal.non_compliant_confirm_count == 0
+
+    @pytest.mark.asyncio
+    async def test_apply_result_does_not_refresh_compliant_checked_at_when_unchanged(self, service, mock_db):
+        """长期合规终端反复「确认合规」（状态未变）不应刷新 compliant_checked_at。
+
+        若每次确认合规都刷新该标记，recalc 的「最近转合规宽限」守卫会因每个
+        判定周期都刷新而永久生效，导致终端真实不合规时迟迟无法降级（漏封）。
+        """
+        terminal = create_mock_terminal(
+            ip="10.8.27.68",
+            mac="68:DA:73:A6:D3:21",
+            status="unblocked",
+            compliance_status="compliant",
+        )
+        old_checked_at = datetime.now(UTC) - timedelta(hours=1)
+        terminal.compliant_checked_at = old_checked_at
+
+        # 状态未变（compliant → compliant）：不刷新标记
+        await service._apply_compliance_result(
+            terminal, "compliant", None, None, terminal.ip_address, terminal.mac_address
+        )
+        assert terminal.compliant_checked_at == old_checked_at
+
+    @pytest.mark.asyncio
+    async def test_apply_result_refreshes_compliant_checked_at_on_transition(self, service, mock_db):
+        """状态真正转换到合规时才会刷新 compliant_checked_at。"""
+        terminal = create_mock_terminal(
+            ip="10.8.27.68",
+            mac="68:DA:73:A6:D3:21",
+            status="unblocked",
+            compliance_status="unknown",
+        )
+        terminal.compliant_checked_at = None
+
+        mock_db.execute = AsyncMock(return_value=make_result(all_rows=[]))
+
+        with patch.object(service, "log_action", return_value=None), \
+             patch("app.services.event_emitter.emit_terminal_compliant", new=AsyncMock()), \
+             patch("app.services.event_emitter.emit_terminal_non_compliant", new=AsyncMock()):
+            await service._apply_compliance_result(
+                terminal, "compliant", None, None, terminal.ip_address, terminal.mac_address
+            )
+
+        assert terminal.compliant_checked_at is not None
 
     @pytest.mark.asyncio
     async def test_recalculate_skips_offline_records(self, service, mock_db):

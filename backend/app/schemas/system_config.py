@@ -151,6 +151,9 @@ class ComplianceConfigResponse(BaseModel):
     compliance_ip_grace_minutes: int
     compliance_whitelist_miss_threshold: int
     compliance_compliant_downgrade_threshold: int
+    compliance_confirm_min_interval_seconds: int
+    compliance_new_terminal_grace_minutes: int
+    compliance_compliant_grace_minutes: int
 
 
 class CacheConfigResponse(BaseModel):
