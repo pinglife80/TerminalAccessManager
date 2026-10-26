@@ -38,6 +38,8 @@ class Terminal(Base):
     non_compliant_confirm_count = Column(Integer, default=0)  # Consecutive non_compliant detections during compliant/bypass/unknown→non_compliant transition
     compliant_confirm_count = Column(Integer, default=0)  # Consecutive compliant/bypass detections during non_compliant→compliant transition
     ip_changed_at = Column(DateTime(timezone=True), nullable=True)  # Timestamp of last IP change (for grace period)
+    compliance_checked_at = Column(DateTime(timezone=True), nullable=True, index=True)  # 最近一次不合规确认计数的时间（最小时间间隔守卫）
+    compliant_checked_at = Column(DateTime(timezone=True), nullable=True)  # 最近一次状态转换为合规/bypass 的时间（最近转合规宽限期）
     block_state = Column(String(30), nullable=True, index=True)
     # None          -> 正常（已封锁 或 不适用）
     # 'no_firewall' -> non_compliant 且 ARP 源无绑定防火墙（不可封锁）

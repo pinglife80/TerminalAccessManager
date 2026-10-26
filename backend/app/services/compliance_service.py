@@ -1795,28 +1795,72 @@ class ComplianceService:
                 ip_changed_at = ip_changed_at.replace(tzinfo=UTC)
             if ip_changed_at >= grace_cutoff:
                 logger.info(
-                    f"First-discovery {ip_addr}/{mac_addr}: IP recently changed "
-                    f"(ip_changed_at={terminal.ip_changed_at.isoformat()}), holding "
-                    f"unknown in grace period ({grace_minutes}min)"
+                    f"[compliance-guard][ip-grace] First-discovery {ip_addr}/{mac_addr}: "
+                    f"IP recently changed (ip_changed_at={terminal.ip_changed_at.isoformat()}), "
+                    f"holding unknown in grace period ({grace_minutes}min)"
                 )
                 return {"status_changed": False, "new_compliance": terminal.compliance_status, "unblocked": False}
 
         if new_compliance == "non_compliant":
+            now = datetime.now(UTC)
+
+            # 修复2：新发现终端合规宽限期——首检若仍处于入库后首个 IPGuard
+            # 同步窗口内，则保持 unknown、不累加、不封锁，避免 IPGuard
+            # 尚未同步导致的瞬时假不合规。
+            if terminal.timestamp is not None:
+                new_terminal_grace_minutes = await self._get_new_terminal_grace_minutes()
+                discovered_at = terminal.timestamp
+                if discovered_at.tzinfo is None:
+                    discovered_at = discovered_at.replace(tzinfo=UTC)
+                grace_cutoff = now - timedelta(minutes=new_terminal_grace_minutes)
+                if discovered_at >= grace_cutoff:
+                    age_seconds = int((now - discovered_at).total_seconds())
+                    remaining_seconds = int(
+                        (discovered_at + timedelta(minutes=new_terminal_grace_minutes) - now).total_seconds()
+                    )
+                    logger.info(
+                        f"[compliance-guard][new-terminal-grace] First-discovery "
+                        f"{ip_addr}/{mac_addr}: holding unknown — discovered "
+                        f"{age_seconds}s ago < grace {new_terminal_grace_minutes}min "
+                        f"(discovered_at={discovered_at.isoformat()}, "
+                        f"remaining_seconds={remaining_seconds})"
+                    )
+                    return {"status_changed": False, "new_compliance": terminal.compliance_status, "unblocked": False}
+
+            # 修复1：最小时间间隔守卫——距上次不合规确认计数不足一个独立周期时，
+            # 跳过本次累加，防止并发/相邻首检在同一周期内击穿确认阈值。
+            if terminal.compliance_checked_at is not None:
+                min_interval_seconds = await self._get_confirm_min_interval_seconds()
+                checked_at = terminal.compliance_checked_at
+                if checked_at.tzinfo is None:
+                    checked_at = checked_at.replace(tzinfo=UTC)
+                elapsed_seconds = int((now - checked_at).total_seconds())
+                if elapsed_seconds < min_interval_seconds:
+                    logger.info(
+                        f"[compliance-guard][min-interval] First-discovery "
+                        f"{ip_addr}/{mac_addr}: skipping non_compliant increment — "
+                        f"elapsed {elapsed_seconds}s < min_interval {min_interval_seconds}s "
+                        f"(last_checked_at={checked_at.isoformat()})"
+                    )
+                    return {"status_changed": False, "new_compliance": terminal.compliance_status, "unblocked": False}
+
             terminal.non_compliant_confirm_count = (terminal.non_compliant_confirm_count or 0) + 1
+            terminal.compliance_checked_at = now
             terminal.compliant_confirm_count = 0
             mac_norm = self._norm_mac_key(mac_addr)
             confirm_total = await self._mac_non_compliant_total(mac_norm)
             threshold = await self._get_confirm_threshold()
             if confirm_total < threshold:
                 logger.info(
-                    f"First-discovery {ip_addr}/{mac_addr}: non_compliant confirm "
-                    f"{confirm_total}/{threshold} (MAC {mac_norm}), holding "
-                    f"(not blocking yet)"
+                    f"[compliance-guard][confirm-hold] First-discovery {ip_addr}/{mac_addr}: "
+                    f"non_compliant confirm {confirm_total}/{threshold} (MAC {mac_norm}), "
+                    f"holding (not blocking yet); checked_at={now.isoformat()}"
                 )
                 return {"status_changed": False, "new_compliance": terminal.compliance_status, "unblocked": False}
-            logger.info(
-                f"First-discovery {ip_addr}/{mac_addr}: non_compliant confirmed "
-                f"{confirm_total}/{threshold} (MAC {mac_norm}), will block"
+            logger.warning(
+                f"[compliance-guard][confirm-block] First-discovery {ip_addr}/{mac_addr}: "
+                f"non_compliant confirmed {confirm_total}/{threshold} (MAC {mac_norm}), "
+                f"will block"
             )
             await self._reset_mac_non_compliant_counts(mac_norm)
             terminal.non_compliant_confirm_count = 0
@@ -1954,6 +1998,13 @@ class ComplianceService:
         terminal.compliance_status = new_compliance
         terminal.wl_match_type = new_wl_match_type
         terminal.non_compliant_type = non_compliant_type
+
+        # 最近转合规宽限期：仅在「状态真正发生转换」到合规/bypass 时刷新，
+        # 而不是每次确认合规/bypass 都刷新。否则长期合规的终端每个判定周期
+        # 都会刷新该标记，令 recalc 的「最近转合规宽限」守卫永久生效，
+        # 使真实不合规迟迟无法降级（漏封）。
+        if status_changed and new_compliance in ("compliant", "bypass"):
+            terminal.compliant_checked_at = datetime.now(UTC)
 
         if status_changed:
             if terminal.status == "blocked" and new_compliance in ("bypass", "compliant"):
@@ -2490,26 +2541,82 @@ class ComplianceService:
                                     downgrade_threshold = confirm_threshold
                                     if old_compliance == "compliant":
                                         downgrade_threshold = await self._get_compliant_downgrade_threshold()
-                                    terminal.non_compliant_confirm_count += 1
-                                    terminal.compliant_confirm_count = 0
-                                    mac_norm = self._norm_mac_key(mac_addr)
-                                    downgrade_total = await self._mac_non_compliant_total(mac_norm)
-                                    if downgrade_total >= downgrade_threshold:
-                                        new_compliance = "non_compliant"
-                                        await self._reset_mac_non_compliant_counts(mac_norm)
-                                        terminal.non_compliant_confirm_count = 0
-                                        logger.info(
-                                            f"Terminal[{batch_start + idx}] {ip_addr}/{mac_addr}: "
-                                            f"CONFIRMED downgrade {old_compliance} → non_compliant "
-                                            f"after {downgrade_total} checks (MAC {mac_norm})"
-                                        )
+
+                                    # ---- recalc 降级守卫（在累加 non_compliant_confirm_count 之前判定）----
+                                    # 同源根因：IPGuard 瞬时不命中（新 IP/MAC 未同步 / 记录 MAC 不符），
+                                    # 但发生在 recalculate_all_compliance 的降级分支。三层守卫分别是：
+                                    #   1) 新终端宽限（unknown 且在宽限内）
+                                    #   2) 最近转合规宽限（compliant 且 compliant_checked_at 在宽限内）
+                                    #   3) 最小间隔守卫（compliance_checked_at 距今 < min_interval）
+                                    guard_hold = False
+                                    guard_now = datetime.now(UTC)
+
+                                    # 守卫1：新终端宽限（unknown → non_compliant）
+                                    if old_compliance == "unknown" and terminal.timestamp is not None:
+                                        _ts = terminal.timestamp
+                                        if _ts.tzinfo is None:
+                                            _ts = _ts.replace(tzinfo=UTC)
+                                        _age_seconds = (guard_now - _ts).total_seconds()
+                                        _grace_seconds = await self._get_new_terminal_grace_minutes() * 60
+                                        if _age_seconds < _grace_seconds:
+                                            guard_hold = True
+                                            logger.info(
+                                                f"[compliance-guard][recalc-new-terminal-grace] {ip_addr}/{mac_addr}: "
+                                                f"hold {old_compliance}→non_compliant (age={_age_seconds:.0f}s < {_grace_seconds:.0f}s)"
+                                            )
+
+                                    # 守卫2：最近转合规宽限（compliant → non_compliant）
+                                    if not guard_hold and old_compliance == "compliant" and terminal.compliant_checked_at is not None:
+                                        _ct = terminal.compliant_checked_at
+                                        if _ct.tzinfo is None:
+                                            _ct = _ct.replace(tzinfo=UTC)
+                                        _since_compliant = (guard_now - _ct).total_seconds()
+                                        _compliant_grace = await self._get_compliant_grace_minutes() * 60
+                                        if _since_compliant < _compliant_grace:
+                                            guard_hold = True
+                                            logger.info(
+                                                f"[compliance-guard][recalc-compliant-grace] {ip_addr}/{mac_addr}: "
+                                                f"hold compliant→non_compliant (since_compliant={_since_compliant:.0f}s < {_compliant_grace:.0f}s)"
+                                            )
+
+                                    # 守卫3：最小间隔守卫
+                                    if not guard_hold and terminal.compliance_checked_at is not None:
+                                        _lct = terminal.compliance_checked_at
+                                        if _lct.tzinfo is None:
+                                            _lct = _lct.replace(tzinfo=UTC)
+                                        _since_last = (guard_now - _lct).total_seconds()
+                                        _min_interval = await self._get_confirm_min_interval_seconds()
+                                        if _since_last < _min_interval:
+                                            guard_hold = True
+                                            logger.info(
+                                                f"[compliance-guard][recalc-min-interval] {ip_addr}/{mac_addr}: "
+                                                f"hold downgrade (since_last={_since_last:.0f}s < {_min_interval}s)"
+                                            )
+
+                                    if guard_hold:
+                                        new_compliance = old_compliance  # hold，不累加
                                     else:
-                                        new_compliance = old_compliance  # hold
-                                        logger.info(
-                                            f"Terminal[{batch_start + idx}] {ip_addr}/{mac_addr}: "
-                                            f"non_compliant confirm hold ({downgrade_total}/{downgrade_threshold}, "
-                                            f"MAC {mac_norm})"
-                                        )
+                                        terminal.non_compliant_confirm_count += 1
+                                        terminal.compliant_confirm_count = 0
+                                        terminal.compliance_checked_at = guard_now
+                                        mac_norm = self._norm_mac_key(mac_addr)
+                                        downgrade_total = await self._mac_non_compliant_total(mac_norm)
+                                        if downgrade_total >= downgrade_threshold:
+                                            new_compliance = "non_compliant"
+                                            await self._reset_mac_non_compliant_counts(mac_norm)
+                                            terminal.non_compliant_confirm_count = 0
+                                            logger.info(
+                                                f"Terminal[{batch_start + idx}] {ip_addr}/{mac_addr}: "
+                                                f"CONFIRMED downgrade {old_compliance} → non_compliant "
+                                                f"after {downgrade_total} checks (MAC {mac_norm})"
+                                            )
+                                        else:
+                                            new_compliance = old_compliance  # hold
+                                            logger.info(
+                                                f"Terminal[{batch_start + idx}] {ip_addr}/{mac_addr}: "
+                                                f"non_compliant confirm hold ({downgrade_total}/{downgrade_threshold}, "
+                                                f"MAC {mac_norm})"
+                                            )
 
                     if old_compliance != new_compliance:
                         logger.info(
@@ -2738,6 +2845,50 @@ class ComplianceService:
             from app.services.config_service import ConfigService
             config_service = ConfigService(self.db)
             value = await config_service.get("compliance_ip_grace_minutes") or "10"
+            minutes = int(value)
+            return max(1, min(60, minutes))
+        except Exception:
+            return 10
+
+    async def _get_confirm_min_interval_seconds(self) -> int:
+        """获取不合规确认计数的最小时间间隔（秒），默认 300（30-3600）。
+
+        同周期内相邻的重复首检若间隔小于该值，将不会累加确认计数，
+        从而保证 compliance_confirm_threshold=N 表示「N 个独立周期」而非「N 次调用」。
+        """
+        try:
+            from app.services.config_service import ConfigService
+            config_service = ConfigService(self.db)
+            value = await config_service.get("compliance_confirm_min_interval_seconds") or "300"
+            return max(30, min(3600, int(value)))
+        except Exception:
+            return 300
+
+    async def _get_new_terminal_grace_minutes(self) -> int:
+        """获取新发现终端的合规宽限期（分钟），默认 10（1-60）。
+
+        新发现（unknown）终端在首次判定不合规时，若距离入库时间尚未超过该宽限期，
+        则保持 unknown 不累加、不封锁，等待 IPGuard 同步一轮后再判定。
+        """
+        try:
+            from app.services.config_service import ConfigService
+            config_service = ConfigService(self.db)
+            value = await config_service.get("compliance_new_terminal_grace_minutes") or "10"
+            minutes = int(value)
+            return max(1, min(60, minutes))
+        except Exception:
+            return 10
+
+    async def _get_compliant_grace_minutes(self) -> int:
+        """获取「最近转合规」宽限期（分钟），默认 10（1-60）。
+
+        终端最近一次被判定为合规/bypass 后，若在该宽限期内又出现 IPGuard 瞬时失配，
+        则保持合规不累加、不降级，等待 IPGuard 记录重新对上。
+        """
+        try:
+            from app.services.config_service import ConfigService
+            config_service = ConfigService(self.db)
+            value = await config_service.get("compliance_compliant_grace_minutes") or "10"
             minutes = int(value)
             return max(1, min(60, minutes))
         except Exception:

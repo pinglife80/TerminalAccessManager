@@ -311,11 +311,30 @@ async def scheduled_compliance_check():
                     for source in all_arp_sources:
                         try:
                             from sqlalchemy import select as sa_select
+                            from datetime import datetime as _dt, UTC as _utc, timedelta as _td
 
                             from app.models.terminal import Terminal
+                            from app.services.config_service import ConfigService
+
+                            # 修复3：收敛 unknown 首检——跳过最近一个确认周期内已经
+                            # 被首检过的终端，避免与 ARP 采集侧首检相邻运行时重复触发，
+                            # 同时保留「跨周期兜底重检」的能力（ARP 采集异常时，超过
+                            # 一个最小间隔后仍会在此处被重新首检）。
+                            config_service = ConfigService(db)
+                            min_interval_raw = await config_service.get("compliance_confirm_min_interval_seconds") or "300"
+                            try:
+                                min_interval = max(30, min(3600, int(min_interval_raw)))
+                            except (ValueError, TypeError):
+                                min_interval = 300
+                            first_check_cutoff = _dt.now(_utc) - _td(seconds=min_interval)
+
                             stmt = sa_select(Terminal).where(
                                 (Terminal.source_tag == source.tag) &
-                                (Terminal.compliance_status == "unknown")
+                                (Terminal.compliance_status == "unknown") &
+                                (
+                                    Terminal.compliance_checked_at.is_(None) |
+                                    (Terminal.compliance_checked_at < first_check_cutoff)
+                                )
                             )
                             r = await db.execute(stmt)
                             unchecked = r.scalars().all()

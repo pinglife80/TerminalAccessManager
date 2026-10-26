@@ -1,6 +1,6 @@
 # 更新日志
 
-> 文档版本：v3.23.0  更新日期：2026-10-23
+> 文档版本：v3.23.1  更新日期：2026-10-26
 
 本文件记录 TerminalAccessManager 的所有重要变更。
 
@@ -8,6 +8,21 @@
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ***
+
+## [3.23.1] - 2026-10-26
+
+### 修复
+
+- **合规终端被误封（先封锁后解封）**：首检（`apply_initial_compliance_result`）与重算（`recalculate_all_compliance`）两条降级路径均补齐守卫——新终端宽限期、最小时间间隔、最近转合规宽限期三层拦截，避免 IPGuard 瞬时失配/同步滞后导致实际合规终端被错误降级为 non_compliant 并封锁；新增 `compliant_checked_at` 仅状态真正转换时刷新，防止长期合规终端宽限期永久失效导致漏封
+  - 关联文件：`backend/app/services/compliance_service.py`、`backend/app/main.py`、`backend/app/models/terminal.py`、`backend/app/services/config_service.py`、`backend/app/schemas/system_config.py`、`backend/alembic/versions/041/042/043_*.py`
+
+- **scheduled 首检查询全表扫描退化**：unknown 终端大量积压时 `compliance_status='unknown'` 失去选择性导致 Seq Scan；新增 `ix_terminals_compliance_checked_at` 索引，planner 改用 BitmapOr 精准定位待重检行
+  - 关联文件：`backend/alembic/versions/043_terminal_compliance_idx.py`
+
+### 配置
+
+- 新增 `compliance_confirm_min_interval_seconds`、`compliance_new_terminal_grace_minutes`、`compliance_compliant_grace_minutes` 三项合规守卫配置（默认 300/10/10），系统设置→合规配置可调
+  - 关联文件：`frontend/src/pages/GeneralSettings.tsx`、`frontend/src/hooks/useTerminalData.ts`、`frontend/src/i18n/locales/{zh,en,ja}.ts`
 
 ## [3.23.0] - 2026-10-23
 
