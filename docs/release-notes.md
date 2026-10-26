@@ -1,12 +1,60 @@
 # 版本跟踪记录
 
-> 文档版本：v3.23.0 | 更新日期：2026-10-23
+> 文档版本：v3.23.1 | 更新日期：2026-10-26
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
 
 ---
+
+## [v3.23.1] - 2026-10-26
+
+### 修复合规终端误封（先封锁后解封）（Patch 版本）
+
+#### 背景
+
+合规终端被错误降级为 non_compliant 并被防火墙封锁，随后又因 IPGuard 数据同步后被判定合规而解封（先封锁后解封）。根因是 IPGuard 同步滞后/瞬时失配，叠加首检（`apply_initial_compliance_result`）与重算（`recalculate_all_compliance`）两条降级路径的确认逻辑缺少宽限期与最小时间间隔守卫；同时 scheduled 首检查询在 unknown 终端大量积压时因 `compliance_status='unknown'` 失去选择性而退化为全表顺序扫描。
+
+#### 主要变更
+
+| 变更项 | 说明 |
+|--------|------|
+| 合规降级三层守卫 | 首检与重算路径均补齐新终端宽限期、最小时间间隔、最近转合规宽限期守卫，避免 IPGuard 瞬时失配导致实际合规终端被误降级为 non_compliant |
+| 转合规状态标记 | 新增 `compliant_checked_at` 列，仅在状态真正转换为 compliant/bypass 时刷新，防止长期合规终端宽限期永久生效导致漏封 |
+| 首检查询索引 | 新增 `ix_terminals_compliance_checked_at`，planner 改用 BitmapOr 精准定位待重检行，消除 unknown 积压时 Seq Scan |
+| 合规守卫配置项 | 新增 3 项配置（最小间隔 300s、新终端宽限 10min、转合规宽限 10min），系统设置→合规配置可调 |
+
+#### 升级步骤（推荐：一键升级）
+
+```bash
+git checkout main
+git pull origin main
+./manage.sh upgrade
+```
+
+#### 升级注意事项
+
+- 本次含 3 个新增 Alembic 迁移（`041`/`042`/`043`），后端启动时 `init_db` 自动执行 `alembic upgrade head`，无需手动迁移。
+- 迁移为纯新增（2 列 + 1 索引），不修改既有表结构；不影响白名单、数据源、合规基线/作用域、用户/角色、系统配置等既有数据。
+- 修复仅作用于合规判定守卫逻辑，不改变防火墙封锁/解封 API 契约与速率限制行为。
+
+#### 文件变更清单
+
+| 文件 | 变更类型 | 说明 |
+|------|---------|------|
+| `backend/app/services/compliance_service.py` | 编辑 | 首检/recalc 三层守卫 + compliant_checked_at 转换刷新 |
+| `backend/app/main.py` | 编辑 | scheduled 首检收敛时间过滤 |
+| `backend/app/models/terminal.py` | 编辑 | 新增 compliant_checked_at 列 + compliance_checked_at 索引 |
+| `backend/app/services/config_service.py` | 编辑 | 新增 3 项合规配置 seed |
+| `backend/app/schemas/system_config.py` | 编辑 | ComplianceConfigResponse 新增字段 |
+| `backend/alembic/versions/041_terminal_compliance_check.py` | 新增 | 新增 compliance_checked_at 列 |
+| `backend/alembic/versions/042_terminal_compliant_check.py` | 新增 | 新增 compliant_checked_at 列 |
+| `backend/alembic/versions/043_terminal_compliance_idx.py` | 新增 | 新增 ix_terminals_compliance_checked_at 索引 |
+| `backend/tests/test_compliance_service.py` | 编辑 | 新增守卫/刷新/索引用例 |
+| `frontend/src/pages/GeneralSettings.tsx` | 编辑 | 3 项合规配置项入口 |
+| `frontend/src/hooks/useTerminalData.ts` | 编辑 | ComplianceConfig 类型扩展 |
+| `frontend/src/i18n/locales/{zh,en,ja}.ts` | 编辑 | 新配置项文案 |
 
 ## [v3.23.0] - 2026-10-23
 

@@ -12,6 +12,7 @@
 
 | 文档版本 | 更新日期 | 关联版本 | 更新内容 |
 |---------|---------|---------|---------|
+| v3.23.1 | 2026-10-26 | v3.23.1 | 修复合规终端误封（首检/recalc 三层守卫宽限+最小间隔、compliant_checked_at 仅状态转换刷新、新增 ix_terminals_compliance_checked_at 索引）；新增 3 项合规守卫配置 |
 | v3.23.0 | 2026-10-23 | v3.23.0 | 数据源删除异步化（202+task_id 后台执行 + delete-tasks 轮询端点 + 前端 useAsyncTask 轮询）；scheduler 登录限流误报修复（_config_get_admin_token 状态码分类、_scheduler_validate_task 离线优先） |
 | v3.22.0 | 2026-10-23 | v3.22.0 | 新增选择性数据清理命令（data clear，先解封防火墙再清运营数据/Redis，保留配置）；Sangfor AF 认证失效重认证修复（_is_auth_failure 统一识别 401/400 "request error"/code 1003·1012） |
 | v3.21.12 | 2026-10-22 | v3.21.12 | compliance scope ip_range/ip_range_any 区间匹配统一（_ip_in_range）；登录认证方式优先级（LDAP 优先、local 最低）；白名单/compliance scope 校验提示歧义修正与 scope 语义文案澄清 |
