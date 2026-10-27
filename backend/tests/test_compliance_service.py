@@ -1015,6 +1015,7 @@ class TestRecalculateCompliance:
              patch.object(service, "_is_ipguard_cache_stale", return_value=False), \
              patch.object(service, "_get_confirm_threshold", return_value=1), \
              patch.object(service, "_get_compliant_downgrade_threshold", return_value=1), \
+             patch.object(service, "_get_ipguard_absence_threshold", return_value=1), \
              patch.object(service, "_get_cooldown_minutes", return_value=10), \
              patch.object(service, "_get_bound_firewall_tags", return_value=["fw1"]), \
              patch.object(service, "_block_on_firewall_detailed", return_value=(True, True)), \
@@ -1713,6 +1714,7 @@ class TestTimeline10182183:
              patch.object(service, "_is_ipguard_cache_stale", return_value=False), \
              patch.object(service, "_get_confirm_threshold", return_value=1), \
              patch.object(service, "_get_compliant_downgrade_threshold", return_value=1), \
+             patch.object(service, "_get_ipguard_absence_threshold", return_value=1), \
              patch.object(service, "_get_cooldown_minutes", return_value=10), \
              patch.object(service, "_get_bound_firewall_tags", return_value=["hq"]), \
              patch.object(service, "_block_on_firewall_detailed", return_value=(True, True)), \
@@ -3446,7 +3448,7 @@ class TestRecalculateComplianceEdges:
              patch.object(service, "_is_ipguard_cache_stale", return_value=False), \
              patch.object(service, "_get_confirm_threshold", return_value=2), \
              patch.object(service, "_get_compliant_downgrade_threshold", return_value=6), \
-             patch.object(service, "_match_ipguard_in_memory", return_value=(False, False, False)), \
+             patch.object(service, "_match_ipguard_in_memory", return_value=(False, True, False)), \
              patch.object(service, "_apply_compliance_result", new=fake_apply):
             result = await service.recalculate_all_compliance()
 
@@ -3530,6 +3532,7 @@ class TestRecalculateComplianceEdges:
              patch.object(service, "_is_ipguard_cache_stale", return_value=False), \
              patch.object(service, "_get_confirm_threshold", return_value=2), \
              patch.object(service, "_get_compliant_downgrade_threshold", return_value=6), \
+             patch.object(service, "_get_ipguard_absence_threshold", return_value=24), \
              patch.object(service, "_get_compliant_grace_minutes", return_value=10), \
              patch.object(service, "_match_ipguard_in_memory", return_value=(False, False, False)), \
              patch.object(service, "_apply_compliance_result", new=fake_apply), \
@@ -3570,6 +3573,7 @@ class TestRecalculateComplianceEdges:
              patch.object(service, "_is_ipguard_cache_stale", return_value=False), \
              patch.object(service, "_get_confirm_threshold", return_value=2), \
              patch.object(service, "_get_compliant_downgrade_threshold", return_value=6), \
+             patch.object(service, "_get_ipguard_absence_threshold", return_value=24), \
              patch.object(service, "_get_confirm_min_interval_seconds", return_value=300), \
              patch.object(service, "_match_ipguard_in_memory", return_value=(False, False, False)), \
              patch.object(service, "_apply_compliance_result", new=fake_apply), \
@@ -3623,6 +3627,90 @@ class TestRecalculateComplianceEdges:
         assert applied["new_compliance"] == "non_compliant"
         assert terminal.compliance_checked_at is not None  # 累加时刷新了时间戳
         assert terminal.non_compliant_confirm_count == 0
+
+    @pytest.mark.asyncio
+    async def test_recalculate_compliant_total_absence_uses_extended_threshold(self, service, mock_db):
+        """曾合规终端 IP 与 MAC 同时从 IPGuard 缺失（total absence）时，改用更长的
+        IPGuard 缺失降级阈值，避免瞬时离线/DHCP 造成误封。"""
+        terminal = create_mock_terminal(
+            ip="10.8.27.68",
+            mac="68:DA:73:A6:D3:21",
+            status="unblocked",
+            compliance_status="compliant",
+        )
+        terminal.compliant_checked_at = datetime.now(UTC) - timedelta(minutes=5)
+        terminal.block_state = None
+        terminal.non_compliant_confirm_count = 0
+
+        mock_db.execute = scripted_execute([make_result(scalars_all=[terminal])])
+
+        ig_data = {"yp": [{"ip_address": "10.0.0.99", "mac_address": "11-22-33-44-55-66"}]}
+
+        applied = {}
+        absence_threshold = AsyncMock(return_value=24)
+
+        async def fake_apply(terminal, new_compliance, new_wl_match_type, wl_comments, ip_addr, mac_addr):
+            applied["new_compliance"] = new_compliance
+            return {"status_changed": False, "new_compliance": new_compliance, "unblocked": False}
+
+        with patch("app.services.compliance_service._acquire_compliance_lock", new=AsyncMock(return_value="tok")), \
+             patch("app.services.compliance_service._release_compliance_lock"), \
+             patch.object(service, "_load_whitelist_cache", return_value=[]), \
+             patch.object(service, "_load_all_ipguard_cache", return_value=ig_data), \
+             patch.object(service, "_load_scope_cache", return_value=[]), \
+             patch.object(service, "_is_ipguard_cache_stale", return_value=False), \
+             patch.object(service, "_get_confirm_threshold", return_value=2), \
+             patch.object(service, "_get_compliant_downgrade_threshold", return_value=6), \
+             patch.object(service, "_get_compliant_grace_minutes", return_value=10), \
+             patch.object(service, "_get_ipguard_absence_threshold", new=absence_threshold), \
+             patch.object(service, "_match_ipguard_in_memory", return_value=(False, False, False)), \
+             patch.object(service, "_apply_compliance_result", new=fake_apply):
+            result = await service.recalculate_all_compliance()
+
+        absence_threshold.assert_awaited_once()
+        assert applied["new_compliance"] == "compliant"
+
+    @pytest.mark.asyncio
+    async def test_recalculate_compliant_partial_absence_uses_normal_threshold(self, service, mock_db):
+        """仅 IP 或仅 MAC 缺失（非同时缺失）时，不应启用 IPGuard 缺失阈值，
+        仍沿用既有的 compliant 降级阈值。"""
+        terminal = create_mock_terminal(
+            ip="10.8.27.68",
+            mac="68:DA:73:A6:D3:21",
+            status="unblocked",
+            compliance_status="compliant",
+        )
+        terminal.compliant_checked_at = datetime.now(UTC) - timedelta(minutes=5)
+        terminal.block_state = None
+        terminal.non_compliant_confirm_count = 0
+
+        mock_db.execute = scripted_execute([make_result(scalars_all=[terminal])])
+
+        ig_data = {"yp": [{"ip_address": "10.8.27.68", "mac_address": "11-22-33-44-55-66"}]}
+
+        applied = {}
+        absence_threshold = AsyncMock(return_value=24)
+
+        async def fake_apply(terminal, new_compliance, new_wl_match_type, wl_comments, ip_addr, mac_addr):
+            applied["new_compliance"] = new_compliance
+            return {"status_changed": False, "new_compliance": new_compliance, "unblocked": False}
+
+        with patch("app.services.compliance_service._acquire_compliance_lock", new=AsyncMock(return_value="tok")), \
+             patch("app.services.compliance_service._release_compliance_lock"), \
+             patch.object(service, "_load_whitelist_cache", return_value=[]), \
+             patch.object(service, "_load_all_ipguard_cache", return_value=ig_data), \
+             patch.object(service, "_load_scope_cache", return_value=[]), \
+             patch.object(service, "_is_ipguard_cache_stale", return_value=False), \
+             patch.object(service, "_get_confirm_threshold", return_value=2), \
+             patch.object(service, "_get_compliant_downgrade_threshold", return_value=6), \
+             patch.object(service, "_get_compliant_grace_minutes", return_value=10), \
+             patch.object(service, "_get_ipguard_absence_threshold", new=absence_threshold), \
+             patch.object(service, "_match_ipguard_in_memory", return_value=(False, True, False)), \
+             patch.object(service, "_apply_compliance_result", new=fake_apply):
+            result = await service.recalculate_all_compliance()
+
+        absence_threshold.assert_not_awaited()
+        assert applied["new_compliance"] == "compliant"
 
     @pytest.mark.asyncio
     async def test_apply_result_does_not_refresh_compliant_checked_at_when_unchanged(self, service, mock_db):
