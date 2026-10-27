@@ -1,12 +1,55 @@
 # 版本跟踪记录
 
-> 文档版本：v3.23.1 | 更新日期：2026-10-26
+> 文档版本：v3.23.2 | 更新日期：2026-10-27
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
 
 ---
+
+## [v3.23.2] - 2026-10-27
+
+### 修复合规终端在 IPGuard 双缺失场景被误封（Patch 版本）
+
+#### 背景
+
+合规终端在 IPGuard 侧 IP 与 MAC 同时缺失（`total_absence`，多为瞬时离线/DHCP 续租）时，重算（`recalculate_all_compliance`）降级分支未区分「IPGuard 瞬时缺失」与「真实不合规」，统一沿用 `compliance_compliant_downgrade_threshold=6`，约 30 分钟即累积到阈值被降级为非合规并封锁。本次新增独立阈值以更长确认窗口承载该瞬时缺失场景，避免误封。
+
+#### 主要变更
+
+| 变更项 | 说明 |
+|--------|------|
+| IPGuard 双缺失独立阈值 | 新增 `compliance_ipguard_absence_threshold`（默认 18，clamp 2–200），仅对「曾合规 + IP/MAC 同时缺失 + 仍被 ARP 采集（未 offline）」场景生效 |
+| `total_absence` 识别 | recalc 降级分支识别 IP+MAC 同时缺失，复用 `_match_ipguard_in_memory` 三元组避免重复扫描 |
+| 配置项 seed + Schema | `config_service.py` 的 `DEFAULT_CONFIGS` / `get_compliance_config` 补键，`system_config.py` 新增字段 |
+| 前端入口 | 系统设置→合规配置新增该阈值输入项（含 i18n 三语文案） |
+
+#### 升级步骤（推荐：一键升级）
+
+```bash
+git checkout main
+git pull origin main
+./manage.sh upgrade
+```
+
+#### 升级注意事项
+
+- 本次无 Alembic 迁移；`ConfigService.seed_defaults()` 幂等（只插缺失 key），存量环境下次启动自动补插 `compliance_ipguard_absence_threshold`（默认 18）。
+- `_get_ipguard_absence_threshold` 运行时 clamp 至 2–200；`_validate_value` 对 int 仅做非负校验，前端保存 18 不会触发范围告警。
+- 修复仅作用于合规降级阈值选择逻辑，不改变防火墙封锁/解封 API 契约与速率限制行为。
+
+#### 文件变更清单
+
+| 文件 | 变更类型 | 说明 |
+|------|---------|------|
+| `backend/app/services/compliance_service.py` | 编辑 | 匹配块复用三元组 + total_absence 识别 + 新增 `_get_ipguard_absence_threshold` |
+| `backend/app/services/config_service.py` | 编辑 | DEFAULT_CONFIGS 新增 seed + `get_compliance_config` 补键 |
+| `backend/app/schemas/system_config.py` | 编辑 | ComplianceConfigResponse 新增字段 |
+| `backend/tests/test_compliance_service.py` | 编辑 | 新增 2 用例 + 修正 3 既有用例 mock |
+| `frontend/src/pages/GeneralSettings.tsx` | 编辑 | 合规配置新增阈值入口 |
+| `frontend/src/hooks/useTerminalData.ts` | 编辑 | ComplianceConfig 类型扩展 |
+| `frontend/src/i18n/locales/{zh,en,ja}.ts` | 编辑 | 新配置项文案 |
 
 ## [v3.23.1] - 2026-10-26
 

@@ -1,6 +1,6 @@
 # 更新日志
 
-> 文档版本：v3.23.1  更新日期：2026-10-26
+> 文档版本：v3.23.2  更新日期：2026-10-27
 
 本文件记录 TerminalAccessManager 的所有重要变更。
 
@@ -8,6 +8,18 @@
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ***
+
+## [3.23.2] - 2026-10-27
+
+### 修复
+
+- **合规终端在 IPGuard 双缺失场景被误封**：终端瞬时离线/DHCP 续租导致 IPGuard 侧 IP 与 MAC 同时缺失（`total_absence`）时，重算（`recalculate_all_compliance`）仍沿用 `compliance_compliant_downgrade_threshold=6` 快速降级并封锁。现新增独立阈值 `compliance_ipguard_absence_threshold`（默认 18，clamp 2–200），仅对「曾合规 + IP/MAC 同时缺失 + 仍被 ARP 采集（未 offline）」场景使用更长确认窗口，区分 IPGuard 瞬时缺失与真实不合规，避免误封
+  - 关联文件：`backend/app/services/compliance_service.py`、`backend/app/services/config_service.py`、`backend/app/schemas/system_config.py`、`backend/tests/test_compliance_service.py`
+
+### 配置
+
+- 新增 `compliance_ipguard_absence_threshold`（默认 18，范围 2–200），系统设置→合规配置可调
+  - 关联文件：`frontend/src/pages/GeneralSettings.tsx`、`frontend/src/hooks/useTerminalData.ts`、`frontend/src/i18n/locales/{zh,en,ja}.ts`
 
 ## [3.23.1] - 2026-10-26
 
