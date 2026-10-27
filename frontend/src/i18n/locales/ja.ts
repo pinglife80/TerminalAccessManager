@@ -1037,6 +1037,8 @@ const ja = {
     compliance_whitelist_miss_thresholdDesc: 'ホワイトリスト端末が連続未検出になった後に非準拠へ降格する回数',
     compliance_compliant_downgrade_threshold: '準拠降格閾値 (回)',
     compliance_compliant_downgrade_thresholdDesc: '準拠端末が非準拠を連続検出してから降格する回数（準拠端末は安定しているため、長めに設定可能）',
+    compliance_ipguard_absence_threshold: 'IPGuard 不在降格閾値 (回)',
+    compliance_ipguard_absence_thresholdDesc: '準拠端末の IP と MAC が同時に IPGuard から欠落した場合（一時的なオフライン/DHCP が大半）に降格するまでの連続検出回数。誤ブロック回避のため長めに設定可能',
     firewallReconciliation: 'ファイアウォール照合',
     firewallReconciliationDesc: 'ファイアウォールのブロック記録をデータベースと同期し、不整合状態を修正します',
     firewallReconciliationConfirm: 'ファイアウォール照合をトリガーしますか？これはすべてのデータソースのブロック状態を同期します。',
