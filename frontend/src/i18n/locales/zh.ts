@@ -1087,6 +1087,8 @@ const zh = {
     compliance_whitelist_miss_thresholdDesc: '白名单终端连续未命中多少次后才降级为非合规',
     compliance_compliant_downgrade_threshold: '合规降级阈值 (次)',
     compliance_compliant_downgrade_thresholdDesc: '合规终端连续检测到非合规多少次后才降级（合规终端较稳定，可设更长）',
+    compliance_ipguard_absence_threshold: 'IPGuard 缺失降级阈值 (次)',
+    compliance_ipguard_absence_thresholdDesc: '合规终端 IP 与 MAC 同时不在 IPGuard 时（多为瞬时离线/DHCP）连续检测多少次后才降级，可设更长以避免误封',
     firewallReconciliation: '防火墙对账',
     firewallReconciliationDesc: '同步防火墙封堵记录与数据库，修复不一致状态',
     firewallReconciliationConfirm: '确定要触发防火墙对账吗？此操作会同步所有数据源的封堵状态。',

@@ -1087,6 +1087,8 @@ const en = {
     compliance_whitelist_miss_thresholdDesc: 'Consecutive whitelist misses before downgrading to non-compliant',
     compliance_compliant_downgrade_threshold: 'Compliant Downgrade Threshold (times)',
     compliance_compliant_downgrade_thresholdDesc: 'Consecutive non-compliant detections before a compliant terminal downgrades (compliant terminals are stable, can be set longer)',
+    compliance_ipguard_absence_threshold: 'IPGuard Absence Downgrade Threshold (times)',
+    compliance_ipguard_absence_thresholdDesc: 'Consecutive IPGuard-absence detections (both IP and MAC missing, usually transient offline/DHCP) before a compliant terminal downgrades; set longer to avoid false blocks',
     firewallReconciliation: 'Firewall Reconciliation',
     firewallReconciliationDesc: 'Sync firewall blocked records with database, fix inconsistent states',
     firewallReconciliationConfirm: 'Are you sure you want to trigger firewall reconciliation? This will sync block status for all data sources.',

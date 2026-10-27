@@ -2437,12 +2437,17 @@ class ComplianceService:
                     wl_result = self._match_whitelist_in_memory(whitelist_data, ip_addr, mac_addr)
                     use_ip_only = self._check_terminal_in_arp_scope(scope_data, ip_addr, mac_addr)
                     use_or_match = self._check_terminal_in_or_scope(scope_data, ip_addr, mac_addr)
+                    # 一次匹配同时取得 ip_found/mac_found，供 OR 判定与
+                    # 「IP 与 MAC 同时缺失（total_absence）」识别复用，避免重复扫描。
+                    ig_exact, ig_ip_found, ig_mac_found = self._match_ipguard_in_memory(
+                        ipguard_data, ip_addr, mac_addr, ipguard_mac_prefixes
+                    )
                     if use_or_match:
-                        ig_match = self._match_ipguard_or_in_memory(ipguard_data, ip_addr, mac_addr)
+                        ig_match = ig_ip_found or ig_mac_found
                     elif use_ip_only:
                         ig_match = self._match_ipguard_ip_only_in_memory(ipguard_data, ip_addr)
                     else:
-                        ig_match, _, _ = self._match_ipguard_in_memory(ipguard_data, ip_addr, mac_addr, ipguard_mac_prefixes)
+                        ig_match = ig_exact
 
                     # Initialize compliant_confirm_count if not present (handles pre-migration records)
                     if not hasattr(terminal, 'compliant_confirm_count') or terminal.compliant_confirm_count is None:
@@ -2538,9 +2543,17 @@ class ComplianceService:
                                 if current_check_status == old_compliance:
                                     terminal.compliant_confirm_count = 0
                                 else:
+                                    # 「IP 与 MAC 同时缺失」= 终端整体从 IPGuard 消失（常见于
+                                    # 瞬时离线/DHCP 续租导致的数据源侧瞬时缺失），并非真实不合规。
+                                    total_absence = (not use_ip_only) and (not ig_ip_found) and (not ig_mac_found)
+
                                     downgrade_threshold = confirm_threshold
                                     if old_compliance == "compliant":
                                         downgrade_threshold = await self._get_compliant_downgrade_threshold()
+                                        # 曾合规终端 + IP/MAC 同时缺失 + 仍被 ARP 采集（未标记 offline）
+                                        # → 使用更长的独立阈值，避免瞬时离线/DHCP 造成误封。
+                                        if total_absence and terminal.block_state != "offline":
+                                            downgrade_threshold = await self._get_ipguard_absence_threshold()
 
                                     # ---- recalc 降级守卫（在累加 non_compliant_confirm_count 之前判定）----
                                     # 同源根因：IPGuard 瞬时不命中（新 IP/MAC 未同步 / 记录 MAC 不符），
@@ -2816,6 +2829,23 @@ class ComplianceService:
             return max(2, min(20, threshold))
         except Exception:
             return 6
+
+    async def _get_ipguard_absence_threshold(self) -> int:
+        """Get the downgrade threshold for a compliant terminal whose IP AND MAC
+        both vanished from IPGuard (total absence) while ARP still tracks it.
+
+        This pattern is overwhelmingly a transient offline/DHCP data-source gap
+        rather than genuine non-compliance, so it uses a much longer confirmation
+        window. Default is 18 (clamped 2-200).
+        """
+        try:
+            from app.services.config_service import ConfigService
+            config_service = ConfigService(self.db)
+            value = await config_service.get("compliance_ipguard_absence_threshold") or "18"
+            threshold = int(value)
+            return max(2, min(200, threshold))
+        except Exception:
+            return 18
 
     async def _get_ipguard_stale_threshold_minutes(self) -> int:
         """Get IPGuard cache stale threshold from system config (default 12min)."""
