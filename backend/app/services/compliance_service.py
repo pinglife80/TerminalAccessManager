@@ -745,6 +745,7 @@ class ComplianceService:
                     await emit_block_threshold_exceeded(block_threshold, blocked)
 
             terminal_list = [{"terminal_id": d.get("terminal_id"), "ip_address": d["ip_address"], "mac_address": d["mac_address"]} for d in details]
+            await self.db.commit()
             await self.log_action("system", "auto_block_terminal", "terminal", None, {
                 "message": f"Auto-blocked {blocked} non-compliant terminals from source '{arp_source_tag}'",
                 "source_tag": arp_source_tag,
@@ -755,7 +756,6 @@ class ComplianceService:
                 "terminals": terminal_list,
                 "total_terminals": len(terminal_list),
             }, ip_address="System")
-            await self.db.commit()
 
         return AutoBlockResult(
             total_non_compliant=len(non_compliant_entries),
@@ -1054,8 +1054,10 @@ class ComplianceService:
             for entry in successfully_unblocked_entries:
                 await emit_terminal_unblocked(entry.ip_address, entry.mac_address or "", "system")
 
-            # Audit log for auto-unblock (before commit so it's persisted in the same transaction)
+            # Audit log for auto-unblock summary, emitted after the business commit
+            # below so the audit entry never precedes the persisted state change.
             terminal_list = [{"terminal_id": d.get("terminal_id"), "ip_address": d["ip_address"], "mac_address": d["mac_address"]} for d in details]
+            await self.db.commit()
             await self.log_action("system", "auto_unblock_terminal", "terminal", None, {
                 "message": f"Auto-unblocked {unblocked} compliant terminals",
                 "unblocked": unblocked,
@@ -1063,7 +1065,6 @@ class ComplianceService:
                 "terminals": terminal_list,
                 "total_terminals": len(terminal_list),
             }, ip_address="System")
-            await self.db.commit()
 
         return AutoUnblockResult(
             total_auto_blocked=len(auto_blocked_entries),
@@ -1830,7 +1831,7 @@ class ComplianceService:
                     f"IP recently changed (ip_changed_at={terminal.ip_changed_at.isoformat()}), "
                     f"holding unknown in grace period ({grace_minutes}min)"
                 )
-                return {"status_changed": False, "new_compliance": terminal.compliance_status, "unblocked": False}
+                return {"status_changed": False, "new_compliance": terminal.compliance_status, "unblocked": False, "audit": None}
 
         if new_compliance == "non_compliant":
             now = datetime.now(UTC)
@@ -1856,7 +1857,7 @@ class ComplianceService:
                         f"(discovered_at={discovered_at.isoformat()}, "
                         f"remaining_seconds={remaining_seconds})"
                     )
-                    return {"status_changed": False, "new_compliance": terminal.compliance_status, "unblocked": False}
+                    return {"status_changed": False, "new_compliance": terminal.compliance_status, "unblocked": False, "audit": None}
 
             # 修复1：最小时间间隔守卫——距上次不合规确认计数不足一个独立周期时，
             # 跳过本次累加，防止并发/相邻首检在同一周期内击穿确认阈值。
@@ -1873,7 +1874,7 @@ class ComplianceService:
                         f"elapsed {elapsed_seconds}s < min_interval {min_interval_seconds}s "
                         f"(last_checked_at={checked_at.isoformat()})"
                     )
-                    return {"status_changed": False, "new_compliance": terminal.compliance_status, "unblocked": False}
+                    return {"status_changed": False, "new_compliance": terminal.compliance_status, "unblocked": False, "audit": None}
 
             terminal.non_compliant_confirm_count = (terminal.non_compliant_confirm_count or 0) + 1
             terminal.compliance_checked_at = now
@@ -1887,7 +1888,7 @@ class ComplianceService:
                     f"non_compliant confirm {confirm_total}/{threshold} (MAC {mac_norm}), "
                     f"holding (not blocking yet); checked_at={now.isoformat()}"
                 )
-                return {"status_changed": False, "new_compliance": terminal.compliance_status, "unblocked": False}
+                return {"status_changed": False, "new_compliance": terminal.compliance_status, "unblocked": False, "audit": None}
             logger.warning(
                 f"[compliance-guard][confirm-block] First-discovery {ip_addr}/{mac_addr}: "
                 f"non_compliant confirmed {confirm_total}/{threshold} (MAC {mac_norm}), "
@@ -1926,7 +1927,8 @@ class ComplianceService:
             mac_addr: MAC address string
         
         Returns:
-            dict: {"status_changed": bool, "new_compliance": str, "unblocked": bool}
+            dict: {"status_changed": bool, "new_compliance": str, "unblocked": bool,
+                   "audit": dict | None}
         """
         status_changed = terminal.compliance_status != new_compliance
         unblocked = False
@@ -1992,7 +1994,7 @@ class ComplianceService:
 
         if _cooldown_skip_downgrade:
             # Keep original compliance status to avoid intermediate state
-            return {"status_changed": False, "new_compliance": old_compliance, "unblocked": False}
+            return {"status_changed": False, "new_compliance": old_compliance, "unblocked": False, "audit": None}
 
         # Normal processing
         if new_compliance == "bypass":
@@ -2346,22 +2348,31 @@ class ComplianceService:
         if terminal.status != "blocked":
             terminal.firewall_tag = None
 
-        # Deferred net-change audit & event: log only the ACTUAL (initial → final)
+        # Deferred net-change audit & event: compute only the ACTUAL (initial → final)
         # compliance transition. A failed block that rolls back to old_compliance
-        # must NOT produce a phantom downgrade audit entry.
+        # must NOT produce a phantom downgrade audit entry. The audit payload is
+        # returned (not logged here) so callers can emit it AFTER their own commit,
+        # keeping audit from preceding the business state change on disk.
         final_compliance = terminal.compliance_status
         final_changed = final_compliance != old_compliance
+        audit = None
         if final_changed:
-            await self.log_action("system", "compliance_status_changed", "terminal",
-                                  str(terminal.id), {
-                                      "message": f"Terminal compliance status changed from {old_compliance} to {final_compliance}",
-                                      "terminal_id": terminal.id,
-                                      "ip_address": ip_addr,
-                                      "mac_address": mac_addr,
-                                      "old_compliance": old_compliance,
-                                      "new_compliance": final_compliance,
-                                      "wl_match_type": terminal.wl_match_type,
-                                  }, ip_address="System")
+            audit = {
+                "username": "system",
+                "action": "compliance_status_changed",
+                "resource_type": "terminal",
+                "resource_id": str(terminal.id),
+                "details": {
+                    "message": f"Terminal compliance status changed from {old_compliance} to {final_compliance}",
+                    "terminal_id": terminal.id,
+                    "ip_address": ip_addr,
+                    "mac_address": mac_addr,
+                    "old_compliance": old_compliance,
+                    "new_compliance": final_compliance,
+                    "wl_match_type": terminal.wl_match_type,
+                },
+                "ip_address": "System",
+            }
 
             if final_compliance == "compliant":
                 from app.services.event_emitter import emit_terminal_compliant
@@ -2370,7 +2381,7 @@ class ComplianceService:
                 from app.services.event_emitter import emit_terminal_non_compliant
                 await emit_terminal_non_compliant(ip_addr, mac_addr, ["Non-compliant terminal detected"])
 
-        return {"status_changed": final_changed, "new_compliance": final_compliance, "unblocked": unblocked}
+        return {"status_changed": final_changed, "new_compliance": final_compliance, "unblocked": unblocked, "audit": audit}
 
     async def recalculate_all_compliance(self) -> dict:
         """Recalculate compliance status for all existing terminals.
@@ -2449,6 +2460,8 @@ class ComplianceService:
                 total_batches = (len(terminals) + BATCH_SIZE - 1) // BATCH_SIZE
 
                 logger.debug(f"Processing batch {batch_num}/{total_batches} ({len(batch_terminals)} terminals)")
+
+                pending_audits: list[dict] = []
 
                 for idx, terminal in enumerate(batch_terminals):
                     # Skip stale offline records (old IP/MAC no longer seen) so they
@@ -2681,6 +2694,9 @@ class ComplianceService:
                         terminal, new_compliance, new_wl_match_type, wl_comments, ip_addr, mac_addr
                     )
 
+                    if result.get("audit"):
+                        pending_audits.append(result["audit"])
+
                     if result["status_changed"]:
                         if new_compliance == "bypass":
                             bypass_count += 1
@@ -2696,6 +2712,12 @@ class ComplianceService:
 
                 await self.db.flush()
                 await self.db.commit()
+                for audit in pending_audits:
+                    await self.log_action(
+                        audit["username"], audit["action"], audit["resource_type"],
+                        audit["resource_id"], audit["details"],
+                        ip_address=audit.get("ip_address"),
+                    )
                 logger.debug(f"Batch {batch_num}/{total_batches} committed")
 
             end_time = datetime.now(UTC)
@@ -3046,6 +3068,7 @@ class ComplianceService:
         terminal.non_compliant_confirm_count = 0
 
         unblocked = False
+        audit = None
 
         # If terminal is currently blocked, unblock immediately (bypass cooldown)
         if old_status == "blocked":
@@ -3116,10 +3139,14 @@ class ComplianceService:
                 terminal.firewall_tag = None
                 unblocked = True
 
-            # Audit log
-            await self.log_action(
-                username, "manual_whitelist_unblock", "terminal", str(terminal.id),
-                {
+            # Deferred audit: returned to the caller, which emits it AFTER its own
+            # commit so the audit entry never precedes the persisted change.
+            audit = {
+                "username": username,
+                "action": "manual_whitelist_unblock",
+                "resource_type": "terminal",
+                "resource_id": str(terminal.id),
+                "details": {
                     "message": f"Manual whitelist applied: {ip_addr}/{mac_addr} - "
                                f"unblocked on {len(successfully_unblocked)} firewall(s)",
                     "ip_address": ip_addr,
@@ -3128,8 +3155,9 @@ class ComplianceService:
                     "old_status": old_status,
                     "unblocked_entries": len(successfully_unblocked),
                     "errors": unblock_errors,
-                }
-            )
+                },
+                "ip_address": None,
+            }
 
             if unblock_errors:
                 logger.warning(
@@ -3146,5 +3174,6 @@ class ComplianceService:
             "old_status": old_status,
             "new_status": terminal.status,
             "unblocked": unblocked,
+            "audit": audit,
         }
 

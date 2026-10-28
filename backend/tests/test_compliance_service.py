@@ -1199,7 +1199,12 @@ class TestApplyResultTransitions:
                 "192.168.1.100", "AA:BB:CC:DD:EE:FF",
             )
 
-        assert result == {"status_changed": True, "new_compliance": "bypass", "unblocked": False}
+        assert result["status_changed"] is True
+        assert result["new_compliance"] == "bypass"
+        assert result["unblocked"] is False
+        assert result["audit"] is not None
+        assert result["audit"]["action"] == "compliance_status_changed"
+        assert result["audit"]["resource_id"] == str(terminal.id)
         assert terminal.compliance_status == "bypass"
         assert terminal.wl_match_type == "mac"
         assert terminal.comments == "Whitelist: test device"
@@ -1223,7 +1228,12 @@ class TestApplyResultTransitions:
                 "192.168.1.100", "AA:BB:CC:DD:EE:FF",
             )
 
-        assert result == {"status_changed": True, "new_compliance": "compliant", "unblocked": False}
+        assert result["status_changed"] is True
+        assert result["new_compliance"] == "compliant"
+        assert result["unblocked"] is False
+        assert result["audit"] is not None
+        assert result["audit"]["action"] == "compliance_status_changed"
+        assert result["audit"]["resource_id"] == str(terminal.id)
         assert terminal.compliance_status == "compliant"
         assert agg.emit_compliant.call_count == 1
         agg.emit_compliant.assert_awaited_once_with("192.168.1.100", "AA:BB:CC:DD:EE:FF")
@@ -1340,7 +1350,7 @@ class TestApplyResultCooldownDowngrade:
                 "192.168.1.100", "AA:BB:CC:DD:EE:FF",
             )
 
-        assert result == {"status_changed": False, "new_compliance": "compliant", "unblocked": False}
+        assert result == {"status_changed": False, "new_compliance": "compliant", "unblocked": False, "audit": None}
         assert terminal.compliance_status == "compliant"
         assert created_blacklists(mock_db) == []
 
@@ -1620,7 +1630,7 @@ class TestTimeline10182183:
         assert terminal.compliance_status == "compliant"
         assert terminal.status == "unblocked"
         assert created_blacklists(mock_db) == []
-        assert result == {"status_changed": False, "new_compliance": "compliant", "unblocked": False}
+        assert result == {"status_changed": False, "new_compliance": "compliant", "unblocked": False, "audit": None}
 
         # 2) no phantom compliant -> non_compliant audit entry
         assert self._compliance_changed_calls(log_action_mock) == []
@@ -1647,17 +1657,17 @@ class TestTimeline10182183:
             make_result(one=None),      # blacklist upsert (idempotency) -> None
         ]
         with apply_result_mocks(service, mock_db, results, bound_fw_tags=["hq"]) as agg:
-            log_action_mock = service.log_action
             result = await service._apply_compliance_result(
                 terminal, "non_compliant", None, None, self.IP, self.NEW_MAC,
             )
 
         assert result["status_changed"] is True
 
-        changed = self._compliance_changed_calls(log_action_mock)
-        assert len(changed) == 1
-        assert changed[0].args[3] == str(terminal.id)
-        assert changed[0].kwargs["ip_address"] == "System"
+        audit = result["audit"]
+        assert audit is not None
+        assert audit["action"] == "compliance_status_changed"
+        assert audit["resource_id"] == str(terminal.id)
+        assert audit["ip_address"] == "System"
 
         agg.emit_non_compliant.assert_awaited_once()
 
@@ -1821,7 +1831,7 @@ class TestApplyResultStatusUnchanged:
                 "192.168.1.100", "AA:BB:CC:DD:EE:FF",
             )
 
-        assert result == {"status_changed": False, "new_compliance": "compliant", "unblocked": False}
+        assert result == {"status_changed": False, "new_compliance": "compliant", "unblocked": False, "audit": None}
         assert terminal.firewall_tag is None
 
 

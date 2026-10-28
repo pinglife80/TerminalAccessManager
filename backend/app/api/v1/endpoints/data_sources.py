@@ -637,11 +637,12 @@ async def compliance_check(
                 if key not in decision_by_terminal:
                     decision_by_terminal[key] = item
 
+    pending_audits = []
     for entry in entries:
         item = decision_by_terminal.get((entry.ip_address, entry.mac_address))
         if not item:
             continue
-        await compliance_service.apply_initial_compliance_result(
+        apply_result = await compliance_service.apply_initial_compliance_result(
             entry,
             item.get("compliance_status"),
             item.get("wl_match_type"),
@@ -649,8 +650,16 @@ async def compliance_check(
             entry.ip_address or "",
             entry.mac_address or "",
         )
+        if apply_result and apply_result.get("audit"):
+            pending_audits.append(apply_result["audit"])
 
     await db.commit()
+    for audit in pending_audits:
+        await compliance_service.log_action(
+            audit["username"], audit["action"], audit["resource_type"],
+            audit["resource_id"], audit["details"],
+            ip_address=audit.get("ip_address"),
+        )
 
     return check_result
 

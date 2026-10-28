@@ -2026,10 +2026,11 @@ async def _scheduler_trigger(args):
                         }
 
                 # Apply results
+                pending_audits = []
                 for entry in unchecked:
                     res = result_lookup.get(entry.ip_address)
                     if res:
-                        await service._apply_compliance_result(
+                        apply_result = await service._apply_compliance_result(
                             entry,
                             res["compliance_status"],
                             res["wl_match_type"],
@@ -2037,8 +2038,16 @@ async def _scheduler_trigger(args):
                             entry.ip_address or "",
                             entry.mac_address or "",
                         )
+                        if apply_result and apply_result.get("audit"):
+                            pending_audits.append(apply_result["audit"])
 
                 await db.commit()
+                for audit in pending_audits:
+                    await service.log_action(
+                        audit["username"], audit["action"], audit["resource_type"],
+                        audit["resource_id"], audit["details"],
+                        ip_address=audit.get("ip_address"),
+                    )
 
                 # Aggregate
                 total_checked_all += (result.compliant + result.bypass + result.non_compliant + result.unknown)

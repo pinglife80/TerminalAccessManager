@@ -427,11 +427,12 @@ class ArpCollectorService:
 
                 # Apply compliance results for newly discovered (unknown) terminals,
                 # with confirm-threshold protection against immediate false blocks.
+                pending_compliance_audits = []
                 for entry in unchecked_entries:
                     mac_key = entry.mac_address_normalized or ""
                     result = result_lookup.get((mac_key, entry.ip_address or ""))
                     if result:
-                        await compliance_service.apply_initial_compliance_result(
+                        apply_result = await compliance_service.apply_initial_compliance_result(
                             entry,
                             result["compliance_status"],
                             result["wl_match_type"],
@@ -439,8 +440,17 @@ class ArpCollectorService:
                             entry.ip_address or "",
                             entry.mac_address or "",
                         )
+                        if apply_result and apply_result.get("audit"):
+                            pending_compliance_audits.append(apply_result["audit"])
 
                 await self.db.commit()
+
+                for audit in pending_compliance_audits:
+                    await compliance_service.log_action(
+                        audit["username"], audit["action"], audit["resource_type"],
+                        audit["resource_id"], audit["details"],
+                        ip_address=audit.get("ip_address"),
+                    )
 
                 # Audit first-discovery event for terminals newly created this
                 # cycle (only "unknown 态建立" once; subsequent collections do not
@@ -489,6 +499,7 @@ class ArpCollectorService:
 
             now_ts = now_utc().timestamp()
             newly_offline = 0
+            pending_state_audits = []
 
             for terminal in all_terminals:
                 # Check if the (MAC, IP) pair was seen in this collection.
@@ -501,16 +512,22 @@ class ArpCollectorService:
                             f"ARP online: {terminal.ip_address}/{terminal.mac_address} "
                             f"cleared offline mark"
                         )
-                        await audit_svc.log_action("system", "terminal_online", "terminal",
-                                                   str(terminal.id), {
-                                                       "message": f"Terminal back online: {terminal.ip_address}/{terminal.mac_address}",
-                                                       "terminal_id": terminal.id,
-                                                       "ip_address": terminal.ip_address,
-                                                       "mac_address": terminal.mac_address,
-                                                       "old_block_state": "offline",
-                                                       "new_block_state": None,
-                                                       "reason": "seen_in_collection",
-                                                   }, ip_address="System")
+                        pending_state_audits.append({
+                            "username": "system",
+                            "action": "terminal_online",
+                            "resource_type": "terminal",
+                            "resource_id": str(terminal.id),
+                            "details": {
+                                "message": f"Terminal back online: {terminal.ip_address}/{terminal.mac_address}",
+                                "terminal_id": terminal.id,
+                                "ip_address": terminal.ip_address,
+                                "mac_address": terminal.mac_address,
+                                "old_block_state": "offline",
+                                "new_block_state": None,
+                                "reason": "seen_in_collection",
+                            },
+                            "ip_address": "System",
+                        })
                     continue
 
                 if not terminal.updated_at:
@@ -529,16 +546,22 @@ class ArpCollectorService:
                             f"stale {(now_ts - last_seen):.0f}s (threshold {offline_threshold_seconds}s), "
                             f"marked offline"
                         )
-                        await audit_svc.log_action("system", "terminal_offline", "terminal",
-                                                   str(terminal.id), {
-                                                       "message": f"Terminal went offline: {terminal.ip_address}/{terminal.mac_address}",
-                                                       "terminal_id": terminal.id,
-                                                       "ip_address": terminal.ip_address,
-                                                       "mac_address": terminal.mac_address,
-                                                       "old_block_state": None,
-                                                       "new_block_state": "offline",
-                                                       "reason": "stale_not_seen",
-                                                   }, ip_address="System")
+                        pending_state_audits.append({
+                            "username": "system",
+                            "action": "terminal_offline",
+                            "resource_type": "terminal",
+                            "resource_id": str(terminal.id),
+                            "details": {
+                                "message": f"Terminal went offline: {terminal.ip_address}/{terminal.mac_address}",
+                                "terminal_id": terminal.id,
+                                "ip_address": terminal.ip_address,
+                                "mac_address": terminal.mac_address,
+                                "old_block_state": None,
+                                "new_block_state": "offline",
+                                "reason": "stale_not_seen",
+                            },
+                            "ip_address": "System",
+                        })
                     try:
                         await emit_terminal_offline(
                             ip_address=terminal.ip_address,
@@ -552,6 +575,17 @@ class ArpCollectorService:
                     f"Offline detection for '{source_tag}': "
                     f"{newly_offline} terminals offline"
                 )
+
+            # Persist the online/offline block_state changes before emitting their
+            # audit entries, so the audit never precedes the committed state.
+            if pending_state_audits:
+                await self.db.commit()
+                for audit in pending_state_audits:
+                    await audit_svc.log_action(
+                        audit["username"], audit["action"], audit["resource_type"],
+                        audit["resource_id"], audit["details"],
+                        ip_address=audit.get("ip_address"),
+                    )
 
         except Exception as e:
             logger.error(f"Offline detection failed for '{source_tag}': {str(e)}")

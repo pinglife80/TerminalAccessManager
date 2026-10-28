@@ -676,6 +676,7 @@ class TerminalService:
         the original pattern is stored as ip_pattern with a pattern_type field.
         """
         try:
+            pending_audits = []
             normalized_mac = None
 
             if mac_address:
@@ -745,7 +746,14 @@ class TerminalService:
                     "new_comments": comments,
                 }
                 resource_id = str(existing.id)
-                await self.log_action(username, "whitelist_update", "whitelist", resource_id, log_details)
+                pending_audits.append({
+                    "username": username,
+                    "action": "whitelist_update",
+                    "resource_type": "whitelist",
+                    "resource_id": resource_id,
+                    "details": log_details,
+                    "ip_address": None,
+                })
             else:
                 whitelist_entry = Whitelist(
                     mac_address=normalized_mac,
@@ -765,7 +773,14 @@ class TerminalService:
                     "comments": comments,
                 }
                 resource_id = normalized_mac or ip_pattern
-                await self.log_action(username, "whitelist_create", "whitelist", resource_id, log_details)
+                pending_audits.append({
+                    "username": username,
+                    "action": "whitelist_create",
+                    "resource_type": "whitelist",
+                    "resource_id": resource_id,
+                    "details": log_details,
+                    "ip_address": None,
+                })
 
             # After creating/updating the whitelist entry: apply it immediately to
             # every terminal whose identity matches the entry's semantics.
@@ -806,6 +821,8 @@ class TerminalService:
                         wl_match_type=wl_match_type,
                         username=username,
                     )
+                    if apply_result.get("audit"):
+                        pending_audits.append(apply_result["audit"])
                     logger.info(
                         f"Manual whitelist applied immediately ({wl_match_type}) for "
                         f"{terminal.ip_address or ''}/{terminal.mac_address or ''}: {apply_result}"
@@ -821,6 +838,13 @@ class TerminalService:
                 logger.info(f"Whitelist add (IP pattern) triggered full compliance recalculation: {recalc_result}")
 
             await self.db.commit()
+
+            for audit in pending_audits:
+                await self.log_action(
+                    audit["username"], audit["action"], audit["resource_type"],
+                    audit["resource_id"], audit["details"],
+                    ip_address=audit.get("ip_address"),
+                )
 
             from app.services.event_emitter import emit_whitelist_changed
             await emit_whitelist_changed(
@@ -1804,6 +1828,7 @@ class TerminalService:
             entry.last_operation_error = str(e)
             entry.last_operation_at = datetime.now(UTC)
             entry.retry_count = (entry.retry_count or 0) + 1
+            await self.db.commit()
             await self.log_action(
                 username,
                 "firewall_unblock",
@@ -1819,7 +1844,6 @@ class TerminalService:
                 ip_address=ip_address,
                 resource_name=ip_address,
             )
-            await self.db.commit()
             return {"success": False, "error": str(e)}
 
         if not success:
@@ -1829,6 +1853,7 @@ class TerminalService:
             entry.last_operation_error = error_msg
             entry.last_operation_at = datetime.now(UTC)
             entry.retry_count = (entry.retry_count or 0) + 1
+            await self.db.commit()
             await self.log_action(
                 username,
                 "firewall_unblock",
@@ -1844,7 +1869,6 @@ class TerminalService:
                 ip_address=ip_address,
                 resource_name=ip_address,
             )
-            await self.db.commit()
             return {"success": False, "error": error_msg}
 
         entry.auto_unblocked = True
@@ -1900,9 +1924,9 @@ class TerminalService:
                 terminal.firewall_tag = None
                 terminal.block_state = None
 
-        # Audit before commit so it is written in the same transaction as the
-        # entry state change (otherwise a later get_db commit failure would
-        # leave a successful unblock with no audit record).
+        # Audit log for the successful unblock, emitted after the entry state
+        # commit so it never precedes the persisted change.
+        await self.db.commit()
         await self.log_action(
             username,
             "firewall_unblock",
@@ -1917,8 +1941,6 @@ class TerminalService:
             ip_address=ip_address,
             resource_name=ip_address,
         )
-
-        await self.db.commit()
 
         from app.services.event_emitter import emit_terminal_unblocked
         await emit_terminal_unblocked(
