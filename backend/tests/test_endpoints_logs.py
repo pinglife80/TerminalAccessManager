@@ -72,6 +72,32 @@ class TestSearchAuditLogs:
         assert data["items"][0]["username"] == "alice"
 
     @pytest.mark.asyncio
+    async def test_filter_by_resource_id(self, api_db, api_client):
+        await _seed(
+            api_db,
+            _make_log(action="terminal_discovered", resource_type="terminal", resource_id="5"),
+            _make_log(action="terminal_discovered", resource_type="terminal", resource_id="6"),
+        )
+        resp = await api_client.get("/api/v1/logs/search?resource_type=terminal&resource_id=5")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] == 1
+        assert data["items"][0]["resource_id"] == "5"
+
+    @pytest.mark.asyncio
+    async def test_filter_by_resource_type(self, api_db, api_client):
+        await _seed(
+            api_db,
+            _make_log(action="terminal_offline", resource_type="terminal", resource_id="1"),
+            _make_log(action="login", resource_type="system", resource_id=None),
+        )
+        resp = await api_client.get("/api/v1/logs/search?resource_type=terminal")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] == 1
+        assert data["items"][0]["resource_type"] == "terminal"
+
+    @pytest.mark.asyncio
     async def test_keyset_pagination_cursor(self, api_db, api_client):
         logs = [
             _make_log(
@@ -112,3 +138,16 @@ class TestExportAuditLogs:
         assert "Username" in body
         assert "alice" in body
         assert "10.1.1.1" in body
+
+    @pytest.mark.asyncio
+    async def test_export_filter_by_resource_id(self, api_db, api_client):
+        await _seed(
+            api_db,
+            _make_log(username="system", action="terminal_offline", resource_type="terminal", resource_id="7"),
+            _make_log(username="admin", action="login", resource_type="system", resource_id=None),
+        )
+        resp = await api_client.get("/api/v1/logs/export?resource_type=terminal&resource_id=7")
+        assert resp.status_code == 200
+        body = resp.text
+        assert "terminal_offline" in body
+        assert "login" not in body

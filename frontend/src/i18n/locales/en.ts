@@ -503,6 +503,7 @@ const en = {
     resourceId: 'Resource ID',
     noDetailsAvailable: 'No details available',
     searchByUserActionIp: 'Search by user, action, or IP...',
+    filterByTerminalId: 'Filter by terminal ID',
     failedToExportLogs: 'Failed to export logs',
     categories: {
       all: 'All Categories',
@@ -530,6 +531,9 @@ const en = {
       recalculate_compliance: 'Recalculate Compliance',
       auto_block_terminal: 'Auto Block Terminal',
       auto_unblock_terminal: 'Auto Unblock Terminal',
+      terminal_discovered: 'Terminal Discovered',
+      terminal_offline: 'Terminal Offline',
+      terminal_online: 'Terminal Online',
       create_scope: 'Create Compliance Scope',
       update_scope: 'Update Compliance Scope',
       delete_scope: 'Delete Compliance Scope',

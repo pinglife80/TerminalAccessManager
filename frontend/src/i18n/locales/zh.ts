@@ -503,6 +503,7 @@ const zh = {
     resourceId: '资源 ID',
     noDetailsAvailable: '暂无详情',
     searchByUserActionIp: '搜索用户、操作或 IP...',
+    filterByTerminalId: '按终端 ID 过滤',
     failedToExportLogs: '导出日志失败',
     categories: {
       all: '全部分类',
@@ -530,6 +531,9 @@ const zh = {
       recalculate_compliance: '合规重新计算',
       auto_block_terminal: '自动封禁终端',
       auto_unblock_terminal: '自动解封终端',
+      terminal_discovered: '终端首次发现',
+      terminal_offline: '终端离线',
+      terminal_online: '终端上线',
       create_scope: '创建合规作用域',
       update_scope: '更新合规作用域',
       delete_scope: '删除合规作用域',

@@ -2190,6 +2190,11 @@ class TerminalService:
         if actions:
             conditions.append(AuditLog.action.in_(actions))
 
+        if query.resource_type:
+            conditions.append(AuditLog.resource_type == query.resource_type)
+        if query.resource_id:
+            conditions.append(AuditLog.resource_id == query.resource_id)
+
         # Keyword search across IP, username, action, and details
         if query.search:
             conditions.append(
@@ -2257,6 +2262,11 @@ class TerminalService:
         if actions:
             conditions.append(AuditLog.action.in_(actions))
 
+        if query.resource_type:
+            conditions.append(AuditLog.resource_type == query.resource_type)
+        if query.resource_id:
+            conditions.append(AuditLog.resource_id == query.resource_id)
+
         # Keyword search across IP, username, action, and details
         if query.search:
             conditions.append(
@@ -2296,6 +2306,11 @@ class TerminalService:
         actions = _parse_actions(query.action)
         if actions:
             conditions.append(AuditLog.action.in_(actions))
+
+        if query.resource_type:
+            conditions.append(AuditLog.resource_type == query.resource_type)
+        if query.resource_id:
+            conditions.append(AuditLog.resource_id == query.resource_id)
 
         if query.search:
             conditions.append(

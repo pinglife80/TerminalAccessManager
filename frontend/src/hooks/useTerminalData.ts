@@ -278,6 +278,8 @@ export const useBlacklistCheck = (params: BlacklistCheckParams) => {
 export interface AuditLogSearchParams {
   username?: string;
   action?: string;
+  resource_type?: string;
+  resource_id?: string;
   search?: string;
   start_date?: string;
   end_date?: string;

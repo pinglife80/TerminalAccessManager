@@ -27,7 +27,7 @@ const ACTION_CATEGORIES = [
   {
     key: 'compliance',
     labelKey: 'auditLogs.categories.compliance',
-    actions: ['compliance_status_changed', 'recalculate_compliance', 'auto_block_terminal', 'auto_unblock_terminal', 'create_scope', 'update_scope', 'delete_scope', 'toggle_scope'],
+    actions: ['compliance_status_changed', 'recalculate_compliance', 'auto_block_terminal', 'auto_unblock_terminal', 'terminal_discovered', 'terminal_offline', 'terminal_online', 'create_scope', 'update_scope', 'delete_scope', 'toggle_scope'],
   },
   {
     key: 'firewall',
@@ -94,6 +94,9 @@ const actionLabelKeys: Record<string, string> = {
   recalculate_compliance: 'auditLogs.actionLabels.recalculate_compliance',
   auto_block_terminal: 'auditLogs.actionLabels.auto_block_terminal',
   auto_unblock_terminal: 'auditLogs.actionLabels.auto_unblock_terminal',
+  terminal_discovered: 'auditLogs.actionLabels.terminal_discovered',
+  terminal_offline: 'auditLogs.actionLabels.terminal_offline',
+  terminal_online: 'auditLogs.actionLabels.terminal_online',
   create_scope: 'auditLogs.actionLabels.create_scope',
   update_scope: 'auditLogs.actionLabels.update_scope',
   delete_scope: 'auditLogs.actionLabels.delete_scope',
@@ -179,6 +182,9 @@ const ACTION_CATEGORY_MAP: Record<string, string> = {
   recalculate_compliance: 'compliance',
   auto_block_terminal: 'compliance',
   auto_unblock_terminal: 'compliance',
+  terminal_discovered: 'compliance',
+  terminal_offline: 'compliance',
+  terminal_online: 'compliance',
   create_scope: 'compliance',
   update_scope: 'compliance',
   delete_scope: 'compliance',
@@ -367,6 +373,7 @@ const AuditLogs: React.FC = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
+  const [terminalId, setTerminalId] = useState('');
 
   // Debounce search term
   const debouncedSearch = useDebounce(searchTerm, 500);
@@ -392,9 +399,11 @@ const AuditLogs: React.FC = () => {
   const queryParams = useMemo(() => ({
     search: debouncedSearch || undefined,
     action: apiActionsParam ? apiActionsParam.join(',') : undefined,
+    resource_id: terminalId.trim() || undefined,
+    resource_type: terminalId.trim() ? 'terminal' : undefined,
     start_date: startDate || undefined,
     end_date: endDate || undefined,
-  }), [debouncedSearch, apiActionsParam, startDate, endDate]);
+  }), [debouncedSearch, apiActionsParam, terminalId, startDate, endDate]);
 
   const { data: logsData, isLoading, refetch } = useAuditLogs({
     ...queryParams,
@@ -434,6 +443,10 @@ const AuditLogs: React.FC = () => {
       const params: Record<string, string> = {};
       if (searchTerm) params.search = searchTerm;
       if (apiActionsParam) params.action = apiActionsParam.join(',');
+      if (terminalId.trim()) {
+        params.resource_id = terminalId.trim();
+        params.resource_type = 'terminal';
+      }
       if (startDate) params.start_date = startDate;
       if (endDate) params.end_date = endDate;
 
@@ -463,6 +476,7 @@ const AuditLogs: React.FC = () => {
     setFilterAction('all');
     setStartDate('');
     setEndDate('');
+    setTerminalId('');
     resetPagination();
   };
 
@@ -565,6 +579,21 @@ const AuditLogs: React.FC = () => {
 
             {/* Filters */}
             <div className="flex flex-wrap items-center gap-2">
+              {/* Terminal ID Filter (resource_id) */}
+              <div className="flex items-center gap-2 bg-background rounded-xl px-3 py-1.5">
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  placeholder={t('auditLogs.filterByTerminalId')}
+                  value={terminalId}
+                  onChange={(e) => {
+                    setTerminalId(e.target.value);
+                    resetPagination();
+                  }}
+                  className="bg-transparent py-1 text-sm text-muted-foreground focus:outline-none focus:ring-0 w-28"
+                />
+              </div>
+
               {/* Category Filter */}
               <div className="flex items-center gap-2 bg-background rounded-xl px-3 py-1.5">
                 <Filter className="h-4 w-4 text-muted-foreground flex-shrink-0" />

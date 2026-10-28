@@ -20,6 +20,8 @@ async def export_audit_logs(
     request: Request,
     username: str = Query(None, description="Filter by username"),
     action: str = Query(None, description="Filter by action type"),
+    resource_type: str = Query(None, description="Filter by resource type (e.g. terminal)"),
+    resource_id: str = Query(None, description="Filter by resource id (e.g. terminal id)"),
     search: str = Query(None, description="Search by IP, username, or details"),
     start_date: str = Query(None, description="Filter by start date (YYYY-MM-DD)"),
     end_date: str = Query(None, description="Filter by end date (YYYY-MM-DD)"),
@@ -35,6 +37,10 @@ async def export_audit_logs(
     actions = _parse_actions(action)
     if actions:
         conditions.append(AuditLog.action.in_(actions))
+    if resource_type:
+        conditions.append(AuditLog.resource_type == resource_type)
+    if resource_id:
+        conditions.append(AuditLog.resource_id == resource_id)
     if search:
         escaped_search = search.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
         search_term = f"%{escaped_search}%"
@@ -87,7 +93,8 @@ async def export_audit_logs(
     ts = TerminalService(db)
     await ts.log_action(current_user.username, "export_audit_logs", "system", None,
                         {"message": "Exported audit logs", "record_count": len(logs),
-                         "filters": {"username": username, "action": action, "search": search,
+                         "filters": {"username": username, "action": action, "resource_type": resource_type,
+                                     "resource_id": resource_id, "search": search,
                                      "start_date": start_date, "end_date": end_date, "limit": limit}},
                         ip_address=get_client_ip(request),
                         resource_name="audit_logs",
@@ -105,6 +112,8 @@ async def export_audit_logs(
 async def search_audit_logs(
     username: str = Query(None, description="Filter by username"),
     action: str = Query(None, description="Filter by action type"),
+    resource_type: str = Query(None, description="Filter by resource type (e.g. terminal)"),
+    resource_id: str = Query(None, description="Filter by resource id (e.g. terminal id)"),
     search: str = Query(None, description="Search by IP, username, or details"),
     start_date: str = Query(None, description="Filter by start date (YYYY-MM-DD)"),
     end_date: str = Query(None, description="Filter by end date (YYYY-MM-DD)"),
@@ -119,6 +128,8 @@ async def search_audit_logs(
     query = AuditLogQuery(
         username=username,
         action=action,
+        resource_type=resource_type,
+        resource_id=resource_id,
         search=search,
         start_date=start_date,
         end_date=end_date,
@@ -137,6 +148,8 @@ async def search_audit_logs(
 async def security_events_count(
     username: str = Query(None, description="Filter by username"),
     action: str = Query(None, description="Comma-separated action filters"),
+    resource_type: str = Query(None, description="Filter by resource type (e.g. terminal)"),
+    resource_id: str = Query(None, description="Filter by resource id (e.g. terminal id)"),
     search: str = Query(None, description="Search by IP, username, action, or details"),
     start_date: str = Query(None, description="Filter by start date (YYYY-MM-DD)"),
     end_date: str = Query(None, description="Filter by end date (YYYY-MM-DD)"),
@@ -148,6 +161,8 @@ async def security_events_count(
     query = AuditLogQuery(
         username=username,
         action=action,
+        resource_type=resource_type,
+        resource_id=resource_id,
         search=search,
         start_date=start_date,
         end_date=end_date,

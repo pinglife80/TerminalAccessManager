@@ -503,6 +503,7 @@ const ja = {
     resourceId: 'リソースID',
     noDetailsAvailable: '詳細情報はありません',
     searchByUserActionIp: 'ユーザー、アクション、またはIPで検索...',
+    filterByTerminalId: '端末IDで絞り込み',
     failedToExportLogs: 'ログのエクスポートに失敗しました',
     categories: {
       all: 'すべてのカテゴリ',
@@ -530,6 +531,9 @@ const ja = {
       recalculate_compliance: 'コンプライアンス再計算',
       auto_block_terminal: '端末の自動ブロック',
       auto_unblock_terminal: '端末の自動ブロック解除',
+      terminal_discovered: '端末の初回検出',
+      terminal_offline: '端末オフライン',
+      terminal_online: '端末オンライン',
       create_scope: 'コンプライアンススコープ作成',
       update_scope: 'コンプライアンススコープ更新',
       delete_scope: 'コンプライアンススコープ削除',

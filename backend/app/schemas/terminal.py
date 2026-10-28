@@ -193,6 +193,8 @@ class AuditLogQuery(BaseModel):
     """Query parameters for audit log search"""
     username: str | None = None
     action: str | None = Field(None, description="Comma-separated action filters")
+    resource_type: str | None = Field(None, description="Filter by resource type (e.g. terminal)")
+    resource_id: str | None = Field(None, description="Filter by resource id (e.g. terminal id)")
     search: str | None = Field(None, description="Search by IP, username, action, or details")
     start_date: str | None = Field(None, description="Filter by start date (YYYY-MM-DD)")
     end_date: str | None = Field(None, description="Filter by end date (YYYY-MM-DD)")
