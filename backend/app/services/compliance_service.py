@@ -745,8 +745,9 @@ class ComplianceService:
                     await emit_block_threshold_exceeded(block_threshold, blocked)
 
             terminal_list = [{"terminal_id": d.get("terminal_id"), "ip_address": d["ip_address"], "mac_address": d["mac_address"]} for d in details]
-            await self.db.commit()
-            await self.log_action("system", "auto_block_terminal", "terminal", None, {
+            # Queued on the current session so the summary audit is committed
+            # atomically with the blacklist state in the same commit below.
+            self._record_audit_inline("system", "auto_block_terminal", "terminal", None, {
                 "message": f"Auto-blocked {blocked} non-compliant terminals from source '{arp_source_tag}'",
                 "source_tag": arp_source_tag,
                 "blocked": blocked,
@@ -756,6 +757,7 @@ class ComplianceService:
                 "terminals": terminal_list,
                 "total_terminals": len(terminal_list),
             }, ip_address="System")
+            await self.db.commit()
 
         return AutoBlockResult(
             total_non_compliant=len(non_compliant_entries),
@@ -1054,17 +1056,17 @@ class ComplianceService:
             for entry in successfully_unblocked_entries:
                 await emit_terminal_unblocked(entry.ip_address, entry.mac_address or "", "system")
 
-            # Audit log for auto-unblock summary, emitted after the business commit
-            # below so the audit entry never precedes the persisted state change.
+            # Queued on the current session so the summary audit is committed
+            # atomically with the blacklist state in the same commit below.
             terminal_list = [{"terminal_id": d.get("terminal_id"), "ip_address": d["ip_address"], "mac_address": d["mac_address"]} for d in details]
-            await self.db.commit()
-            await self.log_action("system", "auto_unblock_terminal", "terminal", None, {
+            self._record_audit_inline("system", "auto_unblock_terminal", "terminal", None, {
                 "message": f"Auto-unblocked {unblocked} compliant terminals",
                 "unblocked": unblocked,
                 "skipped": skipped,
                 "terminals": terminal_list,
                 "total_terminals": len(terminal_list),
             }, ip_address="System")
+            await self.db.commit()
 
         return AutoUnblockResult(
             total_auto_blocked=len(auto_blocked_entries),
@@ -3030,6 +3032,36 @@ class ComplianceService:
         async with async_session_factory() as session:
             session.add(audit_log)
             await session.commit()
+
+    def _record_audit_inline(
+        self,
+        username: str,
+        action: str,
+        resource_type: str,
+        resource_id: str | None,
+        details: dict,
+        ip_address: str = None,
+        resource_name: str = None,
+        user_id: int | None = None,
+    ) -> None:
+        """Queue an audit record on the current session without committing.
+
+        Used by self-held-transaction methods (auto_block/auto_unblock) so the
+        audit row is persisted atomically with the business changes in the same
+        ``self.db.commit()``, eliminating the residual "business committed but
+        audit missing" gap of the deferred-audit (策略 A) approach.
+        """
+        audit_log = AuditLog(
+            username=username,
+            user_id=user_id,
+            action=action,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            resource_name=resource_name,
+            details=json.dumps(details, ensure_ascii=False),
+            ip_address=ip_address,
+        )
+        self.db.add(audit_log)
 
     async def apply_manual_whitelist_for_terminal(
         self,

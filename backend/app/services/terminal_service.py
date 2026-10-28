@@ -1828,8 +1828,7 @@ class TerminalService:
             entry.last_operation_error = str(e)
             entry.last_operation_at = datetime.now(UTC)
             entry.retry_count = (entry.retry_count or 0) + 1
-            await self.db.commit()
-            await self.log_action(
+            self._record_audit_inline(
                 username,
                 "firewall_unblock",
                 "blacklist",
@@ -1844,6 +1843,7 @@ class TerminalService:
                 ip_address=ip_address,
                 resource_name=ip_address,
             )
+            await self.db.commit()
             return {"success": False, "error": str(e)}
 
         if not success:
@@ -1853,8 +1853,7 @@ class TerminalService:
             entry.last_operation_error = error_msg
             entry.last_operation_at = datetime.now(UTC)
             entry.retry_count = (entry.retry_count or 0) + 1
-            await self.db.commit()
-            await self.log_action(
+            self._record_audit_inline(
                 username,
                 "firewall_unblock",
                 "blacklist",
@@ -1869,6 +1868,7 @@ class TerminalService:
                 ip_address=ip_address,
                 resource_name=ip_address,
             )
+            await self.db.commit()
             return {"success": False, "error": error_msg}
 
         entry.auto_unblocked = True
@@ -1924,10 +1924,9 @@ class TerminalService:
                 terminal.firewall_tag = None
                 terminal.block_state = None
 
-        # Audit log for the successful unblock, emitted after the entry state
-        # commit so it never precedes the persisted change.
-        await self.db.commit()
-        await self.log_action(
+        # Queued on the current session so the audit row is committed atomically
+        # with the entry state in the same commit below.
+        self._record_audit_inline(
             username,
             "firewall_unblock",
             "blacklist",
@@ -1941,6 +1940,7 @@ class TerminalService:
             ip_address=ip_address,
             resource_name=ip_address,
         )
+        await self.db.commit()
 
         from app.services.event_emitter import emit_terminal_unblocked
         await emit_terminal_unblocked(
@@ -2378,6 +2378,36 @@ class TerminalService:
         async with async_session_factory() as session:
             session.add(audit_log)
             await session.commit()
+
+    def _record_audit_inline(
+        self,
+        username: str,
+        action: str,
+        resource_type: str,
+        resource_id: str | None,
+        details: dict[str, Any],
+        ip_address: str = None,
+        resource_name: str = None,
+        user_id: int | None = None,
+    ) -> None:
+        """Queue an audit record on the current session without committing.
+
+        Used by self-held-transaction methods (retry_unblock) so the audit row is
+        persisted atomically with the business changes in the same
+        ``self.db.commit()``, eliminating the residual "business committed but
+        audit missing" gap of the deferred-audit (策略 A) approach.
+        """
+        audit_log = AuditLog(
+            username=username,
+            user_id=user_id,
+            action=action,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            resource_name=resource_name,
+            details=json.dumps(details, ensure_ascii=False),
+            ip_address=ip_address,
+        )
+        self.db.add(audit_log)
 
     @staticmethod
     def _normalize_mac(mac: str) -> str:

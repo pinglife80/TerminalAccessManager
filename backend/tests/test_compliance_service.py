@@ -1739,6 +1739,48 @@ class TestTimeline10182183:
         # 1 batch commit + 1 trailing summary commit (the fix under test)
         assert mock_db.commit.await_count == 2
 
+    @pytest.mark.asyncio
+    async def test_recalculate_commit_failure_emits_no_audit(self, service, mock_db):
+        """点2 failure path: the recalculate batch commit fails, so the
+        ``compliance_status_changed`` audit must NOT be emitted — the audit must
+        never precede the committed business state."""
+        terminal = create_mock_terminal(
+            ip="192.168.1.100",
+            mac="AA:BB:CC:DD:EE:FF",
+            status="unblocked",
+            compliance_status="non_compliant",
+        )
+        terminal.non_compliant_confirm_count = 5
+        terminal.compliant_confirm_count = 3
+
+        mock_db.execute = scripted_execute([
+            make_result(scalars_all=[terminal]),  # select(Terminal)
+            make_result(all_rows=[]),             # active firewall tags -> {}
+        ])
+        # Batch persistence (self.db.commit after self.db.flush) fails.
+        mock_db.commit = AsyncMock(side_effect=RuntimeError("db commit failed"))
+
+        ig_data = {"lab": [{"ip_address": "10.0.0.99", "mac_address": "11-22-33-44-55-66"}]}
+        log_action_mock = AsyncMock()
+
+        with patch("app.services.compliance_service._acquire_compliance_lock", new=AsyncMock(return_value="tok")), \
+             patch("app.services.compliance_service._release_compliance_lock"), \
+             patch.object(service, "log_action", log_action_mock), \
+             patch.object(service, "_load_whitelist_cache", return_value=[]), \
+             patch.object(service, "_load_all_ipguard_cache", return_value=ig_data), \
+             patch.object(service, "_load_scope_cache", return_value=[]), \
+             patch.object(service, "_is_ipguard_cache_stale", return_value=False), \
+             patch.object(service, "_get_confirm_threshold", return_value=2), \
+             patch.object(service, "_match_ipguard_in_memory", return_value=(True, True, True)), \
+             patch("app.services.event_emitter.emit_terminal_compliant", AsyncMock()):
+            with pytest.raises(RuntimeError):
+                await service.recalculate_all_compliance()
+
+        # The audit emit loop runs only after a successful batch commit; on
+        # failure it must never have run (a transition happened but was not
+        # persisted, so no matching audit entry may be emitted).
+        log_action_mock.assert_not_awaited()
+
 
 class TestApplyResultBlockReason:
     """Detailed block_reason derivation for non_compliant terminals."""

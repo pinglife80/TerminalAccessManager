@@ -685,12 +685,11 @@ async def scheduled_backup():
                     logger.info(f"Scheduled backup starting (cron='{config.schedule}') [source=scheduler]")
                     job = await service.run_backup("full")
 
-                    # Write to audit log so frontend can see backup history, emitted after
-                    # the commit so the audit entry never precedes the persisted job.
-                    await db.commit()
+                    # Queued on the current session so the audit row is committed
+                    # atomically with the backup job in the same commit below.
                     from app.services.terminal_service import TerminalService
                     ts = TerminalService(db)
-                    await ts.log_action(
+                    ts._record_audit_inline(
                         "system", "scheduled_backup", "backup", str(job.id),
                         {
                             "status": job.status,
@@ -709,6 +708,7 @@ async def scheduled_backup():
                         ip_address="System",
                         resource_name=job.file_path,
                     )
+                    await db.commit()
 
                     if job.status == "completed":
                         logger.info(f"Scheduled backup completed: {job.file_path} ({job.file_size} bytes) [source=scheduler]")
