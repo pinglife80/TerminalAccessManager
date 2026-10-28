@@ -90,8 +90,11 @@ def _parse_date_range(start_date: str | None, end_date: str | None):
     if end_date:
         try:
             naive_end = datetime.strptime(end_date, "%Y-%m-%d")
-            end_dt = tz.localize(naive_end.replace(hour=23, minute=59, second=59))
-            conditions.append(lambda col: col <= end_dt)
+            # Exclusive upper bound: select records up to (but not including)
+            # the start of the following day, so 23:59:59.x records on end_date
+            # itself are still included.
+            end_dt = tz.localize(naive_end + timedelta(days=1))
+            conditions.append(lambda col: col < end_dt)
         except ValueError:
             pass
     return conditions

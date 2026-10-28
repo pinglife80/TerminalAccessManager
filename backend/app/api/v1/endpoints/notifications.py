@@ -85,6 +85,7 @@ async def create_channel(
         {"name": channel.name, "type": channel.type, "enabled": channel.enabled},
         ip_address=get_client_ip(request),
         resource_name=channel.name,
+        user_id=current_user.id,
     )
     return channel
 
@@ -129,6 +130,7 @@ async def update_channel(
         {"name": channel.name, "enabled": channel.enabled},
         ip_address=get_client_ip(request),
         resource_name=channel.name,
+        user_id=current_user.id,
     )
     return channel
 
@@ -154,6 +156,7 @@ async def delete_channel(
         {"name": channel_name},
         ip_address=get_client_ip(request),
         resource_name=channel_name,
+        user_id=current_user.id,
     )
 
 
@@ -289,6 +292,7 @@ async def create_template(
         {"name": template.name, "event_type": template.event_type, "channel_type": template.channel_type},
         ip_address=get_client_ip(request),
         resource_name=template.name,
+        user_id=current_user.id,
     )
     return NotificationTemplateResponse.model_validate(template)
 
@@ -342,6 +346,7 @@ async def update_template(
         {"name": template.name, "event_type": template.event_type, "channel_type": template.channel_type},
         ip_address=get_client_ip(request),
         resource_name=template.name,
+        user_id=current_user.id,
     )
     return NotificationTemplateResponse.model_validate(template)
 
@@ -370,6 +375,7 @@ async def delete_template(
         {"name": template_name},
         ip_address=get_client_ip(request),
         resource_name=template_name,
+        user_id=current_user.id,
     )
 
 
@@ -484,6 +490,7 @@ async def create_rule(
         {"name": rule.name, "event_type": rule.event_type, "channel_name": rule.channel_name, "enabled": rule.enabled},
         ip_address=get_client_ip(request),
         resource_name=rule.name,
+        user_id=current_user.id,
     )
     return NotificationRuleResponse.model_validate(rule)
 
@@ -552,6 +559,7 @@ async def update_rule(
         {"name": rule.name, "event_type": rule.event_type, "channel_name": rule.channel_name, "enabled": rule.enabled},
         ip_address=get_client_ip(request),
         resource_name=rule.name,
+        user_id=current_user.id,
     )
     return NotificationRuleResponse.model_validate(rule)
 
@@ -580,6 +588,7 @@ async def delete_rule(
         {"name": rule_name},
         ip_address=get_client_ip(request),
         resource_name=rule_name,
+        user_id=current_user.id,
     )
 
 

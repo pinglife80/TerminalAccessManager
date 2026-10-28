@@ -343,6 +343,15 @@ const DETAIL_KEY_LABELS: Record<string, string> = {
   purpose: 'auditLogs.detailKeys.purpose',
   url: 'auditLogs.detailKeys.url',
   record_count: 'auditLogs.detailKeys.record_count',
+  status: 'auditLogs.detailKeys.status',
+  file_path: 'auditLogs.detailKeys.file_path',
+  file_size: 'auditLogs.detailKeys.file_size',
+  checksum: 'auditLogs.detailKeys.checksum',
+  options: 'auditLogs.detailKeys.options',
+  config: 'auditLogs.detailKeys.config',
+  events: 'auditLogs.detailKeys.events',
+  backup_type: 'auditLogs.detailKeys.backup_type',
+  error_message: 'auditLogs.detailKeys.error_message',
 };
 
 const AuditLogs: React.FC = () => {

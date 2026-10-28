@@ -3000,7 +3000,7 @@ class ComplianceService:
             user_id=user_id,
             action=action,
             resource_type=resource_type,
-            resource_id=resource_id or "",
+            resource_id=resource_id,
             resource_name=resource_name,
             details=json.dumps(details, ensure_ascii=False),
             ip_address=ip_address,

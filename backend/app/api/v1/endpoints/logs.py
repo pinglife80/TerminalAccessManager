@@ -90,7 +90,8 @@ async def export_audit_logs(
                          "filters": {"username": username, "action": action, "search": search,
                                      "start_date": start_date, "end_date": end_date, "limit": limit}},
                         ip_address=get_client_ip(request),
-                        resource_name="audit_logs")
+                        resource_name="audit_logs",
+                        user_id=current_user.id)
 
     headers = {
         "Content-Disposition": "attachment; filename=audit_logs.csv",
@@ -98,27 +99,6 @@ async def export_audit_logs(
     }
 
     return Response(content=output.getvalue(), headers=headers)
-
-
-@router.get("/", response_model=list[AuditLogResponse])
-async def get_audit_logs(
-    skip: int = Query(0, ge=0),
-    limit: int = Query(50, ge=1, le=200),
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_permission("audit:read"))
-):
-    """Get audit logs with pagination"""
-    stmt = (
-        select(AuditLog)
-        .order_by(desc(AuditLog.timestamp))
-        .offset(skip)
-        .limit(limit)
-    )
-
-    result = await db.execute(stmt)
-    logs = result.scalars().all()
-
-    return logs
 
 
 @router.get("/search", response_model=CursorPaginatedResponse[AuditLogResponse])

@@ -31,28 +31,6 @@ async def _seed(db, *logs) -> None:
     await db.commit()
 
 
-class TestListAuditLogs:
-    @pytest.mark.asyncio
-    async def test_empty(self, api_db, api_client):
-        resp = await api_client.get("/api/v1/logs/")
-        assert resp.status_code == 200
-        assert resp.json() == []
-
-    @pytest.mark.asyncio
-    async def test_returns_logs_ordered_desc(self, api_db, api_client):
-        await _seed(
-            api_db,
-            _make_log(id=None, action="login", timestamp=datetime(2026, 8, 20, 12, 0, 0)),
-            _make_log(id=None, action="logout", timestamp=datetime(2026, 8, 20, 13, 0, 0)),
-        )
-        resp = await api_client.get("/api/v1/logs/?skip=0&limit=10")
-        assert resp.status_code == 200
-        items = resp.json()
-        assert len(items) == 2
-        # Ordered by timestamp desc -> logout (newer) first.
-        assert items[0]["action"] == "logout"
-
-
 class TestSearchAuditLogs:
     @pytest.mark.asyncio
     async def test_filter_by_username(self, api_db, api_client):

@@ -182,6 +182,7 @@ class AuditLogResponse(AuditLogBase):
     """Audit log response schema"""
     id: int
     username: str
+    user_id: int | None = None
     ip_address: str | None = None
     timestamp: datetime
 

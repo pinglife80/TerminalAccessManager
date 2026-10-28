@@ -53,7 +53,6 @@ export const API_ENDPOINTS = {
   BLACKLIST: '/blacklist/',
   BLACKLIST_EXPORT: '/blacklist/export',
   BLACKLIST_CHECK: '/blacklist/check',
-  AUDIT_LOGS: '/logs/',
   AUDIT_LOGS_SEARCH: '/logs/search',
   AUDIT_LOGS_EXPORT: '/logs/export',
   AUTH_LOGIN: '/auth/login',
