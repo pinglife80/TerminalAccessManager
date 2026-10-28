@@ -358,6 +358,14 @@ const DETAIL_KEY_LABELS: Record<string, string> = {
   events: 'auditLogs.detailKeys.events',
   backup_type: 'auditLogs.detailKeys.backup_type',
   error_message: 'auditLogs.detailKeys.error_message',
+  terminal_id: 'auditLogs.detailKeys.terminal_id',
+  ip_address: 'auditLogs.detailKeys.ip_address',
+  mac_address: 'auditLogs.detailKeys.mac_address',
+  source: 'auditLogs.detailKeys.source',
+  source_tag: 'auditLogs.detailKeys.source_tag',
+  compliance_status: 'auditLogs.detailKeys.compliance_status',
+  old_block_state: 'auditLogs.detailKeys.old_block_state',
+  new_block_state: 'auditLogs.detailKeys.new_block_state',
 };
 
 const AuditLogs: React.FC = () => {
