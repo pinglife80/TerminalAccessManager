@@ -60,7 +60,7 @@ async def create_baseline(
     # Audit log
     from app.services.terminal_service import TerminalService
     ts = TerminalService(db)
-    await ts.log_action(current_user.username, "create_baseline", "compliance", str(baseline.id),
+    await ts.log_action(current_user.username, "create_baseline", "baseline", str(baseline.id),
                         {"message": "Created compliance baseline", "name": baseline.name,
                          "type": baseline.type, "tag": baseline.tag},
                         ip_address=get_client_ip(request),
@@ -119,7 +119,7 @@ async def update_baseline(
     # Audit log
     from app.services.terminal_service import TerminalService
     ts = TerminalService(db)
-    await ts.log_action(current_user.username, "update_baseline", "compliance", str(baseline.id),
+    await ts.log_action(current_user.username, "update_baseline", "baseline", str(baseline.id),
                         {"message": "Updated compliance baseline", "name": baseline.name, "tag": baseline.tag,
                          "changes": list(update_data.keys())},
                         ip_address=get_client_ip(request),
@@ -247,7 +247,7 @@ async def delete_baseline(
     # Step 4: Audit log
     from app.services.terminal_service import TerminalService
     ts = TerminalService(db)
-    await ts.log_action(current_user.username, "delete_baseline", "compliance", str(baseline_id),
+    await ts.log_action(current_user.username, "delete_baseline", "baseline", str(baseline_id),
                         {"message": "Safely deleted compliance baseline with cleanup", "name": deleted_name, "tag": deleted_tag},
                         ip_address=get_client_ip(request),
                         resource_name=deleted_name)

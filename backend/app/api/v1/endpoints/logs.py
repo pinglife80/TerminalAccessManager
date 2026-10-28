@@ -10,7 +10,7 @@ from app.core.security import get_client_ip, require_permission
 from app.models.log import AuditLog
 from app.models.user import User
 from app.schemas.terminal import AuditLogQuery, AuditLogResponse, CursorPaginatedResponse
-from app.services.terminal_service import TerminalService, _parse_date_range
+from app.services.terminal_service import TerminalService, _parse_actions, _parse_date_range
 
 router = APIRouter(prefix="/logs", tags=["Audit Logs"])
 
@@ -32,8 +32,9 @@ async def export_audit_logs(
 
     if username:
         conditions.append(AuditLog.username == username)
-    if action:
-        conditions.append(AuditLog.action == action)
+    actions = _parse_actions(action)
+    if actions:
+        conditions.append(AuditLog.action.in_(actions))
     if search:
         escaped_search = search.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
         search_term = f"%{escaped_search}%"
@@ -41,6 +42,7 @@ async def export_audit_logs(
             or_(
                 AuditLog.ip_address.ilike(search_term),
                 AuditLog.username.ilike(search_term),
+                AuditLog.action.ilike(search_term),
                 AuditLog.details.ilike(search_term),
             )
         )
@@ -149,3 +151,27 @@ async def search_audit_logs(
     logs, next_cursor = await service.search_audit_logs(query)
     total = await service.search_audit_logs_count(query)
     return {"items": logs, "total": total, "limit": limit, "next_cursor": next_cursor}
+
+
+@router.get("/security-count")
+async def security_events_count(
+    username: str = Query(None, description="Filter by username"),
+    action: str = Query(None, description="Comma-separated action filters"),
+    search: str = Query(None, description="Search by IP, username, action, or details"),
+    start_date: str = Query(None, description="Filter by start date (YYYY-MM-DD)"),
+    end_date: str = Query(None, description="Filter by end date (YYYY-MM-DD)"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permission("audit:read"))
+):
+    """Count security-relevant audit events (login failures, blocks, lockouts)
+    matching the given filters, used by the aggregate stats card."""
+    query = AuditLogQuery(
+        username=username,
+        action=action,
+        search=search,
+        start_date=start_date,
+        end_date=end_date,
+    )
+    service = TerminalService(db)
+    count = await service.search_security_events_count(query)
+    return {"count": count}

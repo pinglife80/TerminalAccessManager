@@ -97,6 +97,18 @@ def _parse_date_range(start_date: str | None, end_date: str | None):
     return conditions
 
 
+def _parse_actions(action: str | None) -> list[str] | None:
+    """Split a comma-separated action filter string into a list of actions."""
+    if not action:
+        return None
+    parts = [p.strip() for p in action.split(",") if p.strip()]
+    return parts or None
+
+
+# Actions classified as security events for the security-events aggregate card
+SECURITY_EVENT_ACTIONS = ("login_failed", "firewall_block", "auto_block_terminal", "lock_user")
+
+
 def _parse_block_time(block_time: str) -> timedelta:
     """Parse block time string (e.g. '15d', '7d', '1h', '30m') into timedelta"""
     match = re.match(r'^(\d+)([dhm])$', block_time.lower())
@@ -2171,8 +2183,9 @@ class TerminalService:
         if query.username:
             conditions.append(AuditLog.username == query.username)
 
-        if query.action:
-            conditions.append(AuditLog.action == query.action)
+        actions = _parse_actions(query.action)
+        if actions:
+            conditions.append(AuditLog.action.in_(actions))
 
         # Keyword search across IP, username, action, and details
         if query.search:
@@ -2237,8 +2250,9 @@ class TerminalService:
         if query.username:
             conditions.append(AuditLog.username == query.username)
 
-        if query.action:
-            conditions.append(AuditLog.action == query.action)
+        actions = _parse_actions(query.action)
+        if actions:
+            conditions.append(AuditLog.action.in_(actions))
 
         # Keyword search across IP, username, action, and details
         if query.search:
@@ -2261,6 +2275,40 @@ class TerminalService:
             .where(and_(*conditions) if conditions else True)
         )
 
+        result = await self.db.execute(stmt)
+        return result.scalar() or 0
+
+    async def search_security_events_count(self, query: AuditLogQuery) -> int:
+        """Count security-relevant audit events matching the given filters.
+
+        Always scoped to the security action set (login failures, blocks, account
+        lockouts); further narrowed by the same username/action/search/date filters
+        as the main search so the aggregate card matches the visible result set.
+        """
+        conditions = [AuditLog.action.in_(SECURITY_EVENT_ACTIONS)]
+
+        if query.username:
+            conditions.append(AuditLog.username == query.username)
+
+        actions = _parse_actions(query.action)
+        if actions:
+            conditions.append(AuditLog.action.in_(actions))
+
+        if query.search:
+            conditions.append(
+                or_(
+                    AuditLog.ip_address.ilike(f"%{_escape_like(query.search)}%"),
+                    AuditLog.username.ilike(f"%{_escape_like(query.search)}%"),
+                    AuditLog.action.ilike(f"%{_escape_like(query.search)}%"),
+                    AuditLog.details.ilike(f"%{_escape_like(query.search)}%"),
+                )
+            )
+
+        date_conditions = _parse_date_range(query.start_date, query.end_date)
+        for dc in date_conditions:
+            conditions.append(dc(AuditLog.timestamp))
+
+        stmt = select(func.count(AuditLog.id)).where(and_(*conditions))
         result = await self.db.execute(stmt)
         return result.scalar() or 0
 

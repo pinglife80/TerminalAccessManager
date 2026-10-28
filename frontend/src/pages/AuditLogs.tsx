@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Search, Filter, Download, Clock, User, X, FileText, RefreshCw, ChevronDown } from 'lucide-react';
-import { useAuditLogs, AuditLog as AuditLogType } from '@/hooks/useTerminalData';
+import { useAuditLogs, useSecurityEventsCount, AuditLog as AuditLogType } from '@/hooks/useTerminalData';
 import { apiClient } from '@/lib/api';
 import { toast } from 'sonner';
 import { API_ENDPOINTS } from '@/lib/constants';
@@ -27,7 +27,7 @@ const ACTION_CATEGORIES = [
   {
     key: 'compliance',
     labelKey: 'auditLogs.categories.compliance',
-    actions: ['compliance_status_changed', 'recalculate_compliance', 'auto_block_terminal', 'auto_unblock_terminal'],
+    actions: ['compliance_status_changed', 'recalculate_compliance', 'auto_block_terminal', 'auto_unblock_terminal', 'create_scope', 'update_scope', 'delete_scope', 'toggle_scope'],
   },
   {
     key: 'firewall',
@@ -37,7 +37,7 @@ const ACTION_CATEGORIES = [
   {
     key: 'whitelist',
     labelKey: 'auditLogs.categories.whitelist',
-    actions: ['whitelist_create', 'whitelist_update', 'whitelist_delete'],
+    actions: ['whitelist_create', 'whitelist_update', 'whitelist_delete', 'whitelist_import'],
   },
   {
     key: 'blacklist',
@@ -65,9 +65,19 @@ const ACTION_CATEGORIES = [
     actions: ['create_baseline', 'update_baseline', 'delete_baseline'],
   },
   {
+    key: 'notification',
+    labelKey: 'auditLogs.categories.notification',
+    actions: ['create_notification_channel', 'update_notification_channel', 'delete_notification_channel', 'create_notification_template', 'update_notification_template', 'delete_notification_template', 'create_notification_rule', 'update_notification_rule', 'delete_notification_rule'],
+  },
+  {
+    key: 'auth_provider',
+    labelKey: 'auditLogs.categories.auth_provider',
+    actions: ['create_auth_provider', 'update_auth_provider', 'delete_auth_provider', 'test_auth_provider'],
+  },
+  {
     key: 'system',
     labelKey: 'auditLogs.categories.system',
-    actions: ['update_config', 'save_email_config', 'test_email', 'upload_branding', 'export_audit_logs'],
+    actions: ['update_config', 'save_email_config', 'test_email', 'upload_branding', 'export_audit_logs', 'scheduled_backup'],
   },
 ] as const;
 
@@ -84,6 +94,10 @@ const actionLabelKeys: Record<string, string> = {
   recalculate_compliance: 'auditLogs.actionLabels.recalculate_compliance',
   auto_block_terminal: 'auditLogs.actionLabels.auto_block_terminal',
   auto_unblock_terminal: 'auditLogs.actionLabels.auto_unblock_terminal',
+  create_scope: 'auditLogs.actionLabels.create_scope',
+  update_scope: 'auditLogs.actionLabels.update_scope',
+  delete_scope: 'auditLogs.actionLabels.delete_scope',
+  toggle_scope: 'auditLogs.actionLabels.toggle_scope',
   // firewall
   firewall_block: 'auditLogs.actionLabels.firewall_block',
   firewall_unblock: 'auditLogs.actionLabels.firewall_unblock',
@@ -91,6 +105,7 @@ const actionLabelKeys: Record<string, string> = {
   whitelist_create: 'auditLogs.actionLabels.whitelist_create',
   whitelist_update: 'auditLogs.actionLabels.whitelist_update',
   whitelist_delete: 'auditLogs.actionLabels.whitelist_delete',
+  whitelist_import: 'auditLogs.actionLabels.whitelist_import',
   // blacklist
   cleanup_expired_blacklist: 'auditLogs.actionLabels.cleanup_expired_blacklist',
   // datasource
@@ -118,12 +133,28 @@ const actionLabelKeys: Record<string, string> = {
   create_baseline: 'auditLogs.actionLabels.create_baseline',
   update_baseline: 'auditLogs.actionLabels.update_baseline',
   delete_baseline: 'auditLogs.actionLabels.delete_baseline',
+  // notification
+  create_notification_channel: 'auditLogs.actionLabels.create_notification_channel',
+  update_notification_channel: 'auditLogs.actionLabels.update_notification_channel',
+  delete_notification_channel: 'auditLogs.actionLabels.delete_notification_channel',
+  create_notification_template: 'auditLogs.actionLabels.create_notification_template',
+  update_notification_template: 'auditLogs.actionLabels.update_notification_template',
+  delete_notification_template: 'auditLogs.actionLabels.delete_notification_template',
+  create_notification_rule: 'auditLogs.actionLabels.create_notification_rule',
+  update_notification_rule: 'auditLogs.actionLabels.update_notification_rule',
+  delete_notification_rule: 'auditLogs.actionLabels.delete_notification_rule',
+  // auth provider
+  create_auth_provider: 'auditLogs.actionLabels.create_auth_provider',
+  update_auth_provider: 'auditLogs.actionLabels.update_auth_provider',
+  delete_auth_provider: 'auditLogs.actionLabels.delete_auth_provider',
+  test_auth_provider: 'auditLogs.actionLabels.test_auth_provider',
   // system
   update_config: 'auditLogs.actionLabels.update_config',
   save_email_config: 'auditLogs.actionLabels.save_email_config',
   test_email: 'auditLogs.actionLabels.test_email',
   upload_branding: 'auditLogs.actionLabels.upload_branding',
   export_audit_logs: 'auditLogs.actionLabels.export_audit_logs',
+  scheduled_backup: 'auditLogs.actionLabels.scheduled_backup',
   // Legacy action names (backward compatibility for historical records)
   block_ip: 'auditLogs.actionLabels.firewall_block',
   unblock_ip: 'auditLogs.actionLabels.firewall_unblock',
@@ -148,6 +179,10 @@ const ACTION_CATEGORY_MAP: Record<string, string> = {
   recalculate_compliance: 'compliance',
   auto_block_terminal: 'compliance',
   auto_unblock_terminal: 'compliance',
+  create_scope: 'compliance',
+  update_scope: 'compliance',
+  delete_scope: 'compliance',
+  toggle_scope: 'compliance',
   // firewall
   firewall_block: 'firewall',
   firewall_unblock: 'firewall',
@@ -155,6 +190,7 @@ const ACTION_CATEGORY_MAP: Record<string, string> = {
   whitelist_create: 'whitelist',
   whitelist_update: 'whitelist',
   whitelist_delete: 'whitelist',
+  whitelist_import: 'whitelist',
   // blacklist
   cleanup_expired_blacklist: 'blacklist',
   // datasource
@@ -182,12 +218,28 @@ const ACTION_CATEGORY_MAP: Record<string, string> = {
   create_baseline: 'baseline',
   update_baseline: 'baseline',
   delete_baseline: 'baseline',
+  // notification
+  create_notification_channel: 'notification',
+  update_notification_channel: 'notification',
+  delete_notification_channel: 'notification',
+  create_notification_template: 'notification',
+  update_notification_template: 'notification',
+  delete_notification_template: 'notification',
+  create_notification_rule: 'notification',
+  update_notification_rule: 'notification',
+  delete_notification_rule: 'notification',
+  // auth provider
+  create_auth_provider: 'auth_provider',
+  update_auth_provider: 'auth_provider',
+  delete_auth_provider: 'auth_provider',
+  test_auth_provider: 'auth_provider',
   // system
   update_config: 'system',
   save_email_config: 'system',
   test_email: 'system',
   upload_branding: 'system',
   export_audit_logs: 'system',
+  scheduled_backup: 'system',
   // Legacy action names
   block_ip: 'firewall',
   unblock_ip: 'firewall',
@@ -209,6 +261,8 @@ const CATEGORY_BADGE_STYLES: Record<string, string> = {
   user: 'bg-cyan-100 text-cyan-800',
   role: 'bg-indigo-100 text-indigo-800',
   baseline: 'bg-amber-100 text-amber-800',
+  notification: 'bg-orange-100 text-orange-800',
+  auth_provider: 'bg-rose-100 text-rose-800',
   system: 'bg-gray-100 text-gray-800',
 };
 
@@ -225,6 +279,12 @@ const getResourceDisplay = (log: AuditLogType, t: (key: string) => string) => {
     compliance: t('auditLogs.resourceTypes.compliance'),
     firewall: t('auditLogs.resourceTypes.firewall'),
     baseline: t('auditLogs.resourceTypes.baseline'),
+    notification_channel: t('auditLogs.resourceTypes.notification_channel'),
+    notification_template: t('auditLogs.resourceTypes.notification_template'),
+    notification_rule: t('auditLogs.resourceTypes.notification_rule'),
+    auth_provider: t('auditLogs.resourceTypes.auth_provider'),
+    backup: t('auditLogs.resourceTypes.backup'),
+    compliance_scope: t('auditLogs.resourceTypes.compliance_scope'),
     system: t('auditLogs.resourceTypes.system'),
   };
 
@@ -237,7 +297,7 @@ const getResourceDisplay = (log: AuditLogType, t: (key: string) => string) => {
 
   // Format resource_id based on resource_type (fallback for legacy records)
   let resourceId = log.resource_id || '';
-  if (resourceId && ['auth', 'user', 'datasource', 'role', 'compliance'].includes(log.resource_type || '')) {
+  if (resourceId && ['auth', 'user', 'datasource', 'role', 'compliance', 'terminal'].includes(log.resource_type || '')) {
     // Numeric IDs: show as "Type #ID"
     const typeName = typeLabels[log.resource_type || ''] || log.resource_type || '';
     resourceId = `${typeName} #${resourceId}`;
@@ -309,34 +369,35 @@ const AuditLogs: React.FC = () => {
     return category?.actions ?? [];
   }, [filterCategory]);
 
-  // Determine the action parameter for the API
-  const apiActionParam = useMemo(() => {
+  // Determine the action parameter for the API (server-side category expansion)
+  const apiActionsParam = useMemo(() => {
     if (filterCategory === 'all') return undefined;
-    if (filterAction !== 'all') return filterAction;
-    return undefined;
+    const category = ACTION_CATEGORIES.find((c) => c.key === filterCategory);
+    if (!category) return undefined;
+    if (filterAction !== 'all') return [filterAction];
+    return [...category.actions];
   }, [filterCategory, filterAction]);
 
   const skip = (currentPage - 1) * pageSize;
 
-  const { data: logsData, isLoading, refetch } = useAuditLogs({
+  const queryParams = useMemo(() => ({
     search: debouncedSearch || undefined,
-    action: apiActionParam,
+    action: apiActionsParam ? apiActionsParam.join(',') : undefined,
     start_date: startDate || undefined,
     end_date: endDate || undefined,
+  }), [debouncedSearch, apiActionsParam, startDate, endDate]);
+
+  const { data: logsData, isLoading, refetch } = useAuditLogs({
+    ...queryParams,
     skip,
     limit: pageSize,
   });
 
-  // Client-side filtering for category (when no specific action is selected)
-  const filteredLogs = useMemo(() => {
-    const items = logsData?.items ?? [];
-    if (filterCategory === 'all' || filterAction !== 'all') return items;
-    const category = ACTION_CATEGORIES.find((c) => c.key === filterCategory);
-    if (!category) return items;
-    return items.filter((log) => (category.actions as readonly string[]).includes(log.action));
-  }, [logsData?.items, filterCategory, filterAction]);
+  const { data: securityCountData } = useSecurityEventsCount(queryParams);
 
+  const items = logsData?.items ?? [];
   const totalFromServer = logsData?.total ?? 0;
+  const securityEventsCount = securityCountData?.count ?? 0;
   const totalPages = Math.max(1, Math.ceil(totalFromServer / pageSize));
 
   const handlePageSizeChange = (size: number) => {
@@ -363,7 +424,7 @@ const AuditLogs: React.FC = () => {
     try {
       const params: Record<string, string> = {};
       if (searchTerm) params.search = searchTerm;
-      if (filterCategory !== 'all' && filterAction !== 'all') params.action = filterAction;
+      if (apiActionsParam) params.action = apiActionsParam.join(',');
       if (startDate) params.start_date = startDate;
       if (endDate) params.end_date = endDate;
 
@@ -587,7 +648,7 @@ const AuditLogs: React.FC = () => {
         <div className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden">
           <div className="p-4 text-center">
             <div className="text-xl sm:text-2xl font-bold text-red-600">
-              {filteredLogs.filter((l) => ['login_failed', 'firewall_block', 'auto_block_terminal', 'lock_user'].includes(l.action)).length}
+              {securityEventsCount}
             </div>
             <div className="text-xs sm:text-sm text-muted-foreground mt-1">{t('auditLogs.securityEvents')}</div>
           </div>
@@ -622,7 +683,7 @@ const AuditLogs: React.FC = () => {
               </tr>
             </thead>
             <tbody className="bg-card divide-y divide-border">
-              {filteredLogs.length === 0 ? (
+              {items.length === 0 ? (
                 <tr>
                   <td colSpan={6}>
                     <EmptyState
@@ -633,7 +694,7 @@ const AuditLogs: React.FC = () => {
                   </td>
                 </tr>
               ) : (
-                (filteredLogs || []).map((log) => {
+                (items || []).map((log) => {
                   const { typeLabel, resourceId } = getResourceDisplay(log, t);
                   return (
                     <tr key={log.id} className="hover:bg-blue-50/30 transition-colors">

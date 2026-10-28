@@ -191,8 +191,8 @@ class AuditLogResponse(AuditLogBase):
 class AuditLogQuery(BaseModel):
     """Query parameters for audit log search"""
     username: str | None = None
-    action: str | None = None
-    search: str | None = Field(None, description="Search by IP, username, or details")
+    action: str | None = Field(None, description="Comma-separated action filters")
+    search: str | None = Field(None, description="Search by IP, username, action, or details")
     start_date: str | None = Field(None, description="Filter by start date (YYYY-MM-DD)")
     end_date: str | None = Field(None, description="Filter by end date (YYYY-MM-DD)")
     skip: int = Field(0, ge=0)

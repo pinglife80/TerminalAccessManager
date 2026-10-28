@@ -316,6 +316,17 @@ export const useAuditLogs = (params?: AuditLogSearchParams) => {
   });
 };
 
+export const useSecurityEventsCount = (params?: AuditLogSearchParams) => {
+  return useQuery({
+    queryKey: ['audit-logs-security-count', params],
+    queryFn: async () => {
+      const response = await apiClient.get('/logs/security-count', { params });
+      return response.data as { count: number };
+    },
+    placeholderData: keepPreviousData,
+  });
+};
+
 // Settings interfaces
 export interface SecurityConfig {
   max_login_attempts: number;
