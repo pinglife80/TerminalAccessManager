@@ -368,6 +368,8 @@ const DETAIL_KEY_LABELS: Record<string, string> = {
   new_block_state: 'auditLogs.detailKeys.new_block_state',
 };
 
+const TERMINAL_RESOURCE_TYPE = 'terminal';
+
 const AuditLogs: React.FC = () => {
   const { t } = useTranslation();
   const { hasPermission } = usePermission();
@@ -408,7 +410,7 @@ const AuditLogs: React.FC = () => {
     search: debouncedSearch || undefined,
     action: apiActionsParam ? apiActionsParam.join(',') : undefined,
     resource_id: terminalId.trim() || undefined,
-    resource_type: terminalId.trim() ? 'terminal' : undefined,
+    resource_type: terminalId.trim() ? TERMINAL_RESOURCE_TYPE : undefined,
     start_date: startDate || undefined,
     end_date: endDate || undefined,
   }), [debouncedSearch, apiActionsParam, terminalId, startDate, endDate]);
@@ -453,7 +455,7 @@ const AuditLogs: React.FC = () => {
       if (apiActionsParam) params.action = apiActionsParam.join(',');
       if (terminalId.trim()) {
         params.resource_id = terminalId.trim();
-        params.resource_type = 'terminal';
+        params.resource_type = TERMINAL_RESOURCE_TYPE;
       }
       if (startDate) params.start_date = startDate;
       if (endDate) params.end_date = endDate;

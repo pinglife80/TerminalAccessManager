@@ -1636,7 +1636,7 @@ class ComplianceService:
 
         See :meth:`_block_outcome` for flag semantics.
         """
-        resource_id = str(terminal_id) if terminal_id is not None else firewall_tag
+        resource_id = str(terminal_id) if terminal_id is not None else None
         try:
             stmt = select(DataSource).where(
                 (DataSource.tag == firewall_tag) & (DataSource.type == "sangfor")
@@ -1725,7 +1725,7 @@ class ComplianceService:
         terminal_id: int | None = None, mac_address: str | None = None,
     ) -> bool:
         """Unblock an IP on the specified firewall (synchronous)"""
-        resource_id = str(terminal_id) if terminal_id is not None else firewall_tag
+        resource_id = str(terminal_id) if terminal_id is not None else None
         try:
             stmt = select(DataSource).where(
                 (DataSource.tag == firewall_tag) & (DataSource.type == "sangfor")
