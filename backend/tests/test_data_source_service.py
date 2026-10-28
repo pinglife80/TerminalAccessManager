@@ -795,10 +795,11 @@ class TestSafeDeleteDataSource:
 
     @pytest.mark.asyncio
     async def test_audit_add_before_commit_atomic(self, service, mock_db, mock_redis):
-        """审计日志的 add 必须发生在 commit 之前（同事务原子提交）。
+        """业务删除仍在事务内提交；审计已解耦到独立会话。
 
-        防止回归：若 log_action 被移回 commit 之后，审计与删除将拆成两个事务，
-        出现"业务已提交但审计可能丢失"的非原子缺口。
+        P0 将 ``log_action`` 改为通过独立 ``async_session_factory`` 立即提交，
+        使审计记录即便业务事务回滚也能落库（审计必记）。因此 ``self.db`` 上
+        不再出现审计的 ``add``，只保留业务删除的 ``commit``。
         """
         source = make_source(type_="arp_ssh", tag="lab", name="lab-source")
         mock_redis.keys = AsyncMock(return_value=[])
@@ -817,7 +818,9 @@ class TestSafeDeleteDataSource:
         with patch("app.services.terminal_service.SangforService"):
             assert await service.safe_delete_data_source(1, username="admin", client_ip="1.2.3.4") is True
 
-        assert events == ["add", "commit"]
+        # 审计 add 不再落在业务 session 上；仅业务删除的 commit 出现一次。
+        assert events == ["commit"]
+        mock_db.add.assert_not_called()
 
 
 # ===========================================================================
@@ -906,7 +909,7 @@ class TestSafeDeleteBinding:
 
     @pytest.mark.asyncio
     async def test_audit_add_before_commit_atomic(self, service, mock_db):
-        """unbind_datasource 审计的 add 必须发生在 commit 之前（同事务原子提交）。"""
+        """unbind_datasource 业务删除提交仍在事务内；审计已解耦到独立会话。"""
         binding = make_binding(arp_source_tag="lab", firewall_tag="fw1")
         set_exec_sequence(mock_db, [
             make_result(scalar=binding),   # binding lookup
@@ -924,4 +927,6 @@ class TestSafeDeleteBinding:
             cs_cls.return_value = cs
             assert await service.safe_delete_binding(1, username="admin", client_ip="1.2.3.4") is True
 
-        assert events == ["add", "commit"]
+        # 审计 add 不再落在业务 session 上；仅业务删除的 commit 出现一次。
+        assert events == ["commit"]
+        mock_db.add.assert_not_called()

@@ -42,10 +42,12 @@ def create_mock_terminal(
     comments="",
     wl_match_type=None,
     mac_address_normalized=None,
+    id_=1,
 ):
     """Create a mock Terminal object with sensible defaults."""
     # Plain MagicMock (no spec) keeps the mock flexible for attribute assignment.
     t = MagicMock()
+    t.id = id_
     t.ip_address = ip
     t.mac_address = mac
     t.mac_address_normalized = mac_address_normalized or mac.replace(':', '').replace('-', '').replace('.', '').upper()
@@ -76,6 +78,7 @@ def create_mock_blacklist(
 ):
     """Create a mock Blacklist object with sensible defaults."""
     b = MagicMock(spec=Blacklist)
+    b.id = 1
     b.ip_address = ip
     b.mac_address = mac
     b.mac_address_normalized = mac_normalized
@@ -624,7 +627,7 @@ class TestAutoUnblockTerminal:
 
         unblock_results = {"fw1": True, "fw2": False}
 
-        async def mock_unblock(ip, fw_tag):
+        async def mock_unblock(ip, fw_tag, terminal_id=None, mac_address=None):
             return unblock_results.get(fw_tag, False)
 
         with patch.object(service, "_load_whitelist_cache", return_value=wl_data), \
@@ -1653,7 +1656,7 @@ class TestTimeline10182183:
 
         changed = self._compliance_changed_calls(log_action_mock)
         assert len(changed) == 1
-        assert changed[0].args[3] == f"{self.IP}_{self.NEW_MAC}"
+        assert changed[0].args[3] == str(terminal.id)
         assert changed[0].kwargs["ip_address"] == "System"
 
         agg.emit_non_compliant.assert_awaited_once()
@@ -1884,7 +1887,7 @@ class TestApplyResultUnblockEdges:
             firewall_tag="fw1",
         )
 
-        async def fake_unblock(ip, fw_tag):
+        async def fake_unblock(ip, fw_tag, terminal_id=None, mac_address=None):
             return fw_tag == "fw1"
 
         results = [
@@ -2364,7 +2367,7 @@ class TestApplyManualWhitelist:
         )
         terminal.id = 1
 
-        async def fake_unblock(ip, fw_tag):
+        async def fake_unblock(ip, fw_tag, terminal_id=None, mac_address=None):
             return fw_tag == "fw1"
 
         mock_db.execute = scripted_execute([make_result(scalars_all=[bl1, bl2])])
@@ -2399,7 +2402,7 @@ class TestApplyManualWhitelist:
         )
         terminal.id = 1
 
-        async def fake_unblock(ip, fw_tag):
+        async def fake_unblock(ip, fw_tag, terminal_id=None, mac_address=None):
             raise RuntimeError("boom")
 
         mock_db.execute = scripted_execute([make_result(scalars_all=[bl_entry])])
@@ -4346,7 +4349,7 @@ class TestAutoUnblockEdges:
         assert result.unblocked == 1
         assert terminal.status == "unblocked"
         assert bl_entry.auto_unblocked is True
-        unblock_mock.assert_awaited_once_with("192.168.1.100", "fw1")
+        unblock_mock.assert_awaited_once_with("192.168.1.100", "fw1", terminal.id, terminal.mac_address)
 
     @pytest.mark.asyncio
     async def test_whitelist_match_immediate_unblock_bypasses_cooldown(self, service, mock_db):

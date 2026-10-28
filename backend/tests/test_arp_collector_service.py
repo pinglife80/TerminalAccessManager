@@ -51,6 +51,7 @@ def make_terminal(ip="10.0.0.1", mac="AA-BB-CC-DD-EE-FF", mac_norm="AABBCCDDEEFF
                   status="unblocked", compliance_status="unknown", source_tag="lab"):
     """Create a mock Terminal with commonly inspected attributes."""
     t = MagicMock(spec=Terminal)
+    t.id = 1
     t.ip_address = ip
     t.mac_address = mac
     t.mac_address_normalized = mac_norm

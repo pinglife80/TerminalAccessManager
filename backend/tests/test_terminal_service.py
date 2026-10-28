@@ -447,13 +447,29 @@ class TestRetryUnblock:
             "data": {"unblocked": [], "skipped": [], "errors": [{"ip": "10.8.18.183", "error": "fail"}]},
         })
 
-        # Track add vs commit ordering to prove they share one transaction.
+        # P0 decoupled audit into an independent session. Capture the audit row
+        # from that session so its content can still be asserted below, while the
+        # business transaction on ``mock_async_session`` only commits once.
+        import app.services.terminal_service as terminal_service_mod
+
+        audit_logs = []
+
+        def audit_factory():
+            session = MagicMock()
+            session.add = MagicMock(side_effect=lambda obj: audit_logs.append(obj))
+            session.commit = AsyncMock()
+            manager = MagicMock()
+            manager.__aenter__ = AsyncMock(return_value=session)
+            manager.__aexit__ = AsyncMock(return_value=False)
+            return manager
+
+        # Track business commit count only.
         events = []
-        mock_async_session.add = MagicMock(side_effect=lambda *a, **k: events.append("add"))
         mock_async_session.commit = AsyncMock(side_effect=lambda: events.append("commit"))
 
         service = TerminalService(mock_async_session)
-        with patch.object(SangforService, "get_cached_service", AsyncMock(return_value=svc)):
+        with patch.object(terminal_service_mod, "async_session_factory", audit_factory), \
+             patch.object(SangforService, "get_cached_service", AsyncMock(return_value=svc)):
             result = await service.retry_unblock(7, username="admin")
 
         # 1) business failure propagates
@@ -464,14 +480,13 @@ class TestRetryUnblock:
         assert entry.last_operation_error == "fail"
         assert entry.retry_count == 1
 
-        # 3) audit add precedes the (single) commit -> same transaction
-        assert events == ["add", "commit"]
+        # 3) business commit happens exactly once, decoupled from audit
+        assert events == ["commit"]
         assert mock_async_session.commit.await_count == 1
 
-        # 4) the audit entry is a firewall_unblock failure on the right target
-        add_call = mock_async_session.add.call_args
-        assert add_call is not None
-        audit_log = add_call.args[0]
+        # 4) the independent audit entry is a firewall_unblock failure on the right target
+        assert len(audit_logs) == 1
+        audit_log = audit_logs[0]
         assert audit_log.action == "firewall_unblock"
         assert audit_log.resource_type == "blacklist"
         details = json.loads(audit_log.details)
@@ -518,12 +533,27 @@ class TestRetryUnblock:
             "data": {"unblocked": [{"ip": "10.8.18.183"}], "skipped": [], "errors": []},
         })
 
+        # P0 decoupled audit into an independent session. Capture it below so its
+        # content is still asserted, while the business transaction only commits once.
+        import app.services.terminal_service as terminal_service_mod
+
+        audit_logs = []
+
+        def audit_factory():
+            session = MagicMock()
+            session.add = MagicMock(side_effect=lambda obj: audit_logs.append(obj))
+            session.commit = AsyncMock()
+            manager = MagicMock()
+            manager.__aenter__ = AsyncMock(return_value=session)
+            manager.__aexit__ = AsyncMock(return_value=False)
+            return manager
+
         events = []
-        mock_async_session.add = MagicMock(side_effect=lambda *a, **k: events.append("add"))
         mock_async_session.commit = AsyncMock(side_effect=lambda: events.append("commit"))
 
         service = TerminalService(mock_async_session)
-        with patch.object(SangforService, "get_cached_service", AsyncMock(return_value=svc)), \
+        with patch.object(terminal_service_mod, "async_session_factory", audit_factory), \
+             patch.object(SangforService, "get_cached_service", AsyncMock(return_value=svc)), \
              patch("app.services.event_emitter.emit_terminal_unblocked", new=AsyncMock()):
             result = await service.retry_unblock(7, username="admin")
 
@@ -531,11 +561,12 @@ class TestRetryUnblock:
         assert entry.last_operation_status == "success"
         assert entry.auto_unblocked is True
 
-        # audit add precedes the (single) commit -> same transaction
-        assert events == ["add", "commit"]
+        # business commit happens exactly once, decoupled from audit
+        assert events == ["commit"]
         assert mock_async_session.commit.await_count == 1
 
-        audit_log = mock_async_session.add.call_args.args[0]
+        assert len(audit_logs) == 1
+        audit_log = audit_logs[0]
         assert audit_log.action == "firewall_unblock"
         assert audit_log.resource_type == "blacklist"
         details = json.loads(audit_log.details)
