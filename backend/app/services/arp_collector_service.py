@@ -277,6 +277,7 @@ class ArpCollectorService:
         updated = 0
         errors = []
         seen_pairs: set[tuple[str, str]] = set()
+        new_terminals: list[Terminal] = []
 
         # Pre-load existing (MAC, IP) mappings for IP-migration detection.
         # A MAC appearing under a *new* IP (same MAC, different IP) signals a
@@ -363,6 +364,7 @@ class ArpCollectorService:
                             f"marking ip_changed_at for grace period"
                         )
                     self.db.add(mac_record)
+                    new_terminals.append(mac_record)
                     added += 1
                     from app.services.event_emitter import emit_terminal_online
                     await emit_terminal_online(ip_address=ip_addr, mac_address=mac_normalized)
@@ -440,6 +442,21 @@ class ArpCollectorService:
 
                 await self.db.commit()
 
+                # Audit first-discovery event for terminals newly created this
+                # cycle (only "unknown 态建立" once; subsequent collections do not
+                # re-log because these terminals are no longer newly created).
+                for t in new_terminals:
+                    await compliance_service.log_action(
+                        "system", "terminal_discovered", "terminal", str(t.id), {
+                            "message": f"Terminal discovered: {t.ip_address}/{t.mac_address}",
+                            "terminal_id": t.id,
+                            "ip_address": t.ip_address,
+                            "mac_address": t.mac_address,
+                            "source_tag": t.source_tag,
+                            "source": t.source,
+                            "compliance_status": t.compliance_status,
+                        }, ip_address="System")
+
                 logger.info(
                     f"Compliance check for source '{source_tag}': "
                     f"{check_result.compliant} compliant, {check_result.bypass} bypass, {check_result.non_compliant} non-compliant"
@@ -452,7 +469,10 @@ class ArpCollectorService:
         # Terminal online/offline detection (based on last-seen timestamp)
         try:
             from app.core.timezone import now_utc
+            from app.services.compliance_service import ComplianceService
             from app.services.event_emitter import emit_terminal_offline
+
+            audit_svc = ComplianceService(self.db)
 
             all_stmt = select(Terminal).where(Terminal.source_tag == source_tag)
             all_result = await self.db.execute(all_stmt)
@@ -481,6 +501,16 @@ class ArpCollectorService:
                             f"ARP online: {terminal.ip_address}/{terminal.mac_address} "
                             f"cleared offline mark"
                         )
+                        await audit_svc.log_action("system", "terminal_online", "terminal",
+                                                   str(terminal.id), {
+                                                       "message": f"Terminal back online: {terminal.ip_address}/{terminal.mac_address}",
+                                                       "terminal_id": terminal.id,
+                                                       "ip_address": terminal.ip_address,
+                                                       "mac_address": terminal.mac_address,
+                                                       "old_block_state": "offline",
+                                                       "new_block_state": None,
+                                                       "reason": "seen_in_collection",
+                                                   }, ip_address="System")
                     continue
 
                 if not terminal.updated_at:
@@ -499,6 +529,16 @@ class ArpCollectorService:
                             f"stale {(now_ts - last_seen):.0f}s (threshold {offline_threshold_seconds}s), "
                             f"marked offline"
                         )
+                        await audit_svc.log_action("system", "terminal_offline", "terminal",
+                                                   str(terminal.id), {
+                                                       "message": f"Terminal went offline: {terminal.ip_address}/{terminal.mac_address}",
+                                                       "terminal_id": terminal.id,
+                                                       "ip_address": terminal.ip_address,
+                                                       "mac_address": terminal.mac_address,
+                                                       "old_block_state": None,
+                                                       "new_block_state": "offline",
+                                                       "reason": "stale_not_seen",
+                                                   }, ip_address="System")
                     try:
                         await emit_terminal_offline(
                             ip_address=terminal.ip_address,

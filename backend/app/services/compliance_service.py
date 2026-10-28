@@ -34,6 +34,7 @@ from app.schemas.data_source import (
     AutoUnblockResult,
     ComplianceCheckResult,
 )
+from app.core.database import async_session_factory
 from app.services.config_service import get_config_value
 
 # Redis cache key patterns and TTLs
@@ -559,9 +560,11 @@ class ComplianceService:
                     msg = f"Failed to block {entry.ip_address} on firewall '{fw_tag}': service not available"
                     entry_errors.append(msg)
                     errors.append(msg)
-                    await self.log_action("system", "firewall_block", "firewall", fw_tag, {
+                    await self.log_action("system", "firewall_block", "terminal", str(entry.id), {
                         "message": msg,
+                        "terminal_id": entry.id,
                         "ip_address": entry.ip_address,
+                        "mac_address": entry.mac_address,
                         "firewall_tag": fw_tag,
                         "success": False,
                         "error": "service_not_available",
@@ -579,9 +582,11 @@ class ComplianceService:
                         if newly_blocked:
                             newly_blocked_fw.append(fw_tag)
                         logger.debug(f"Blocked {entry.ip_address} on firewall '{fw_tag}'")
-                        await self.log_action("system", "firewall_block", "firewall", fw_tag, {
+                        await self.log_action("system", "firewall_block", "terminal", str(entry.id), {
                             "message": f"Blocked IP {entry.ip_address} on firewall {fw_tag}",
+                            "terminal_id": entry.id,
                             "ip_address": entry.ip_address,
+                            "mac_address": entry.mac_address,
                             "firewall_tag": fw_tag,
                             "success": True,
                             "newly_blocked": newly_blocked,
@@ -592,9 +597,11 @@ class ComplianceService:
                         msg = f"Failed to block {entry.ip_address} on firewall '{fw_tag}': {error_msg}"
                         entry_errors.append(msg)
                         errors.append(msg)
-                        await self.log_action("system", "firewall_block", "firewall", fw_tag, {
+                        await self.log_action("system", "firewall_block", "terminal", str(entry.id), {
                             "message": msg,
+                            "terminal_id": entry.id,
                             "ip_address": entry.ip_address,
+                            "mac_address": entry.mac_address,
                             "firewall_tag": fw_tag,
                             "success": False,
                             "error": error_msg,
@@ -603,9 +610,11 @@ class ComplianceService:
                     msg = f"Error blocking {entry.ip_address} on firewall '{fw_tag}': {str(e)}"
                     entry_errors.append(msg)
                     errors.append(msg)
-                    await self.log_action("system", "firewall_block", "firewall", fw_tag, {
+                    await self.log_action("system", "firewall_block", "terminal", str(entry.id), {
                         "message": msg,
+                        "terminal_id": entry.id,
                         "ip_address": entry.ip_address,
+                        "mac_address": entry.mac_address,
                         "firewall_tag": fw_tag,
                         "success": False,
                         "error": str(e),
@@ -687,6 +696,7 @@ class ComplianceService:
                 blocked += 1
 
                 details.append({
+                    "terminal_id": entry.id,
                     "ip_address": entry.ip_address,
                     "mac_address": entry.mac_address,
                     "action": "blocked",
@@ -734,7 +744,7 @@ class ComplianceService:
                 if blocked > block_threshold:
                     await emit_block_threshold_exceeded(block_threshold, blocked)
 
-            terminal_list = [{"ip_address": d["ip_address"], "mac_address": d["mac_address"]} for d in details]
+            terminal_list = [{"terminal_id": d.get("terminal_id"), "ip_address": d["ip_address"], "mac_address": d["mac_address"]} for d in details]
             await self.log_action("system", "auto_block_terminal", "terminal", None, {
                 "message": f"Auto-blocked {blocked} non-compliant terminals from source '{arp_source_tag}'",
                 "source_tag": arp_source_tag,
@@ -742,7 +752,7 @@ class ComplianceService:
                 "skipped": skipped,
                 "errors": len(errors),
                 "firewall_tags": firewall_tags,
-                "terminals": terminal_list[:50],
+                "terminals": terminal_list,
                 "total_terminals": len(terminal_list),
             }, ip_address="System")
             await self.db.commit()
@@ -890,7 +900,7 @@ class ComplianceService:
                 fw_tag = bl_entry.firewall_tag
                 if fw_tag:
                     try:
-                        success = await self._unblock_on_firewall(blocked_ip, fw_tag)
+                        success = await self._unblock_on_firewall(blocked_ip, fw_tag, terminal_record.id if terminal_record else None, current_mac)
                         if success:
                             successfully_unblocked_entries.append(bl_entry)
                         else:
@@ -918,7 +928,7 @@ class ComplianceService:
                         binding_success = True
                         for ft in fw_tags:
                             try:
-                                success = await self._unblock_on_firewall(blocked_ip, ft)
+                                success = await self._unblock_on_firewall(blocked_ip, ft, terminal_record.id if terminal_record else None, current_mac)
                                 if not success:
                                     binding_success = False
                                     all_success = False
@@ -1004,6 +1014,7 @@ class ComplianceService:
 
                 unblocked += 1
                 details.append({
+                    "terminal_id": terminal_record.id if terminal_record else None,
                     "ip_address": current_ip,
                     "mac_address": current_mac,
                     "action": "unblocked",
@@ -1044,12 +1055,12 @@ class ComplianceService:
                 await emit_terminal_unblocked(entry.ip_address, entry.mac_address or "", "system")
 
             # Audit log for auto-unblock (before commit so it's persisted in the same transaction)
-            terminal_list = [{"ip_address": d["ip_address"], "mac_address": d["mac_address"]} for d in details]
+            terminal_list = [{"terminal_id": d.get("terminal_id"), "ip_address": d["ip_address"], "mac_address": d["mac_address"]} for d in details]
             await self.log_action("system", "auto_unblock_terminal", "terminal", None, {
                 "message": f"Auto-unblocked {unblocked} compliant terminals",
                 "unblocked": unblocked,
                 "skipped": skipped,
-                "terminals": terminal_list[:50],
+                "terminals": terminal_list,
                 "total_terminals": len(terminal_list),
             }, ip_address="System")
             await self.db.commit()
@@ -1618,12 +1629,14 @@ class ComplianceService:
 
     async def _block_on_firewall_detailed(
         self, ip_address: str, firewall_tag: str, block_time: str = "30d",
-        reason: str = "Auto-blocked: non-compliant"
+        reason: str = "Auto-blocked: non-compliant",
+        terminal_id: int | None = None, mac_address: str | None = None,
     ) -> tuple[bool, bool]:
         """Block an IP and return ``(is_blocked, newly_blocked)``.
 
         See :meth:`_block_outcome` for flag semantics.
         """
+        resource_id = str(terminal_id) if terminal_id is not None else firewall_tag
         try:
             stmt = select(DataSource).where(
                 (DataSource.tag == firewall_tag) & (DataSource.type == "sangfor")
@@ -1633,9 +1646,11 @@ class ComplianceService:
 
             if not fw_source or not fw_source.enabled:
                 logger.warning(f"Firewall '{firewall_tag}' not found or disabled")
-                await self.log_action("system", "firewall_block", "firewall", firewall_tag, {
+                await self.log_action("system", "firewall_block", "terminal", resource_id, {
                     "message": f"Failed to block IP {ip_address} on firewall {firewall_tag}: firewall not found or disabled",
+                    "terminal_id": terminal_id,
                     "ip_address": ip_address,
+                    "mac_address": mac_address,
                     "firewall_tag": firewall_tag,
                     "success": False,
                     "error": "firewall_not_found_or_disabled",
@@ -1666,9 +1681,11 @@ class ComplianceService:
                 logger.info(f"Blocked {ip_address} on firewall '{firewall_tag}' (newly_blocked={newly_blocked})")
             else:
                 logger.error(f"Failed to block {ip_address} on firewall '{firewall_tag}': {result.get('message', 'unknown error')}")
-            await self.log_action("system", "firewall_block", "firewall", firewall_tag, {
+            await self.log_action("system", "firewall_block", "terminal", resource_id, {
                 "message": f"Blocked IP {ip_address} on firewall {firewall_tag}" if is_blocked else f"Failed to block IP {ip_address} on firewall {firewall_tag}: {result.get('message', 'unknown error')}",
+                "terminal_id": terminal_id,
                 "ip_address": ip_address,
+                "mac_address": mac_address,
                 "firewall_tag": firewall_tag,
                 "success": is_blocked,
                 "newly_blocked": newly_blocked,
@@ -1677,9 +1694,11 @@ class ComplianceService:
             return is_blocked, newly_blocked
         except Exception as e:
             logger.error(f"Failed to block {ip_address} on firewall '{firewall_tag}': {str(e)}")
-            await self.log_action("system", "firewall_block", "firewall", firewall_tag, {
+            await self.log_action("system", "firewall_block", "terminal", resource_id, {
                 "message": f"Failed to block IP {ip_address} on firewall {firewall_tag}: {str(e)}",
+                "terminal_id": terminal_id,
                 "ip_address": ip_address,
+                "mac_address": mac_address,
                 "firewall_tag": firewall_tag,
                 "success": False,
                 "error": str(e),
@@ -1688,19 +1707,25 @@ class ComplianceService:
 
     async def _block_on_firewall(
         self, ip_address: str, firewall_tag: str, block_time: str = "30d",
-        reason: str = "Auto-blocked: non-compliant"
+        reason: str = "Auto-blocked: non-compliant",
+        terminal_id: int | None = None, mac_address: str | None = None,
     ) -> bool:
         """Block an IP on the specified firewall via permanent blacklist (synchronous).
 
         Returns True when the IP is now present on the firewall (including idempotent skips).
         """
         is_blocked, _ = await self._block_on_firewall_detailed(
-            ip_address, firewall_tag, block_time=block_time, reason=reason
+            ip_address, firewall_tag, block_time=block_time, reason=reason,
+            terminal_id=terminal_id, mac_address=mac_address,
         )
         return is_blocked
 
-    async def _unblock_on_firewall(self, ip_address: str, firewall_tag: str) -> bool:
+    async def _unblock_on_firewall(
+        self, ip_address: str, firewall_tag: str,
+        terminal_id: int | None = None, mac_address: str | None = None,
+    ) -> bool:
         """Unblock an IP on the specified firewall (synchronous)"""
+        resource_id = str(terminal_id) if terminal_id is not None else firewall_tag
         try:
             stmt = select(DataSource).where(
                 (DataSource.tag == firewall_tag) & (DataSource.type == "sangfor")
@@ -1710,9 +1735,11 @@ class ComplianceService:
 
             if not fw_source or not fw_source.enabled:
                 logger.warning(f"Firewall '{firewall_tag}' not found or disabled")
-                await self.log_action("system", "firewall_unblock", "firewall", firewall_tag, {
+                await self.log_action("system", "firewall_unblock", "terminal", resource_id, {
                     "message": f"Failed to unblock IP {ip_address} on firewall {firewall_tag}: firewall not found or disabled",
+                    "terminal_id": terminal_id,
                     "ip_address": ip_address,
+                    "mac_address": mac_address,
                     "firewall_tag": firewall_tag,
                     "success": False,
                     "error": "firewall_not_found_or_disabled",
@@ -1739,18 +1766,22 @@ class ComplianceService:
                 logger.info(f"Unblocked {ip_address} on firewall '{firewall_tag}'")
             else:
                 logger.error(f"Failed to unblock {ip_address} on firewall '{firewall_tag}': {result.get('message', 'unknown error')}")
-            await self.log_action("system", "firewall_unblock", "firewall", firewall_tag, {
+            await self.log_action("system", "firewall_unblock", "terminal", resource_id, {
                 "message": f"Unblocked IP {ip_address} on firewall {firewall_tag}" if success else f"Failed to unblock IP {ip_address} on firewall {firewall_tag}: {result.get('message', 'unknown error')}",
+                "terminal_id": terminal_id,
                 "ip_address": ip_address,
+                "mac_address": mac_address,
                 "firewall_tag": firewall_tag,
                 "success": success,
             }, ip_address="System")
             return success
         except Exception as e:
             logger.error(f"Failed to unblock {ip_address} on firewall '{firewall_tag}': {str(e)}")
-            await self.log_action("system", "firewall_unblock", "firewall", firewall_tag, {
+            await self.log_action("system", "firewall_unblock", "terminal", resource_id, {
                 "message": f"Failed to unblock IP {ip_address} on firewall {firewall_tag}: {str(e)}",
+                "terminal_id": terminal_id,
                 "ip_address": ip_address,
+                "mac_address": mac_address,
                 "firewall_tag": firewall_tag,
                 "success": False,
                 "error": str(e),
@@ -2042,7 +2073,7 @@ class ComplianceService:
                         
                         for fw_tag in fw_tags:
                             try:
-                                success = await self._unblock_on_firewall(ip_addr, fw_tag)
+                                success = await self._unblock_on_firewall(ip_addr, fw_tag, terminal.id, mac_addr)
                                 if success:
                                     successful_fw_tags.append(fw_tag)
                                 else:
@@ -2199,7 +2230,8 @@ class ComplianceService:
 
                                 is_blocked, newly_blocked = await self._block_on_firewall_detailed(
                                     ip_addr, fw_tag,
-                                    reason="Auto-blocked: compliance recalculation"
+                                    reason="Auto-blocked: compliance recalculation",
+                                    terminal_id=terminal.id, mac_address=mac_addr,
                                 )
                                 if is_blocked:
                                     successfully_blocked_fw.append(fw_tag)
@@ -2321,8 +2353,9 @@ class ComplianceService:
         final_changed = final_compliance != old_compliance
         if final_changed:
             await self.log_action("system", "compliance_status_changed", "terminal",
-                                  f"{ip_addr}_{mac_addr}", {
+                                  str(terminal.id), {
                                       "message": f"Terminal compliance status changed from {old_compliance} to {final_compliance}",
+                                      "terminal_id": terminal.id,
                                       "ip_address": ip_addr,
                                       "mac_address": mac_addr,
                                       "old_compliance": old_compliance,
@@ -2954,10 +2987,17 @@ class ComplianceService:
 
     async def log_action(self, username: str, action: str, resource_type: str,
                          resource_id: str | None, details: dict,
-                         ip_address: str = None, resource_name: str = None):
-        """Log an audit action with JSON details"""
+                         ip_address: str = None, resource_name: str = None,
+                         user_id: int | None = None):
+        """Log an audit action with JSON details.
+
+        Uses an independent session and commits immediately so the audit record
+        is persisted even if the caller's transaction is rolled back or the
+        caller (e.g. a background task) never commits.
+        """
         audit_log = AuditLog(
             username=username,
+            user_id=user_id,
             action=action,
             resource_type=resource_type,
             resource_id=resource_id or "",
@@ -2965,7 +3005,9 @@ class ComplianceService:
             details=json.dumps(details, ensure_ascii=False),
             ip_address=ip_address,
         )
-        self.db.add(audit_log)
+        async with async_session_factory() as session:
+            session.add(audit_log)
+            await session.commit()
 
     async def apply_manual_whitelist_for_terminal(
         self,
@@ -3037,7 +3079,7 @@ class ComplianceService:
 
                 for ft in fw_tags:
                     try:
-                        success = await self._unblock_on_firewall(blocked_ip, ft)
+                        success = await self._unblock_on_firewall(blocked_ip, ft, terminal.id, mac_addr)
                         if success:
                             successfully_unblocked.append(bl_entry)
                             logger.info(

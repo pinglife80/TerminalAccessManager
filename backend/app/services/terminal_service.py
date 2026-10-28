@@ -22,6 +22,7 @@ from app.models.whitelist import Whitelist
 from app.schemas.terminal import AuditLogQuery, BlacklistQuery, TerminalQuery, WhitelistQuery
 from app.core.crypto import decrypt_config
 from app.core.config import settings
+from app.core.database import async_session_factory
 from app.services.sangfor_service import SangforService
 
 
@@ -2268,10 +2269,17 @@ class TerminalService:
     # ------------------------------------------------------------------
     async def log_action(self, username: str, action: str, resource_type: str,
                          resource_id: str, details: dict[str, Any],
-                         ip_address: str = None, resource_name: str = None):
-        """Log an audit action with JSON details"""
+                         ip_address: str = None, resource_name: str = None,
+                         user_id: int | None = None):
+        """Log an audit action with JSON details.
+
+        Uses an independent session and commits immediately so the audit record
+        is persisted even if the caller's transaction is rolled back or the
+        caller (e.g. a background task) never commits.
+        """
         audit_log = AuditLog(
             username=username,
+            user_id=user_id,
             action=action,
             resource_type=resource_type,
             resource_id=resource_id,
@@ -2279,7 +2287,9 @@ class TerminalService:
             details=json.dumps(details, ensure_ascii=False),
             ip_address=ip_address,
         )
-        self.db.add(audit_log)
+        async with async_session_factory() as session:
+            session.add(audit_log)
+            await session.commit()
 
     @staticmethod
     def _normalize_mac(mac: str) -> str:

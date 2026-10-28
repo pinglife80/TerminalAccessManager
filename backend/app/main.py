@@ -485,7 +485,8 @@ async def scheduled_compliance_check():
                                     for fw_tag in fw_tags:
                                         success = await service._block_on_firewall(
                                             ip_addr, fw_tag,
-                                            reason="Auto-blocked: retry (compliance check)"
+                                            reason="Auto-blocked: retry (compliance check)",
+                                            terminal_id=terminal.id, mac_address=mac_addr or None,
                                         )
                                         if not success:
                                             all_success = False
