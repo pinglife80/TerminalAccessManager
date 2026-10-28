@@ -1,6 +1,6 @@
 # 更新日志
 
-> 文档版本：v3.23.2  更新日期：2026-10-27
+> 文档版本：v3.24.0  更新日期：2026-10-28
 
 本文件记录 TerminalAccessManager 的所有重要变更。
 
@@ -8,6 +8,28 @@
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ***
+
+## [3.24.0] - 2026-10-28
+
+### 新增
+
+- **审计日志分类筛选服务端化与动作映射补齐**：分类/筛选下沉服务端，补齐终端生命周期动作映射（在线/离线/发现/合规状态变化/自动封锁解封等），支持按终端回溯过滤，审计列表可精确查看某终端全部生命周期事件
+  - 关联文件：`backend/app/api/v1/endpoints/logs.py`、`backend/app/services/*.py`、`frontend/src/pages/AuditLogs.tsx`
+
+- **终端事件详情字段三语翻译**：新增终端事件详情字段中/英/日三语文案，动作与详情按当前语言呈现
+  - 关联文件：`frontend/src/i18n/locales/{zh,en,ja}.ts`
+
+### 修复
+
+- **审计日志原子性与时序修复**：审计写入与业务状态变更解耦——延后补记（策略 A）与自持事务改同事务原子写入（策略 B），消除「日志超前于业务提交」与「业务已提交但审计缺失」窗口；统一防火墙日志 resource_id 语义并提取终端资源类型常量
+  - 关联文件：`backend/app/services/arp_collector_service.py`、`backend/app/services/compliance_service.py`、`backend/app/services/terminal_service.py`、`backend/app/main.py`、`backend/app/api/v1/endpoints/*.py`
+
+- **审计日志完善与清理**：填充 user_id、详情字段翻译、边界与死代码清理
+  - 关联文件：`backend/app/schemas/terminal.py`、`backend/app/services/*.py`
+
+### 测试
+
+- 补充失败路径测试（业务 commit 失败审计不超前），修复 P0 审计解耦引入的测试回归；后端全量 1607 用例通过
 
 ## [3.23.2] - 2026-10-27
 

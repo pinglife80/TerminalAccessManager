@@ -1,12 +1,49 @@
 # 版本跟踪记录
 
-> 文档版本：v3.23.2 | 更新日期：2026-10-27
+> 文档版本：v3.24.0 | 更新日期：2026-10-28
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
 
 ---
+
+## [v3.24.0] - 2026-10-28
+
+### 审计日志子系统重构与生命周期链路线索补齐（Minor 版本）
+
+#### 背景
+
+审计日志此前存在时序风险（日志先于业务提交落库）、动作分类在客户端拼装不易扩展、缺少按终端回溯能力，且防火墙日志 resource_id 语义不统一。本次对审计子系统整体加固：P0~P2（原子性/分类/清理）+ 分类筛选服务端化 + 终端生命周期动作映射 + 按终端回溯过滤 + 事件详情三语翻译，并补充失败路径测试。
+
+#### 主要变更
+
+| 变更项 | 说明 |
+|--------|------|
+| 审计原子性（P0） | 日志写入与业务提交解耦，消除日志超前/缺失窗口 |
+| 分类筛选服务端化（P1） | 分类/筛选下沉服务端，补齐生命周期动作映射 |
+| 完善与清理（P2） | user_id 填充、详情翻译、边界与死代码清理 |
+| 按终端回溯过滤（feat） | 终端生命周期动作映射 + 按终端回溯过滤 |
+| 三语翻译（feat） | 终端事件详情字段中/英/日文案 |
+| 时序修复 | 策略 A（延后补记）+ 策略 B（同事务原子写入）+ 失败路径测试 |
+
+#### 升级步骤（推荐：一键升级）
+
+```bash
+git checkout main
+git pull origin main
+./manage.sh upgrade
+```
+
+#### 升级注意事项
+
+- 本次无 Alembic 迁移（不改动数据库 schema）。
+- 修复仅作用于审计日志写入时序与展示层，不改变防火墙封锁/解封 API 契约与速率限制行为。
+- 前端 `AuditLogs.tsx` 与三语 i18n 有改动，需重新构建前端镜像（`./manage.sh upgrade` / `rebuild` 已覆盖）。
+
+#### 文件变更清单
+
+主要涉及：`backend/app/api/v1/endpoints/logs.py`、`backend/app/services/{arp_collector,compliance,terminal}_service.py`、`backend/app/main.py`、`backend/app/schemas/terminal.py`、`frontend/src/pages/AuditLogs.tsx`、`frontend/src/hooks/useTerminalData.ts`、`frontend/src/i18n/locales/{zh,en,ja}.ts`
 
 ## [v3.23.2] - 2026-10-27
 
