@@ -51,6 +51,7 @@ def make_terminal(ip="10.0.0.1", mac="AA-BB-CC-DD-EE-FF", mac_norm="AABBCCDDEEFF
                   status="unblocked", compliance_status="unknown", source_tag="lab"):
     """Create a mock Terminal with commonly inspected attributes."""
     t = MagicMock(spec=Terminal)
+    t.id = 1
     t.ip_address = ip
     t.mac_address = mac
     t.mac_address_normalized = mac_norm
@@ -706,6 +707,46 @@ class TestProcessArpEntries:
         offline.assert_called_once()
         # 离线标记必须记录 ip/mac 与标记动作，便于排查陈旧记录去向。
         assert_logged_any(info_logger, "ARP offline", "10.0.0.2", "marked offline")
+
+    @pytest.mark.asyncio
+    async def test_offline_commit_failure_emits_no_audit(self, service, mock_db):
+        """点1 failure path: persisting the online/offline block_state change fails,
+        so the terminal_online/terminal_offline audit must NOT be emitted — the
+        audit must never precede the committed business state."""
+        entries = [{"ip_address": "10.0.0.1", "mac_address": "aa:bb:cc:dd:ee:ff"}]
+        existing = make_terminal(ip="10.0.0.1", mac_norm="AABBCCDDEEFF")
+        stale = make_terminal(ip="10.0.0.2", mac_norm="112233445566")
+        stale.block_state = None
+        stale.updated_at = datetime(2025, 1, 1, tzinfo=timezone.utc)
+
+        set_exec_sequence(
+            mock_db,
+            [
+                make_exec_result(scalar=existing),
+                make_exec_result(rows=[]),
+                make_exec_result(rows=[stale]),
+            ],
+        )
+
+        # Commit #1 = upsert persists (succeeds), #2 = block_state persists (fails).
+        mock_db.commit = AsyncMock(side_effect=[None, RuntimeError("db commit failed")])
+
+        # The deferred-audit emitter is the ComplianceService used inside the
+        # online/offline block; capture it so we can assert it is never invoked.
+        audit_svc = MagicMock()
+        audit_svc.log_action = AsyncMock()
+
+        fixed_now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        with patch("app.services.compliance_service.ComplianceService", return_value=audit_svc), \
+             patch("app.core.timezone.now_utc", return_value=fixed_now), \
+             patch("app.services.config_service.get_config_value", AsyncMock(side_effect=[300, 3])), \
+             patch("app.services.event_emitter.emit_terminal_offline", AsyncMock()):
+            await service.process_arp_entries(entries, "lab")
+
+        # The offline-detection block swallows the commit error and returns a
+        # normal SyncResult; crucially, the audit emit is gated behind a
+        # successful commit, so it must never have run.
+        audit_svc.log_action.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_offline_detection_skips_blocked(self, service, mock_db):

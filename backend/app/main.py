@@ -375,11 +375,12 @@ async def scheduled_compliance_check():
                                 # Apply compliance results for newly discovered (unknown)
                                 # terminals, with confirm-threshold protection against
                                 # immediate false blocks.
+                                pending_audits = []
                                 for entry in unchecked:
                                     mac_key = entry.mac_address_normalized or ""
                                     r = result_lookup.get(mac_key)
                                     if r:
-                                        await service.apply_initial_compliance_result(
+                                        apply_result = await service.apply_initial_compliance_result(
                                             entry,
                                             r["compliance_status"],
                                             r["wl_match_type"],
@@ -387,8 +388,16 @@ async def scheduled_compliance_check():
                                             entry.ip_address or "",
                                             entry.mac_address or "",
                                         )
+                                        if apply_result and apply_result.get("audit"):
+                                            pending_audits.append(apply_result["audit"])
 
                                 await db.commit()
+                                for audit in pending_audits:
+                                    await service.log_action(
+                                        audit["username"], audit["action"], audit["resource_type"],
+                                        audit["resource_id"], audit["details"],
+                                        ip_address=audit.get("ip_address"),
+                                    )
                                 if result.non_compliant > 0 or result.bypass > 0:
                                     logger.info(f"Compliance check for {source.tag}: {result.compliant} compliant, {result.bypass} bypass, {result.non_compliant} non-compliant")
                                     # Trigger auto-block for non-compliant terminals
@@ -485,7 +494,8 @@ async def scheduled_compliance_check():
                                     for fw_tag in fw_tags:
                                         success = await service._block_on_firewall(
                                             ip_addr, fw_tag,
-                                            reason="Auto-blocked: retry (compliance check)"
+                                            reason="Auto-blocked: retry (compliance check)",
+                                            terminal_id=terminal.id, mac_address=mac_addr or None,
                                         )
                                         if not success:
                                             all_success = False
@@ -675,10 +685,11 @@ async def scheduled_backup():
                     logger.info(f"Scheduled backup starting (cron='{config.schedule}') [source=scheduler]")
                     job = await service.run_backup("full")
 
-                    # Write to audit log so frontend can see backup history
+                    # Queued on the current session so the audit row is committed
+                    # atomically with the backup job in the same commit below.
                     from app.services.terminal_service import TerminalService
                     ts = TerminalService(db)
-                    await ts.log_action(
+                    ts._record_audit_inline(
                         "system", "scheduled_backup", "backup", str(job.id),
                         {
                             "status": job.status,

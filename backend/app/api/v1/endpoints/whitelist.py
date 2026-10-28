@@ -2,11 +2,11 @@ import csv
 import os
 from io import StringIO
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, Response, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.security import require_permission
+from app.core.security import get_client_ip, require_permission
 from app.models.user import User
 from app.schemas.terminal import (
     PaginatedResponse,
@@ -97,6 +97,7 @@ async def delete_from_whitelist(
 
 @router.get("/export")
 async def export_whitelist(
+    request: Request,
     search: str = Query(None, description="Search by MAC, IP, or comments"),
     start_date: str = Query(None, description="Filter by start date (YYYY-MM-DD)"),
     end_date: str = Query(None, description="Filter by end date (YYYY-MM-DD)"),
@@ -152,6 +153,17 @@ async def export_whitelist(
         ])
 
     output.seek(0)
+
+    # Audit log for export action
+    service = TerminalService(db)
+    await service.log_action(
+        current_user.username, "export_whitelist", "whitelist", None,
+        {"message": "Exported whitelist", "record_count": len(whitelist),
+         "filters": {"search": search, "start_date": start_date, "end_date": end_date}},
+        ip_address=get_client_ip(request),
+        resource_name="whitelist",
+        user_id=current_user.id,
+    )
 
     headers = {
         "Content-Disposition": "attachment; filename=whitelist.csv",

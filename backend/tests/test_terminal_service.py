@@ -447,10 +447,11 @@ class TestRetryUnblock:
             "data": {"unblocked": [], "skipped": [], "errors": [{"ip": "10.8.18.183", "error": "fail"}]},
         })
 
-        # Track add vs commit ordering to prove they share one transaction.
+        # 策略 B: audit is queued on the SAME session (db.add) before the single
+        # business commit, so both land atomically. Track ordering via events.
         events = []
-        mock_async_session.add = MagicMock(side_effect=lambda *a, **k: events.append("add"))
-        mock_async_session.commit = AsyncMock(side_effect=lambda: events.append("commit"))
+        mock_async_session.add = MagicMock(side_effect=lambda obj: events.append(("add", obj)))
+        mock_async_session.commit = AsyncMock(side_effect=lambda: events.append(("commit", None)))
 
         service = TerminalService(mock_async_session)
         with patch.object(SangforService, "get_cached_service", AsyncMock(return_value=svc)):
@@ -464,14 +465,14 @@ class TestRetryUnblock:
         assert entry.last_operation_error == "fail"
         assert entry.retry_count == 1
 
-        # 3) audit add precedes the (single) commit -> same transaction
-        assert events == ["add", "commit"]
+        # 3) audit is queued (db.add) BEFORE the single business commit
+        assert [kind for kind, _ in events] == ["add", "commit"]
         assert mock_async_session.commit.await_count == 1
 
-        # 4) the audit entry is a firewall_unblock failure on the right target
-        add_call = mock_async_session.add.call_args
-        assert add_call is not None
-        audit_log = add_call.args[0]
+        # 4) the queued audit entry is a firewall_unblock failure on the right target
+        add_calls = [obj for kind, obj in events if kind == "add"]
+        assert len(add_calls) == 1
+        audit_log = add_calls[0]
         assert audit_log.action == "firewall_unblock"
         assert audit_log.resource_type == "blacklist"
         details = json.loads(audit_log.details)
@@ -518,9 +519,11 @@ class TestRetryUnblock:
             "data": {"unblocked": [{"ip": "10.8.18.183"}], "skipped": [], "errors": []},
         })
 
+        # 策略 B: audit is queued on the SAME session (db.add) before the single
+        # business commit, so both land atomically. Track ordering via events.
         events = []
-        mock_async_session.add = MagicMock(side_effect=lambda *a, **k: events.append("add"))
-        mock_async_session.commit = AsyncMock(side_effect=lambda: events.append("commit"))
+        mock_async_session.add = MagicMock(side_effect=lambda obj: events.append(("add", obj)))
+        mock_async_session.commit = AsyncMock(side_effect=lambda: events.append(("commit", None)))
 
         service = TerminalService(mock_async_session)
         with patch.object(SangforService, "get_cached_service", AsyncMock(return_value=svc)), \
@@ -531,11 +534,13 @@ class TestRetryUnblock:
         assert entry.last_operation_status == "success"
         assert entry.auto_unblocked is True
 
-        # audit add precedes the (single) commit -> same transaction
-        assert events == ["add", "commit"]
+        # audit is queued (db.add) BEFORE the single business commit
+        assert [kind for kind, _ in events] == ["add", "commit"]
         assert mock_async_session.commit.await_count == 1
 
-        audit_log = mock_async_session.add.call_args.args[0]
+        add_calls = [obj for kind, obj in events if kind == "add"]
+        assert len(add_calls) == 1
+        audit_log = add_calls[0]
         assert audit_log.action == "firewall_unblock"
         assert audit_log.resource_type == "blacklist"
         details = json.loads(audit_log.details)

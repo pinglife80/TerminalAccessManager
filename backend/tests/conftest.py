@@ -175,6 +175,40 @@ def mock_async_session():
     return make_mock_async_session()
 
 
+@pytest.fixture(autouse=True)
+def _stub_audit_session_factory():
+    """Re-bind the audit session factory to a mock for unit/service tests.
+
+    P0 changed ``log_action`` to persist audit rows through an independent
+    session (``async with async_session_factory()``), so an audit record is
+    committed even when the caller's transaction rolls back. Unit/service tests
+    back their services with ``mock_async_session`` and never create real
+    tables, so leaving that module-level factory pointed at the bare test
+    ``:memory:`` engine makes every audit write fail with
+    ``no such table: audit_logs``. Pointing both service-level references at a
+    mock session makes ``log_action`` a safe no-op in those tests.
+
+    Endpoint tests (``api_client``) re-point the same two module attributes at
+    the real ``api_engine`` session factory inside that fixture, so audit rows
+    are actually persisted there for export/count assertions.
+    """
+    import app.services.compliance_service as compliance_service_mod
+    import app.services.terminal_service as terminal_service_mod
+
+    def _factory():
+        session = make_mock_async_session()
+        manager = MagicMock()
+        manager.__aenter__ = AsyncMock(return_value=session)
+        manager.__aexit__ = AsyncMock(return_value=False)
+        return manager
+
+    with (
+        patch.object(terminal_service_mod, "async_session_factory", _factory),
+        patch.object(compliance_service_mod, "async_session_factory", _factory),
+    ):
+        yield
+
+
 # ---------------------------------------------------------------------------
 # HTTP API endpoint integration test fixtures (6C)
 #
@@ -231,6 +265,8 @@ async def api_client(api_db, api_engine):
     from app.core.database import get_db
     from app.core.security import get_current_user
     from app.main import app
+    import app.services.compliance_service as compliance_service_mod
+    import app.services.terminal_service as terminal_service_mod
 
     session_factory = async_sessionmaker(
         api_engine, class_=AsyncSession, expire_on_commit=False
@@ -259,11 +295,20 @@ async def api_client(api_db, api_engine):
     overrides[get_db] = override_get_db
     overrides[get_current_user] = override_get_current_user
     try:
-        transport = ASGITransport(app=app)
-        async with AsyncClient(
-            transport=transport, base_url="http://testserver"
-        ) as client:
-            yield client
+        # log_action() uses a module-level ``async_session_factory`` (introduced
+        # in the P0 atomic-audit change) as an independent session, bypassing the
+        # ``get_db`` override above. In tests that factory points at a separate
+        # bare ``:memory:`` DB (no StaticPool) and has no tables, so re-bind both
+        # service-level references to the same test ``api_engine`` session factory.
+        with (
+            patch.object(terminal_service_mod, "async_session_factory", session_factory),
+            patch.object(compliance_service_mod, "async_session_factory", session_factory),
+        ):
+            transport = ASGITransport(app=app)
+            async with AsyncClient(
+                transport=transport, base_url="http://testserver"
+            ) as client:
+                yield client
     finally:
         if prev_get_db is None:
             overrides.pop(get_db, None)

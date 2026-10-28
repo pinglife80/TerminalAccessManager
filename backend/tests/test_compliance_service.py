@@ -42,10 +42,12 @@ def create_mock_terminal(
     comments="",
     wl_match_type=None,
     mac_address_normalized=None,
+    id_=1,
 ):
     """Create a mock Terminal object with sensible defaults."""
     # Plain MagicMock (no spec) keeps the mock flexible for attribute assignment.
     t = MagicMock()
+    t.id = id_
     t.ip_address = ip
     t.mac_address = mac
     t.mac_address_normalized = mac_address_normalized or mac.replace(':', '').replace('-', '').replace('.', '').upper()
@@ -76,6 +78,7 @@ def create_mock_blacklist(
 ):
     """Create a mock Blacklist object with sensible defaults."""
     b = MagicMock(spec=Blacklist)
+    b.id = 1
     b.ip_address = ip
     b.mac_address = mac
     b.mac_address_normalized = mac_normalized
@@ -624,7 +627,7 @@ class TestAutoUnblockTerminal:
 
         unblock_results = {"fw1": True, "fw2": False}
 
-        async def mock_unblock(ip, fw_tag):
+        async def mock_unblock(ip, fw_tag, terminal_id=None, mac_address=None):
             return unblock_results.get(fw_tag, False)
 
         with patch.object(service, "_load_whitelist_cache", return_value=wl_data), \
@@ -1196,7 +1199,12 @@ class TestApplyResultTransitions:
                 "192.168.1.100", "AA:BB:CC:DD:EE:FF",
             )
 
-        assert result == {"status_changed": True, "new_compliance": "bypass", "unblocked": False}
+        assert result["status_changed"] is True
+        assert result["new_compliance"] == "bypass"
+        assert result["unblocked"] is False
+        assert result["audit"] is not None
+        assert result["audit"]["action"] == "compliance_status_changed"
+        assert result["audit"]["resource_id"] == str(terminal.id)
         assert terminal.compliance_status == "bypass"
         assert terminal.wl_match_type == "mac"
         assert terminal.comments == "Whitelist: test device"
@@ -1220,7 +1228,12 @@ class TestApplyResultTransitions:
                 "192.168.1.100", "AA:BB:CC:DD:EE:FF",
             )
 
-        assert result == {"status_changed": True, "new_compliance": "compliant", "unblocked": False}
+        assert result["status_changed"] is True
+        assert result["new_compliance"] == "compliant"
+        assert result["unblocked"] is False
+        assert result["audit"] is not None
+        assert result["audit"]["action"] == "compliance_status_changed"
+        assert result["audit"]["resource_id"] == str(terminal.id)
         assert terminal.compliance_status == "compliant"
         assert agg.emit_compliant.call_count == 1
         agg.emit_compliant.assert_awaited_once_with("192.168.1.100", "AA:BB:CC:DD:EE:FF")
@@ -1337,7 +1350,7 @@ class TestApplyResultCooldownDowngrade:
                 "192.168.1.100", "AA:BB:CC:DD:EE:FF",
             )
 
-        assert result == {"status_changed": False, "new_compliance": "compliant", "unblocked": False}
+        assert result == {"status_changed": False, "new_compliance": "compliant", "unblocked": False, "audit": None}
         assert terminal.compliance_status == "compliant"
         assert created_blacklists(mock_db) == []
 
@@ -1617,7 +1630,7 @@ class TestTimeline10182183:
         assert terminal.compliance_status == "compliant"
         assert terminal.status == "unblocked"
         assert created_blacklists(mock_db) == []
-        assert result == {"status_changed": False, "new_compliance": "compliant", "unblocked": False}
+        assert result == {"status_changed": False, "new_compliance": "compliant", "unblocked": False, "audit": None}
 
         # 2) no phantom compliant -> non_compliant audit entry
         assert self._compliance_changed_calls(log_action_mock) == []
@@ -1644,17 +1657,17 @@ class TestTimeline10182183:
             make_result(one=None),      # blacklist upsert (idempotency) -> None
         ]
         with apply_result_mocks(service, mock_db, results, bound_fw_tags=["hq"]) as agg:
-            log_action_mock = service.log_action
             result = await service._apply_compliance_result(
                 terminal, "non_compliant", None, None, self.IP, self.NEW_MAC,
             )
 
         assert result["status_changed"] is True
 
-        changed = self._compliance_changed_calls(log_action_mock)
-        assert len(changed) == 1
-        assert changed[0].args[3] == f"{self.IP}_{self.NEW_MAC}"
-        assert changed[0].kwargs["ip_address"] == "System"
+        audit = result["audit"]
+        assert audit is not None
+        assert audit["action"] == "compliance_status_changed"
+        assert audit["resource_id"] == str(terminal.id)
+        assert audit["ip_address"] == "System"
 
         agg.emit_non_compliant.assert_awaited_once()
 
@@ -1725,6 +1738,48 @@ class TestTimeline10182183:
         assert result["non_compliant"] == 1
         # 1 batch commit + 1 trailing summary commit (the fix under test)
         assert mock_db.commit.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_recalculate_commit_failure_emits_no_audit(self, service, mock_db):
+        """点2 failure path: the recalculate batch commit fails, so the
+        ``compliance_status_changed`` audit must NOT be emitted — the audit must
+        never precede the committed business state."""
+        terminal = create_mock_terminal(
+            ip="192.168.1.100",
+            mac="AA:BB:CC:DD:EE:FF",
+            status="unblocked",
+            compliance_status="non_compliant",
+        )
+        terminal.non_compliant_confirm_count = 5
+        terminal.compliant_confirm_count = 3
+
+        mock_db.execute = scripted_execute([
+            make_result(scalars_all=[terminal]),  # select(Terminal)
+            make_result(all_rows=[]),             # active firewall tags -> {}
+        ])
+        # Batch persistence (self.db.commit after self.db.flush) fails.
+        mock_db.commit = AsyncMock(side_effect=RuntimeError("db commit failed"))
+
+        ig_data = {"lab": [{"ip_address": "10.0.0.99", "mac_address": "11-22-33-44-55-66"}]}
+        log_action_mock = AsyncMock()
+
+        with patch("app.services.compliance_service._acquire_compliance_lock", new=AsyncMock(return_value="tok")), \
+             patch("app.services.compliance_service._release_compliance_lock"), \
+             patch.object(service, "log_action", log_action_mock), \
+             patch.object(service, "_load_whitelist_cache", return_value=[]), \
+             patch.object(service, "_load_all_ipguard_cache", return_value=ig_data), \
+             patch.object(service, "_load_scope_cache", return_value=[]), \
+             patch.object(service, "_is_ipguard_cache_stale", return_value=False), \
+             patch.object(service, "_get_confirm_threshold", return_value=2), \
+             patch.object(service, "_match_ipguard_in_memory", return_value=(True, True, True)), \
+             patch("app.services.event_emitter.emit_terminal_compliant", AsyncMock()):
+            with pytest.raises(RuntimeError):
+                await service.recalculate_all_compliance()
+
+        # The audit emit loop runs only after a successful batch commit; on
+        # failure it must never have run (a transition happened but was not
+        # persisted, so no matching audit entry may be emitted).
+        log_action_mock.assert_not_awaited()
 
 
 class TestApplyResultBlockReason:
@@ -1818,7 +1873,7 @@ class TestApplyResultStatusUnchanged:
                 "192.168.1.100", "AA:BB:CC:DD:EE:FF",
             )
 
-        assert result == {"status_changed": False, "new_compliance": "compliant", "unblocked": False}
+        assert result == {"status_changed": False, "new_compliance": "compliant", "unblocked": False, "audit": None}
         assert terminal.firewall_tag is None
 
 
@@ -1884,7 +1939,7 @@ class TestApplyResultUnblockEdges:
             firewall_tag="fw1",
         )
 
-        async def fake_unblock(ip, fw_tag):
+        async def fake_unblock(ip, fw_tag, terminal_id=None, mac_address=None):
             return fw_tag == "fw1"
 
         results = [
@@ -2364,7 +2419,7 @@ class TestApplyManualWhitelist:
         )
         terminal.id = 1
 
-        async def fake_unblock(ip, fw_tag):
+        async def fake_unblock(ip, fw_tag, terminal_id=None, mac_address=None):
             return fw_tag == "fw1"
 
         mock_db.execute = scripted_execute([make_result(scalars_all=[bl1, bl2])])
@@ -2399,7 +2454,7 @@ class TestApplyManualWhitelist:
         )
         terminal.id = 1
 
-        async def fake_unblock(ip, fw_tag):
+        async def fake_unblock(ip, fw_tag, terminal_id=None, mac_address=None):
             raise RuntimeError("boom")
 
         mock_db.execute = scripted_execute([make_result(scalars_all=[bl_entry])])
@@ -4346,7 +4401,7 @@ class TestAutoUnblockEdges:
         assert result.unblocked == 1
         assert terminal.status == "unblocked"
         assert bl_entry.auto_unblocked is True
-        unblock_mock.assert_awaited_once_with("192.168.1.100", "fw1")
+        unblock_mock.assert_awaited_once_with("192.168.1.100", "fw1", terminal.id, terminal.mac_address)
 
     @pytest.mark.asyncio
     async def test_whitelist_match_immediate_unblock_bypasses_cooldown(self, service, mock_db):

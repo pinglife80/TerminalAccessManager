@@ -239,7 +239,8 @@ async def login(
     await ts.log_action(user.username, "login", "auth", str(user.id),
                         {"message": "User logged in successfully", "ip": get_client_ip(request), "provider": provider},
                         ip_address=get_client_ip(request),
-                        resource_name=user.username)
+                        resource_name=user.username,
+                        user_id=user.id)
 
     access_token = await create_access_token_async(data={"sub": user.username}, user_id=user.id)
     refresh_token = await create_refresh_token_async(data={"sub": user.username}, user_id=user.id)
@@ -440,7 +441,8 @@ async def refresh_token(
         await ts.log_action(username, "token_refresh", "auth", str(user.id),
                             {"message": "Token refreshed"},
                             ip_address=get_client_ip(request),
-                            resource_name=user.username)
+                            resource_name=user.username,
+                            user_id=user.id)
 
         return {
             "access_token": access_token,
@@ -480,7 +482,8 @@ async def logout(
     await ts.log_action(current_user.username, "logout", "auth", str(current_user.id),
                         {"message": "User logged out"},
                         ip_address=get_client_ip(request),
-                        resource_name=current_user.username)
+                        resource_name=current_user.username,
+                        user_id=current_user.id)
 
     return {"message": "Successfully logged out", "success": True}
 
@@ -564,7 +567,8 @@ async def change_password(
     await ts.log_action(current_user.username, "change_password", "auth", str(current_user.id),
                         {"message": "User changed their own password"},
                         ip_address=get_client_ip(request),
-                        resource_name=current_user.username)
+                        resource_name=current_user.username,
+                        user_id=current_user.id)
 
     return {"message": "Password changed successfully", "success": True}
 
@@ -722,7 +726,8 @@ async def admin_create_user(
                          "email": new_user.email, "is_active": new_user.is_active,
                          "role": "superuser" if new_user.is_superuser else "user"},
                         ip_address=get_client_ip(request),
-                        resource_name=new_user.username)
+                        resource_name=new_user.username,
+                        user_id=current_user.id)
 
     return await _build_user_detail_response(db, new_user)
 
@@ -823,7 +828,8 @@ async def admin_update_user(
                             {"message": f"User role changed from {old_role} to {new_role}",
                              "target_user": user.username, "old_role": old_role, "new_role": new_role},
                             ip_address=get_client_ip(request),
-                            resource_name=user.username)
+                            resource_name=user.username,
+                            user_id=current_user.id)
 
     await db.commit()
     await db.refresh(user)
@@ -860,7 +866,8 @@ async def admin_update_user(
                         {"message": "Updated user", "username": user.username,
                          "changes": changes},
                         ip_address=get_client_ip(request),
-                        resource_name=user.username)
+                        resource_name=user.username,
+                        user_id=current_user.id)
 
     return await _build_user_detail_response(db, user)
 
@@ -904,7 +911,8 @@ async def admin_delete_user(
     await ts.log_action(current_user.username, "delete_user", "user", str(user_id),
                         {"message": "Deleted user", "username": deleted_username},
                         ip_address=get_client_ip(request),
-                        resource_name=deleted_username)
+                        resource_name=deleted_username,
+                        user_id=current_user.id)
 
     return {"message": f"User '{deleted_username}' deleted successfully", "success": True}
 
@@ -946,7 +954,8 @@ async def admin_reset_password(
     await ts.log_action(current_user.username, "reset_password", "user", str(user.id),
                         {"message": "Reset password for user", "username": user.username},
                         ip_address=get_client_ip(request),
-                        resource_name=user.username)
+                        resource_name=user.username,
+                        user_id=current_user.id)
 
     return {"message": f"Password for '{user.username}' reset successfully", "success": True}
 
@@ -973,7 +982,8 @@ async def admin_unlock_user(
     await ts.log_action(current_user.username, "unlock_user", "user", str(user.id),
                         {"message": "Unlocked user account", "username": user.username},
                         ip_address=get_client_ip(request),
-                        resource_name=user.username)
+                        resource_name=user.username,
+                        user_id=current_user.id)
 
     return {"message": f"Account '{user.username}' unlocked successfully", "success": True}
 
@@ -1003,7 +1013,8 @@ async def admin_lock_user(
     await ts.log_action(current_user.username, "lock_user", "user", str(user.id),
                         {"message": "Locked user account", "username": user.username},
                         ip_address=get_client_ip(request),
-                        resource_name=user.username)
+                        resource_name=user.username,
+                        user_id=current_user.id)
 
     return {"message": f"Account '{user.username}' locked successfully", "success": True}
 
@@ -1123,7 +1134,8 @@ async def verify_and_reset_password(
                         {"message": "User reset password via verification code",
                          "ip": get_client_ip(request)},
                         ip_address=get_client_ip(request),
-                        resource_name=user.username)
+                        resource_name=user.username,
+                        user_id=user.id)
 
     from app.services.event_emitter import emit_password_reset
     await emit_password_reset(user.username)

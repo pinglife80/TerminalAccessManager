@@ -2,11 +2,11 @@ import csv
 from io import StringIO
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.security import require_permission
+from app.core.security import get_client_ip, require_permission
 from app.models.user import User
 from app.schemas.terminal import BlacklistCheckItem, BlacklistCheckRequest, BlacklistQuery, BlacklistResponse, PaginatedResponse
 from app.services.terminal_service import TerminalService
@@ -91,6 +91,7 @@ async def check_blacklist(
 
 @router.get("/export")
 async def export_blacklist(
+    request: Request,
     search: str = Query(None, description="Search by MAC or IP"),
     start_date: str = Query(None, description="Filter by start date (YYYY-MM-DD)"),
     end_date: str = Query(None, description="Filter by end date (YYYY-MM-DD)"),
@@ -175,6 +176,17 @@ async def export_blacklist(
         ])
 
     output.seek(0)
+
+    # Audit log for export action
+    service = TerminalService(db)
+    await service.log_action(
+        current_user.username, "export_blacklist", "blacklist", None,
+        {"message": "Exported blacklist", "record_count": len(blacklist),
+         "filters": {"search": search, "start_date": start_date, "end_date": end_date, "status": status}},
+        ip_address=get_client_ip(request),
+        resource_name="blacklist",
+        user_id=current_user.id,
+    )
 
     headers = {
         "Content-Disposition": "attachment; filename=blacklist.csv",

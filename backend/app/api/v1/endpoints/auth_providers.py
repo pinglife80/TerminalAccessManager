@@ -104,6 +104,7 @@ async def create_provider(
         {"name": provider.name, "provider_type": provider.provider_type, "enabled": provider.enabled},
         ip_address=get_client_ip(request),
         resource_name=provider.name,
+        user_id=current_user.id,
     )
     return provider
 
@@ -158,6 +159,7 @@ async def update_provider(
         {"name": provider.name, "enabled": provider.enabled, "priority": provider.priority},
         ip_address=get_client_ip(request),
         resource_name=provider.name,
+        user_id=current_user.id,
     )
     return provider
 
@@ -184,6 +186,7 @@ async def delete_provider(
         {"name": provider_name, "provider_type": provider_type},
         ip_address=get_client_ip(request),
         resource_name=provider_name,
+        user_id=current_user.id,
     )
 
 
@@ -213,6 +216,7 @@ async def test_provider(
             {"name": provider_config.name, "provider_type": provider_config.provider_type, "success": result.get("success", False)},
             ip_address=get_client_ip(request),
             resource_name=provider_config.name,
+            user_id=current_user.id,
         )
         return AuthTestResult(**result)
     except Exception as e:
@@ -223,6 +227,7 @@ async def test_provider(
             {"name": provider_config.name, "provider_type": provider_config.provider_type, "success": False, "error": str(e)},
             ip_address=get_client_ip(request),
             resource_name=provider_config.name,
+            user_id=current_user.id,
         )
         return AuthTestResult(
             success=False,

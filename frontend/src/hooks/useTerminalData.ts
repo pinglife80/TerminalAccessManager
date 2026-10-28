@@ -278,6 +278,8 @@ export const useBlacklistCheck = (params: BlacklistCheckParams) => {
 export interface AuditLogSearchParams {
   username?: string;
   action?: string;
+  resource_type?: string;
+  resource_id?: string;
   search?: string;
   start_date?: string;
   end_date?: string;
@@ -300,6 +302,7 @@ export interface AuditLog {
   resource_id?: string;
   resource_name?: string;
   username: string;
+  user_id?: number;
   ip_address?: string;
   timestamp: string;
   details?: string;
@@ -311,6 +314,17 @@ export const useAuditLogs = (params?: AuditLogSearchParams) => {
     queryFn: async () => {
       const response = await apiClient.get('/logs/search', { params });
       return response.data as CursorPaginatedResponse<AuditLog>;
+    },
+    placeholderData: keepPreviousData,
+  });
+};
+
+export const useSecurityEventsCount = (params?: AuditLogSearchParams) => {
+  return useQuery({
+    queryKey: ['audit-logs-security-count', params],
+    queryFn: async () => {
+      const response = await apiClient.get('/logs/security-count', { params });
+      return response.data as { count: number };
     },
     placeholderData: keepPreviousData,
   });

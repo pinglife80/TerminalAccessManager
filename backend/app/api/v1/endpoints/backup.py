@@ -86,6 +86,7 @@ async def update_backup_config(
         None,
         {"enabled": config.enabled, "schedule": config.schedule, "storage_type": config.storage_type},
         ip_address=get_client_ip(request),
+        user_id=current_user.id,
     )
     return BackupConfigResponse(**config_data.model_dump())
 
@@ -123,6 +124,7 @@ async def run_backup(
         },
         ip_address=get_client_ip(request),
         resource_name=job.file_path,
+        user_id=current_user.id,
     )
     return BackupJobResponse(
         id=job.id,
@@ -155,6 +157,7 @@ async def create_whitelist_backup(
         {"status": job.status, "file_path": job.file_path, "file_size": job.file_size},
         ip_address=get_client_ip(request),
         resource_name=job.file_path,
+        user_id=current_user.id,
     )
     return BackupJobResponse(
         id=job.id,
@@ -220,6 +223,7 @@ async def restore_whitelist_backup(
         {"filename": safe_filename, "success": success},
         ip_address=get_client_ip(request),
         resource_name=safe_filename,
+        user_id=current_user.id,
     )
 
     return BackupRestoreResponse(
@@ -331,6 +335,7 @@ async def download_backup(
         {"filename": safe_filename, "file_size": file_size},
         ip_address=get_client_ip(request),
         resource_name=safe_filename,
+        user_id=current_user.id,
     )
 
     return FileResponse(
@@ -367,6 +372,7 @@ async def restore_backup(
         {"filename": safe_filename, "success": success},
         ip_address=get_client_ip(request),
         resource_name=safe_filename,
+        user_id=current_user.id,
     )
 
     return BackupRestoreResponse(
@@ -407,6 +413,7 @@ async def delete_backup(
         {"filename": safe_filename, "file_size": file_size},
         ip_address=get_client_ip(request),
         resource_name=safe_filename,
+        user_id=current_user.id,
     )
 
 

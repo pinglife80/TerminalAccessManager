@@ -22,6 +22,7 @@ from app.models.whitelist import Whitelist
 from app.schemas.terminal import AuditLogQuery, BlacklistQuery, TerminalQuery, WhitelistQuery
 from app.core.crypto import decrypt_config
 from app.core.config import settings
+from app.core.database import async_session_factory
 from app.services.sangfor_service import SangforService
 
 
@@ -89,11 +90,26 @@ def _parse_date_range(start_date: str | None, end_date: str | None):
     if end_date:
         try:
             naive_end = datetime.strptime(end_date, "%Y-%m-%d")
-            end_dt = tz.localize(naive_end.replace(hour=23, minute=59, second=59))
-            conditions.append(lambda col: col <= end_dt)
+            # Exclusive upper bound: select records up to (but not including)
+            # the start of the following day, so 23:59:59.x records on end_date
+            # itself are still included.
+            end_dt = tz.localize(naive_end + timedelta(days=1))
+            conditions.append(lambda col: col < end_dt)
         except ValueError:
             pass
     return conditions
+
+
+def _parse_actions(action: str | None) -> list[str] | None:
+    """Split a comma-separated action filter string into a list of actions."""
+    if not action:
+        return None
+    parts = [p.strip() for p in action.split(",") if p.strip()]
+    return parts or None
+
+
+# Actions classified as security events for the security-events aggregate card
+SECURITY_EVENT_ACTIONS = ("login_failed", "firewall_block", "auto_block_terminal", "lock_user")
 
 
 def _parse_block_time(block_time: str) -> timedelta:
@@ -660,6 +676,7 @@ class TerminalService:
         the original pattern is stored as ip_pattern with a pattern_type field.
         """
         try:
+            pending_audits = []
             normalized_mac = None
 
             if mac_address:
@@ -729,7 +746,14 @@ class TerminalService:
                     "new_comments": comments,
                 }
                 resource_id = str(existing.id)
-                await self.log_action(username, "whitelist_update", "whitelist", resource_id, log_details)
+                pending_audits.append({
+                    "username": username,
+                    "action": "whitelist_update",
+                    "resource_type": "whitelist",
+                    "resource_id": resource_id,
+                    "details": log_details,
+                    "ip_address": None,
+                })
             else:
                 whitelist_entry = Whitelist(
                     mac_address=normalized_mac,
@@ -749,7 +773,14 @@ class TerminalService:
                     "comments": comments,
                 }
                 resource_id = normalized_mac or ip_pattern
-                await self.log_action(username, "whitelist_create", "whitelist", resource_id, log_details)
+                pending_audits.append({
+                    "username": username,
+                    "action": "whitelist_create",
+                    "resource_type": "whitelist",
+                    "resource_id": resource_id,
+                    "details": log_details,
+                    "ip_address": None,
+                })
 
             # After creating/updating the whitelist entry: apply it immediately to
             # every terminal whose identity matches the entry's semantics.
@@ -790,6 +821,8 @@ class TerminalService:
                         wl_match_type=wl_match_type,
                         username=username,
                     )
+                    if apply_result.get("audit"):
+                        pending_audits.append(apply_result["audit"])
                     logger.info(
                         f"Manual whitelist applied immediately ({wl_match_type}) for "
                         f"{terminal.ip_address or ''}/{terminal.mac_address or ''}: {apply_result}"
@@ -805,6 +838,13 @@ class TerminalService:
                 logger.info(f"Whitelist add (IP pattern) triggered full compliance recalculation: {recalc_result}")
 
             await self.db.commit()
+
+            for audit in pending_audits:
+                await self.log_action(
+                    audit["username"], audit["action"], audit["resource_type"],
+                    audit["resource_id"], audit["details"],
+                    ip_address=audit.get("ip_address"),
+                )
 
             from app.services.event_emitter import emit_whitelist_changed
             await emit_whitelist_changed(
@@ -1788,7 +1828,7 @@ class TerminalService:
             entry.last_operation_error = str(e)
             entry.last_operation_at = datetime.now(UTC)
             entry.retry_count = (entry.retry_count or 0) + 1
-            await self.log_action(
+            self._record_audit_inline(
                 username,
                 "firewall_unblock",
                 "blacklist",
@@ -1813,7 +1853,7 @@ class TerminalService:
             entry.last_operation_error = error_msg
             entry.last_operation_at = datetime.now(UTC)
             entry.retry_count = (entry.retry_count or 0) + 1
-            await self.log_action(
+            self._record_audit_inline(
                 username,
                 "firewall_unblock",
                 "blacklist",
@@ -1884,10 +1924,9 @@ class TerminalService:
                 terminal.firewall_tag = None
                 terminal.block_state = None
 
-        # Audit before commit so it is written in the same transaction as the
-        # entry state change (otherwise a later get_db commit failure would
-        # leave a successful unblock with no audit record).
-        await self.log_action(
+        # Queued on the current session so the audit row is committed atomically
+        # with the entry state in the same commit below.
+        self._record_audit_inline(
             username,
             "firewall_unblock",
             "blacklist",
@@ -1901,7 +1940,6 @@ class TerminalService:
             ip_address=ip_address,
             resource_name=ip_address,
         )
-
         await self.db.commit()
 
         from app.services.event_emitter import emit_terminal_unblocked
@@ -2170,8 +2208,14 @@ class TerminalService:
         if query.username:
             conditions.append(AuditLog.username == query.username)
 
-        if query.action:
-            conditions.append(AuditLog.action == query.action)
+        actions = _parse_actions(query.action)
+        if actions:
+            conditions.append(AuditLog.action.in_(actions))
+
+        if query.resource_type:
+            conditions.append(AuditLog.resource_type == query.resource_type)
+        if query.resource_id:
+            conditions.append(AuditLog.resource_id == query.resource_id)
 
         # Keyword search across IP, username, action, and details
         if query.search:
@@ -2236,8 +2280,14 @@ class TerminalService:
         if query.username:
             conditions.append(AuditLog.username == query.username)
 
-        if query.action:
-            conditions.append(AuditLog.action == query.action)
+        actions = _parse_actions(query.action)
+        if actions:
+            conditions.append(AuditLog.action.in_(actions))
+
+        if query.resource_type:
+            conditions.append(AuditLog.resource_type == query.resource_type)
+        if query.resource_id:
+            conditions.append(AuditLog.resource_id == query.resource_id)
 
         # Keyword search across IP, username, action, and details
         if query.search:
@@ -2263,15 +2313,93 @@ class TerminalService:
         result = await self.db.execute(stmt)
         return result.scalar() or 0
 
+    async def search_security_events_count(self, query: AuditLogQuery) -> int:
+        """Count security-relevant audit events matching the given filters.
+
+        Always scoped to the security action set (login failures, blocks, account
+        lockouts); further narrowed by the same username/action/search/date filters
+        as the main search so the aggregate card matches the visible result set.
+        """
+        conditions = [AuditLog.action.in_(SECURITY_EVENT_ACTIONS)]
+
+        if query.username:
+            conditions.append(AuditLog.username == query.username)
+
+        actions = _parse_actions(query.action)
+        if actions:
+            conditions.append(AuditLog.action.in_(actions))
+
+        if query.resource_type:
+            conditions.append(AuditLog.resource_type == query.resource_type)
+        if query.resource_id:
+            conditions.append(AuditLog.resource_id == query.resource_id)
+
+        if query.search:
+            conditions.append(
+                or_(
+                    AuditLog.ip_address.ilike(f"%{_escape_like(query.search)}%"),
+                    AuditLog.username.ilike(f"%{_escape_like(query.search)}%"),
+                    AuditLog.action.ilike(f"%{_escape_like(query.search)}%"),
+                    AuditLog.details.ilike(f"%{_escape_like(query.search)}%"),
+                )
+            )
+
+        date_conditions = _parse_date_range(query.start_date, query.end_date)
+        for dc in date_conditions:
+            conditions.append(dc(AuditLog.timestamp))
+
+        stmt = select(func.count(AuditLog.id)).where(and_(*conditions))
+        result = await self.db.execute(stmt)
+        return result.scalar() or 0
+
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
     async def log_action(self, username: str, action: str, resource_type: str,
                          resource_id: str, details: dict[str, Any],
-                         ip_address: str = None, resource_name: str = None):
-        """Log an audit action with JSON details"""
+                         ip_address: str = None, resource_name: str = None,
+                         user_id: int | None = None):
+        """Log an audit action with JSON details.
+
+        Uses an independent session and commits immediately so the audit record
+        is persisted even if the caller's transaction is rolled back or the
+        caller (e.g. a background task) never commits.
+        """
         audit_log = AuditLog(
             username=username,
+            user_id=user_id,
+            action=action,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            resource_name=resource_name,
+            details=json.dumps(details, ensure_ascii=False),
+            ip_address=ip_address,
+        )
+        async with async_session_factory() as session:
+            session.add(audit_log)
+            await session.commit()
+
+    def _record_audit_inline(
+        self,
+        username: str,
+        action: str,
+        resource_type: str,
+        resource_id: str | None,
+        details: dict[str, Any],
+        ip_address: str = None,
+        resource_name: str = None,
+        user_id: int | None = None,
+    ) -> None:
+        """Queue an audit record on the current session without committing.
+
+        Used by self-held-transaction methods (retry_unblock) so the audit row is
+        persisted atomically with the business changes in the same
+        ``self.db.commit()``, eliminating the residual "business committed but
+        audit missing" gap of the deferred-audit (策略 A) approach.
+        """
+        audit_log = AuditLog(
+            username=username,
+            user_id=user_id,
             action=action,
             resource_type=resource_type,
             resource_id=resource_id,

@@ -153,7 +153,8 @@ async def create_role(
     await ts.log_action(current_user.username, "create_role", "role", str(role.id),
                         {"message": "Created role", "name": role.name, "description": role.description},
                         ip_address=get_client_ip(request),
-                        resource_name=role.name)
+                        resource_name=role.name,
+                        user_id=current_user.id)
 
     from app.services.event_emitter import emit_role_changed
     await emit_role_changed(role.name, current_user.username, "created", {"description": role.description})
@@ -224,7 +225,8 @@ async def update_role(
     await ts.log_action(current_user.username, "update_role", "role", str(role_id),
                         {"message": "Updated role", "name": role.name, "changes": changes},
                         ip_address=get_client_ip(request),
-                        resource_name=role.name)
+                        resource_name=role.name,
+                        user_id=current_user.id)
 
     from app.services.event_emitter import emit_role_changed, emit_permission_changed
     await emit_role_changed(role.name, current_user.username, "updated", {"changes": changes})
@@ -268,7 +270,8 @@ async def delete_role(
     await ts.log_action(current_user.username, "delete_role", "role", str(role_id),
                         {"message": "Deleted role", "name": deleted_name},
                         ip_address=get_client_ip(request),
-                        resource_name=deleted_name)
+                        resource_name=deleted_name,
+                        user_id=current_user.id)
 
     from app.services.event_emitter import emit_role_changed
     await emit_role_changed(deleted_name, current_user.username, "deleted", {})
@@ -329,7 +332,8 @@ async def assign_user_roles(
                         {"message": "Assigned role to user", "username": user.username,
                          "role": role_name, "role_name": role_name},
                         ip_address=get_client_ip(request),
-                        resource_name=role_name)
+                        resource_name=role_name,
+                        user_id=current_user.id)
 
     return {"message": f"Roles updated for user '{user.username}'", "success": True}
 

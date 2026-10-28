@@ -93,7 +93,8 @@ async def update_configs(
                             {"message": "Updated system configuration", "key": update.key,
                              "old_value": old_values.get(update.key), "new_value": update.value},
                             ip_address=get_client_ip(request),
-                            resource_name=update.key)
+                            resource_name=update.key,
+                            user_id=current_user.id)
 
     if email_updates:
         email_changes = {}
@@ -105,7 +106,8 @@ async def update_configs(
         await ts.log_action(current_user.username, "save_email_config", "system", "email_config",
                             {"message": "Saved email configuration", "changes": email_changes},
                             ip_address=get_client_ip(request),
-                            resource_name="email_config")
+                            resource_name="email_config",
+                            user_id=current_user.id)
 
     from app.services.event_emitter import emit_config_changed
     changes = [{"key": u.key, "old_value": old_values.get(u.key), "new_value": u.value} for u in updates]
@@ -140,7 +142,8 @@ async def update_single_config(
                         {"message": "Updated system configuration", "key": key,
                          "old_value": old_value, "new_value": update.value},
                         ip_address=get_client_ip(request),
-                        resource_name=key)
+                        resource_name=key,
+                        user_id=current_user.id)
 
     from app.services.event_emitter import emit_config_changed
     await emit_config_changed(key, current_user.username, old_value, update.value)
@@ -220,7 +223,8 @@ async def test_email_configuration(
             await ts.log_action(current_user.username, "test_email", "system", "email_config",
                                 {"message": "Sent test email", "recipient": email},
                                 ip_address="",
-                                resource_name="email_config")
+                                resource_name="email_config",
+                                user_id=current_user.id)
             return {"success": True, "message": f"Test email sent to {email}"}
         return {"success": False, "message": "Email send returned False"}
     except EmailRateLimitError:
@@ -285,7 +289,8 @@ async def upload_branding_asset(
                         {"message": "Uploaded branding asset", "purpose": purpose, "url": url_path,
                          "file_size": len(content)},
                         ip_address=get_client_ip(request),
-                        resource_name=config_key)
+                        resource_name=config_key,
+                        user_id=current_user.id)
 
     return {
         "url": url_path,
