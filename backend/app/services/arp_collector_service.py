@@ -508,6 +508,18 @@ class ArpCollectorService:
                     # Online this cycle: clear any prior offline mark.
                     if terminal.block_state == "offline":
                         terminal.block_state = None
+                        # 方向 B（B2）：离线打断了「连续在线观测」，此前累积的非合规
+                        # 确认计数证据已过期；重新上线时清零该 MAC 所有记录的确认计数，
+                        # 与 recalc 采用的 MAC 级累积口径保持一致，避免跨在线窗口累积
+                        # 陈旧的瞬时漏同步证据导致合规终端被误降级。
+                        if terminal.mac_address_normalized:
+                            sibling_stmt = select(Terminal).where(
+                                Terminal.mac_address_normalized == terminal.mac_address_normalized
+                            )
+                            sibling_result = await self.db.execute(sibling_stmt)
+                            for sibling in sibling_result.scalars().all():
+                                sibling.non_compliant_confirm_count = 0
+                                sibling.compliant_confirm_count = 0
                         logger.info(
                             f"ARP online: {terminal.ip_address}/{terminal.mac_address} "
                             f"cleared offline mark"

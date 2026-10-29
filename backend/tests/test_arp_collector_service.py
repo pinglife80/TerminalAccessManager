@@ -803,6 +803,40 @@ class TestProcessArpEntries:
         # 在线清除 offline 标记必须留痕，便于确认设备重新上线。
         assert_logged_any(info_logger, "ARP online", "AA-BB-CC-DD-EE-FF", "cleared offline mark")
 
+    @pytest.mark.asyncio
+    async def test_online_clears_offline_mark_and_resets_mac_confirm_counts(self, service, mock_db):
+        entries = [{"ip_address": "10.0.0.1", "mac_address": "aa:bb:cc:dd:ee:ff"}]
+        existing = make_terminal(ip="10.0.0.1", mac_norm="AABBCCDDEEFF")
+        existing.block_state = "offline"
+        existing.updated_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+        sibling = make_terminal(ip="10.0.0.2", mac_norm="AABBCCDDEEFF")
+        sibling.non_compliant_confirm_count = 3
+        sibling.compliant_confirm_count = 2
+
+        set_exec_sequence(
+            mock_db,
+            [
+                make_exec_result(scalar=existing),   # upsert lookup
+                make_exec_result(rows=[]),           # unchecked entries query
+                make_exec_result(rows=[existing]),   # all_terminals (offline detection)
+                make_exec_result(rows=[sibling]),    # sibling query by MAC (B2 clear)
+            ],
+        )
+
+        with patch("app.services.config_service.get_config_value", AsyncMock(side_effect=[300, 3])), \
+             patch("app.services.event_emitter.emit_terminal_offline", AsyncMock()) as offline, \
+             patch("app.services.arp_collector_service.logger.info") as info_logger:
+            await service.process_arp_entries(entries, "lab")
+
+        assert existing.block_state is None
+        # 方向 B（B2）：重新上线时按 MAC 清零兄弟记录确认计数，防止跨在线窗口
+        # 累积陈旧的瞬时漏同步证据导致合规终端被误降级。
+        assert sibling.non_compliant_confirm_count == 0
+        assert sibling.compliant_confirm_count == 0
+        offline.assert_not_called()
+        assert_logged_any(info_logger, "ARP online", "AA-BB-CC-DD-EE-FF", "cleared offline mark")
+
 
 # ===========================================================================
 # TestCollectFromApi
