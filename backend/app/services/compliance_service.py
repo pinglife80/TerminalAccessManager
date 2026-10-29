@@ -863,33 +863,9 @@ class ComplianceService:
                 skipped += len(entries)
                 continue
 
-            # Cooldown protection: skip auto-unblock if this MAC was recently auto-blocked
-            # within the cooldown period (default 10 minutes), to prevent rapid oscillation.
-            # EXCEPTION: If whitelist matches, unblock immediately (bypass cooldown) -
-            # whitelist is authoritative admin decision.
-            if not wl_match:
-                try:
-                    cooldown_minutes = await self._get_cooldown_minutes()
-                    cooldown_cutoff = datetime.now(UTC) - timedelta(minutes=cooldown_minutes)
-                    bl_recent_block_stmt = select(Blacklist).where(
-                        (Blacklist.mac_address_normalized == group_mac_norm) &
-                        (Blacklist.ip_address == group_ip) &
-                        (Blacklist.is_auto_blocked == True) &
-                        (Blacklist.blocked_at >= cooldown_cutoff) &
-                        (Blacklist.auto_unblocked == False)
-                    )
-                    recent_block_result = await self.db.execute(bl_recent_block_stmt)
-                    recent_block = recent_block_result.scalar_one_or_none()
-                    if recent_block:
-                        skipped += len(entries)
-                        logger.info(
-                            f"Cooldown: skipping auto-unblock for MAC {group_mac_norm} - "
-                            f"recently auto-blocked at {recent_block.blocked_at}, "
-                            f"cooldown={cooldown_minutes}min"
-                        )
-                        continue
-                except Exception:
-                    pass  # Cooldown check failure should not prevent unblocking
+            # 方向 C（C1）：此处不设解封冷却。能走到这的只有 whitelist（权威管理员
+            # 决策）或 IPGuard 已确认合规（误判自纠）两种「源已确认合规」情形，均应
+            # 即时解封；真实震荡由封锁侧的 confirm-count 阈值兜底，无需在此重复冷却。
 
             # Try to unblock on ALL firewalls for this terminal.
             # IMPORTANT: Unblock each firewall using the IP that was originally blocked
@@ -1913,6 +1889,7 @@ class ComplianceService:
         wl_comments: str | None,
         ip_addr: str,
         mac_addr: str,
+        ig_match: bool | None = None,
     ) -> dict:
         """
         Apply compliance result to a single terminal.
@@ -1927,6 +1904,9 @@ class ComplianceService:
             wl_comments: The whitelist comments or None
             ip_addr: IP address string
             mac_addr: MAC address string
+            ig_match: Whether the IPGuard baseline confirmed compliance (recalc paths
+                only). When True and new_compliance == "compliant", unblock bypasses
+                cooldown. Default None preserves the original cooldown behavior.
         
         Returns:
             dict: {"status_changed": bool, "new_compliance": str, "unblocked": bool,
@@ -2047,7 +2027,11 @@ class ComplianceService:
                 # within the cooldown period (default 10 minutes), to prevent rapid oscillation.
                 # EXCEPTION: Bypass (whitelist) always unblocks immediately - whitelist is authoritative.
                 _cooldown_skip_unblock = False
-                if new_compliance != "bypass":
+                # 方向 C（C1）：误判自纠绕过冷却。源已确认合规（new_compliance=="compliant"
+                # 且调用方传入 ig_match=True）时即时解封，避免误判封锁后被冷却多封锁约
+                # 一个冷却周期。真实震荡仍由封锁侧 confirm-count 阈值兜底，此处无需重复
+                # 冷却；ig_match 缺省(None)时保持原有冷却行为。
+                if new_compliance != "bypass" and not (new_compliance == "compliant" and ig_match is True):
                     try:
                         cooldown_minutes = await self._get_cooldown_minutes()
                         cooldown_cutoff = datetime.now(UTC) - timedelta(minutes=cooldown_minutes)
@@ -2593,7 +2577,12 @@ class ComplianceService:
                                 else:
                                     # 「IP 与 MAC 同时缺失」= 终端整体从 IPGuard 消失（常见于
                                     # 瞬时离线/DHCP 续租导致的数据源侧瞬时缺失），并非真实不合规。
-                                    total_absence = (not use_ip_only) and (not ig_ip_found) and (not ig_mac_found)
+                                    # IP-only 作用域只看 IP，当 IP 缺失时应同等视为数据源侧瞬时缺口，
+                                    # 享受同样的长阈值防误封保护（否则会退回 6 短阈值误降级）。
+                                    total_absence = (
+                                        ((not use_ip_only) and (not ig_ip_found) and (not ig_mac_found))
+                                        or (use_ip_only and (not ig_ip_found))
+                                    )
 
                                     downgrade_threshold = confirm_threshold
                                     if old_compliance == "compliant":
@@ -2693,7 +2682,8 @@ class ComplianceService:
                             )
 
                     result = await self._apply_compliance_result(
-                        terminal, new_compliance, new_wl_match_type, wl_comments, ip_addr, mac_addr
+                        terminal, new_compliance, new_wl_match_type, wl_comments, ip_addr, mac_addr,
+                        ig_match=ig_match,
                     )
 
                     if result.get("audit"):

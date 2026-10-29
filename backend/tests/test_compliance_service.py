@@ -1451,6 +1451,66 @@ class TestApplyResultUnblock:
         assert terminal.status == "blocked"
 
     @pytest.mark.asyncio
+    async def test_blocked_to_compliant_ig_match_true_bypasses_cooldown(self, service, mock_db):
+        bl_entry = create_mock_blacklist(
+            ip="192.168.1.100",
+            mac="AA:BB:CC:DD:EE:FF",
+            mac_normalized="AABBCCDDEEFF",
+            firewall_tag="fw1",
+            auto_unblocked=False,
+        )
+        terminal = create_mock_terminal(
+            ip="192.168.1.100",
+            mac="AA:BB:CC:DD:EE:FF",
+            status="blocked",
+            compliance_status="non_compliant",
+            source_tag="lab",
+            firewall_tag="fw1",
+        )
+
+        # ig_match=True 且转 compliant：误判自纠，跳过冷却查询，直接走解封路径。
+        results = [
+            make_result(scalars_all=[bl_entry]),  # mark blacklist entries
+            make_result(all_rows=[]),             # active blacklist query
+        ]
+        with apply_result_mocks(service, mock_db, results):
+            result = await service._apply_compliance_result(
+                terminal, "compliant", None, None,
+                "192.168.1.100", "AA:BB:CC:DD:EE:FF",
+                ig_match=True,
+            )
+
+        assert result["unblocked"] is True
+        assert terminal.status == "unblocked"
+        assert bl_entry.auto_unblocked is True
+
+    @pytest.mark.asyncio
+    async def test_blocked_to_compliant_ig_match_false_keeps_cooldown(self, service, mock_db):
+        terminal = create_mock_terminal(
+            ip="192.168.1.100",
+            mac="AA:BB:CC:DD:EE:FF",
+            status="blocked",
+            compliance_status="non_compliant",
+            source_tag="lab",
+            firewall_tag="fw1",
+        )
+
+        # ig_match=False：不属于确认合规，冷却保护保持生效。
+        results = [
+            make_result(one=MagicMock()),  # unblock cooldown -> recent auto-block (truthy)
+            make_result(all_rows=[]),      # active blacklist query
+        ]
+        with apply_result_mocks(service, mock_db, results):
+            result = await service._apply_compliance_result(
+                terminal, "compliant", None, None,
+                "192.168.1.100", "AA:BB:CC:DD:EE:FF",
+                ig_match=False,
+            )
+
+        assert result["unblocked"] is False
+        assert terminal.status == "blocked"
+
+    @pytest.mark.asyncio
     async def test_blocked_to_compliant_keeps_blocked_when_all_unblock_fail(self, service, mock_db):
         terminal = create_mock_terminal(
             ip="192.168.1.100",
@@ -3489,7 +3549,7 @@ class TestRecalculateComplianceEdges:
 
         applied = {}
 
-        async def fake_apply(terminal, new_compliance, new_wl_match_type, wl_comments, ip_addr, mac_addr):
+        async def fake_apply(terminal, new_compliance, new_wl_match_type, wl_comments, ip_addr, mac_addr, ig_match=None):
             # 模拟 _apply_compliance_result 的核心副作用，隔离封锁机制，聚焦阈值逻辑。
             applied["new_compliance"] = new_compliance
             terminal.compliance_status = new_compliance
@@ -3536,7 +3596,7 @@ class TestRecalculateComplianceEdges:
 
         applied = {}
 
-        async def fake_apply(terminal, new_compliance, new_wl_match_type, wl_comments, ip_addr, mac_addr):
+        async def fake_apply(terminal, new_compliance, new_wl_match_type, wl_comments, ip_addr, mac_addr, ig_match=None):
             applied["new_compliance"] = new_compliance
             return {"status_changed": False, "new_compliance": new_compliance, "unblocked": False}
 
@@ -3575,7 +3635,7 @@ class TestRecalculateComplianceEdges:
 
         applied = {}
 
-        async def fake_apply(terminal, new_compliance, new_wl_match_type, wl_comments, ip_addr, mac_addr):
+        async def fake_apply(terminal, new_compliance, new_wl_match_type, wl_comments, ip_addr, mac_addr, ig_match=None):
             applied["new_compliance"] = new_compliance
             return {"status_changed": False, "new_compliance": new_compliance, "unblocked": False}
 
@@ -3616,7 +3676,7 @@ class TestRecalculateComplianceEdges:
 
         applied = {}
 
-        async def fake_apply(terminal, new_compliance, new_wl_match_type, wl_comments, ip_addr, mac_addr):
+        async def fake_apply(terminal, new_compliance, new_wl_match_type, wl_comments, ip_addr, mac_addr, ig_match=None):
             applied["new_compliance"] = new_compliance
             return {"status_changed": False, "new_compliance": new_compliance, "unblocked": False}
 
@@ -3662,7 +3722,7 @@ class TestRecalculateComplianceEdges:
 
         applied = {}
 
-        async def fake_apply(terminal, new_compliance, new_wl_match_type, wl_comments, ip_addr, mac_addr):
+        async def fake_apply(terminal, new_compliance, new_wl_match_type, wl_comments, ip_addr, mac_addr, ig_match=None):
             applied["new_compliance"] = new_compliance
             return {"status_changed": True, "new_compliance": new_compliance, "unblocked": False}
 
@@ -3704,7 +3764,7 @@ class TestRecalculateComplianceEdges:
         applied = {}
         absence_threshold = AsyncMock(return_value=24)
 
-        async def fake_apply(terminal, new_compliance, new_wl_match_type, wl_comments, ip_addr, mac_addr):
+        async def fake_apply(terminal, new_compliance, new_wl_match_type, wl_comments, ip_addr, mac_addr, ig_match=None):
             applied["new_compliance"] = new_compliance
             return {"status_changed": False, "new_compliance": new_compliance, "unblocked": False}
 
@@ -3746,7 +3806,7 @@ class TestRecalculateComplianceEdges:
         applied = {}
         absence_threshold = AsyncMock(return_value=24)
 
-        async def fake_apply(terminal, new_compliance, new_wl_match_type, wl_comments, ip_addr, mac_addr):
+        async def fake_apply(terminal, new_compliance, new_wl_match_type, wl_comments, ip_addr, mac_addr, ig_match=None):
             applied["new_compliance"] = new_compliance
             return {"status_changed": False, "new_compliance": new_compliance, "unblocked": False}
 
@@ -3765,6 +3825,51 @@ class TestRecalculateComplianceEdges:
             result = await service.recalculate_all_compliance()
 
         absence_threshold.assert_not_awaited()
+        assert applied["new_compliance"] == "compliant"
+
+    @pytest.mark.asyncio
+    async def test_recalculate_ip_only_scope_ip_missing_uses_extended_threshold(self, service, mock_db):
+        """IP-only 作用域（如 ip_cidr）终端的 IP 从 IPGuard 缺失时，应视为数据源侧
+        瞬时缺口并启用更长的 IPGuard 缺失降级阈值（而非退回 6 短阈值误降级）。"""
+        terminal = create_mock_terminal(
+            ip="10.8.27.68",
+            mac="68:DA:73:A6:D3:21",
+            status="unblocked",
+            compliance_status="compliant",
+        )
+        terminal.compliant_checked_at = datetime.now(UTC) - timedelta(minutes=5)
+        terminal.block_state = None
+        terminal.non_compliant_confirm_count = 0
+
+        mock_db.execute = scripted_execute([make_result(scalars_all=[terminal])])
+
+        # 终端不在 IPGuard 缓存中 → IP-only 匹配不命中，且 IP 缺失
+        ig_data = {"yp": [{"ip_address": "10.0.0.99", "mac_address": "11-22-33-44-55-66"}]}
+        scope_data = [{"scope_type": "ip_cidr", "scope_value": "10.8.27.0/24"}]
+
+        applied = {}
+        absence_threshold = AsyncMock(return_value=24)
+
+        async def fake_apply(terminal, new_compliance, new_wl_match_type, wl_comments, ip_addr, mac_addr, ig_match=None):
+            applied["new_compliance"] = new_compliance
+            return {"status_changed": False, "new_compliance": new_compliance, "unblocked": False}
+
+        with patch("app.services.compliance_service._acquire_compliance_lock", new=AsyncMock(return_value="tok")), \
+             patch("app.services.compliance_service._release_compliance_lock"), \
+             patch.object(service, "_load_whitelist_cache", return_value=[]), \
+             patch.object(service, "_load_all_ipguard_cache", return_value=ig_data), \
+             patch.object(service, "_load_scope_cache", return_value=scope_data), \
+             patch.object(service, "_is_ipguard_cache_stale", return_value=False), \
+             patch.object(service, "_get_confirm_threshold", return_value=2), \
+             patch.object(service, "_get_compliant_downgrade_threshold", return_value=6), \
+             patch.object(service, "_get_compliant_grace_minutes", return_value=10), \
+             patch.object(service, "_get_ipguard_absence_threshold", new=absence_threshold), \
+             patch.object(service, "_match_ipguard_in_memory", return_value=(False, False, False)), \
+             patch.object(service, "_match_ipguard_ip_only_in_memory", return_value=False), \
+             patch.object(service, "_apply_compliance_result", new=fake_apply):
+            result = await service.recalculate_all_compliance()
+
+        absence_threshold.assert_awaited_once()
         assert applied["new_compliance"] == "compliant"
 
     @pytest.mark.asyncio
@@ -3869,7 +3974,7 @@ class TestRecalculateComplianceEdges:
 
         applied = {}
 
-        async def fake_apply(terminal, new_compliance, new_wl_match_type, wl_comments, ip_addr, mac_addr):
+        async def fake_apply(terminal, new_compliance, new_wl_match_type, wl_comments, ip_addr, mac_addr, ig_match=None):
             applied["new_compliance"] = new_compliance
             terminal.compliance_status = new_compliance
             return {"status_changed": True, "new_compliance": new_compliance, "unblocked": False}
@@ -4176,7 +4281,8 @@ class TestAutoUnblockEdges:
     """Finer branches for auto_unblock_compliant."""
 
     @pytest.mark.asyncio
-    async def test_cooldown_skips_unblock(self, service, mock_db):
+    async def test_ipguard_confirmed_compliant_bypasses_cooldown(self, service, mock_db):
+        """方向 C（C1）：IPGuard 已确认合规时，即便近期刚被自动封锁也立即解封。"""
         bl_entry = create_mock_blacklist(
             ip="192.168.1.100",
             mac="AA:BB:CC:DD:EE:FF",
@@ -4196,17 +4302,6 @@ class TestAutoUnblockEdges:
         term_result_mock = MagicMock()
         term_result_mock.scalar_one_or_none.return_value = terminal
 
-        recent_block = create_mock_blacklist(
-            ip="192.168.1.100",
-            mac="AA:BB:CC:DD:EE:FF",
-            mac_normalized="AABBCCDDEEFF",
-            firewall_tag="fw1",
-            is_auto_blocked=True,
-            auto_unblocked=False,
-        )
-        recent_result_mock = MagicMock()
-        recent_result_mock.scalar_one_or_none.return_value = recent_block
-
         call_count = {"n": 0}
 
         async def execute_side_effect(stmt):
@@ -4215,8 +4310,6 @@ class TestAutoUnblockEdges:
                 return bl_result_mock
             elif call_count["n"] == 2:
                 return term_result_mock
-            elif call_count["n"] == 3:
-                return recent_result_mock
             return MagicMock()
 
         mock_db.execute = AsyncMock(side_effect=execute_side_effect)
@@ -4226,13 +4319,13 @@ class TestAutoUnblockEdges:
         with patch.object(service, "_load_whitelist_cache", return_value=[]), \
              patch.object(service, "_load_all_ipguard_cache", return_value=ig_data), \
              patch.object(service, "_load_scope_cache", return_value=[]), \
-             patch.object(service, "_get_cooldown_minutes", return_value=10), \
-             patch.object(service, "_unblock_on_firewall") as unblock_mock:
+             patch.object(service, "_unblock_on_firewall", return_value=True) as unblock_mock:
             result = await service.auto_unblock_compliant()
 
-        assert result.unblocked == 0
-        assert result.skipped == 1
-        unblock_mock.assert_not_awaited()
+        assert result.unblocked == 1
+        assert result.skipped == 0
+        assert terminal.status == "unblocked"
+        unblock_mock.assert_awaited()
 
     @pytest.mark.asyncio
     async def test_ipguard_match_sets_compliant(self, service, mock_db):
