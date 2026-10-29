@@ -1,6 +1,6 @@
 # 更新日志
 
-> 文档版本：v3.24.0  更新日期：2026-10-28
+> 文档版本：v3.24.1  更新日期：2026-10-29
 
 本文件记录 TerminalAccessManager 的所有重要变更。
 
@@ -8,6 +8,23 @@
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ***
+
+## [3.24.1] - 2026-10-29
+
+### 修复
+
+- **IP-only 合规作用域 IP 漏同步导致合规终端被误封**：IP-only 作用域（ip_cidr/ip_range/mac_prefix_arp）下，IPGuard 源瞬时漏同步该 IP 时，`total_absence` 的「IP/MAC 双缺失→18 长阈值」防误封保护被旁路，退回 6 短阈值误降级并封锁。现修复 total_absence 判定，将「仅 IP 缺失」纳入长阈值保护
+  - 关联文件：`backend/app/services/compliance_service.py`、`backend/tests/test_compliance_service.py`
+
+- **离线重新上线清零确认计数，避免跨在线窗口累积陈旧证据误封**：终端离线重新上线时按 MAC 清零该 MAC 全部记录的确认计数，与 recalc 的 MAC 级累积口径一致，避免跨在线窗口累积瞬时漏同步证据导致误降级
+  - 关联文件：`backend/app/services/arp_collector_service.py`、`backend/tests/test_arp_collector_service.py`
+
+- **误判自纠绕过解封冷却即时恢复**：IPGuard 确认合规后即时解封，不再被解封冷却再卡一个冷却周期；真实震荡仍由封锁侧确认计数阈值兜底
+  - 关联文件：`backend/app/services/compliance_service.py`、`backend/tests/test_compliance_service.py`
+
+### 测试
+
+- 新增方向 A/B/C 回归测试 3 例（IP-only 作用域 IP 缺失走长阈值、离线重上线清零计数、ig_match 绕过/保持冷却）；后端全量 1611 用例通过
 
 ## [3.24.0] - 2026-10-28
 

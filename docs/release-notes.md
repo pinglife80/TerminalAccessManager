@@ -1,12 +1,44 @@
 # 版本跟踪记录
 
-> 文档版本：v3.24.0 | 更新日期：2026-10-28
+> 文档版本：v3.24.1 | 更新日期：2026-10-29
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
 
 ---
+
+## [v3.24.1] - 2026-10-29
+
+### 合规终端误封修复（方向 A/B/C）（Patch 版本）
+
+#### 背景
+
+终端 10.8.14.225 实际合规（合规基线库存在）却被误判非合规并封锁。根因：IP-only 合规作用域下，IPGuard 源瞬时漏同步该 IP 时，`total_absence` 的双缺失 18 长阈值防误封保护被旁路，退回 6 短阈值误降级 + 封锁；翻回合规后又被 10 分钟冷却卡住。
+
+#### 主要变更
+
+| 变更项 | 说明 |
+|--------|------|
+| 方向 A | IP-only 作用域「仅 IP 缺失」纳入 total_absence 长阈值保护，防瞬时漏同步误降级 |
+| 方向 B（B2） | 离线重新上线按 MAC 清零确认计数，避免跨在线窗口累积陈旧证据 |
+| 方向 C（C1） | IPGuard 确认合规后绕过解封冷却即时恢复，震荡仍由封锁侧阈值兜底 |
+
+#### 升级步骤（推荐：一键升级）
+
+    git checkout main
+    git pull origin main
+    ./manage.sh upgrade
+
+#### 升级注意事项
+
+- 本次无 Alembic 迁移（不改动数据库 schema）。
+- 修复仅作用于合规判定与解封冷却逻辑，不改变防火墙封锁/解封 API 契约。
+- 仅后端代码与测试变更，需重新构建后端镜像（`./manage.sh upgrade` / `./manage.sh rebuild backend` 已覆盖）。
+
+#### 文件变更清单
+
+    backend/app/services/compliance_service.py、backend/app/services/arp_collector_service.py、backend/tests/test_compliance_service.py、backend/tests/test_arp_collector_service.py
 
 ## [v3.24.0] - 2026-10-28
 
