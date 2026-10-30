@@ -207,6 +207,12 @@ class ComplianceService:
             elif use_ip_only:
                 ig_match = self._match_ipguard_ip_only_in_memory(ipguard_data, ip_addr)
                 entry["use_ip_only"] = True
+                # 建议#1：ip-only 作用域也补算 ip_found/mac_found，供首次发现路径
+                # total_absence 判定复用（与 OR/exact 分支及 recalc 路径保持一致，
+                # 避免 ip-only 下 ip_found 依赖默认 False 的隐式巧合）。
+                _, ip_found, mac_found = self._match_ipguard_in_memory(ipguard_data, ip_addr, mac_addr, ipguard_mac_prefixes)
+                entry["ip_found"] = ip_found
+                entry["mac_found"] = mac_found
             else:
                 ig_match, ip_found, mac_found = self._match_ipguard_in_memory(ipguard_data, ip_addr, mac_addr, ipguard_mac_prefixes)
                 entry["use_ip_only"] = False
@@ -1786,6 +1792,9 @@ class ComplianceService:
         wl_comments: str | None,
         ip_addr: str,
         mac_addr: str,
+        ip_found: bool = False,
+        mac_found: bool = False,
+        use_ip_only: bool = False,
     ) -> dict:
         """Apply compliance result for a newly discovered (unknown) terminal.
 
@@ -1812,6 +1821,31 @@ class ComplianceService:
                 return {"status_changed": False, "new_compliance": terminal.compliance_status, "unblocked": False, "audit": None}
 
         if new_compliance == "non_compliant":
+            # offline 记录跳过（对齐 recalc 的 offline skip）：
+            # 陈旧终端（IP/MAC 不再被 ARP 采集到）不应累加确认计数，
+            # 避免「离线瞬时缺失」累积成误封；blocked 记录不跳过（其封堵仍需对账）。
+            if terminal.block_state == "offline" and terminal.status != "blocked":
+                logger.info(
+                    f"[compliance-guard][offline-skip] First-discovery "
+                    f"{ip_addr}/{mac_addr}: holding unknown — stale offline record "
+                    f"(block_state=offline, status={terminal.status})"
+                )
+                return {"status_changed": False, "new_compliance": terminal.compliance_status,
+                        "unblocked": False, "audit": None}
+
+            # 同步就绪前置闸（建议#2）：
+            # IPGuard 尚未完成首轮成功同步 / 缓存已过期时，「匹配失败 →
+            # non_compliant」无法采信（数据源侧缺失 ≠ 真实不合规），
+            # 保持 unknown，不累加、不封锁。
+            if not await self._is_ipguard_sync_ready():
+                logger.info(
+                    f"[compliance-guard][ipguard-not-ready] First-discovery "
+                    f"{ip_addr}/{mac_addr}: holding unknown — IPGuard sync not ready "
+                    f"(ip_found={ip_found}, mac_found={mac_found}, use_ip_only={use_ip_only})"
+                )
+                return {"status_changed": False, "new_compliance": terminal.compliance_status,
+                        "unblocked": False, "audit": None}
+
             now = datetime.now(UTC)
 
             # 修复2：新发现终端合规宽限期——首检若仍处于入库后首个 IPGuard
@@ -1854,12 +1888,33 @@ class ComplianceService:
                     )
                     return {"status_changed": False, "new_compliance": terminal.compliance_status, "unblocked": False, "audit": None}
 
+            # 建议#1：total_absence 判定（与 recalc 路径语义一致）——
+            # 终端在 IPGuard 数据源中「IP+MAC 双缺失」（非 ip-only）或「IP 缺失」（ip-only）
+            # 时，属数据源侧瞬时缺口，改用长阈值（ipguard_absence_threshold）防误封。
+            #
+            # 首次发现的终端恒为 unknown，与 recalc 的「曾合规终端+双缺失」语义不同，
+            # 这里不区分旧状态：只要 total_absence 即用长阈值（报告第七节建议#1）。
+            total_absence = (
+                ((not use_ip_only) and (not ip_found) and (not mac_found))
+                or (use_ip_only and (not ip_found))
+            )
+
             terminal.non_compliant_confirm_count = (terminal.non_compliant_confirm_count or 0) + 1
             terminal.compliance_checked_at = now
             terminal.compliant_confirm_count = 0
             mac_norm = self._norm_mac_key(mac_addr)
             confirm_total = await self._mac_non_compliant_total(mac_norm)
             threshold = await self._get_confirm_threshold()
+            threshold_source = "confirm"
+            if total_absence and terminal.block_state != "offline":
+                threshold = await self._get_ipguard_absence_threshold()
+                threshold_source = "ipguard_absence"
+            logger.info(
+                f"[compliance-guard][first-discovery] {ip_addr}/{mac_addr}: "
+                f"threshold={threshold} (source={threshold_source}), total_absence={total_absence}, "
+                f"use_ip_only={use_ip_only}, ip_found={ip_found}, mac_found={mac_found}, "
+                f"block_state={terminal.block_state}"
+            )
             if confirm_total < threshold:
                 logger.info(
                     f"[compliance-guard][confirm-hold] First-discovery {ip_addr}/{mac_addr}: "
@@ -1874,6 +1929,10 @@ class ComplianceService:
             )
             await self._reset_mac_non_compliant_counts(mac_norm)
             terminal.non_compliant_confirm_count = 0
+            logger.info(
+                f"[compliance-guard][first-discovery] {ip_addr}/{mac_addr}: "
+                f"confirm counts reset after block decision (non_compliant_confirm_count=0)"
+            )
         elif new_compliance in ("compliant", "bypass"):
             terminal.non_compliant_confirm_count = 0
 
@@ -2585,12 +2644,23 @@ class ComplianceService:
                                     )
 
                                     downgrade_threshold = confirm_threshold
+                                    threshold_source = "confirm"
                                     if old_compliance == "compliant":
                                         downgrade_threshold = await self._get_compliant_downgrade_threshold()
-                                        # 曾合规终端 + IP/MAC 同时缺失 + 仍被 ARP 采集（未标记 offline）
-                                        # → 使用更长的独立阈值，避免瞬时离线/DHCP 造成误封。
-                                        if total_absence and terminal.block_state != "offline":
-                                            downgrade_threshold = await self._get_ipguard_absence_threshold()
+                                        threshold_source = "compliant_downgrade"
+                                    # IP/MAC 同时缺失（或 IP-only 下 IP 缺失）= 数据源侧瞬时缺口，
+                                    # 与旧状态无关，统一使用更长的独立阈值，避免瞬时离线/DHCP 造成误封。
+                                    # 与首次发现路径的 total_absence 判定保持一致。
+                                    if total_absence and terminal.block_state != "offline":
+                                        downgrade_threshold = await self._get_ipguard_absence_threshold()
+                                        threshold_source = "ipguard_absence"
+                                    logger.info(
+                                        f"[compliance-guard][recalc] {ip_addr}/{mac_addr}: "
+                                        f"threshold={downgrade_threshold} (source={threshold_source}), "
+                                        f"total_absence={total_absence}, old_compliance={old_compliance}, "
+                                        f"use_ip_only={use_ip_only}, ip_found={ig_ip_found}, "
+                                        f"mac_found={ig_mac_found}, block_state={terminal.block_state}"
+                                    )
 
                                     # ---- recalc 降级守卫（在累加 non_compliant_confirm_count 之前判定）----
                                     # 同源根因：IPGuard 瞬时不命中（新 IP/MAC 未同步 / 记录 MAC 不符），
@@ -2655,6 +2725,10 @@ class ComplianceService:
                                             new_compliance = "non_compliant"
                                             await self._reset_mac_non_compliant_counts(mac_norm)
                                             terminal.non_compliant_confirm_count = 0
+                                            logger.info(
+                                                f"[compliance-guard][recalc] {ip_addr}/{mac_addr}: "
+                                                f"confirm counts reset after downgrade (non_compliant_confirm_count=0)"
+                                            )
                                             logger.info(
                                                 f"Terminal[{batch_start + idx}] {ip_addr}/{mac_addr}: "
                                                 f"CONFIRMED downgrade {old_compliance} → non_compliant "
@@ -2983,21 +3057,41 @@ class ComplianceService:
             return 6
 
     async def _is_ipguard_cache_stale(self) -> bool:
-        """Return True if IPGuard cache is stale (last sync exceeds threshold)."""
-        threshold = await self._get_ipguard_stale_threshold_minutes()
-        stmt = select(ComplianceBaseline).where(ComplianceBaseline.enabled == True)
-        result = await self.db.execute(stmt)
-        baselines = result.scalars().all()
-        if not baselines:
-            return True
-        sync_times = [b.last_sync_at for b in baselines if b.last_sync_at is not None]
-        if not sync_times:
-            return True  # never synced yet
-        newest = max(sync_times)
-        if newest.tzinfo is None:
-            newest = newest.replace(tzinfo=UTC)
-        age_minutes = (datetime.now(UTC) - newest).total_seconds() / 60.0
-        return age_minutes > threshold
+        """Return True if IPGuard cache is fresh-unsafe for downgrade decisions.
+
+        复用 _is_ipguard_sync_ready 的严格语义：仅当存在 enabled 基线、至少一次
+        last_sync_status == "success"、且最新成功同步未超过 stale 阈值时才视为「不 stale」。
+        「最近一次同步失败但 last_sync_at 很新」不再被当作 fresh（与首次发现路径对齐）。
+        """
+        return not await self._is_ipguard_sync_ready()
+
+    async def _is_ipguard_sync_ready(self) -> bool:
+        """IPGuard 是否已完成至少一次成功同步且缓存未过期。
+
+        仅当存在 enabled 基线、至少一次 last_sync_status == "success"、
+        且最新成功同步距今未超过 stale 阈值时返回 True。
+        否则「IPGuard 匹配失败 → non_compliant」不成立，应 hold。
+        """
+        try:
+            stmt = select(ComplianceBaseline).where(ComplianceBaseline.enabled == True)
+            result = await self.db.execute(stmt)
+            baselines = result.scalars().all()
+            if not baselines:
+                return False
+            successful = [
+                b for b in baselines
+                if b.last_sync_at is not None and b.last_sync_status == "success"
+            ]
+            if not successful:
+                return False
+            newest = max(b.last_sync_at for b in successful)
+            if newest.tzinfo is None:
+                newest = newest.replace(tzinfo=UTC)
+            age_minutes = (datetime.now(UTC) - newest).total_seconds() / 60.0
+            return age_minutes <= await self._get_ipguard_stale_threshold_minutes()
+        except Exception as e:
+            logger.error(f"[compliance-guard][ipguard-not-ready] sync-ready check failed: {e}")
+            return False  # fail-safe：查询异常按「未就绪」处理，宁 hold 不误封
 
     async def log_action(self, username: str, action: str, resource_type: str,
                          resource_id: str | None, details: dict,

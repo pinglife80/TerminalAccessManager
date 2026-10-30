@@ -1,6 +1,6 @@
 # 更新日志
 
-> 文档版本：v3.24.1  更新日期：2026-10-29
+> 文档版本：v3.24.2  更新日期：2026-10-30
 
 本文件记录 TerminalAccessManager 的所有重要变更。
 
@@ -8,6 +8,26 @@
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ***
+
+## [3.24.2] - 2026-10-30
+
+### 修复
+
+- **合规判定两条路径语义对齐，修复合规终端误判**：首次发现路径补齐 `total_absence`（IP+MAC 双缺失 / ip-only 下 IP 缺失）判定与 18 长阈值，并新增 offline 跳过与 IPGuard 同步就绪前置闸；recalc 路径的长阈值不再受限于「曾合规」旧状态，未知终端同样按长阈值防误封
+  - 关联文件：`backend/app/services/compliance_service.py`
+
+- **`_is_ipguard_cache_stale` 严格 success 语义**：复用新增 `_is_ipguard_sync_ready`（存在 enabled 基线 + 至少一次 `last_sync_status=="success"` + 最新成功同步未过期），「最近一次同步失败但 time 很新」不再视为 fresh，与首次发现路径的同步就绪闸一致
+  - 关联文件：`backend/app/services/compliance_service.py`
+
+- **IP-only 作用域补算 `ip_found`/`mac_found` 并透传**：`batch_check` 的 ip-only 分支补算 `ip_found`/`mac_found`，并在 ARP 采集、定时合规检查、手动合规检查三处透传，消除 ip-only 下依赖默认 `False` 的隐式巧合
+  - 关联文件：`backend/app/services/arp_collector_service.py`、`backend/app/api/v1/endpoints/data_sources.py`、`backend/app/main.py`、`backend/app/services/compliance_service.py`
+
+- **合规判定日志补齐**：在首次发现 / recalc 两条路径的阈值选择、hold 返回、计数重置处补 `[compliance-guard]` 前缀日志，便于线上快速定位生效路径
+  - 关联文件：`backend/app/services/compliance_service.py`
+
+### 测试
+
+- 新增/适配 total_absence、offline skip、sync-not-ready、未知终端长阈值、最近同步失败视为 stale 等回归用例；后端全量 1622 用例通过
 
 ## [3.24.1] - 2026-10-29
 

@@ -649,6 +649,9 @@ async def compliance_check(
             item.get("wl_comments"),
             entry.ip_address or "",
             entry.mac_address or "",
+            ip_found=item.get("ip_found", False),
+            mac_found=item.get("mac_found", False),
+            use_ip_only=item.get("use_ip_only", False),
         )
         if apply_result and apply_result.get("audit"):
             pending_audits.append(apply_result["audit"])

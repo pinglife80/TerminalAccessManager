@@ -249,7 +249,11 @@ def mock_db(mock_async_session):
 @pytest.fixture
 def service(mock_db):
     """ComplianceService instance backed by a mock DB."""
-    return ComplianceService(mock_db)
+    svc = ComplianceService(mock_db)
+    # 默认「IPGuard 已同步就绪」，使聚焦阈值/宽限逻辑的旧用例不受新增的前置闸影响；
+    # 需测同步未就绪闸行为的用例单独 patch 为 False 即可。
+    svc._is_ipguard_sync_ready = AsyncMock(return_value=True)
+    return svc
 
 
 # ===========================================================================
@@ -2137,7 +2141,7 @@ class TestApplyInitialComplianceResult:
              patch.object(service, "_apply_compliance_result", return_value={"status_changed": True}) as apply_mock:
             result = await service.apply_initial_compliance_result(
                 terminal, "non_compliant", None, None,
-                "192.168.1.100", "AA:BB:CC:DD:EE:FF",
+                "192.168.1.100", "AA:BB:CC:DD:EE:FF", ip_found=True,
             )
 
         assert terminal.non_compliant_confirm_count == 1
@@ -2154,7 +2158,7 @@ class TestApplyInitialComplianceResult:
              patch.object(service, "_apply_compliance_result", return_value={"status_changed": True}) as apply_mock:
             result = await service.apply_initial_compliance_result(
                 terminal, "non_compliant", None, None,
-                "192.168.1.100", "AA:BB:CC:DD:EE:FF",
+                "192.168.1.100", "AA:BB:CC:DD:EE:FF", ip_found=True,
             )
 
         assert result["status_changed"] is False
@@ -2173,7 +2177,7 @@ class TestApplyInitialComplianceResult:
              patch.object(service, "_apply_compliance_result", return_value={"status_changed": True}) as apply_mock:
             result = await service.apply_initial_compliance_result(
                 terminal, "non_compliant", None, None,
-                "192.168.1.100", "AA:BB:CC:DD:EE:FF",
+                "192.168.1.100", "AA:BB:CC:DD:EE:FF", ip_found=True,
             )
 
         assert terminal.non_compliant_confirm_count == 1
@@ -2193,7 +2197,7 @@ class TestApplyInitialComplianceResult:
              patch.object(service, "_apply_compliance_result", return_value={"status_changed": True}) as apply_mock:
             await service.apply_initial_compliance_result(
                 terminal, "non_compliant", None, None,
-                "192.168.1.100", "AA:BB:CC:DD:EE:FF",
+                "192.168.1.100", "AA:BB:CC:DD:EE:FF", ip_found=True,
             )
 
         assert terminal.non_compliant_confirm_count == 0
@@ -2227,7 +2231,7 @@ class TestApplyInitialComplianceResult:
              patch.object(service, "_apply_compliance_result", return_value={"status_changed": True}) as apply_mock:
             await service.apply_initial_compliance_result(
                 terminal, "non_compliant", None, None,
-                "192.168.1.100", "AA:BB:CC:DD:EE:FF",
+                "192.168.1.100", "AA:BB:CC:DD:EE:FF", ip_found=True,
             )
 
         # 1 (this record) + 2 (sibling) == 3 -> threshold reached, both reset.
@@ -2270,7 +2274,7 @@ class TestApplyInitialComplianceResult:
              patch.object(service, "_apply_compliance_result", return_value={"status_changed": True}) as apply_mock:
             result = await service.apply_initial_compliance_result(
                 terminal, "non_compliant", None, None,
-                "192.168.1.100", "AA:BB:CC:DD:EE:FF",
+                "192.168.1.100", "AA:BB:CC:DD:EE:FF", ip_found=True,
             )
 
         assert result["status_changed"] is False
@@ -2290,7 +2294,7 @@ class TestApplyInitialComplianceResult:
              patch.object(service, "_apply_compliance_result", return_value={"status_changed": True}) as apply_mock:
             result = await service.apply_initial_compliance_result(
                 terminal, "non_compliant", None, None,
-                "192.168.1.100", "AA:BB:CC:DD:EE:FF",
+                "192.168.1.100", "AA:BB:CC:DD:EE:FF", ip_found=True,
             )
 
         assert terminal.non_compliant_confirm_count == 1
@@ -2307,7 +2311,7 @@ class TestApplyInitialComplianceResult:
              patch.object(service, "_apply_compliance_result", return_value={"status_changed": True}) as apply_mock:
             result = await service.apply_initial_compliance_result(
                 terminal, "non_compliant", None, None,
-                "192.168.1.100", "AA:BB:CC:DD:EE:FF",
+                "192.168.1.100", "AA:BB:CC:DD:EE:FF", ip_found=True,
             )
 
         assert result["status_changed"] is False
@@ -2326,13 +2330,145 @@ class TestApplyInitialComplianceResult:
              patch.object(service, "_apply_compliance_result", return_value={"status_changed": True}) as apply_mock:
             result = await service.apply_initial_compliance_result(
                 terminal, "non_compliant", None, None,
-                "192.168.1.100", "AA:BB:CC:DD:EE:FF",
+                "192.168.1.100", "AA:BB:CC:DD:EE:FF", ip_found=True,
             )
 
         assert terminal.non_compliant_confirm_count == 1
         assert result["status_changed"] is False
         assert result["new_compliance"] == "unknown"
         apply_mock.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_non_compliant_offline_terminal_skipped(self, service, mock_db):
+        """offline 陈旧记录首次发现不累加、不封锁（对齐 recalc 的 offline skip）。"""
+        terminal = create_mock_terminal(compliance_status="unknown", source_tag="lab")
+        terminal.block_state = "offline"
+        with patch.object(service, "_apply_compliance_result", return_value={"status_changed": True}) as apply_mock:
+            result = await service.apply_initial_compliance_result(
+                terminal, "non_compliant", None, None,
+                "192.168.1.100", "AA:BB:CC:DD:EE:FF", ip_found=True,
+            )
+
+        assert result["status_changed"] is False
+        assert result["new_compliance"] == "unknown"
+        assert terminal.non_compliant_confirm_count == 0
+        assert terminal.compliance_checked_at is None
+        apply_mock.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_non_compliant_holds_when_sync_not_ready(self, service, mock_db):
+        """IPGuard 尚未同步就绪时，首次发现 non_compliant 保持 unknown、不累加不封锁。"""
+        terminal = create_mock_terminal(compliance_status="unknown", source_tag="lab")
+        with patch.object(service, "_is_ipguard_sync_ready", new=AsyncMock(return_value=False)), \
+             patch.object(service, "_apply_compliance_result", return_value={"status_changed": True}) as apply_mock:
+            result = await service.apply_initial_compliance_result(
+                terminal, "non_compliant", None, None,
+                "192.168.1.100", "AA:BB:CC:DD:EE:FF", ip_found=True,
+            )
+
+        assert result["status_changed"] is False
+        assert result["new_compliance"] == "unknown"
+        assert terminal.non_compliant_confirm_count == 0
+        assert terminal.compliance_checked_at is None
+        apply_mock.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_non_compliant_total_absence_uses_long_threshold(self, service, mock_db):
+        """双缺失(total_absence)首次发现即使跨过短阈值，仍改用长阈值保护，不立即封锁。"""
+        terminal = create_mock_terminal(compliance_status="unknown", source_tag="lab")
+        terminal.non_compliant_confirm_count = 2
+        terminal.block_state = None
+        mock_db.execute = scripted_execute([make_result(scalars_all=[terminal])])  # MAC total
+        with patch.object(service, "_get_confirm_threshold", return_value=2), \
+             patch.object(service, "_get_ipguard_absence_threshold", return_value=18), \
+             patch.object(service, "_apply_compliance_result", return_value={"status_changed": True}) as apply_mock:
+            # ip_found=False, mac_found=False, use_ip_only=False → total_absence=True
+            result = await service.apply_initial_compliance_result(
+                terminal, "non_compliant", None, None,
+                "192.168.1.100", "AA:BB:CC:DD:EE:FF",
+            )
+
+        # 3 >= 短阈值2 本应封锁，但 total_absence 改用长阈值18，故继续 hold。
+        assert terminal.non_compliant_confirm_count == 3
+        assert result["status_changed"] is False
+        assert result["new_compliance"] == "unknown"
+        apply_mock.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_non_compliant_ip_only_total_absence(self, service, mock_db):
+        """ip-only 作用域下 IP 缺失(total_absence)同样享受长阈值防误封保护。"""
+        terminal = create_mock_terminal(compliance_status="unknown", source_tag="lab")
+        terminal.non_compliant_confirm_count = 2
+        terminal.block_state = None
+        mock_db.execute = scripted_execute([make_result(scalars_all=[terminal])])  # MAC total
+        with patch.object(service, "_get_confirm_threshold", return_value=2), \
+             patch.object(service, "_get_ipguard_absence_threshold", return_value=18), \
+             patch.object(service, "_apply_compliance_result", return_value={"status_changed": True}) as apply_mock:
+            # use_ip_only=True 且 IP 缺失 → total_absence=True（MAC 命中不影响）。
+            result = await service.apply_initial_compliance_result(
+                terminal, "non_compliant", None, None,
+                "192.168.1.100", "AA:BB:CC:DD:EE:FF",
+                ip_found=False, mac_found=True, use_ip_only=True,
+            )
+
+        assert terminal.non_compliant_confirm_count == 3
+        assert result["status_changed"] is False
+        assert result["new_compliance"] == "unknown"
+        apply_mock.assert_not_awaited()
+
+
+# ===========================================================================
+# _is_ipguard_sync_ready helper (IPGuard 同步就绪判断)
+# ===========================================================================
+
+class TestIpguardSyncReady:
+    """_is_ipguard_sync_ready 单元测试。
+
+    手动构造 ComplianceService（绕过 service fixture 的默认 True mock）以测真实逻辑。
+    """
+
+    @pytest.mark.asyncio
+    async def test_no_baselines_returns_false(self, mock_db):
+        svc = ComplianceService(mock_db)
+        mock_db.execute = AsyncMock(return_value=make_result(scalars_all=[]))
+        assert await svc._is_ipguard_sync_ready() is False
+
+    @pytest.mark.asyncio
+    async def test_never_success_returns_false(self, mock_db):
+        baseline = MagicMock(last_sync_at=datetime.now(UTC), last_sync_status="failed")
+        svc = ComplianceService(mock_db)
+        mock_db.execute = AsyncMock(return_value=make_result(scalars_all=[baseline]))
+        assert await svc._is_ipguard_sync_ready() is False
+
+    @pytest.mark.asyncio
+    async def test_success_recent_returns_true(self, mock_db):
+        baseline = MagicMock(last_sync_at=datetime.now(UTC) - timedelta(minutes=5),
+                             last_sync_status="success")
+        svc = ComplianceService(mock_db)
+        svc._get_ipguard_stale_threshold_minutes = AsyncMock(return_value=12)
+        mock_db.execute = AsyncMock(return_value=make_result(scalars_all=[baseline]))
+        assert await svc._is_ipguard_sync_ready() is True
+
+    @pytest.mark.asyncio
+    async def test_success_stale_returns_false(self, mock_db):
+        baseline = MagicMock(last_sync_at=datetime.now(UTC) - timedelta(minutes=20),
+                             last_sync_status="success")
+        svc = ComplianceService(mock_db)
+        svc._get_ipguard_stale_threshold_minutes = AsyncMock(return_value=12)
+        mock_db.execute = AsyncMock(return_value=make_result(scalars_all=[baseline]))
+        assert await svc._is_ipguard_sync_ready() is False
+
+    @pytest.mark.asyncio
+    async def test_multiple_baselines_use_newest_success(self, mock_db):
+        old = MagicMock(last_sync_at=datetime.now(UTC) - timedelta(minutes=20),
+                        last_sync_status="success")
+        new = MagicMock(last_sync_at=datetime.now(UTC) - timedelta(minutes=5),
+                        last_sync_status="success")
+        failed = MagicMock(last_sync_at=datetime.now(UTC), last_sync_status="failed")
+        svc = ComplianceService(mock_db)
+        svc._get_ipguard_stale_threshold_minutes = AsyncMock(return_value=12)
+        mock_db.execute = AsyncMock(return_value=make_result(scalars_all=[old, new, failed]))
+        assert await svc._is_ipguard_sync_ready() is True
 
 
 # ===========================================================================
@@ -3735,13 +3871,57 @@ class TestRecalculateComplianceEdges:
              patch.object(service, "_get_confirm_threshold", return_value=2), \
              patch.object(service, "_get_new_terminal_grace_minutes", return_value=10), \
              patch.object(service, "_get_confirm_min_interval_seconds", return_value=300), \
-             patch.object(service, "_match_ipguard_in_memory", return_value=(False, False, False)), \
+             patch.object(service, "_match_ipguard_in_memory", return_value=(False, True, False)), \
              patch.object(service, "_apply_compliance_result", new=fake_apply):
             result = await service.recalculate_all_compliance()
 
         assert applied["new_compliance"] == "non_compliant"
         assert terminal.compliance_checked_at is not None  # 累加时刷新了时间戳
         assert terminal.non_compliant_confirm_count == 0
+
+    @pytest.mark.asyncio
+    async def test_recalculate_unknown_total_absence_uses_extended_threshold(self, service, mock_db):
+        """unknown 终端 IP+MAC 双缺失(total_absence)时，recalc 同样改用长阈值保护，
+        与首次发现路径对齐，避免用短阈值 2 抢先封锁同一计数。"""
+        terminal = create_mock_terminal(
+            ip="10.8.27.68",
+            mac="68:DA:73:A6:D3:21",
+            status="unblocked",
+            compliance_status="unknown",
+        )
+        terminal.timestamp = datetime.now(UTC) - timedelta(minutes=60)
+        terminal.compliance_checked_at = datetime.now(UTC) - timedelta(seconds=600)
+        terminal.non_compliant_confirm_count = 2  # 已跨过短阈值 2，但 total_absence → 长阈值继续 hold
+        terminal.block_state = None
+
+        mock_db.execute = scripted_execute([make_result(scalars_all=[terminal])])
+
+        ig_data = {"yp": [{"ip_address": "10.0.0.99", "mac_address": "11-22-33-44-55-66"}]}
+
+        applied = {}
+        absence_threshold = AsyncMock(return_value=18)
+
+        async def fake_apply(terminal, new_compliance, new_wl_match_type, wl_comments, ip_addr, mac_addr, ig_match=None):
+            applied["new_compliance"] = new_compliance
+            return {"status_changed": False, "new_compliance": new_compliance, "unblocked": False}
+
+        with patch("app.services.compliance_service._acquire_compliance_lock", new=AsyncMock(return_value="tok")), \
+             patch("app.services.compliance_service._release_compliance_lock"), \
+             patch.object(service, "_load_whitelist_cache", return_value=[]), \
+             patch.object(service, "_load_all_ipguard_cache", return_value=ig_data), \
+             patch.object(service, "_load_scope_cache", return_value=[]), \
+             patch.object(service, "_is_ipguard_cache_stale", return_value=False), \
+             patch.object(service, "_get_confirm_threshold", return_value=2), \
+             patch.object(service, "_get_new_terminal_grace_minutes", return_value=10), \
+             patch.object(service, "_get_confirm_min_interval_seconds", return_value=300), \
+             patch.object(service, "_get_ipguard_absence_threshold", new=absence_threshold), \
+             patch.object(service, "_match_ipguard_in_memory", return_value=(False, False, False)), \
+             patch.object(service, "_apply_compliance_result", new=fake_apply):
+            result = await service.recalculate_all_compliance()
+
+        absence_threshold.assert_awaited_once()
+        assert applied["new_compliance"] == "unknown"       # 长阈值下仍 hold
+        assert terminal.non_compliant_confirm_count == 3     # 累加后 3 < 18
 
     @pytest.mark.asyncio
     async def test_recalculate_compliant_total_absence_uses_extended_threshold(self, service, mock_db):

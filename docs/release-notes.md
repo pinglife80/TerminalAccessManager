@@ -1,12 +1,47 @@
 # 版本跟踪记录
 
-> 文档版本：v3.24.1 | 更新日期：2026-10-29
+> 文档版本：v3.24.2 | 更新日期：2026-10-30
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
 
 ---
+
+## [v3.24.2] - 2026-10-30
+
+### 合规判定两条路径对齐修复（Patch 版本）
+
+#### 背景
+
+上一版（v3.24.1）已通过方向 A/B/C 修复了 IP-only 作用域下的合规误判，但首次发现路径与 recalc 路径在 `total_absence` 长阈值、IPGuard 同步就绪判定、offline 跳过三处仍存在语义不一致，且 `use_ip_only` 分支未补算 `ip_found`/`mac_found`。当 IPGuard 源瞬时漏同步时，首次发现的合规终端仍可能被误降级/误封。本次统一两条路径的判定语义。
+
+#### 主要变更
+
+| 变更项 | 说明 |
+|--------|------|
+| total_absence 对齐 | 首次发现路径补齐 IP+MAC 双缺失（或 ip-only 下 IP 缺失）的 18 长阈值判定 |
+| 同步就绪闸 | `_is_ipguard_cache_stale` 改严格 success 语义（复用 `_is_ipguard_sync_ready`），同步失败不再视为 fresh |
+| offline 跳过 | 首次发现路径对陈旧 offline 记录 hold，不累加确认计数 |
+| recalc 阈值统一 | 长阈值不再受限于「曾合规」旧状态，未知终端同样走长阈值 |
+| ip-only 补算透传 | `use_ip_only` 分支补算 `ip_found`/`mac_found`，三处调用链透传 |
+| 日志补齐 | 阈值选择 / hold 返回 / 计数重置处补 `[compliance-guard]` 日志 |
+
+#### 升级步骤（推荐：一键升级）
+
+    git checkout main
+    git pull origin main
+    ./manage.sh upgrade
+
+#### 升级注意事项
+
+- 本次无 Alembic 迁移（不改动数据库 schema）。
+- 修复仅作用于合规判定后端逻辑，不改变防火墙封锁/解封 API 契约与速率限制行为。
+- 仅后端代码与测试变更，需重新构建后端镜像（`./manage.sh upgrade` / `./manage.sh rebuild backend` 已覆盖）。
+
+#### 文件变更清单
+
+    backend/app/services/compliance_service.py、backend/app/services/arp_collector_service.py、backend/app/api/v1/endpoints/data_sources.py、backend/app/main.py、backend/tests/test_compliance_service.py、backend/tests/test_compliance_service_helpers.py
 
 ## [v3.24.1] - 2026-10-29
 

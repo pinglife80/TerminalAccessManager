@@ -356,6 +356,9 @@ async def scheduled_compliance_check():
                                             "compliance_status": "bypass",
                                             "wl_match_type": item.get("wl_match_type"),
                                             "wl_comments": item.get("wl_comments"),
+                                            "ip_found": item.get("ip_found", False),
+                                            "mac_found": item.get("mac_found", False),
+                                            "use_ip_only": item.get("use_ip_only", False),
                                         }
                                     for item in result.details.get("compliant", []):
                                         mac_key = _norm_mac(item.get("mac_address", ""))
@@ -363,6 +366,9 @@ async def scheduled_compliance_check():
                                             "compliance_status": "compliant",
                                             "wl_match_type": None,
                                             "wl_comments": None,
+                                            "ip_found": item.get("ip_found", False),
+                                            "mac_found": item.get("mac_found", False),
+                                            "use_ip_only": item.get("use_ip_only", False),
                                         }
                                     for item in result.details.get("non_compliant", []):
                                         mac_key = _norm_mac(item.get("mac_address", ""))
@@ -370,6 +376,9 @@ async def scheduled_compliance_check():
                                             "compliance_status": "non_compliant",
                                             "wl_match_type": None,
                                             "wl_comments": None,
+                                            "ip_found": item.get("ip_found", False),
+                                            "mac_found": item.get("mac_found", False),
+                                            "use_ip_only": item.get("use_ip_only", False),
                                         }
 
                                 # Apply compliance results for newly discovered (unknown)
@@ -387,6 +396,9 @@ async def scheduled_compliance_check():
                                             r["wl_comments"],
                                             entry.ip_address or "",
                                             entry.mac_address or "",
+                                            ip_found=r.get("ip_found", False),
+                                            mac_found=r.get("mac_found", False),
+                                            use_ip_only=r.get("use_ip_only", False),
                                         )
                                         if apply_result and apply_result.get("audit"):
                                             pending_audits.append(apply_result["audit"])

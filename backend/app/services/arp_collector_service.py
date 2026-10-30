@@ -409,6 +409,9 @@ class ArpCollectorService:
                             "compliance_status": "bypass",
                             "wl_match_type": item.get("wl_match_type"),
                             "wl_comments": item.get("wl_comments"),
+                            "ip_found": item.get("ip_found", False),
+                            "mac_found": item.get("mac_found", False),
+                            "use_ip_only": item.get("use_ip_only", False),
                         }
                     for item in check_result.details.get("compliant", []):
                         mac_key = self._normalize_mac(item.get("mac_address", "")).replace('-', '').replace(':', '').replace('.', '').upper()
@@ -416,6 +419,9 @@ class ArpCollectorService:
                             "compliance_status": "compliant",
                             "wl_match_type": None,
                             "wl_comments": None,
+                            "ip_found": item.get("ip_found", False),
+                            "mac_found": item.get("mac_found", False),
+                            "use_ip_only": item.get("use_ip_only", False),
                         }
                     for item in check_result.details.get("non_compliant", []):
                         mac_key = self._normalize_mac(item.get("mac_address", "")).replace('-', '').replace(':', '').replace('.', '').upper()
@@ -423,6 +429,9 @@ class ArpCollectorService:
                             "compliance_status": "non_compliant",
                             "wl_match_type": None,
                             "wl_comments": None,
+                            "ip_found": item.get("ip_found", False),
+                            "mac_found": item.get("mac_found", False),
+                            "use_ip_only": item.get("use_ip_only", False),
                         }
 
                 # Apply compliance results for newly discovered (unknown) terminals,
@@ -439,6 +448,9 @@ class ArpCollectorService:
                             result["wl_comments"],
                             entry.ip_address or "",
                             entry.mac_address or "",
+                            ip_found=result.get("ip_found", False),
+                            mac_found=result.get("mac_found", False),
+                            use_ip_only=result.get("use_ip_only", False),
                         )
                         if apply_result and apply_result.get("audit"):
                             pending_compliance_audits.append(apply_result["audit"])

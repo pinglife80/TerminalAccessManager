@@ -538,9 +538,10 @@ class TestConfigGetters:
 # ---------------------------------------------------------------------------
 
 class TestIsIpguardCacheStale:
-    def _baseline(self, last_sync_at):
+    def _baseline(self, last_sync_at, last_sync_status="success"):
         b = MagicMock()
         b.last_sync_at = last_sync_at
+        b.last_sync_status = last_sync_status
         return b
 
     def _setup_db(self, service, baselines):
@@ -555,7 +556,14 @@ class TestIsIpguardCacheStale:
         assert await service._is_ipguard_cache_stale() is True
 
     async def test_never_synced(self, service):
-        self._setup_db(service, [self._baseline(None)])
+        self._setup_db(service, [self._baseline(None, last_sync_status=None)])
+        assert await service._is_ipguard_cache_stale() is True
+
+    async def test_latest_sync_failed_treated_as_stale(self, service):
+        # 最近一次同步失败但 last_sync_at 很新 → 严格 success 语义下仍视为 stale。
+        self._setup_db(service, [self._baseline(
+            datetime.now(UTC) - timedelta(minutes=5), last_sync_status="failed"
+        )])
         assert await service._is_ipguard_cache_stale() is True
 
     async def test_recent_sync_not_stale(self, service):
