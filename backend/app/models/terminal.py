@@ -46,6 +46,11 @@ class Terminal(Base):
     # 'block_failed'-> non_compliant 且封锁失败（可恢复，等待 retry-block）
     # 'offline'     -> 记录陈旧（终端已离线，IP/MAC 不再被 ARP 采集到）
     non_compliant_type = Column(String(10), nullable=True)  # "ip" / "mac" / "both" / null（真实不合规因素）
+    # Physical device identity (IPGuard AGENT.ID). Nullable: terminal without a
+    # device match keeps NULL and falls back to per-NIC compliance behavior.
+    device_id = Column(String(64), nullable=True, index=True)
+    device_name = Column(String(255), nullable=True)
+    device_serial = Column(String(255), nullable=True)
 
     # Composite index for efficient queries
     # One record per (IP, MAC) pair; a single MAC may appear on multiple IPs

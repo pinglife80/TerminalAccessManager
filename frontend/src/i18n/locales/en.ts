@@ -1137,6 +1137,8 @@ const en = {
     compliance_compliant_downgrade_thresholdDesc: 'Consecutive non-compliant detections before a compliant terminal downgrades (compliant terminals are stable, can be set longer)',
     compliance_ipguard_absence_threshold: 'IPGuard Absence Downgrade Threshold (times)',
     compliance_ipguard_absence_thresholdDesc: 'Consecutive IPGuard-absence detections (both IP and MAC missing, usually transient offline/DHCP) before a compliant terminal downgrades; set longer to avoid false blocks',
+    device_grouping_enabled: 'Device Grouping Judgment (Gray Release)',
+    device_grouping_enabledDesc: 'When enabled, a physical device (dual wired/wireless NIC) is judged compliant as a whole; disabled reverts to per-NIC judgment',
     firewallReconciliation: 'Firewall Reconciliation',
     firewallReconciliationDesc: 'Sync firewall blocked records with database, fix inconsistent states',
     firewallReconciliationConfirm: 'Are you sure you want to trigger firewall reconciliation? This will sync block status for all data sources.',

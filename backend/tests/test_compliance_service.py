@@ -3113,10 +3113,11 @@ class TestSyncIpguardData:
         _mock_baseline_lookup(mock_db, baseline)
 
         cursor = MagicMock()
-        # First pair has IP (kept); second pair has empty IP, retained as
-        # MAC-only record so ip-only scopes can do MAC fallback判定.
+        # Rows now carry (device_id, AGT_IP_MAC_STR). First pair has IP (kept);
+        # second pair has empty IP, retained as MAC-only record so ip-only scopes
+        # can do MAC fallback判定.
         cursor.__iter__.return_value = iter([
-            ("AA:BB:CC:DD:EE:FF(192.168.1.30),11:22:33:44:55:66()",),
+            ("101", "AA:BB:CC:DD:EE:FF(192.168.1.30),11:22:33:44:55:66()"),
         ])
 
         conn = MagicMock()
@@ -3137,6 +3138,16 @@ class TestSyncIpguardData:
             {"ip_address": "192.168.1.30", "mac_address": "AA:BB:CC:DD:EE:FF"},
             {"ip_address": "", "mac_address": "11:22:33:44:55:66"},
         ]
+        # Device registry + MAC reverse index populated for device grouping.
+        device_data = json.loads(mock_redis._data["ipguard:device:lab"])
+        assert device_data["devices"]["101"]["ips"] == ["192.168.1.30"]
+        assert device_data["devices"]["101"]["macs"] == [
+            "112233445566", "AABBCCDDEEFF",
+        ]
+        assert device_data["mac_to_device"] == {
+            "AABBCCDDEEFF": "101",
+            "112233445566": "101",
+        }
 
     @pytest.mark.asyncio
     async def test_unknown_db_type_falls_back_to_postgresql(self, service, mock_db, mock_redis):

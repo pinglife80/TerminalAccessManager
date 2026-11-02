@@ -35,6 +35,9 @@ class TerminalResponse(TerminalBase):
     firewall_tag: str | None = Field(None, description="Firewall tag from block operation")
     block_state: str | None = Field(None, description="Blockable state: null/no_firewall/block_failed/offline")
     non_compliant_type: str | None = Field(None, description="Non-compliant factor: ip/mac/both/null")
+    device_id: str | None = Field(None, description="Physical device id (IPGuard AGENT.ID)")
+    device_name: str | None = Field(None, description="Physical device name")
+    device_serial: str | None = Field(None, description="Physical device serial")
 
     model_config = ConfigDict(from_attributes=True)
 

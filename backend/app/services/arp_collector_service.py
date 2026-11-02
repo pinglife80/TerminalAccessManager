@@ -279,6 +279,18 @@ class ArpCollectorService:
         seen_pairs: set[tuple[str, str]] = set()
         new_terminals: list[Terminal] = []
 
+        # Device grouping: load MAC -> device_id reverse index once and stamp
+        # terminal rows with their physical device id (best-effort). Gated behind
+        # the same gray-release flag so disabled == unchanged single-NIC behavior.
+        mac_to_device: dict[str, str] = {}
+        try:
+            from app.services.compliance_service import ComplianceService
+            _cs = ComplianceService(self.db)
+            if await _cs._is_device_grouping_enabled():
+                mac_to_device, _ = await _cs._load_device_grouping_cache()
+        except Exception:
+            mac_to_device = {}
+
         # Pre-load existing (MAC, IP) mappings for IP-migration detection.
         # A MAC appearing under a *new* IP (same MAC, different IP) signals a
         # DHCP IP change: the new record is marked ip_changed_at so the
@@ -341,6 +353,8 @@ class ArpCollectorService:
                     existing.updated_at = datetime.now(UTC)
                     existing.source_tag = source_tag
                     existing.source = "arp"
+                    if existing.device_id is None:
+                        existing.device_id = mac_to_device.get(mac_norm_key)
                     updated += 1
                 else:
                     # Create new entry
@@ -352,6 +366,7 @@ class ArpCollectorService:
                         source="arp",
                         source_tag=source_tag,
                         compliance_status="unknown",
+                        device_id=mac_to_device.get(mac_norm_key),
                     )
                     # IP migration: same MAC already exists under a different IP.
                     # Mark ip_changed_at so the compliance grace period holds
@@ -393,6 +408,7 @@ class ArpCollectorService:
                         "ip_address": e.ip_address,
                         "mac_address": e.mac_address,
                         "source_tag": source_tag,
+                        "device_id": e.device_id,
                     }
                     for e in unchecked_entries
                 ]
