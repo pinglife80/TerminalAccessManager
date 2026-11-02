@@ -359,6 +359,7 @@ async def scheduled_compliance_check():
                                             "ip_found": item.get("ip_found", False),
                                             "mac_found": item.get("mac_found", False),
                                             "use_ip_only": item.get("use_ip_only", False),
+                                            "ig_match": item.get("ig_match"),
                                         }
                                     for item in result.details.get("compliant", []):
                                         mac_key = _norm_mac(item.get("mac_address", ""))
@@ -369,6 +370,7 @@ async def scheduled_compliance_check():
                                             "ip_found": item.get("ip_found", False),
                                             "mac_found": item.get("mac_found", False),
                                             "use_ip_only": item.get("use_ip_only", False),
+                                            "ig_match": item.get("ig_match"),
                                         }
                                     for item in result.details.get("non_compliant", []):
                                         mac_key = _norm_mac(item.get("mac_address", ""))
@@ -379,6 +381,7 @@ async def scheduled_compliance_check():
                                             "ip_found": item.get("ip_found", False),
                                             "mac_found": item.get("mac_found", False),
                                             "use_ip_only": item.get("use_ip_only", False),
+                                            "ig_match": item.get("ig_match"),
                                         }
 
                                 # Apply compliance results for newly discovered (unknown)
@@ -399,6 +402,7 @@ async def scheduled_compliance_check():
                                             ip_found=r.get("ip_found", False),
                                             mac_found=r.get("mac_found", False),
                                             use_ip_only=r.get("use_ip_only", False),
+                                            ig_match=r.get("ig_match"),
                                         )
                                         if apply_result and apply_result.get("audit"):
                                             pending_audits.append(apply_result["audit"])

@@ -219,6 +219,10 @@ class ComplianceService:
                 entry["ip_found"] = ip_found
                 entry["mac_found"] = mac_found
 
+            # 透传本次判定是否命中 IPGuard（ig_match），供首次发现路径对齐
+            # 方向 C（误判自纠绕过解封冷却）语义；recalc 路径已有该信号。
+            entry["ig_match"] = ig_match
+
             if wl_result:
                 entry["compliance_status"] = "bypass"
                 entry["wl_match_type"] = wl_result.get("match_type")
@@ -310,9 +314,16 @@ class ComplianceService:
                 for row in cursor:
                     ip_mac_str = row[0] or ""
                     for mac, ip in mac_ip_pattern.findall(ip_mac_str):
-                        if ip:  # Only entries with an IP address
+                        if ip:
                             entries.append({
                                 "ip_address": ip.strip(),
+                                "mac_address": mac.strip(),
+                            })
+                        else:
+                            # 保留无 IP 的 MAC（设备离线但仍在基线）供 ip-only 作用域做 MAC 回退判定，
+                            # 避免 IP 租约变化/IPGuard 缺 IP 时误封合规终端。
+                            entries.append({
+                                "ip_address": "",
                                 "mac_address": mac.strip(),
                             })
                 conn.close()
@@ -1795,6 +1806,7 @@ class ComplianceService:
         ip_found: bool = False,
         mac_found: bool = False,
         use_ip_only: bool = False,
+        ig_match: bool | None = None,
     ) -> dict:
         """Apply compliance result for a newly discovered (unknown) terminal.
 
@@ -1888,6 +1900,17 @@ class ComplianceService:
                     )
                     return {"status_changed": False, "new_compliance": terminal.compliance_status, "unblocked": False, "audit": None}
 
+            # ip-only 作用域 MAC 回退：IP 缺失但 MAC 命中，属数据源侧 IP 缺口，
+            # hold 不累加，与 recalc 路径语义一致，避免首次发现的合规终端因
+            # IP 瞬时缺失被误封。
+            if use_ip_only and not ip_found and mac_found:
+                logger.info(
+                    f"[compliance-guard][first-discovery-ip-only-mac-fallback] "
+                    f"{ip_addr}/{mac_addr}: IP 缺失但 MAC 命中 IPGuard，holding unknown"
+                )
+                return {"status_changed": False, "new_compliance": terminal.compliance_status,
+                        "unblocked": False, "audit": None}
+
             # 建议#1：total_absence 判定（与 recalc 路径语义一致）——
             # 终端在 IPGuard 数据源中「IP+MAC 双缺失」（非 ip-only）或「IP 缺失」（ip-only）
             # 时，属数据源侧瞬时缺口，改用长阈值（ipguard_absence_threshold）防误封。
@@ -1937,7 +1960,8 @@ class ComplianceService:
             terminal.non_compliant_confirm_count = 0
 
         return await self._apply_compliance_result(
-            terminal, new_compliance, new_wl_match_type, wl_comments, ip_addr, mac_addr
+            terminal, new_compliance, new_wl_match_type, wl_comments, ip_addr, mac_addr,
+            ig_match=ig_match,
         )
 
     async def _apply_compliance_result(
@@ -2587,6 +2611,18 @@ class ComplianceService:
                         new_compliance = "compliant"
                         terminal.compliant_confirm_count = 0
                         terminal.non_compliant_confirm_count = 0
+                    elif use_ip_only and not ig_match and ig_mac_found:
+                        # ip-only 作用域 MAC 回退：IP 缺失但 MAC 命中 IPGuard，属数据源侧
+                        # IP 缺口（IP 租约变化/IPGuard 未同步），设备仍在基线，
+                        # hold 不降级、不累加确认计数，与首次发现路径语义一致。
+                        current_check_status = "compliant"
+                        new_wl_match_type = None
+                        wl_comments = None
+                        new_compliance = old_compliance
+                        logger.info(
+                            f"[compliance-guard][recalc-ip-only-mac-fallback] {ip_addr}/{mac_addr}: "
+                            f"IP 缺失但 MAC 命中 IPGuard，hold {old_compliance}（设备仍在基线）"
+                        )
                     elif not in_ip_grace_period:
                         if ipguard_cache_stale:
                             current_check_status = "compliant"
