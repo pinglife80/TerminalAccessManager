@@ -155,6 +155,10 @@ class ComplianceConfigResponse(BaseModel):
     compliance_confirm_min_interval_seconds: int
     compliance_new_terminal_grace_minutes: int
     compliance_compliant_grace_minutes: int
+    device_grouping_enabled: bool
+    device_compliance_mode: str
+    device_block_granularity: str
+    device_id_field: str
 
 
 class CacheConfigResponse(BaseModel):

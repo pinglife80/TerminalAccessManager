@@ -41,6 +41,8 @@ from app.services.config_service import get_config_value
 IPGUARD_CACHE_PREFIX = "ipguard:"
 IPGUARD_CACHE_TTL = 900  # 15 minutes (1.5x sync interval to avoid expiry gap)
 IPGUARD_BACKUP_CACHE_PREFIX = "ipguard:backup:"
+# Device grouping cache: physical device id -> MAC/IP set + MAC -> device_id reverse index.
+IPGUARD_DEVICE_CACHE_PREFIX = "ipguard:device:"
 WHITELIST_CACHE_KEY = "whitelist:all"
 WHITELIST_CACHE_TTL = 300  # 5 minutes
 SCOPE_CACHE_KEY = "compliance_scope:all"
@@ -182,6 +184,14 @@ class ComplianceService:
         ipguard_data = await self._load_all_ipguard_cache()
         ipguard_mac_prefixes = self._extract_ipguard_mac_prefixes(scope_data)
 
+        # Device grouping (any mode): when enabled, a terminal stamped with a
+        # device_id is judged device-wide instead of per-NIC.
+        device_grouping_enabled = await self._is_device_grouping_enabled()
+        mac_to_device: dict[str, str] = {}
+        device_ids: set[str] = set()
+        if device_grouping_enabled:
+            mac_to_device, device_ids = await self._load_device_grouping_cache()
+
         compliant_list = []
         non_compliant_list = []
         bypass_list = []
@@ -221,6 +231,14 @@ class ComplianceService:
 
             # 透传本次判定是否命中 IPGuard（ig_match），供首次发现路径对齐
             # 方向 C（误判自纠绕过解封冷却）语义；recalc 路径已有该信号。
+            # Device grouping (any) override before final classification.
+            if device_grouping_enabled:
+                device_id = entry.get("device_id")
+                if device_id is None and mac_addr:
+                    device_id = mac_to_device.get(self._norm_mac_key(mac_addr))
+                if device_id is not None:
+                    ig_match = device_id in device_ids
+                    entry["device_id"] = device_id
             entry["ig_match"] = ig_match
 
             if wl_result:
@@ -274,6 +292,10 @@ class ComplianceService:
         if config:
             config = decrypt_config(config)
         entries = []
+        # Physical device registry (device_id -> MAC/IP sets) and MAC -> device_id
+        # reverse index, built per device from IPGuard data. Used by device grouping.
+        device_registry: dict[str, dict] = {}
+        mac_to_device: dict[str, str] = {}
 
         # Determine database type (default: postgresql for backward compatibility)
         db_type = config.get("db_type", "postgresql")
@@ -287,10 +309,19 @@ class ComplianceService:
             if db_type == "mssql":
                 # SQL Server (IPGuard OCULAR3 typically uses this)
                 # IPGuard OCULAR3 stores IP+MAC in AGENT.AGT_IP_MAC_STR
-                # Format: "MAC(IP),MAC(),MAC()" — only pairs with IP are useful
+                # Format: "MAC(IP),MAC(),MAC()" — only pairs with IP are useful.
+                # Each AGENT row = one physical device (ID column), so we keep the
+                # device grouping relationship instead of flattening the NICs.
                 import re
 
                 import pyodbc
+
+                # Physical device id column is configurable (default AGENT.ID),
+                # validated to a safe identifier to avoid SQL injection via config.
+                device_id_field = await get_config_value("device_id_field", "ID")
+                if not re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', str(device_id_field)):
+                    device_id_field = "ID"
+
                 conn_str = (
                     f"DRIVER={{FreeTDS}};"
                     f"SERVER={host};"
@@ -303,8 +334,9 @@ class ComplianceService:
                 conn = pyodbc.connect(conn_str, timeout=30)
                 cursor = conn.cursor()
                 cursor.execute(
-                    "SELECT AGT_IP_MAC_STR FROM AGENT "
-                    "WHERE AGT_IP_MAC_STR IS NOT NULL AND AGT_IP_MAC_STR <> ''"
+                    f"SELECT [{device_id_field}], AGT_IP_MAC_STR FROM AGENT "
+                    f"WHERE AGT_IP_MAC_STR IS NOT NULL AND AGT_IP_MAC_STR <> '' "
+                    f"AND [{device_id_field}] IS NOT NULL"
                 )
                 # Parse MAC(IP) pairs from AGT_IP_MAC_STR
                 mac_ip_pattern = re.compile(
@@ -312,13 +344,22 @@ class ComplianceService:
                     r'[0-9A-Fa-f]{2}[:-][0-9A-Fa-f]{2}[:-][0-9A-Fa-f]{2})\(([^)]*)\)'
                 )
                 for row in cursor:
-                    ip_mac_str = row[0] or ""
+                    device_id = str(row[0]).strip() if row[0] is not None else ""
+                    ip_mac_str = row[1] or ""
+                    device_macs: set[str] = set()
+                    device_ips: set[str] = set()
                     for mac, ip in mac_ip_pattern.findall(ip_mac_str):
+                        mac_norm = self._norm_mac_key(mac.strip())
+                        if mac_norm:
+                            device_macs.add(mac_norm)
+                            if device_id:
+                                mac_to_device.setdefault(mac_norm, device_id)
                         if ip:
                             entries.append({
                                 "ip_address": ip.strip(),
                                 "mac_address": mac.strip(),
                             })
+                            device_ips.add(ip.strip())
                         else:
                             # 保留无 IP 的 MAC（设备离线但仍在基线）供 ip-only 作用域做 MAC 回退判定，
                             # 避免 IP 租约变化/IPGuard 缺 IP 时误封合规终端。
@@ -326,6 +367,11 @@ class ComplianceService:
                                 "ip_address": "",
                                 "mac_address": mac.strip(),
                             })
+                    if device_id:
+                        device_registry[device_id] = {
+                            "macs": sorted(device_macs),
+                            "ips": sorted(device_ips),
+                        }
                 conn.close()
 
             elif db_type == "mysql":
@@ -387,6 +433,18 @@ class ComplianceService:
             # Write backup cache (no TTL) for fallback when sync fails
             backup_key = f"{IPGUARD_BACKUP_CACHE_PREFIX}{source_tag}"
             await redis.set(backup_key, json.dumps(entries))
+
+            # Cache the physical-device registry + MAC reverse index (no separate TTL;
+            # refreshed every sync, and read independently of the flat entry cache).
+            if device_registry:
+                device_key = f"{IPGUARD_DEVICE_CACHE_PREFIX}{source_tag}"
+                await redis.set(
+                    device_key,
+                    json.dumps({
+                        "devices": device_registry,
+                        "mac_to_device": mac_to_device,
+                    }),
+                )
 
             # Update sync status
             baseline.last_sync_status = "success"
@@ -454,6 +512,14 @@ class ComplianceService:
         )
         result = await self.db.execute(stmt)
         non_compliant_entries = result.scalars().all()
+
+        # Device granularity: when grouping is on and block granularity is device,
+        # a non-compliant device blocks ALL its currently-visible IPs (sibling
+        # terminals sharing device_id), not just the row(s) independently flagged.
+        if await self._is_device_grouping_enabled() and await self._is_device_block_granularity_device():
+            non_compliant_entries = await self._expand_non_compliant_to_device(
+                non_compliant_entries, arp_source_tag
+            )
 
         # Filter out entries already in blacklist (IP+MAC level)
         def is_already_blacklisted(entry):
@@ -1510,6 +1576,90 @@ class ComplianceService:
 
         return result_data
 
+    async def _load_device_grouping_cache(self) -> tuple[dict[str, str], set[str]]:
+        """Load the physical-device registry merged across all IPGuard baselines.
+
+        Returns:
+            (mac_to_device, device_ids)
+              - mac_to_device: normalized MAC -> device_id reverse index
+              - device_ids: set of device_ids present in the IPGuard baseline
+        """
+        mac_to_device: dict[str, str] = {}
+        device_ids: set[str] = set()
+
+        stmt = select(ComplianceBaseline)
+        db_result = await self.db.execute(stmt)
+        baselines = db_result.scalars().all()
+
+        for baseline in baselines:
+            device_key = f"{IPGUARD_DEVICE_CACHE_PREFIX}{baseline.tag}"
+            try:
+                redis = await _get_redis()
+                cached = await redis.get(device_key)
+                if cached:
+                    data = json.loads(cached if isinstance(cached, str) else cached.decode())
+                    for mac_norm, did in (data.get("mac_to_device") or {}).items():
+                        mac_to_device.setdefault(mac_norm, did)
+                    for did in (data.get("devices") or {}).keys():
+                        device_ids.add(did)
+            except Exception:
+                pass
+
+        return mac_to_device, device_ids
+
+    async def _is_device_grouping_enabled(self) -> bool:
+        """Read the device-grouping gray-release flag (default off)."""
+        try:
+            return bool(await get_config_value("device_grouping_enabled", False))
+        except Exception:
+            return False
+
+    async def _get_device_compliance_mode(self) -> str:
+        """Device compliance judgment mode ('any' default)."""
+        try:
+            value = await get_config_value("device_compliance_mode", "any")
+            return str(value) if value else "any"
+        except Exception:
+            return "any"
+
+    async def _is_device_block_granularity_device(self) -> bool:
+        """Whether block granularity is device-level (default 'device')."""
+        try:
+            value = await get_config_value("device_block_granularity", "device")
+            return str(value).strip().lower() in ("", "device")
+        except Exception:
+            return True
+
+    async def _expand_non_compliant_to_device(
+        self, entries: list[Terminal], arp_source_tag: str
+    ) -> list[Terminal]:
+        """Expand a non-compliant set to include every ARP-visible IP of the same
+        physical device, so a device-level block covers all its NICs.
+
+        Only adds sibling terminals sharing a device_id (and not already blocked);
+        callers re-apply the blacklist/whitelist filters afterward.
+        """
+        device_ids = {e.device_id for e in entries if e.device_id}
+        if not device_ids:
+            return entries
+        try:
+            stmt = select(Terminal).where(
+                (Terminal.source_tag == arp_source_tag) &
+                (Terminal.device_id.in_(device_ids)) &
+                (Terminal.status != "blocked")
+            )
+            result = await self.db.execute(stmt)
+            siblings = result.scalars().all()
+        except Exception:
+            return entries
+        seen_ids = {e.id for e in entries}
+        merged = list(entries)
+        for s in siblings:
+            if s.id not in seen_ids:
+                seen_ids.add(s.id)
+                merged.append(s)
+        return merged
+
     # ------------------------------------------------------------------
     # Firewall Operations
     # ------------------------------------------------------------------
@@ -2503,6 +2653,16 @@ class ComplianceService:
             if ipguard_cache_stale:
                 logger.warning("IPGuard cache is stale; downgrades to non_compliant will be held this cycle")
 
+            device_grouping_enabled = await self._is_device_grouping_enabled()
+            mac_to_device: dict[str, str] = {}
+            device_ids: set[str] = set()
+            if device_grouping_enabled:
+                mac_to_device, device_ids = await self._load_device_grouping_cache()
+                logger.info(
+                    f"Device grouping enabled: {len(device_ids)} devices, "
+                    f"{len(mac_to_device)} MAC→device mappings"
+                )
+
             stmt = select(Terminal)
             result = await self.db.execute(stmt)
             terminals = result.scalars().all()
@@ -2563,6 +2723,20 @@ class ComplianceService:
                         ig_match = self._match_ipguard_ip_only_in_memory(ipguard_data, ip_addr)
                     else:
                         ig_match = ig_exact
+
+                    # Device grouping (any mode) override: when enabled and this terminal
+                    # belongs to a known physical device, replace the per-NIC match with a
+                    # device-wide membership signal. Backfills device_id for pre-migration
+                    # records first. Whitelist precedence is applied later and still wins.
+                    if device_grouping_enabled:
+                        if terminal.device_id is None and mac_addr:
+                            terminal.device_id = mac_to_device.get(self._norm_mac_key(mac_addr))
+                        if terminal.device_id is not None:
+                            ig_match = terminal.device_id in device_ids
+                            # Set both found flags equal so the device-wide signal does not
+                            # trip the per-NIC total_absence branch; a device absent from the
+                            # baseline downgrades under the standard threshold.
+                            ig_ip_found = ig_mac_found = ig_match
 
                     # Initialize compliant_confirm_count if not present (handles pre-migration records)
                     if not hasattr(terminal, 'compliant_confirm_count') or terminal.compliant_confirm_count is None:
