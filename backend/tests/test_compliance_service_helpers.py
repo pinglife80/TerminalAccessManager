@@ -449,6 +449,9 @@ class TestBatchCheckCompliance:
         assert result.bypass == 1
         assert result.compliant == 1
         assert result.non_compliant == 1
+        # ig_match 透传：compliant 命中 → True，non_compliant 未命中 → False。
+        assert result.details["compliant"][0]["ig_match"] is True
+        assert result.details["non_compliant"][0]["ig_match"] is False
 
     async def test_batch_or_strategy_four_scenarios(self, service):
         service._load_whitelist_cache = AsyncMock(return_value=[])

@@ -1,12 +1,44 @@
 # 版本跟踪记录
 
-> 文档版本：v3.24.2 | 更新日期：2026-10-30
+> 文档版本：v3.24.3 | 更新日期：2026-11-02
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
 
 ---
+
+## [v3.24.3] - 2026-11-02
+
+### ip-only 作用域 MAC 回退修复（Patch 版本）
+
+#### 背景
+
+v3.24.2 已统一首次发现与 recalc 两条路径的 total_absence 长阈值、同步就绪闸、offline 跳过语义，但 ip-only 作用域判定仍只看 IP，忽略「MAC 仍在 IPGuard 基线」的强信号。当 IPGuard 源瞬时缺 IP（IP 租约变化/采集波动/DHCP 复用）时，18 长阈值（约 90 分钟缓冲）无法覆盖数小时级缺口，合规终端（如 10.8.14.156）被误封后又判回解封。本次新增 ip-only 的 MAC 回退判定，并对齐方向 C 的 ig_match 透传。
+
+#### 主要变更
+
+| 变更项 | 说明 |
+|--------|------|
+| ip-only MAC 回退 | IP 缺失但 MAC 命中 IPGuard 时 hold 不降级不累加（首次发现 + recalc 两条路径） |
+| mssql 保留 MAC-only | `MAC()` 空 IP 记录不再过滤，为 MAC 回退提供证据 |
+| ig_match 透传 | `batch_check` 写入并透传 `ig_match`，对齐首次发现路径的方向 C 解封冷却语义 |
+
+#### 升级步骤（推荐：一键升级）
+
+    git checkout main
+    git pull origin main
+    ./manage.sh upgrade
+
+#### 升级注意事项
+
+- 本次无 Alembic 迁移（不改动数据库 schema）。
+- 修复仅作用于合规判定后端逻辑，不改变防火墙封锁/解封 API 契约与速率限制行为。
+- 仅后端代码与测试变更，需重新构建后端镜像（`./manage.sh upgrade` / `./manage.sh rebuild backend` 已覆盖）。
+
+#### 文件变更清单
+
+    backend/app/services/compliance_service.py、backend/app/services/arp_collector_service.py、backend/app/api/v1/endpoints/data_sources.py、backend/app/main.py、backend/tests/test_compliance_service.py、backend/tests/test_compliance_service_helpers.py
 
 ## [v3.24.2] - 2026-10-30
 

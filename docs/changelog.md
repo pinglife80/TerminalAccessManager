@@ -1,6 +1,6 @@
 # 更新日志
 
-> 文档版本：v3.24.2  更新日期：2026-10-30
+> 文档版本：v3.24.3  更新日期：2026-11-02
 
 本文件记录 TerminalAccessManager 的所有重要变更。
 
@@ -8,6 +8,23 @@
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ***
+
+## [3.24.3] - 2026-11-02
+
+### 修复
+
+- **ip-only 作用域 MAC 回退，修复合规终端误封**：ip-only 判定在「IP 缺失但 MAC 命中 IPGuard」时视为数据源侧 IP 缺口而 hold（保持旧状态、不降级、不累加确认计数），不再退化为「IP 不在即不合规」；首次发现与 recalc 两条路径对称落地
+  - 关联文件：`backend/app/services/compliance_service.py`
+
+- **mssql 同步保留无 IP 的 MAC-only 记录**：`AGT_IP_MAC_STR` 中空 IP 的 `MAC()` 不再被过滤，保留为 `ip_address=""` 的 MAC-only 条目，为 MAC 回退判定提供 MAC 命中证据
+  - 关联文件：`backend/app/services/compliance_service.py`
+
+- **ig_match 透传对齐方向 C**：`batch_check` 把算好的 `ig_match` 写进 entry，经 ARP 采集 / 定时合规检查 / 手动合规检查三处透传给 `apply_initial_compliance_result`，使首次发现路径「误判自纠绕过解封冷却」语义与 recalc 路径一致
+  - 关联文件：`backend/app/services/compliance_service.py`、`backend/app/services/arp_collector_service.py`、`backend/app/api/v1/endpoints/data_sources.py`、`backend/app/main.py`
+
+### 测试
+
+- 新增 ip-only MAC 回退（首次发现 / recalc）、ig_match 透传、mssql 空 IP 保留等回归用例；后端全量 1625 用例通过
 
 ## [3.24.2] - 2026-10-30
 

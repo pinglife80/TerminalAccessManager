@@ -412,6 +412,7 @@ class ArpCollectorService:
                             "ip_found": item.get("ip_found", False),
                             "mac_found": item.get("mac_found", False),
                             "use_ip_only": item.get("use_ip_only", False),
+                            "ig_match": item.get("ig_match"),
                         }
                     for item in check_result.details.get("compliant", []):
                         mac_key = self._normalize_mac(item.get("mac_address", "")).replace('-', '').replace(':', '').replace('.', '').upper()
@@ -422,6 +423,7 @@ class ArpCollectorService:
                             "ip_found": item.get("ip_found", False),
                             "mac_found": item.get("mac_found", False),
                             "use_ip_only": item.get("use_ip_only", False),
+                            "ig_match": item.get("ig_match"),
                         }
                     for item in check_result.details.get("non_compliant", []):
                         mac_key = self._normalize_mac(item.get("mac_address", "")).replace('-', '').replace(':', '').replace('.', '').upper()
@@ -432,6 +434,7 @@ class ArpCollectorService:
                             "ip_found": item.get("ip_found", False),
                             "mac_found": item.get("mac_found", False),
                             "use_ip_only": item.get("use_ip_only", False),
+                            "ig_match": item.get("ig_match"),
                         }
 
                 # Apply compliance results for newly discovered (unknown) terminals,
@@ -451,6 +454,7 @@ class ArpCollectorService:
                             ip_found=result.get("ip_found", False),
                             mac_found=result.get("mac_found", False),
                             use_ip_only=result.get("use_ip_only", False),
+                            ig_match=result.get("ig_match"),
                         )
                         if apply_result and apply_result.get("audit"):
                             pending_compliance_audits.append(apply_result["audit"])
