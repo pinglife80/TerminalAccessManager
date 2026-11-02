@@ -1,6 +1,6 @@
 # 更新日志
 
-> 文档版本：v3.24.3  更新日期：2026-11-02
+> 文档版本：v3.25.0  更新日期：2026-11-02
 
 本文件记录 TerminalAccessManager 的所有重要变更。
 
@@ -8,6 +8,27 @@
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ***
+
+## [3.25.0] - 2026-11-02
+
+### 新增
+
+- **双网卡终端按物理设备归组统一合规判定（灰度）**：以 IPGuard AGENT.ID 为 device_id 将同一设备的多个网卡（有线+无线）归组，按「任一网卡命中基线→整机合规」（any）统一判定，消除双网卡一卡合规一卡不合规的不一致；封禁粒度支持 device（整机当前可见 IP 一并封禁/解封）
+  - 关联文件：`backend/app/services/compliance_service.py`、`backend/app/services/arp_collector_service.py`、`backend/app/services/config_service.py`、`backend/app/models/terminal.py`、`backend/app/schemas/terminal.py`、`backend/app/schemas/system_config.py`、`backend/alembic/versions/044_terminal_device_grouping.py`
+
+- **新增 4 个合规配置键（灰度）**：`device_grouping_enabled`（默认 false）、`device_compliance_mode`（any）、`device_block_granularity`（device）、`device_id_field`（ID），关闭总开关即完全回归现行单网卡行为
+  - 关联文件：`backend/app/services/config_service.py`、`backend/app/schemas/system_config.py`
+
+- **前端系统设置新增灰度开关**：合规配置分组新增「按物理设备归组判定（灰度）」开关
+  - 关联文件：`frontend/src/pages/GeneralSettings.tsx`、`frontend/src/i18n/locales/{zh,en,ja}.ts`
+
+### 数据库
+
+- 新增迁移 `044_terminal_device_grouping`：`terminals` 新增可空列 `device_id`（索引）、`device_name`、`device_serial`
+
+### 测试
+
+- 新增 `test_device_grouping.py`（6 用例），更新 mssql 同步解析用例；后端全量 1631 用例通过
 
 ## [3.24.3] - 2026-11-02
 

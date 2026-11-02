@@ -1,12 +1,56 @@
 # 版本跟踪记录
 
-> 文档版本：v3.24.3 | 更新日期：2026-11-02
+> 文档版本：v3.25.0 | 更新日期：2026-11-02
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
 
 ---
+
+## [v3.25.0] - 2026-11-02
+
+### 双网卡终端按物理设备归组统一合规判定（Minor 版本）
+
+#### 背景
+
+一台物理终端同时接入有线+无线双网卡时，系统此前存为两条独立 Terminal 记录、分别判定，导致同一终端一张网卡合规、另一张被误判不合规/误封。IPGuard 的 AGENT.AGT_IP_MAC_STR 单行即承载同一设备多网卡信息，但现行同步将其扁平化丢失归组关系。本次新增按设备归组，统一有线/无线判定。
+
+#### 主要变更
+
+| 变更项 | 说明 |
+|--------|------|
+| 设备归组 | 以 IPGuard AGENT.ID 为 device_id，构建设备注册表 + MAC→device_id 反向索引（Redis 缓存） |
+| 判定口径 any | 设备任一网卡命中 IPGuard 基线 → 整机所有记录判合规（白名单仍优先） |
+| 封禁粒度 device | 整机不合规时一并封该设备当前 ARP 全部 IP；解封按设备 |
+| 灰度开关 | device_grouping_enabled 默认 false，关闭即回归单网卡行为 |
+| 前端开关 | 系统设置→合规配置新增灰度开关 |
+
+#### 配置项
+
+| key | 默认 | 说明 |
+|-----|------|------|
+| device_grouping_enabled | false | 总开关（灰度） |
+| device_compliance_mode | any | 判定口径 |
+| device_block_granularity | device | 封禁粒度 |
+| device_id_field | ID | IPGuard AGENT 表设备ID字段名 |
+
+#### 升级步骤（推荐：一键升级）
+
+    git checkout main
+    git pull origin main
+    ./manage.sh upgrade
+
+#### 升级注意事项
+
+- 本次含 Alembic 迁移 044（terminals 新增可空列，向后兼容，不迁移存量数据）。
+- 新功能默认关闭（device_grouping_enabled=false），升级后行为与 v3.24.x 完全一致；需在系统设置中手动开启灰度。
+- 数据库迁移在升级流程中自动执行（alembic upgrade head）。
+- 需重新构建前端与后端镜像（`./manage.sh upgrade` 已覆盖）。
+
+#### 文件变更清单
+
+    backend/app/models/terminal.py、backend/app/schemas/terminal.py、backend/app/schemas/system_config.py、backend/app/services/config_service.py、backend/app/services/compliance_service.py、backend/app/services/arp_collector_service.py、backend/alembic/versions/044_terminal_device_grouping.py、backend/tests/test_device_grouping.py、backend/tests/test_compliance_service.py、frontend/src/pages/GeneralSettings.tsx、frontend/src/i18n/locales/zh.ts、frontend/src/i18n/locales/en.ts、frontend/src/i18n/locales/ja.ts
 
 ## [v3.24.3] - 2026-11-02
 
