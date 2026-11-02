@@ -2134,6 +2134,18 @@ class TestApplyInitialComplianceResult:
     """First-discovery path: non_compliant accumulates confirm count before blocking."""
 
     @pytest.mark.asyncio
+    async def test_apply_initial_passes_ig_match_to_apply_result(self, service, mock_db):
+        """首次发现路径把 ig_match 透传给 _apply_compliance_result（对齐方向 C）。"""
+        terminal = create_mock_terminal(compliance_status="unknown", source_tag="lab")
+        with patch.object(service, "_apply_compliance_result", return_value={"status_changed": True}) as apply_mock:
+            await service.apply_initial_compliance_result(
+                terminal, "compliant", None, None,
+                "192.168.1.100", "AA:BB:CC:DD:EE:FF", ip_found=True, ig_match=True,
+            )
+        assert apply_mock.await_count == 1
+        assert apply_mock.await_args.kwargs["ig_match"] is True
+
+    @pytest.mark.asyncio
     async def test_non_compliant_holds_below_threshold(self, service, mock_db):
         terminal = create_mock_terminal(compliance_status="unknown", source_tag="lab")
         mock_db.execute = scripted_execute([make_result(scalars_all=[terminal])])
@@ -2395,8 +2407,29 @@ class TestApplyInitialComplianceResult:
         apply_mock.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_non_compliant_ip_only_mac_fallback_holds(self, service, mock_db):
+        """ip-only 作用域下 IP 缺失但 MAC 命中 → MAC 回退，hold 不累加不封锁。"""
+        terminal = create_mock_terminal(compliance_status="unknown", source_tag="lab")
+        terminal.non_compliant_confirm_count = 2
+        terminal.block_state = None
+        with patch.object(service, "_get_confirm_threshold", return_value=2), \
+             patch.object(service, "_apply_compliance_result", return_value={"status_changed": True}) as apply_mock:
+            # use_ip_only=True 且 IP 缺失但 MAC 命中 → MAC 回退 hold。
+            result = await service.apply_initial_compliance_result(
+                terminal, "non_compliant", None, None,
+                "192.168.1.100", "AA:BB:CC:DD:EE:FF",
+                ip_found=False, mac_found=True, use_ip_only=True,
+            )
+
+        # 不累加确认计数（保持 2），不封锁。
+        assert terminal.non_compliant_confirm_count == 2
+        assert result["status_changed"] is False
+        assert result["new_compliance"] == "unknown"
+        apply_mock.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_non_compliant_ip_only_total_absence(self, service, mock_db):
-        """ip-only 作用域下 IP 缺失(total_absence)同样享受长阈值防误封保护。"""
+        """ip-only 作用域下 IP 与 MAC 均缺失(total_absence)仍走长阈值防误封保护。"""
         terminal = create_mock_terminal(compliance_status="unknown", source_tag="lab")
         terminal.non_compliant_confirm_count = 2
         terminal.block_state = None
@@ -2404,11 +2437,11 @@ class TestApplyInitialComplianceResult:
         with patch.object(service, "_get_confirm_threshold", return_value=2), \
              patch.object(service, "_get_ipguard_absence_threshold", return_value=18), \
              patch.object(service, "_apply_compliance_result", return_value={"status_changed": True}) as apply_mock:
-            # use_ip_only=True 且 IP 缺失 → total_absence=True（MAC 命中不影响）。
+            # use_ip_only=True 且 IP 与 MAC 均缺失 → total_absence=True（长阈值）。
             result = await service.apply_initial_compliance_result(
                 terminal, "non_compliant", None, None,
                 "192.168.1.100", "AA:BB:CC:DD:EE:FF",
-                ip_found=False, mac_found=True, use_ip_only=True,
+                ip_found=False, mac_found=False, use_ip_only=True,
             )
 
         assert terminal.non_compliant_confirm_count == 3
@@ -3080,7 +3113,8 @@ class TestSyncIpguardData:
         _mock_baseline_lookup(mock_db, baseline)
 
         cursor = MagicMock()
-        # First pair has IP (kept); second pair has empty IP (skipped).
+        # First pair has IP (kept); second pair has empty IP, retained as
+        # MAC-only record so ip-only scopes can do MAC fallback判定.
         cursor.__iter__.return_value = iter([
             ("AA:BB:CC:DD:EE:FF(192.168.1.30),11:22:33:44:55:66()",),
         ])
@@ -3098,9 +3132,10 @@ class TestSyncIpguardData:
             result = await service.sync_ipguard_data("lab")
 
         assert result["success"] is True
-        assert result["entries"] == 1
+        assert result["entries"] == 2
         assert json.loads(mock_redis._data["ipguard:lab"]) == [
             {"ip_address": "192.168.1.30", "mac_address": "AA:BB:CC:DD:EE:FF"},
+            {"ip_address": "", "mac_address": "11:22:33:44:55:66"},
         ]
 
     @pytest.mark.asyncio
@@ -4051,6 +4086,50 @@ class TestRecalculateComplianceEdges:
 
         absence_threshold.assert_awaited_once()
         assert applied["new_compliance"] == "compliant"
+
+    @pytest.mark.asyncio
+    async def test_recalculate_ip_only_scope_mac_fallback_holds(self, service, mock_db):
+        """ip-only 作用域 IP 缺失但 MAC 命中 → MAC 回退，recalc hold 不降级不累加。"""
+        terminal = create_mock_terminal(
+            ip="10.8.14.156",
+            mac="38-D5-7A-10-5C-15",
+            status="unblocked",
+            compliance_status="compliant",
+        )
+        terminal.compliant_checked_at = datetime.now(UTC) - timedelta(minutes=60)
+        terminal.block_state = None
+        terminal.non_compliant_confirm_count = 0
+
+        mock_db.execute = scripted_execute([make_result(scalars_all=[terminal])])
+
+        # 终端 IP 不在 IPGuard 缓存中，但其 MAC 仍在基线 → MAC 回退。
+        ig_data = {"yp": [{"ip_address": "10.0.0.99", "mac_address": "38-D5-7A-10-5C-15"}]}
+        scope_data = [{"scope_type": "ip_cidr", "scope_value": "10.8.14.0/24"}]
+
+        applied = {}
+
+        async def fake_apply(terminal, new_compliance, new_wl_match_type, wl_comments, ip_addr, mac_addr, ig_match=None):
+            applied["new_compliance"] = new_compliance
+            return {"status_changed": False, "new_compliance": new_compliance, "unblocked": False}
+
+        with patch("app.services.compliance_service._acquire_compliance_lock", new=AsyncMock(return_value="tok")), \
+             patch("app.services.compliance_service._release_compliance_lock"), \
+             patch.object(service, "_load_whitelist_cache", return_value=[]), \
+             patch.object(service, "_load_all_ipguard_cache", return_value=ig_data), \
+             patch.object(service, "_load_scope_cache", return_value=scope_data), \
+             patch.object(service, "_is_ipguard_cache_stale", return_value=False), \
+             patch.object(service, "_get_confirm_threshold", return_value=2), \
+             patch.object(service, "_get_compliant_downgrade_threshold", return_value=6), \
+             patch.object(service, "_get_compliant_grace_minutes", return_value=10), \
+             patch.object(service, "_match_ipguard_in_memory", return_value=(False, False, True)), \
+             patch.object(service, "_match_ipguard_ip_only_in_memory", return_value=False), \
+             patch.object(service, "_apply_compliance_result", new=fake_apply), \
+             patch("app.services.compliance_service.logger.info") as info_logger:
+            result = await service.recalculate_all_compliance()
+
+        assert applied["new_compliance"] == "compliant"
+        assert terminal.non_compliant_confirm_count == 0
+        assert_logged_any(info_logger, "[compliance-guard][recalc-ip-only-mac-fallback]", "10.8.14.156")
 
     @pytest.mark.asyncio
     async def test_apply_result_does_not_refresh_compliant_checked_at_when_unchanged(self, service, mock_db):
