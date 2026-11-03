@@ -77,6 +77,42 @@ class TestAddWhitelist:
         assert body["added"] == 1
 
     @pytest.mark.asyncio
+    async def test_add_mac_prefix(self, api_db, api_client):
+        resp = await api_client.post(
+            "/api/v1/whitelist/",
+            json={"mac_prefix": "AA:BB:CC", "comments": "vendor prefix"},
+        )
+        assert resp.status_code == 201
+        body = resp.json()
+        assert body["success"] is True
+        assert body["added"] == 1
+
+        # Verify entry persisted with pattern_type=mac_prefix and normalized storage
+        from sqlalchemy import select
+        stmt = select(Whitelist).where(Whitelist.pattern_type == "mac_prefix")
+        result = await api_db.execute(stmt)
+        entry = result.scalar_one_or_none()
+        assert entry is not None
+        assert entry.mac_address == "AABBCC"
+        assert entry.ip_pattern is None
+
+    @pytest.mark.asyncio
+    async def test_add_mac_prefix_conflict_rejected(self, api_db, api_client):
+        resp = await api_client.post(
+            "/api/v1/whitelist/",
+            json={"mac_prefix": "AA:BB:CC", "mac_address": "AA:BB:CC:DD:EE:FF", "comments": "conflict"},
+        )
+        assert resp.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_add_invalid_mac_prefix_rejected(self, api_db, api_client):
+        resp = await api_client.post(
+            "/api/v1/whitelist/",
+            json={"mac_prefix": "AA:BB", "comments": "too short"},
+        )
+        assert resp.status_code == 400
+
+    @pytest.mark.asyncio
     async def test_add_missing_comments_rejected(self, api_db, api_client):
         # WhitelistCreate requires `comments`.
         resp = await api_client.post(
@@ -102,6 +138,24 @@ class TestDeleteWhitelist:
             "/api/v1/whitelist/", params={"identifier": "00:11:22:33:44:55"}
         )
         assert resp.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_delete_mac_prefix(self, api_db, api_client):
+        await _seed(
+            api_db,
+            _make_whitelist(
+                mac_address="AABBCC",
+                mac_address_normalized="AABBCC",
+                ip_pattern=None,
+                pattern_type="mac_prefix",
+                comments="vendor prefix",
+            ),
+        )
+        resp = await api_client.delete(
+            "/api/v1/whitelist/", params={"identifier": "AA:BB:CC"}
+        )
+        assert resp.status_code == 200
+        assert resp.json()["success"] is True
 
 
 class TestExportWhitelist:

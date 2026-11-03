@@ -960,6 +960,46 @@ class TestWhitelistMatching:
         )
         assert result is None
 
+    @pytest.mark.asyncio
+    async def test_whitelist_match_by_mac_prefix(self, service):
+        """Whitelist entry with MAC prefix -> terminal whose MAC starts with the prefix matches."""
+        whitelist_data = [
+            {
+                "mac_address": "AABBCC",
+                "ip_pattern": None,
+                "pattern_type": "mac_prefix",
+                "comments": "printer vendor",
+            }
+        ]
+        # Terminal MAC starts with the 3-segment prefix -> match (bypass)
+        result = service._match_whitelist_in_memory(
+            whitelist_data, "192.168.1.100", "AA:BB:CC:DD:EE:FF"
+        )
+        assert result is not None
+        assert result["match_type"] == "mac"
+        assert result["comments"] == "printer vendor"
+
+        # Terminal MAC outside the prefix -> no match
+        result_no = service._match_whitelist_in_memory(
+            whitelist_data, "192.168.1.100", "00:11:22:33:44:55"
+        )
+        assert result_no is None
+
+        # Prefix stored with separators still matches
+        whitelist_data2 = [
+            {
+                "mac_address": "AA:BB:CC:DD",
+                "ip_pattern": None,
+                "pattern_type": "mac_prefix",
+                "comments": "sub-vendor",
+            }
+        ]
+        result2 = service._match_whitelist_in_memory(
+            whitelist_data2, "192.168.1.100", "AA:BB:CC:DD:EE:FF"
+        )
+        assert result2 is not None
+        assert result2["match_type"] == "mac"
+
 
 # ===========================================================================
 # TestRecalculateCompliance

@@ -1,11 +1,17 @@
 """Tests for whitelist management"""
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
 from app.core.database import Base
 from app.models.whitelist import Whitelist
-from app.services.terminal_service import TerminalService, _normalize_mac
+from app.services.terminal_service import (
+    TerminalService,
+    _normalize_mac,
+    _validate_mac,
+    _validate_mac_prefix,
+)
 
 # Create test database engine (SQLite for testing)
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
@@ -60,6 +66,92 @@ class TestWhitelistValidation:
         """MAC addresses should be normalizable to standard format"""
         assert _normalize_mac("AA:BB:CC:DD:EE:FF") == _normalize_mac("AA-BB-CC-DD-EE-FF")
         assert _normalize_mac("aa:bb:cc:dd:ee:ff") == _normalize_mac("AABBCCDDEEFF")
+
+
+class TestMacPrefix:
+    """Test MAC prefix validation and whitelist entry creation"""
+
+    def test_validate_mac_full_address(self):
+        """A full MAC address (6 segments) is accepted and normalized."""
+        assert _validate_mac("aa:bb:cc:dd:ee:ff") == "AABBCCDDEEFF"
+        with pytest.raises(ValueError):
+            _validate_mac("AA:BB:CC:DD:EE")  # 5 segments is not a full MAC
+        with pytest.raises(ValueError):
+            _validate_mac("AA:BB:CC:DD:EE:GG")  # non-hex segment
+
+    def test_validate_mac_prefix_valid(self):
+        """3-5 segment prefixes with various separators normalize correctly."""
+        assert _validate_mac_prefix("AA:BB:CC") == "AABBCC"
+        assert _validate_mac_prefix("aa-bb-cc-dd") == "AABBCCDD"
+        assert _validate_mac_prefix("AA:BB:CC:DD:EE") == "AABBCCDDEE"
+        assert _validate_mac_prefix("aabbcc") == "AABBCC"
+        assert _validate_mac_prefix("AA.BB.CC.DD") == "AABBCCDD"
+
+    def test_validate_mac_prefix_invalid(self):
+        """Prefixes with wrong segment counts or non-hex chars are rejected."""
+        with pytest.raises(ValueError):
+            _validate_mac_prefix("AA:BB")               # 2 segments
+        with pytest.raises(ValueError):
+            _validate_mac_prefix("AA:BB:CC:DD:EE:FF")   # 6 segments = full MAC, not a prefix
+        with pytest.raises(ValueError):
+            _validate_mac_prefix("AA:BB:GG")            # non-hex segment
+        with pytest.raises(ValueError):
+            _validate_mac_prefix("")                    # empty
+
+    @pytest.mark.asyncio
+    async def test_add_mac_prefix_entry(self, db_session: AsyncSession):
+        """Adding a MAC prefix creates a mac_prefix entry with normalized storage."""
+        service = TerminalService(db_session)
+        result = await service.add_to_whitelist(
+            mac_prefix="AA:BB:CC",
+            comments="Printer vendor prefix",
+            username="test_user",
+        )
+        assert result["success"] is True
+
+        stmt = select(Whitelist).where(Whitelist.pattern_type == "mac_prefix")
+        result = await db_session.execute(stmt)
+        entry = result.scalar_one_or_none()
+        assert entry is not None
+        assert entry.mac_address == "AABBCC"
+        assert entry.mac_address_normalized == "AABBCC"
+        assert entry.ip_pattern is None
+
+    @pytest.mark.asyncio
+    async def test_add_mac_prefix_conflict_rejected(self, db_session: AsyncSession):
+        """MAC prefix cannot be combined with a full MAC address or IP."""
+        service = TerminalService(db_session)
+        with pytest.raises(ValueError):
+            await service.add_to_whitelist(
+                mac_prefix="AA:BB:CC",
+                mac_address="AA:BB:CC:DD:EE:FF",
+                comments="conflict",
+                username="test_user",
+            )
+        with pytest.raises(ValueError):
+            await service.add_to_whitelist(
+                mac_prefix="AA:BB:CC",
+                ip_address="192.168.1.100",
+                comments="conflict",
+                username="test_user",
+            )
+
+    @pytest.mark.asyncio
+    async def test_delete_mac_prefix_entry(self, db_session: AsyncSession):
+        """A mac_prefix entry can be deleted by its normalized prefix (6 hex chars)."""
+        service = TerminalService(db_session)
+        await service.add_to_whitelist(
+            mac_prefix="AA:BB:CC",
+            comments="Printer vendor prefix",
+            username="test_user",
+        )
+
+        success = await service.delete_from_whitelist("AABBCC", "test_user")
+        assert success is True
+
+        stmt = select(Whitelist).where(Whitelist.pattern_type == "mac_prefix")
+        result = await db_session.execute(stmt)
+        assert result.scalars().first() is None
 
 
 class TestWhitelistDeletion:
