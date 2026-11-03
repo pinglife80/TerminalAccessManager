@@ -466,6 +466,7 @@ const en = {
     statsSuccessBlocked: 'Successfully Blocked',
     statsSuccessUnblocked: 'Successfully Unblocked',
     unblockEvent: 'Unblock Event',
+    unblockReason: 'Unblock Reason',
     statsPendingRetryUnblock: 'Unblock Pending Retry',
     statsFirewallErrors: 'Firewall Errors',
     statsSuccessBlockedHint: 'Active blacklist entries currently blocked on the firewall.',

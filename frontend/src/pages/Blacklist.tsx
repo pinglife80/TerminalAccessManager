@@ -459,7 +459,7 @@ const Blacklist: React.FC = () => {
                         <div className="space-y-1">
                           <div className="flex items-center gap-1.5">
                             <Unlock className="h-3.5 w-3.5 text-green-600 flex-shrink-0" />
-                            <span className="text-sm text-foreground">{item.reason || '—'}</span>
+                            <span className="text-sm text-foreground">{item.unblock_reason || '—'}</span>
                           </div>
                           <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
                             <Clock className="h-3.5 w-3.5 flex-shrink-0" />
@@ -543,6 +543,12 @@ const Blacklist: React.FC = () => {
                 <span className="text-muted-foreground">{t('blacklist.reason')}</span>
                 <span className="text-foreground">{selectedEntry?.reason}</span>
               </div>
+              {(selectedEntry?.auto_unblocked || selectedEntry?.unblocked_at) && (
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">{t('blacklist.unblockReason')}</span>
+                  <span className="text-foreground">{selectedEntry?.unblock_reason || '—'}</span>
+                </div>
+              )}
               <div className="flex justify-between">
                 <span className="text-muted-foreground">{t('blacklist.blockedBy')}</span>
                 <span className="text-foreground">{selectedEntry?.blocked_by}</span>

@@ -466,6 +466,7 @@ const ja = {
     statsSuccessBlocked: 'ブロック成功',
     statsSuccessUnblocked: 'ブロック解除成功',
     unblockEvent: 'ブロック解除イベント',
+    unblockReason: 'ブロック解除の理由',
     statsPendingRetryUnblock: 'ブロック解除再試行待ち',
     statsFirewallErrors: 'ファイアウォールエラー',
     statsSuccessBlockedHint: '現在ファイアウォールでブロック中のアクティブなブラックリスト件数。',
