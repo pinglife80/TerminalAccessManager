@@ -2099,6 +2099,157 @@ class TestApplyResultUnblockEdges:
         assert bl_entry.auto_unblocked is True
 
 
+class TestApplyResultUnblockPrecise:
+    """修复 v3.26.2：recalc 解封按 active 黑名单条目驱动，按 firewall_tag 精确标记。
+
+    对齐加白即时路径 apply_manual_whitelist_for_terminal 的条目级语义：
+    仅标记成功解封防火墙对应的条目；reconcile/绑定外 tag 纳入解封目标。
+    """
+
+    @pytest.mark.asyncio
+    async def test_partial_unblock_marks_only_successful_fw(self, service, mock_db):
+        """多防火墙部分成功：仅成功防火墙的 bl 条目标记解封，失败条目保持 active。"""
+        bl_fw1 = create_mock_blacklist(
+            ip="192.168.1.100", mac="AA:BB:CC:DD:EE:FF", mac_normalized="AABBCCDDEEFF",
+            firewall_tag="fw1", auto_unblocked=False,
+        )
+        bl_fw2 = create_mock_blacklist(
+            ip="192.168.1.100", mac="AA:BB:CC:DD:EE:FF", mac_normalized="AABBCCDDEEFF",
+            firewall_tag="fw2", auto_unblocked=False,
+        )
+        terminal = create_mock_terminal(
+            ip="192.168.1.100", mac="AA:BB:CC:DD:EE:FF",
+            status="blocked", compliance_status="non_compliant",
+            source_tag="lab", firewall_tag="fw1,fw2",
+        )
+
+        async def fake_unblock(ip, fw_tag, terminal_id=None, mac_address=None):
+            return fw_tag == "fw1"
+
+        results = [
+            make_result(scalars_all=[bl_fw1, bl_fw2]),   # active bl 查询（解封目标集合）
+            make_result(all_rows=[]),                    # 封锁段 active 查询
+        ]
+        with apply_result_mocks(service, mock_db, results,
+                                bound_fw_tags=["fw1", "fw2"],
+                                unblock_on_firewall=fake_unblock):
+            result = await service._apply_compliance_result(
+                terminal, "bypass", "ip", "白名单注释",
+                "192.168.1.100", "AA:BB:CC:DD:EE:FF",
+            )
+
+        assert result["unblocked"] is True
+        assert terminal.status == "unblocked"
+        assert bl_fw1.auto_unblocked is True
+        assert bl_fw2.auto_unblocked is False
+        assert "failed on: fw2" in terminal.comments
+
+    @pytest.mark.asyncio
+    async def test_reconcile_tag_entry_included_in_unblock_targets(self, service, mock_db):
+        """reconcile 创建的黑名单条目（firewall_tag 不在终端绑定）被纳入解封目标并成功标记。"""
+        bl_x = create_mock_blacklist(
+            ip="192.168.1.100", mac="AA:BB:CC:DD:EE:FF", mac_normalized="AABBCCDDEEFF",
+            firewall_tag="FW-X", source_tag="reconciliation", auto_unblocked=False,
+        )
+        terminal = create_mock_terminal(
+            ip="192.168.1.100", mac="AA:BB:CC:DD:EE:FF",
+            status="blocked", compliance_status="non_compliant",
+            source_tag="lab", firewall_tag="FW-X",
+        )
+        unblock_calls = []
+
+        async def fake_unblock(ip, fw_tag, terminal_id=None, mac_address=None):
+            unblock_calls.append(fw_tag)
+            return True
+
+        results = [
+            make_result(scalars_all=[bl_x]),             # active bl 查询
+            make_result(all_rows=[]),                    # 封锁段 active 查询
+        ]
+        with apply_result_mocks(service, mock_db, results,
+                                bound_fw_tags=["fw1", "fw2"],
+                                unblock_on_firewall=fake_unblock):
+            result = await service._apply_compliance_result(
+                terminal, "bypass", "ip", None,
+                "192.168.1.100", "AA:BB:CC:DD:EE:FF",
+            )
+
+        assert "FW-X" in unblock_calls
+        assert bl_x.auto_unblocked is True
+        assert result["unblocked"] is True
+        assert terminal.status == "unblocked"
+
+    @pytest.mark.asyncio
+    async def test_blocked_terminal_without_bl_entries_unblocks_via_binding(self, service, mock_db):
+        """无 active 黑名单记录的 blocked 终端：按绑定解封，status=unblocked（保留原语义）。"""
+        terminal = create_mock_terminal(
+            ip="192.168.1.100", mac="AA:BB:CC:DD:EE:FF",
+            status="blocked", compliance_status="non_compliant",
+            source_tag="lab", firewall_tag="fw1",
+        )
+        results = [
+            make_result(one=None),                       # unblock cooldown
+            make_result(scalars_all=[]),                 # active bl 查询（空）
+            make_result(all_rows=[]),                    # 封锁段 active 查询
+        ]
+        with apply_result_mocks(service, mock_db, results, bound_fw_tags=["fw1"]):
+            result = await service._apply_compliance_result(
+                terminal, "compliant", None, None,
+                "192.168.1.100", "AA:BB:CC:DD:EE:FF",
+            )
+
+        assert result["unblocked"] is True
+        assert terminal.status == "unblocked"
+
+    @pytest.mark.asyncio
+    async def test_auto_unblock_judges_and_unblocks_same_bl_ip(self, service, mock_db):
+        """auto_unblock_compliant 判定与解封使用同一 bl 组 IP（固化语义，防换 IP 错位回归）。"""
+        bl_entry = create_mock_blacklist(
+            ip="192.168.1.100", mac="AA:BB:CC:DD:EE:FF", mac_normalized="AABBCCDDEEFF",
+            firewall_tag="fw1", auto_unblocked=False,
+        )
+        terminal = create_mock_terminal(
+            ip="192.168.1.100", mac="AA:BB:CC:DD:EE:FF",
+            status="blocked", compliance_status="non_compliant",
+        )
+
+        bl_result_mock = MagicMock()
+        bl_result_mock.scalars.return_value.all.return_value = [bl_entry]
+        term_result_mock = MagicMock()
+        term_result_mock.scalar_one_or_none.return_value = terminal
+
+        call_count = {"n": 0}
+
+        async def execute_side_effect(stmt):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                return bl_result_mock
+            elif call_count["n"] == 2:
+                return term_result_mock
+            return MagicMock()
+
+        mock_db.execute = AsyncMock(side_effect=execute_side_effect)
+
+        unblock_calls = []
+
+        async def fake_unblock(ip, fw_tag, terminal_id=None, mac_address=None):
+            unblock_calls.append((ip, fw_tag))
+            return True
+
+        wl_data = [{"mac_address": "AA-BB-CC-DD-EE-FF", "ip_pattern": None, "pattern_type": "mac_only", "comments": None}]
+        with patch.object(service, "_load_whitelist_cache", return_value=wl_data), \
+             patch.object(service, "_load_all_ipguard_cache", return_value={}), \
+             patch.object(service, "_load_scope_cache", return_value=[]), \
+             patch.object(service, "_unblock_on_firewall", side_effect=fake_unblock):
+
+            result = await service.auto_unblock_compliant()
+
+        assert result.unblocked == 1
+        # 判定（白名单命中）与解封使用同一 IP（bl 条目 IP）
+        assert unblock_calls[0][0] == "192.168.1.100"
+        assert bl_entry.auto_unblocked is True
+
+
 class TestApplyResultBlockEdges:
     """Block edge branches: all-active, already-marked, idempotency skip."""
 

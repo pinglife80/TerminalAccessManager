@@ -2308,7 +2308,21 @@ class ComplianceService:
                         pass  # Cooldown check failure should not prevent unblocking
 
                 if not _cooldown_skip_unblock:
-                    fw_tags = await self._get_bound_firewall_tags(terminal.source_tag)
+                    # 解封目标集合 = 终端绑定 ∪ active 黑名单条目的 firewall_tag（去重），
+                    # 与加白即时路径 apply_manual_whitelist_for_terminal 的条目级语义对齐
+                    bl_stmt = select(Blacklist).where(
+                        (Blacklist.mac_address_normalized == mac_norm) &
+                        (Blacklist.ip_address == ip_addr) &
+                        (Blacklist.unblocked_at.is_(None)) &
+                        (Blacklist.auto_unblocked == False)
+                    )
+                    bl_result = await self.db.execute(bl_stmt)
+                    bl_entries = bl_result.scalars().all()
+
+                    bound_fw_tags = await self._get_bound_firewall_tags(terminal.source_tag)
+                    bl_fw_tags = {bl_entry.firewall_tag for bl_entry in bl_entries if bl_entry.firewall_tag}
+                    fw_tags = list(dict.fromkeys([*bound_fw_tags, *sorted(bl_fw_tags)]))
+
                     if fw_tags:
                         successful_fw_tags = []
                         failed_fw_tags = []
@@ -2356,26 +2370,32 @@ class ComplianceService:
                                 f"new_compliance={new_compliance}, old_status={terminal.status}"
                             )
                             
-                            # Query by (MAC, IP) composite identity.
-                            bl_stmt = select(Blacklist).where(
-                                (Blacklist.mac_address_normalized == mac_norm) &
-                                (Blacklist.ip_address == ip_addr) &
-                                (Blacklist.unblocked_at.is_(None)) &
-                                (Blacklist.auto_unblocked == False)
-                            )
-                            bl_result = await self.db.execute(bl_stmt)
-                            bl_entries = bl_result.scalars().all()
+                            # 按条目精确标记：仅标记成功解封防火墙（或经绑定解析全部成功的 None-tag 条目）
                             for bl_entry in bl_entries:
-                                bl_entry.auto_unblocked = True
-                                bl_entry.unblocked_at = datetime.now(UTC)
-                                bl_entry.unblock_reason = compliance_unblock_reason
-                                bl_entry.last_operation_type = "unblock"
-                                bl_entry.last_operation_status = "success"
-                                bl_entry.last_operation_at = datetime.now(UTC)
-                                logger.debug(
-                                    f"_apply_compliance_result: Updated blacklist entry id={bl_entry.id}, "
-                                    f"ip={bl_entry.ip_address}, mac={bl_entry.mac_address}, reason='{compliance_unblock_reason}'"
-                                )
+                                entry_tag = bl_entry.firewall_tag
+                                if entry_tag is None:
+                                    entry_bound_tags = await self._get_bound_firewall_tags(
+                                        bl_entry.source_tag or terminal.source_tag
+                                    )
+                                    entry_ok = bool(entry_bound_tags) and set(entry_bound_tags) <= set(successful_fw_tags)
+                                else:
+                                    entry_ok = entry_tag in successful_fw_tags
+                                if entry_ok:
+                                    bl_entry.auto_unblocked = True
+                                    bl_entry.unblocked_at = datetime.now(UTC)
+                                    bl_entry.unblock_reason = compliance_unblock_reason
+                                    bl_entry.last_operation_type = "unblock"
+                                    bl_entry.last_operation_status = "success"
+                                    bl_entry.last_operation_at = datetime.now(UTC)
+                                    logger.debug(
+                                        f"_apply_compliance_result: Updated blacklist entry id={bl_entry.id}, "
+                                        f"ip={bl_entry.ip_address}, mac={bl_entry.mac_address}, reason='{compliance_unblock_reason}'"
+                                    )
+                                else:
+                                    logger.debug(
+                                        f"_apply_compliance_result: Kept blacklist entry id={bl_entry.id} active "
+                                        f"(firewall '{entry_tag}' not successfully unblocked)"
+                                    )
                             
                             if failed_fw_tags:
                                 logger.warning(f"Partially auto-unblocked {ip_addr} (now {new_compliance}): succeeded on [{fw_info}], failed on [{','.join(sorted(failed_fw_tags))}]")

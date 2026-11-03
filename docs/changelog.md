@@ -1,6 +1,6 @@
 # 更新日志
 
-> 文档版本：v3.26.1  更新日期：2026-11-03
+> 文档版本：v3.26.2  更新日期：2026-11-03
 
 本文件记录 TerminalAccessManager 的所有重要变更。
 
@@ -8,6 +8,17 @@
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ***
+
+## [3.26.2] - 2026-11-03
+
+### 修复
+
+- **重算/首次发现路径解封按 active 黑名单条目驱动，按 firewall_tag 精确标记**：`_apply_compliance_result` 解封目标此前仅取终端 `source_tag` 绑定防火墙，reconcile 等来源（`source_tag="reconciliation"`）创建、firewall_tag 不在绑定内的黑名单条目在重算命中白名单/合规时既未被解封又被误标为已解封（`auto_unblocked=True`），导致「终端已解封、黑名单条目仍显示封锁中」的客观状态不一致；现解封目标 = 终端绑定 ∪ active 黑名单条目的 firewall_tag（去重），仅标记成功解封防火墙对应的条目（None-tag 条目按绑定解析全部成功才算），与加白即时路径 `apply_manual_whitelist_for_terminal` 的条目级语义对齐
+  - 关联文件：`backend/app/services/compliance_service.py`
+
+### 测试
+
+- 新增重算解封精确标记用例（多防火墙部分成功仅标记成功条目、reconcile/绑定外 tag 纳入解封目标、无黑名单记录按绑定解封、auto_unblock 判定与解封同 IP）；后端全量 1667 用例通过
 
 ## [3.26.1] - 2026-11-03
 
