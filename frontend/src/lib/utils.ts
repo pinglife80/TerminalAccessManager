@@ -114,6 +114,19 @@ export const isValidMacAddress = (mac: string): boolean => {
   return cleaned.length === 12 && /^[0-9A-F]+$/.test(cleaned);
 };
 
+export const normalizeMacPrefix = (prefix: string): string => {
+  const cleaned = prefix.replace(/[-:.]/g, '').toUpperCase();
+  if (![6, 8, 10].includes(cleaned.length) || !/^[0-9A-F]+$/.test(cleaned)) {
+    throw new Error('Invalid MAC prefix format');
+  }
+  return cleaned;
+};
+
+export const isValidMacPrefix = (prefix: string): boolean => {
+  const cleaned = prefix.replace(/[-:.]/g, '').toUpperCase();
+  return [6, 8, 10].includes(cleaned.length) && /^[0-9A-F]+$/.test(cleaned);
+};
+
 export const isValidIpAddress = (ip: string): boolean => {
   const parts = ip.split('.');
   if (parts.length !== 4) return false;

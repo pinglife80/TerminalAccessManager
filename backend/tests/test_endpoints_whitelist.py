@@ -1,7 +1,9 @@
 """6C HTTP API endpoint layer — /api/v1/whitelist integration tests."""
+import json
 from datetime import datetime
 
 import pytest
+from sqlalchemy import select
 
 from app.models.whitelist import Whitelist
 
@@ -77,6 +79,42 @@ class TestAddWhitelist:
         assert body["added"] == 1
 
     @pytest.mark.asyncio
+    async def test_add_mac_prefix(self, api_db, api_client):
+        resp = await api_client.post(
+            "/api/v1/whitelist/",
+            json={"mac_prefix": "AA:BB:CC", "comments": "vendor prefix"},
+        )
+        assert resp.status_code == 201
+        body = resp.json()
+        assert body["success"] is True
+        assert body["added"] == 1
+
+        # Verify entry persisted with pattern_type=mac_prefix and normalized storage
+        from sqlalchemy import select
+        stmt = select(Whitelist).where(Whitelist.pattern_type == "mac_prefix")
+        result = await api_db.execute(stmt)
+        entry = result.scalar_one_or_none()
+        assert entry is not None
+        assert entry.mac_address == "AABBCC"
+        assert entry.ip_pattern is None
+
+    @pytest.mark.asyncio
+    async def test_add_mac_prefix_conflict_rejected(self, api_db, api_client):
+        resp = await api_client.post(
+            "/api/v1/whitelist/",
+            json={"mac_prefix": "AA:BB:CC", "mac_address": "AA:BB:CC:DD:EE:FF", "comments": "conflict"},
+        )
+        assert resp.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_add_invalid_mac_prefix_rejected(self, api_db, api_client):
+        resp = await api_client.post(
+            "/api/v1/whitelist/",
+            json={"mac_prefix": "AA:BB", "comments": "too short"},
+        )
+        assert resp.status_code == 400
+
+    @pytest.mark.asyncio
     async def test_add_missing_comments_rejected(self, api_db, api_client):
         # WhitelistCreate requires `comments`.
         resp = await api_client.post(
@@ -102,6 +140,24 @@ class TestDeleteWhitelist:
             "/api/v1/whitelist/", params={"identifier": "00:11:22:33:44:55"}
         )
         assert resp.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_delete_mac_prefix(self, api_db, api_client):
+        await _seed(
+            api_db,
+            _make_whitelist(
+                mac_address="AABBCC",
+                mac_address_normalized="AABBCC",
+                ip_pattern=None,
+                pattern_type="mac_prefix",
+                comments="vendor prefix",
+            ),
+        )
+        resp = await api_client.delete(
+            "/api/v1/whitelist/", params={"identifier": "AA:BB:CC"}
+        )
+        assert resp.status_code == 200
+        assert resp.json()["success"] is True
 
 
 class TestExportWhitelist:
@@ -137,3 +193,73 @@ class TestImportWhitelist:
         )
         assert resp.status_code == 400
         assert "Invalid mode" in resp.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_import_mac_prefix_csv_roundtrip(self, api_db, api_client):
+        """CSV exported whitelist containing a mac_prefix row re-imports successfully."""
+        csv_content = (
+            "ID,MAC Address,IP Pattern,Pattern Type,Comments,Added By,Created At\n"
+            "1,AABBCC,,mac_prefix,import-export-verify,admin,2026-11-03 00:00:00\n"
+        )
+        resp = await api_client.post(
+            "/api/v1/whitelist/import",
+            files={"file": ("whitelist.csv", csv_content.encode("utf-8"), "text/csv")},
+            data={"mode": "skip"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["success_count"] == 1
+        assert data["failed_count"] == 0
+
+        stmt = select(Whitelist).where(Whitelist.pattern_type == "mac_prefix")
+        result = await api_db.execute(stmt)
+        entry = result.scalar_one_or_none()
+        assert entry is not None
+        assert entry.mac_address == "AABBCC"
+        assert entry.mac_address_normalized == "AABBCC"
+        assert entry.ip_pattern is None
+
+    @pytest.mark.asyncio
+    async def test_import_mac_prefix_json_roundtrip(self, api_db, api_client):
+        """JSON backup containing a mac_prefix entry re-imports with type preserved."""
+        json_content = json.dumps([
+            {
+                "mac_address": "AABBCC",
+                "ip_pattern": None,
+                "pattern_type": "mac_prefix",
+                "comments": "backup prefix",
+                "added_by": "admin",
+            }
+        ])
+        resp = await api_client.post(
+            "/api/v1/whitelist/import",
+            files={"file": ("whitelist.json", json_content.encode("utf-8"), "application/json")},
+            data={"mode": "skip"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["success_count"] == 1
+        assert data["failed_count"] == 0
+
+        stmt = select(Whitelist).where(Whitelist.pattern_type == "mac_prefix")
+        result = await api_db.execute(stmt)
+        entry = result.scalar_one_or_none()
+        assert entry is not None
+        assert entry.mac_address == "AABBCC"
+
+    @pytest.mark.asyncio
+    async def test_import_mac_prefix_with_ip_rejected(self, api_db, api_client):
+        """A mac_prefix row combined with an IP pattern is rejected during import."""
+        csv_content = (
+            "ID,MAC Address,IP Pattern,Pattern Type,Comments,Added By,Created At\n"
+            "1,AABBCC,192.168.1.100,mac_prefix,c,admin,2026-11-03 00:00:00\n"
+        )
+        resp = await api_client.post(
+            "/api/v1/whitelist/import",
+            files={"file": ("whitelist.csv", csv_content.encode("utf-8"), "text/csv")},
+            data={"mode": "skip"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["failed_count"] == 1
+        assert "MAC prefix cannot be combined" in data["errors"][0]["reason"]

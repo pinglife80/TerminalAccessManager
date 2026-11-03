@@ -69,6 +69,7 @@ class WhitelistCreate(BaseModel):
     """Schema for adding to whitelist"""
     mac_address: str | None = None
     ip_address: str | None = None  # Accepts single IP, CIDR, or IP range (stored as ip_pattern)
+    mac_prefix: str | None = Field(None, description="MAC prefix (3-5 segments, e.g. AA:BB:CC), mutually exclusive with mac_address/ip_address")
     comments: str = Field(..., description="Comment for the whitelist entry")
 
 

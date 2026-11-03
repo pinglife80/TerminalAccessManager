@@ -1161,6 +1161,14 @@ class ComplianceService:
                         return {"match_type": "mac", "comments": entry.get("comments")}
                 continue
 
+            # MAC-prefix whitelist entry: match terminals whose MAC starts with the prefix
+            if entry.get("pattern_type") == "mac_prefix":
+                if entry.get("mac_address"):
+                    entry_mac = entry["mac_address"].upper().replace(":", "").replace("-", "").replace(".", "")
+                    if entry_mac and len(normalized_mac) >= len(entry_mac) and normalized_mac.startswith(entry_mac):
+                        return {"match_type": "mac", "comments": entry.get("comments")}
+                continue
+
             # Check IP pattern match
             ip_match = False
             if entry.get("ip_pattern"):

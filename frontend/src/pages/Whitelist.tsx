@@ -5,7 +5,7 @@ import { Search, Plus, Trash2, User, Server, Globe, RefreshCw, Download, Clock, 
 import { apiClient } from '@/lib/api';
 import { toast } from 'sonner';
 import { API_ENDPOINTS } from '@/lib/constants';
-import { normalizeMacAddress, isValidMacAddress, isValidCidrOrRange, formatDate, useDebounce, getErrorMessage } from '@/lib/utils';
+import { normalizeMacAddress, isValidMacAddress, isValidCidrOrRange, normalizeMacPrefix, isValidMacPrefix, formatDate, useDebounce, getErrorMessage } from '@/lib/utils';
 import { PrimaryButton, IconButton } from '@/components/Button';
 import { Pagination } from '@/components/Pagination';
 import { EmptyState } from '@/components/StateDisplay';
@@ -38,6 +38,7 @@ const Whitelist: React.FC = () => {
   const [deleteIpPattern, setDeleteIpPattern] = useState('');
   const [selectedEntry, setSelectedEntry] = useState<WhitelistEntry | null>(null);
   const [macAddress, setMacAddress] = useState('');
+  const [macPrefix, setMacPrefix] = useState('');
   const [ipAddress, setIpAddress] = useState('');
   const [comments, setComments] = useState('');
   const [commentsError, setCommentsError] = useState('');
@@ -82,13 +83,23 @@ const Whitelist: React.FC = () => {
   };
 
   const handleAddWhitelist = async () => {
-    if (!macAddress.trim() && !ipAddress.trim()) {
+    if (!macAddress.trim() && !ipAddress.trim() && !macPrefix.trim()) {
       toast.error(t('whitelist.pleaseEnterMacOrIp'));
       return;
     }
 
     if (macAddress && !isValidMacAddress(macAddress)) {
       toast.error(t('whitelist.invalidMacFormat'));
+      return;
+    }
+
+    if (macPrefix && !isValidMacPrefix(macPrefix)) {
+      toast.error(t('whitelist.macPrefixError'));
+      return;
+    }
+
+    if (macPrefix && (macAddress || ipAddress)) {
+      toast.error(t('whitelist.macPrefixConflictError'));
       return;
     }
 
@@ -110,6 +121,9 @@ const Whitelist: React.FC = () => {
 
       if (macAddress) {
         payload['mac_address'] = normalizeMacAddress(macAddress);
+      }
+      if (macPrefix) {
+        payload['mac_prefix'] = normalizeMacPrefix(macPrefix);
       }
       if (ipAddress) {
         payload['ip_address'] = ipAddress;
@@ -137,6 +151,7 @@ const Whitelist: React.FC = () => {
       }
 
       setMacAddress('');
+      setMacPrefix('');
       setIpAddress('');
       setComments('');
       setCommentsError('');
@@ -490,6 +505,9 @@ const Whitelist: React.FC = () => {
                       {item.pattern_type === 'mac_only' && (
                         <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-muted text-foreground">{t('whitelist.macOnly')}</span>
                       )}
+                      {item.pattern_type === 'mac_prefix' && (
+                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-indigo-100 text-indigo-800">{t('whitelist.macPrefix')}</span>
+                      )}
                       {item.pattern_type === 'both' && (
                         <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">{t('whitelist.both')}</span>
                       )}
@@ -550,7 +568,7 @@ const Whitelist: React.FC = () => {
       </div>
 
       {/* Add Modal */}
-      <Modal isOpen={showAddModal} onClose={() => { setShowAddModal(false); setMacAddress(''); setIpAddress(''); setComments(''); setCommentsError(''); }} title={t('whitelist.addAllowedTerminal')} size="lg">
+      <Modal isOpen={showAddModal} onClose={() => { setShowAddModal(false); setMacAddress(''); setMacPrefix(''); setIpAddress(''); setComments(''); setCommentsError(''); }} title={t('whitelist.addAllowedTerminal')} size="lg">
         <p className="text-sm text-muted-foreground mb-6">{t('whitelist.enterMacIpOrBoth')}</p>
 
         {/* Format Help - Always visible */}
@@ -563,6 +581,7 @@ const Whitelist: React.FC = () => {
                 <li>• <code className="bg-blue-100 px-1 rounded">AA:BB:CC:DD:EE:FF</code></li>
                 <li>• <code className="bg-blue-100 px-1 rounded">AA-BB-CC-DD-EE-FF</code></li>
                 <li>• <code className="bg-blue-100 px-1 rounded">AABBCCDDEEFF</code></li>
+                <li>• <code className="bg-blue-100 px-1 rounded">AA:BB:CC</code> ({t('whitelist.macPrefix')})</li>
               </ul>
             </div>
             <div>
@@ -596,6 +615,30 @@ const Whitelist: React.FC = () => {
                 {t('whitelist.normalized')}: {normalizeMacAddress(macAddress)}
               </p>
             )}
+          </div>
+
+          {/* MAC Prefix Field */}
+          <div>
+            <label className="block text-sm font-medium text-muted-foreground mb-2 flex items-center gap-2">
+              <Server className="h-4 w-4 text-muted-foreground" />
+              {t('whitelist.macPrefix')} <span className="text-muted-foreground font-normal">({t('common.optional')})</span>
+            </label>
+            <input
+              type="text"
+              placeholder={t('whitelist.macPrefixPlaceholder')}
+              value={macPrefix}
+              onChange={(e) => setMacPrefix(e.target.value)}
+              className="w-full px-4 py-2.5 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono text-sm"
+            />
+            {macPrefix && isValidMacPrefix(macPrefix) && (
+              <p className="mt-2 text-sm text-green-600 flex items-center gap-1">
+                <span className="w-2 h-2 bg-green-500 rounded-full"></span>
+                {t('whitelist.normalized')}: {normalizeMacPrefix(macPrefix)}
+              </p>
+            )}
+            <p className="mt-1.5 text-xs text-muted-foreground">
+              {t('whitelist.macPrefixMatchHint')}
+            </p>
           </div>
 
           {/* IP Address Field */}
@@ -646,6 +689,7 @@ const Whitelist: React.FC = () => {
               onClick={() => {
                 setShowAddModal(false);
                 setMacAddress('');
+                setMacPrefix('');
                 setIpAddress('');
                 setComments('');
                 setCommentsError('');
@@ -736,6 +780,7 @@ const Whitelist: React.FC = () => {
                     {selectedEntry.pattern_type === 'cidr' && t('whitelist.cidr')}
                     {selectedEntry.pattern_type === 'ip_range' && t('whitelist.ipRange')}
                     {selectedEntry.pattern_type === 'mac_only' && t('whitelist.macOnly')}
+                    {selectedEntry.pattern_type === 'mac_prefix' && t('whitelist.macPrefix')}
                     {selectedEntry.pattern_type === 'both' && t('whitelist.both')}
                     {!selectedEntry.pattern_type && '-'}
                   </span>
