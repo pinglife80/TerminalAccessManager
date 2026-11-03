@@ -1874,7 +1874,7 @@ class TerminalService:
         entry.auto_unblocked = True
         entry.unblocked_at = datetime.now(UTC)
         entry.unblocked_by = username
-        entry.reason = "手动重试解封"
+        entry.unblock_reason = "手动重试解封"
         entry.last_operation_type = "unblock"
         entry.last_operation_status = "success"
         entry.last_operation_at = datetime.now(UTC)
@@ -2085,7 +2085,7 @@ class TerminalService:
                         # just mark this expired entry as unblocked
                         entry.unblocked_at = datetime.now(UTC)
                         entry.unblocked_by = "system"
-                        entry.reason = "封锁时间到期自动解封"
+                        entry.unblock_reason = "封锁时间到期自动解封"
                         count += 1
                         continue
 
@@ -2131,7 +2131,7 @@ class TerminalService:
                     if sangfor_unblock_success:
                         entry.unblocked_at = datetime.now(UTC)
                         entry.unblocked_by = "system"
-                        entry.reason = "封锁时间到期自动解封"
+                        entry.unblock_reason = "封锁时间到期自动解封"
                         count += 1
 
                         # Restore terminal status only now that the firewall unblock for

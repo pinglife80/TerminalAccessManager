@@ -1024,7 +1024,7 @@ class ComplianceService:
                 for bl_entry in successfully_unblocked_entries:
                     bl_entry.auto_unblocked = True
                     bl_entry.unblocked_at = datetime.now(UTC)
-                    bl_entry.reason = unblock_reason
+                    bl_entry.unblock_reason = unblock_reason
                     bl_entry.last_operation_type = "unblock"
                     bl_entry.last_operation_status = "success"
                     bl_entry.last_operation_at = datetime.now(UTC)
@@ -1099,7 +1099,7 @@ class ComplianceService:
                 for bl_entry in successfully_unblocked_entries:
                     bl_entry.auto_unblocked = True
                     bl_entry.unblocked_at = datetime.now(UTC)
-                    bl_entry.reason = partial_unblock_reason
+                    bl_entry.unblock_reason = partial_unblock_reason
                     bl_entry.last_operation_type = "unblock"
                     bl_entry.last_operation_status = "success"
                     bl_entry.last_operation_at = datetime.now(UTC)
@@ -2347,7 +2347,7 @@ class ComplianceService:
                             for bl_entry in bl_entries:
                                 bl_entry.auto_unblocked = True
                                 bl_entry.unblocked_at = datetime.now(UTC)
-                                bl_entry.reason = compliance_unblock_reason
+                                bl_entry.unblock_reason = compliance_unblock_reason
                                 bl_entry.last_operation_type = "unblock"
                                 bl_entry.last_operation_status = "success"
                                 bl_entry.last_operation_at = datetime.now(UTC)
@@ -3454,7 +3454,7 @@ class ComplianceService:
                 bl_entry.auto_unblocked = True
                 bl_entry.unblocked_at = now
                 bl_entry.unblocked_by = username
-                bl_entry.reason = "加入白名单（手动）"
+                bl_entry.unblock_reason = "加入白名单（手动）"
                 logger.debug(
                     f"Manual whitelist: Updated blacklist entry id={bl_entry.id}, ip={bl_entry.ip_address}, "
                     f"mac={bl_entry.mac_address}, reason='加入白名单（手动）'"
