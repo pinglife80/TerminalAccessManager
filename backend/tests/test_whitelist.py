@@ -469,3 +469,154 @@ class TestWhitelistDeletion:
         await db_session.refresh(terminal)
         assert terminal.compliance_status == "bypass"
         assert terminal.wl_match_type == "mac"
+
+
+class TestWhitelistTerminalCommentsSync:
+    """新增白名单即时生效时终端 comments 同步：清除封锁/解封注释 + 更新 Whitelist 注释。"""
+
+    @pytest.mark.asyncio
+    async def test_add_whitelist_syncs_terminal_comments(self, db_session: AsyncSession):
+        """终端含封锁/解封注释 + 人工备注 → 添加白名单后 comments 更新并清除 Auto-* 注释。"""
+        terminal = Terminal(
+            ip_address="192.168.1.60",
+            mac_address="AA:BB:CC:DD:EE:FF",
+            mac_address_normalized="AABBCCDDEEFF",
+            compliance_status="non_compliant",
+            comments=(
+                "Auto-blocked by TAM on firewall [FW-1]; "
+                "Auto-unblocked by TAM from firewall [FW-1]; "
+                "人工备注"
+            ),
+        )
+        db_session.add(terminal)
+        await db_session.commit()
+
+        service = TerminalService(db_session)
+        await service.add_to_whitelist(
+            mac_address="AA:BB:CC:DD:EE:FF",
+            comments="合规设备",
+            username="test_user",
+        )
+
+        await db_session.refresh(terminal)
+        assert terminal.compliance_status == "bypass"
+        assert terminal.wl_match_type == "mac"
+        assert terminal.comments == "人工备注; Whitelist: 合规设备"
+
+    @pytest.mark.asyncio
+    async def test_add_whitelist_clears_block_comments_without_wl_comments(self, db_session: AsyncSession):
+        """白名单 comments 为空：仅清除 Auto-* 注释，不写 Whitelist 注释。"""
+        terminal = Terminal(
+            ip_address="192.168.1.61",
+            mac_address="AA:BB:CC:DD:EE:FF",
+            mac_address_normalized="AABBCCDDEEFF",
+            compliance_status="non_compliant",
+            comments="Auto-blocked by TAM on firewall [FW-1]; 备注",
+        )
+        db_session.add(terminal)
+        await db_session.commit()
+
+        service = TerminalService(db_session)
+        await service.add_to_whitelist(
+            mac_address="AA:BB:CC:DD:EE:FF",
+            comments="",
+            username="test_user",
+        )
+
+        await db_session.refresh(terminal)
+        assert terminal.comments == "备注"
+
+    @pytest.mark.asyncio
+    async def test_add_whitelist_updates_existing_whitelist_comment(self, db_session: AsyncSession):
+        """已有旧 Whitelist 注释 → 更新为新值，不重复追加。"""
+        terminal = Terminal(
+            ip_address="192.168.1.62",
+            mac_address="AA:BB:CC:DD:EE:FF",
+            mac_address_normalized="AABBCCDDEEFF",
+            compliance_status="bypass",
+            wl_match_type="mac",
+            comments="Whitelist: old; 备注",
+        )
+        db_session.add(terminal)
+        await db_session.commit()
+
+        service = TerminalService(db_session)
+        await service.add_to_whitelist(
+            mac_address="AA:BB:CC:DD:EE:FF",
+            comments="new",
+            username="test_user",
+        )
+
+        await db_session.refresh(terminal)
+        assert terminal.comments == "备注; Whitelist: new"
+        assert terminal.comments.count("Whitelist:") == 1
+
+    @pytest.mark.asyncio
+    async def test_add_mac_prefix_syncs_terminal_comments(self, db_session: AsyncSession):
+        """mac_prefix 命中终端同样同步 comments。"""
+        terminal = Terminal(
+            ip_address="192.168.1.63",
+            mac_address="AA:BB:CC:DD:EE:FF",
+            mac_address_normalized="AABBCCDDEEFF",
+            compliance_status="non_compliant",
+            comments="Auto-blocked by TAM on firewall [FW-1]; 打印机组",
+        )
+        db_session.add(terminal)
+        await db_session.commit()
+
+        service = TerminalService(db_session)
+        await service.add_to_whitelist(
+            mac_prefix="AA:BB:CC",
+            comments="打印机厂商前缀",
+            username="test_user",
+        )
+
+        await db_session.refresh(terminal)
+        assert terminal.comments == "打印机组; Whitelist: 打印机厂商前缀"
+
+    @pytest.mark.asyncio
+    async def test_add_whitelist_unmatched_terminal_untouched(self, db_session: AsyncSession):
+        """不匹配终端 comments 不受影响。"""
+        terminal = Terminal(
+            ip_address="192.168.1.64",
+            mac_address="00:11:22:33:44:55",
+            mac_address_normalized="001122334455",
+            compliance_status="non_compliant",
+            comments="Auto-blocked by TAM on firewall [FW-1]; 备注",
+        )
+        db_session.add(terminal)
+        await db_session.commit()
+
+        service = TerminalService(db_session)
+        await service.add_to_whitelist(
+            mac_address="AA:BB:CC:DD:EE:FF",
+            comments="合规设备",
+            username="test_user",
+        )
+
+        await db_session.refresh(terminal)
+        assert terminal.comments == "Auto-blocked by TAM on firewall [FW-1]; 备注"
+        assert terminal.compliance_status == "non_compliant"
+
+    @pytest.mark.asyncio
+    async def test_add_whitelist_keeps_manual_comments(self, db_session: AsyncSession):
+        """无 Auto-* 注释时人工备注原样保留并追加 Whitelist 注释。"""
+        terminal = Terminal(
+            ip_address="192.168.1.65",
+            mac_address="AA:BB:CC:DD:EE:FF",
+            mac_address_normalized="AABBCCDDEEFF",
+            compliance_status="non_compliant",
+            comments="备注1; 备注2",
+        )
+        db_session.add(terminal)
+        await db_session.commit()
+
+        service = TerminalService(db_session)
+        await service.add_to_whitelist(
+            mac_address="AA:BB:CC:DD:EE:FF",
+            comments="合规设备",
+            username="test_user",
+        )
+
+        await db_session.refresh(terminal)
+        assert terminal.comments == "备注1; 备注2; Whitelist: 合规设备"

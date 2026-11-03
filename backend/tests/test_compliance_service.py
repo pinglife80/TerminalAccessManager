@@ -1350,7 +1350,7 @@ class TestApplyResultWhitelistComment:
                 terminal, "bypass", "mac", "new device",
                 "192.168.1.100", "AA:BB:CC:DD:EE:FF",
             )
-        assert terminal.comments == "some; Whitelist: new device; other"
+        assert terminal.comments == "some; other; Whitelist: new device"
 
     @pytest.mark.asyncio
     async def test_bypass_removes_whitelist_comment_when_no_comments(self, service, mock_db):
@@ -1363,7 +1363,7 @@ class TestApplyResultWhitelistComment:
                 terminal, "bypass", None, None,
                 "192.168.1.100", "AA:BB:CC:DD:EE:FF",
             )
-        assert terminal.comments == ""
+        assert terminal.comments is None
 
     @pytest.mark.asyncio
     async def test_compliant_removes_whitelist_comment(self, service, mock_db):
@@ -1377,6 +1377,38 @@ class TestApplyResultWhitelistComment:
                 "192.168.1.100", "AA:BB:CC:DD:EE:FF",
             )
         assert "Whitelist" not in terminal.comments
+
+    @pytest.mark.asyncio
+    async def test_bypass_clears_auto_comments_and_updates_whitelist(self, service, mock_db):
+        """重算/首次发现路径：bypass 时清除封锁/解封注释并更新 Whitelist 注释。"""
+        terminal = create_mock_terminal(
+            status="unblocked", compliance_status="unknown",
+            comments=(
+                "Auto-blocked by TAM on firewall [FW-1]; "
+                "Auto-unblocked by TAM from firewall [FW-1]; "
+                "人工备注"
+            ),
+        )
+        with apply_result_mocks(service, mock_db, [make_result(all_rows=[])]):
+            await service._apply_compliance_result(
+                terminal, "bypass", "ip", "新白名单注释",
+                "192.168.1.100", "AA:BB:CC:DD:EE:FF",
+            )
+        assert terminal.comments == "人工备注; Whitelist: 新白名单注释"
+
+    @pytest.mark.asyncio
+    async def test_bypass_clears_auto_comments_without_wl_comments(self, service, mock_db):
+        """bypass 且白名单 comments 为空：仅清除 Auto-* 注释与旧 Whitelist 注释。"""
+        terminal = create_mock_terminal(
+            status="unblocked", compliance_status="unknown",
+            comments="Auto-blocked by TAM on firewall [FW-1]; Whitelist: old; 备注",
+        )
+        with apply_result_mocks(service, mock_db, [make_result(all_rows=[])]):
+            await service._apply_compliance_result(
+                terminal, "bypass", "ip", None,
+                "192.168.1.100", "AA:BB:CC:DD:EE:FF",
+            )
+        assert terminal.comments == "备注"
 
 
 class TestApplyResultCooldownDowngrade:

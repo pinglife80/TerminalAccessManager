@@ -877,6 +877,8 @@ class TerminalService:
                         wl_match_type=wl_match_type,
                         username=username,
                     )
+                    # 同步终端 comments：更新为白名单 comments，并清除封锁/解封历史注释
+                    compliance_svc.sync_terminal_whitelist_comments(terminal, comments)
                     if apply_result.get("audit"):
                         pending_audits.append(apply_result["audit"])
                     logger.info(

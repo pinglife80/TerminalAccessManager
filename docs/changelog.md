@@ -1,6 +1,6 @@
 # 更新日志
 
-> 文档版本：v3.26.0  更新日期：2026-11-03
+> 文档版本：v3.26.1  更新日期：2026-11-03
 
 本文件记录 TerminalAccessManager 的所有重要变更。
 
@@ -8,6 +8,17 @@
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ***
+
+## [3.26.1] - 2026-11-03
+
+### 优化
+
+- **优化白名单命中终端 comments 同步**：添加白名单（即时生效类型 `single_ip`/`mac_only`/`both`/`mac_prefix`）后，对系统中已存在的匹配终端自动更新 `comments` 为白名单条目的 comments（`Whitelist: {comments}`），并清除历史封锁/解封（Auto-blocked/Auto-unblocked）注释；其他人工注释保留；白名单 comments 为空时仅清除封锁/解封注释；CIDR/ip_range 走全量重算路径命中白名单时（`_apply_compliance_result` bypass 分支）同样清除 Auto-* 注释并更新 Whitelist 注释
+  - 关联文件：`backend/app/services/compliance_service.py`、`backend/app/services/terminal_service.py`
+
+### 测试
+
+- 新增白名单 comments 同步用例（即时生效更新/追加 Whitelist 注释、清除 Auto-* 注释、白名单 comments 为空仅清除、mac_prefix 命中同步、不匹配终端不受影响、人工注释保留），并新增重算路径 `_apply_compliance_result` bypass 分支清除 Auto-* 注释用例；后端全量 1663 用例通过
 
 ## [3.26.0] - 2026-11-03
 
