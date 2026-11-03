@@ -1,6 +1,6 @@
 # 更新日志
 
-> 文档版本：v3.25.1  更新日期：2026-11-03
+> 文档版本：v3.26.0  更新日期：2026-11-03
 
 本文件记录 TerminalAccessManager 的所有重要变更。
 
@@ -8,6 +8,23 @@
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ***
+
+## [3.26.0] - 2026-11-03
+
+### 新增
+
+- **白名单支持 MAC 前缀匹配**：添加白名单时可仅填写 MAC 前缀（3-5 段，如 `AA:BB:CC`、`AA:BB:CC:DD`、`AA:BB:CC:DD:EE`），任一终端 MAC 以该前缀开头即视为白名单（bypass 豁免）；前缀与 MAC 地址 / IP 地址互斥，存储复用 `mac_address` / `mac_address_normalized` 列并以 `pattern_type="mac_prefix"` 标识，无数据库迁移
+  - 关联文件：`backend/app/schemas/terminal.py`、`backend/app/services/terminal_service.py`、`backend/app/services/compliance_service.py`、`backend/app/api/v1/endpoints/whitelist.py`、`frontend/src/lib/utils.ts`、`frontend/src/pages/Whitelist.tsx`、`frontend/src/i18n/locales/{zh,en,ja}.ts`
+
+- **补充 MAC 归一化校验**：添加白名单时后端对完整 MAC 地址（6 段 / 12 位十六进制）与 MAC 前缀（3-5 段）做格式校验，非法输入返回 400，前端同步提供前缀归一化/校验提示
+
+### 修复
+
+- **MAC 前缀条目删除支持**：`delete_from_whitelist` 此前仅按 12 位完整 MAC 匹配删除，6/8/10 位十六进制前缀条目（`pattern_type="mac_prefix"`）删除时返回 404；现扩展为按归一化前缀（6/8/10/12 位十六进制）精确匹配删除
+
+### 测试
+
+- 新增 MAC 前缀校验、存储、合规匹配、删除（服务层 + 端点层）用例；后端全量 1642 用例通过
 
 ## [3.25.1] - 2026-11-03
 

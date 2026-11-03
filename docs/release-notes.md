@@ -1,12 +1,47 @@
 # 版本跟踪记录
 
-> 文档版本：v3.25.1 | 更新日期：2026-11-03
+> 文档版本：v3.26.0 | 更新日期：2026-11-03
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
 
 ---
+
+## [v3.26.0] - 2026-11-03
+
+### 白名单支持 MAC 前缀匹配（Minor 版本）
+
+#### 背景
+
+白名单此前仅支持完整 MAC 地址（6 段）或 IP 模式，同一厂商/同批次终端的批量豁免需要逐条添加完整 MAC，操作繁琐。本次新增 MAC 前缀添加方式：填写 3-5 段前缀（如 `AA:BB:CC`），任一终端 MAC 以该前缀开头即命中白名单（bypass 豁免）。
+
+#### 主要变更
+
+| 变更项 | 说明 |
+|--------|------|
+| 新增前缀添加方式 | `WhitelistCreate` 新增 `mac_prefix` 字段（3-5 段，与 mac_address/ip_address 互斥），存储复用 `mac_address`/`mac_address_normalized` 列，`pattern_type="mac_prefix"` |
+| 合规匹配 | `_match_whitelist_in_memory` 新增 mac_prefix 分支：终端 MAC 归一化后以该前缀开头即命中（match_type=mac） |
+| 即时生效 | 添加前缀后对已存在且 MAC 命中前缀的终端立即应用手动白名单（bypass）；后续发现的终端在下次判定时生效 |
+| MAC 归一化校验 | 后端新增 `_validate_mac`（完整 MAC 12 位十六进制）与 `_validate_mac_prefix`（3-5 段）校验，非法输入返回 400 |
+| 删除支持 | `delete_from_whitelist` 扩展为按归一化前缀（6/8/10/12 位十六进制）精确匹配，MAC 前缀条目可正常删除（此前返回 404） |
+| 前端 | 添加弹窗新增 MAC 前缀输入项（归一化实时预览 + 匹配说明），列表与详情弹窗新增 mac_prefix 徽标；i18n 三语 |
+| 数据库 | 无迁移（复用既有列） |
+
+#### 升级步骤（推荐：一键升级）
+
+    git checkout main
+    git pull origin main
+    ./manage.sh upgrade
+
+#### 升级注意事项
+
+- 本次无数据库迁移，无配置项变更，向后兼容。
+- 存量白名单数据不受影响；MAC 前缀条目通过既有搜索（MAC 归一化 ilike）与删除（按归一化前缀，6/8/10/12 位十六进制）能力管理。
+
+#### 文件变更清单
+
+    backend/app/schemas/terminal.py、backend/app/services/terminal_service.py、backend/app/services/compliance_service.py、backend/app/api/v1/endpoints/whitelist.py、backend/tests/test_whitelist.py、backend/tests/test_compliance_service.py、backend/tests/test_endpoints_whitelist.py、frontend/src/lib/utils.ts、frontend/src/pages/Whitelist.tsx、frontend/src/i18n/locales/zh.ts、frontend/src/i18n/locales/en.ts、frontend/src/i18n/locales/ja.ts
 
 ## [v3.25.1] - 2026-11-03
 
