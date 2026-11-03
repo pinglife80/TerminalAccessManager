@@ -36,6 +36,36 @@ def _normalize_mac(mac: str) -> str:
     return mac.replace(':', '').replace('-', '').replace('.', '').upper()
 
 
+def _validate_mac(mac: str) -> str:
+    """Validate and normalize a full MAC address (6 segments / 12 hex chars).
+
+    Returns the normalized uppercase form without separators,
+    or raises ValueError for an invalid format.
+    """
+    normalized = _normalize_mac(mac)
+    if len(normalized) != 12 or not re.fullmatch(r"[0-9A-F]{12}", normalized):
+        raise ValueError(
+            f"Invalid MAC address format: '{mac}'. Expected 6 segments of 2 hex chars "
+            "(e.g., AA:BB:CC:DD:EE:FF)"
+        )
+    return normalized
+
+
+def _validate_mac_prefix(prefix: str) -> str:
+    """Validate and normalize a MAC prefix (3-5 segments, e.g. AA:BB:CC).
+
+    Returns the normalized uppercase form without separators
+    (6 / 8 / 10 hex chars), or raises ValueError for an invalid format.
+    """
+    cleaned = _normalize_mac(prefix)
+    if len(cleaned) not in (6, 8, 10) or not re.fullmatch(r"[0-9A-F]+", cleaned):
+        raise ValueError(
+            f"Invalid MAC prefix format: '{prefix}'. Expected 3-5 segments of 2 hex chars "
+            "(e.g., AA:BB:CC, AA:BB:CC:DD, AA:BB:CC:DD:EE)"
+        )
+    return cleaned
+
+
 def _blacklist_terminal_join():
     """Join condition linking a Blacklist entry to its Terminal by
     (MAC, IP) composite identity, falling back to IP-only for NULL-MAC
@@ -669,24 +699,34 @@ class TerminalService:
         return result.scalar() or 0
 
     async def add_to_whitelist(self, mac_address: str = None, ip_address: str = None,
-                                comments: str = "", username: str = "") -> dict:
-        """Add to whitelist by MAC address, IP address, CIDR subnet, or IP range.
+                                mac_prefix: str = None, comments: str = "", username: str = "") -> dict:
+        """Add to whitelist by MAC address, IP address, CIDR subnet, IP range, or MAC prefix.
 
         Instead of expanding CIDR/IP ranges into multiple records,
         the original pattern is stored as ip_pattern with a pattern_type field.
+        MAC prefixes are stored in the mac_address column with pattern_type="mac_prefix"
+        and exempt every terminal whose MAC starts with the prefix.
         """
         try:
             pending_audits = []
             normalized_mac = None
+            normalized_prefix = None
 
             if mac_address:
-                normalized_mac = self._normalize_mac(mac_address)
+                normalized_mac = _validate_mac(mac_address)
+
+            if mac_prefix:
+                if mac_address or ip_address:
+                    raise ValueError("mac_prefix cannot be combined with mac_address or ip_address")
+                normalized_prefix = _validate_mac_prefix(mac_prefix)
 
             # Determine pattern type and store the original pattern
             ip_pattern = None
             pattern_type = "single_ip"
 
-            if ip_address:
+            if normalized_prefix:
+                pattern_type = "mac_prefix"
+            elif ip_address:
                 raw = ip_address.strip()
                 ip_pattern = IPAddressParser.normalize_pattern(raw)
                 pattern_type = IPAddressParser.detect_pattern_type(raw)
@@ -701,7 +741,14 @@ class TerminalService:
 
             # Check for existing entry
             existing = None
-            if normalized_mac and ip_pattern:
+            if normalized_prefix:
+                stmt = select(Whitelist).where(
+                    (Whitelist.mac_address == normalized_prefix) &
+                    (Whitelist.ip_pattern.is_(None))
+                )
+                result = await self.db.execute(stmt)
+                existing = result.scalar_one_or_none()
+            elif normalized_mac and ip_pattern:
                 stmt = select(Whitelist).where(
                     (Whitelist.mac_address == normalized_mac) &
                     (Whitelist.ip_pattern == ip_pattern)
@@ -723,13 +770,18 @@ class TerminalService:
                 result = await self.db.execute(stmt)
                 existing = result.scalar_one_or_none()
 
+            stored_mac_value = normalized_prefix or normalized_mac
+
             if existing:
                 old_mac = existing.mac_address
                 old_ip_pattern = existing.ip_pattern
                 old_comments = existing.comments
                 
                 existing.comments = comments
-                if normalized_mac:
+                if normalized_prefix:
+                    existing.mac_address = normalized_prefix
+                    existing.mac_address_normalized = normalized_prefix
+                elif normalized_mac:
                     existing.mac_address = normalized_mac
                     existing.mac_address_normalized = _normalize_mac(normalized_mac)
                 if ip_pattern:
@@ -739,7 +791,7 @@ class TerminalService:
                 log_details = {
                     "message": f"Updated whitelist entry {old_mac or old_ip_pattern}",
                     "old_mac_address": old_mac,
-                    "new_mac_address": normalized_mac,
+                    "new_mac_address": stored_mac_value,
                     "old_ip_pattern": old_ip_pattern,
                     "new_ip_pattern": ip_pattern,
                     "old_comments": old_comments,
@@ -756,8 +808,8 @@ class TerminalService:
                 })
             else:
                 whitelist_entry = Whitelist(
-                    mac_address=normalized_mac,
-                    mac_address_normalized=_normalize_mac(normalized_mac) if normalized_mac else None,
+                    mac_address=stored_mac_value,
+                    mac_address_normalized=_normalize_mac(stored_mac_value) if stored_mac_value else None,
                     ip_pattern=ip_pattern,
                     pattern_type=pattern_type,
                     comments=comments,
@@ -766,13 +818,13 @@ class TerminalService:
                 self.db.add(whitelist_entry)
                 
                 log_details = {
-                    "message": f"Created whitelist entry for {normalized_mac or ip_pattern}",
-                    "mac_address": normalized_mac,
+                    "message": f"Created whitelist entry for {stored_mac_value or ip_pattern}",
+                    "mac_address": stored_mac_value,
                     "ip_pattern": ip_pattern,
                     "pattern_type": pattern_type,
                     "comments": comments,
                 }
-                resource_id = normalized_mac or ip_pattern
+                resource_id = stored_mac_value or ip_pattern
                 pending_audits.append({
                     "username": username,
                     "action": "whitelist_create",
@@ -785,6 +837,7 @@ class TerminalService:
             # After creating/updating the whitelist entry: apply it immediately to
             # every terminal whose identity matches the entry's semantics.
             #   mac_only         -> all terminals sharing this MAC
+            #   mac_prefix       -> all terminals whose MAC starts with the prefix
             #   single_ip (ip)   -> all terminals with this IP
             #   both             -> the terminal with this MAC+IP
             # CIDR / IP-range patterns still go through full recalculation.
@@ -794,7 +847,10 @@ class TerminalService:
 
             mac_norm_for_lookup = _normalize_mac(normalized_mac) if normalized_mac else None
 
-            if normalized_mac and ip_pattern:
+            if normalized_prefix:
+                match_cond = Terminal.mac_address_normalized.like(f"{normalized_prefix}%")
+                wl_match_type = "mac"
+            elif normalized_mac and ip_pattern:
                 match_cond = and_(
                     Terminal.mac_address_normalized == mac_norm_for_lookup,
                     Terminal.ip_address == ip_pattern,
@@ -849,7 +905,7 @@ class TerminalService:
             from app.services.event_emitter import emit_whitelist_changed
             await emit_whitelist_changed(
                 action="add",
-                identifier=normalized_mac or ip_pattern or "",
+                identifier=normalized_prefix or normalized_mac or ip_pattern or "",
                 operator=username,
                 details={"pattern_type": pattern_type},
             )
@@ -888,7 +944,8 @@ class TerminalService:
                     for entry in entries:
                         deleted_entries.append(entry)
                         await self.db.delete(entry)
-            elif len(cleaned_identifier) == 12 and cleaned_identifier.isalnum():
+            elif len(cleaned_identifier) in (6, 8, 10, 12) and re.fullmatch(r"[0-9A-F]+", cleaned_identifier):
+                # Full MAC (12 hex chars) or MAC prefix (6/8/10 hex chars) entry
                 normalized_mac = _normalize_mac(identifier)
                 stmt = select(Whitelist).where(Whitelist.mac_address_normalized == normalized_mac)
                 result = await self.db.execute(stmt)

@@ -57,13 +57,14 @@ async def add_to_whitelist(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_permission("whitelist:write"))
 ):
-    """Add to whitelist by MAC address, IP address, CIDR subnet, or IP range"""
+    """Add to whitelist by MAC address, IP address, CIDR subnet, IP range, or MAC prefix"""
     service = TerminalService(db)
 
     try:
         result = await service.add_to_whitelist(
             mac_address=whitelist_data.mac_address,
             ip_address=whitelist_data.ip_address,
+            mac_prefix=whitelist_data.mac_prefix,
             comments=whitelist_data.comments,
             username=current_user.username
         )
