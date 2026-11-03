@@ -214,7 +214,7 @@ class TestTerminalServiceValidation:
         assert TerminalService._validate_mac_format(None, "AA-BB-CC-DD-EE-FF") is True
 
     def test_mac_dot_format(self):
-        # _validate_mac_format only accepts 6 groups of 2 hex (e.g. AA.BB.CC.DD.EE.FF)
+        # _validate_mac_format accepts 6 groups of 2 hex (e.g. AA.BB.CC.DD.EE.FF)
         assert TerminalService._validate_mac_format(None, "AA.BB.CC.DD.EE.FF") is True
 
     def test_mac_dot_four_hex_groups_rejected(self):
@@ -224,11 +224,23 @@ class TestTerminalServiceValidation:
     def test_mac_lowercase_hex(self):
         assert TerminalService._validate_mac_format(None, "aa:bb:cc:dd:ee:ff") is True
 
-    def test_mac_too_short(self):
-        assert TerminalService._validate_mac_format(None, "AA:BB:CC:DD:EE") is False
+    def test_mac_no_separators(self):
+        # Continuous 12-hex full MAC (as stored and exported) is accepted
+        assert TerminalService._validate_mac_format(None, "AABBCCDDEEFF") is True
+
+    def test_mac_prefix_3_segments(self):
+        assert TerminalService._validate_mac_format(None, "AA:BB:CC") is True
+        assert TerminalService._validate_mac_format(None, "AABBCC") is True
+
+    def test_mac_prefix_4_5_segments(self):
+        assert TerminalService._validate_mac_format(None, "AA:BB:CC:DD") is True
+        assert TerminalService._validate_mac_format(None, "AA:BB:CC:DD:EE") is True
+        assert TerminalService._validate_mac_format(None, "AABBCCDDEE") is True
 
     def test_mac_invalid(self):
         assert TerminalService._validate_mac_format(None, "not-a-mac") is False
+        assert TerminalService._validate_mac_format(None, "AA:BB:CC:DD:EE:GG") is False
+        assert TerminalService._validate_mac_format(None, "AABBCCD") is False
 
     # ---- _validate_ip_pattern ----
     def test_ip_pattern_single(self):

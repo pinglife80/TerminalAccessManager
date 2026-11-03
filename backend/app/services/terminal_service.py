@@ -1155,7 +1155,16 @@ class TerminalService:
                 continue
 
             try:
-                pattern_type = self._determine_pattern_type(normalized_mac, ip_pattern)
+                requested_pattern = raw_row.get("pattern type", "")
+                if requested_pattern.strip().lower() == "mac_prefix" and ip_pattern:
+                    result["failed_count"] += 1
+                    result["errors"].append({
+                        "row": row_num,
+                        "reason": "MAC prefix cannot be combined with IP pattern",
+                        "data": raw_row,
+                    })
+                    continue
+                pattern_type = self._determine_pattern_type(normalized_mac, ip_pattern, requested_pattern)
 
                 existing = await self._find_existing_whitelist(normalized_mac, ip_pattern)
 
@@ -1390,7 +1399,16 @@ class TerminalService:
                 continue
 
             try:
-                pattern_type = self._determine_pattern_type(normalized_mac, ip_pattern)
+                requested_pattern = raw_row.get("pattern_type", raw_row.get("pattern type", ""))
+                if requested_pattern.strip().lower() == "mac_prefix" and ip_pattern:
+                    result["failed_count"] += 1
+                    result["errors"].append({
+                        "row": row_num,
+                        "reason": "MAC prefix cannot be combined with IP pattern",
+                        "data": raw_row,
+                    })
+                    continue
+                pattern_type = self._determine_pattern_type(normalized_mac, ip_pattern, requested_pattern)
 
                 existing = await self._find_existing_whitelist(normalized_mac, ip_pattern)
 
@@ -1454,9 +1472,14 @@ class TerminalService:
         return result
 
     def _validate_mac_format(self, mac: str) -> bool:
-        """Validate MAC address format"""
+        """Validate a MAC address (6 segments) or MAC prefix (3-5 segments).
+
+        Accepts 3-6 segments of 2 hex chars each, either separated by ``:``/``-``/``.``
+        or as a continuous hex string (6/8/10/12 chars), e.g. ``AA:BB:CC:DD:EE:FF``,
+        ``AABBCCDDEEFF``, ``AA:BB:CC``, ``AABBCC``.
+        """
         import re
-        pattern = r'^([0-9A-Fa-f]{2}[:.-]){5}[0-9A-Fa-f]{2}$'
+        pattern = r'^(?:(?:[0-9A-Fa-f]{2}){3,6}|(?:[0-9A-Fa-f]{2}[:.-]{1}){2,5}[0-9A-Fa-f]{2})$'
         return bool(re.match(pattern, mac))
 
     def _validate_ip_pattern(self, ip_str: str) -> bool:
@@ -1503,8 +1526,20 @@ class TerminalService:
             return False
         return False
 
-    def _determine_pattern_type(self, normalized_mac: str | None, ip_pattern: str | None) -> str:
-        """Determine pattern type from MAC and IP"""
+    def _determine_pattern_type(
+        self,
+        normalized_mac: str | None,
+        ip_pattern: str | None,
+        requested: str | None = None,
+    ) -> str:
+        """Determine pattern type from MAC and IP.
+
+        ``requested`` carries the explicit pattern type from an import file
+        (e.g. ``mac_prefix``); only the whitelist-supported value is honored,
+        everything else falls back to inference for safety.
+        """
+        if (requested or "").strip().lower() == "mac_prefix":
+            return "mac_prefix"
         if normalized_mac and ip_pattern:
             return "both"
         elif normalized_mac:

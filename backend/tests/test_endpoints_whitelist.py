@@ -1,7 +1,9 @@
 """6C HTTP API endpoint layer — /api/v1/whitelist integration tests."""
+import json
 from datetime import datetime
 
 import pytest
+from sqlalchemy import select
 
 from app.models.whitelist import Whitelist
 
@@ -191,3 +193,73 @@ class TestImportWhitelist:
         )
         assert resp.status_code == 400
         assert "Invalid mode" in resp.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_import_mac_prefix_csv_roundtrip(self, api_db, api_client):
+        """CSV exported whitelist containing a mac_prefix row re-imports successfully."""
+        csv_content = (
+            "ID,MAC Address,IP Pattern,Pattern Type,Comments,Added By,Created At\n"
+            "1,AABBCC,,mac_prefix,import-export-verify,admin,2026-11-03 00:00:00\n"
+        )
+        resp = await api_client.post(
+            "/api/v1/whitelist/import",
+            files={"file": ("whitelist.csv", csv_content.encode("utf-8"), "text/csv")},
+            data={"mode": "skip"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["success_count"] == 1
+        assert data["failed_count"] == 0
+
+        stmt = select(Whitelist).where(Whitelist.pattern_type == "mac_prefix")
+        result = await api_db.execute(stmt)
+        entry = result.scalar_one_or_none()
+        assert entry is not None
+        assert entry.mac_address == "AABBCC"
+        assert entry.mac_address_normalized == "AABBCC"
+        assert entry.ip_pattern is None
+
+    @pytest.mark.asyncio
+    async def test_import_mac_prefix_json_roundtrip(self, api_db, api_client):
+        """JSON backup containing a mac_prefix entry re-imports with type preserved."""
+        json_content = json.dumps([
+            {
+                "mac_address": "AABBCC",
+                "ip_pattern": None,
+                "pattern_type": "mac_prefix",
+                "comments": "backup prefix",
+                "added_by": "admin",
+            }
+        ])
+        resp = await api_client.post(
+            "/api/v1/whitelist/import",
+            files={"file": ("whitelist.json", json_content.encode("utf-8"), "application/json")},
+            data={"mode": "skip"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["success_count"] == 1
+        assert data["failed_count"] == 0
+
+        stmt = select(Whitelist).where(Whitelist.pattern_type == "mac_prefix")
+        result = await api_db.execute(stmt)
+        entry = result.scalar_one_or_none()
+        assert entry is not None
+        assert entry.mac_address == "AABBCC"
+
+    @pytest.mark.asyncio
+    async def test_import_mac_prefix_with_ip_rejected(self, api_db, api_client):
+        """A mac_prefix row combined with an IP pattern is rejected during import."""
+        csv_content = (
+            "ID,MAC Address,IP Pattern,Pattern Type,Comments,Added By,Created At\n"
+            "1,AABBCC,192.168.1.100,mac_prefix,c,admin,2026-11-03 00:00:00\n"
+        )
+        resp = await api_client.post(
+            "/api/v1/whitelist/import",
+            files={"file": ("whitelist.csv", csv_content.encode("utf-8"), "text/csv")},
+            data={"mode": "skip"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["failed_count"] == 1
+        assert "MAC prefix cannot be combined" in data["errors"][0]["reason"]
