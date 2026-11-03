@@ -1,12 +1,44 @@
 # 版本跟踪记录
 
-> 文档版本：v3.26.0 | 更新日期：2026-11-03
+> 文档版本：v3.26.1 | 更新日期：2026-11-03
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
 
 ---
+
+## [v3.26.1] - 2026-11-03
+
+### 优化白名单命中终端 comments 同步（Patch 版本）
+
+#### 背景
+
+新增白名单（即时生效类型）后，系统中已存在的匹配终端仅被设为企业白名单豁免（bypass），终端 `comments` 既不反映白名单身份，历史自动封锁/解封（Auto-blocked/Auto-unblocked）注释也继续残留，前端误读风险高。本次优化：添加白名单后同步更新匹配终端 `comments` 为白名单条目的 comments，并清除历史封锁/解封注释。
+
+#### 主要变更
+
+| 变更项 | 说明 |
+|--------|------|
+| 新增同步方法 | `compliance_service.py` 新增 `_strip_block_unblock_comments` 与 `sync_terminal_whitelist_comments`：清除 Auto-* 封锁/解封注释、更新/追加 `Whitelist: {comments}` 注释、保留其他人工注释（白名单 comments 为空时仅清除） |
+| 即时生效集成 | `add_to_whitelist` 即时生效循环内、`apply_manual_whitelist_for_terminal` 之后调用同步方法（纯内存修改，不提交、不单独审计） |
+| 适用范围 | `single_ip` / `mac_only` / `both` / `mac_prefix`（即时生效分支）直接调用同步；CIDR / ip_range 走全量重算路径，命中白名单（`_apply_compliance_result` bypass 分支）同样清除 Auto-* 注释并更新 Whitelist 注释 |
+| 数据库 | 无迁移 |
+
+#### 升级步骤（推荐：一键升级）
+
+    git checkout main
+    git pull origin main
+    ./manage.sh upgrade
+
+#### 升级注意事项
+
+- 本次无数据库迁移、无配置项变更，向后兼容。
+- 添加白名单（即时生效类型）命中已存在终端时，其 comments 将按上述规则自动更新；历史残留的 Auto-blocked/Auto-unblocked 注释在下次新增白名单命中时被清除。
+
+#### 文件变更清单
+
+    backend/app/services/compliance_service.py、backend/app/services/terminal_service.py、backend/tests/test_whitelist.py
 
 ## [v3.26.0] - 2026-11-03
 

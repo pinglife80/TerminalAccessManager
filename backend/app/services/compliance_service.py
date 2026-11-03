@@ -1781,6 +1781,38 @@ class ComplianceService:
                 return
         terminal.comments = f"{terminal.comments}; {comment}" if terminal.comments else comment
 
+    @staticmethod
+    def _strip_block_unblock_comments(comments: str | None) -> str:
+        """从 comments 中移除所有封锁/解封（Auto-blocked/Auto-unblocked）注释。
+
+        按 ``;`` 分段过滤：匹配 ``_AUTO_COMMENT_RE``（Auto-* 系列）的段落丢弃，
+        其余人工/自定义注释保留并按 ``; `` 重组。
+        """
+        if not comments:
+            return ""
+        kept = [
+            c.strip()
+            for c in (c.strip() for c in comments.split(";") if c.strip())
+            if ComplianceService._comment_dedupe_key(c)[0] != "auto"
+        ]
+        return "; ".join(kept)
+
+    def sync_terminal_whitelist_comments(self, terminal: Terminal, wl_comments: str | None) -> None:
+        """新增白名单即时生效时同步终端 comments（纯内存修改，不提交、不审计）。
+
+        1) 清除已有封锁/解封（Auto-blocked/Auto-unblocked）注释；
+        2) 更新/追加 ``Whitelist: {wl_comments}`` 注释（wl_comments 为空时移除已有 Whitelist 注释）；
+        3) 保留其他人工/自定义注释。
+        """
+        base = self._strip_block_unblock_comments(terminal.comments)
+        parts = [
+            p for p in (p.strip() for p in base.split(";") if p.strip())
+            if not p.startswith("Whitelist: ")
+        ]
+        if wl_comments:
+            parts.append(f"Whitelist: {wl_comments}")
+        terminal.comments = "; ".join(parts) if parts else None
+
     async def _block_on_firewall_detailed(
         self, ip_address: str, firewall_tag: str, block_time: str = "30d",
         reason: str = "Auto-blocked: non-compliant",
@@ -2221,28 +2253,9 @@ class ComplianceService:
 
         # Normal processing
         if new_compliance == "bypass":
-            wl_comment_str = f"Whitelist: {wl_comments}" if wl_comments else None
-            
-            if wl_comment_str:
-                if terminal.comments and "Whitelist: " in terminal.comments:
-                    old_wl_start = terminal.comments.find("Whitelist: ")
-                    semicolon_pos = terminal.comments.find(";", old_wl_start)
-                    if semicolon_pos > old_wl_start:
-                        old_wl_end = semicolon_pos
-                        terminal.comments = terminal.comments[:old_wl_start] + wl_comment_str + terminal.comments[old_wl_end:]
-                    else:
-                        terminal.comments = terminal.comments[:old_wl_start] + wl_comment_str
-                elif terminal.comments:
-                    terminal.comments = f"{terminal.comments}; {wl_comment_str}"
-                else:
-                    terminal.comments = wl_comment_str
-            elif terminal.comments and "Whitelist: " in terminal.comments:
-                old_wl_start = terminal.comments.find("Whitelist: ")
-                semicolon_pos = terminal.comments.find(";", old_wl_start)
-                if semicolon_pos > old_wl_start:
-                    terminal.comments = terminal.comments[:old_wl_start].rstrip("; ") + terminal.comments[semicolon_pos+1:].lstrip()
-                else:
-                    terminal.comments = terminal.comments[:old_wl_start].rstrip("; ")
+            # 同步终端 comments：清除封锁/解封（Auto-*）注释并更新 Whitelist 注释
+            # （重算/首次发现路径命中白名单时与即时生效路径行为一致）
+            self.sync_terminal_whitelist_comments(terminal, wl_comments)
         elif terminal.comments and "Whitelist: " in terminal.comments:
             old_wl_start = terminal.comments.find("Whitelist: ")
             semicolon_pos = terminal.comments.find(";", old_wl_start)
