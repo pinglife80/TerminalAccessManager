@@ -1,12 +1,44 @@
 # 版本跟踪记录
 
-> 文档版本：v3.26.1 | 更新日期：2026-11-03
+> 文档版本：v3.26.2 | 更新日期：2026-11-03
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
 
 ---
+
+## [v3.26.2] - 2026-11-03
+
+### 修复重算/首次发现路径解封状态不一致（Patch 版本）
+
+#### 背景
+
+梳理白名单中「已封锁」与「已解封」终端时发现客观事实与业务逻辑不一致：重算（CIDR/ip_range 全量重算、首次发现、数据源重绑定）路径命中白名单/合规的解封块，其解封目标仅取终端 `source_tag` 绑定防火墙；而 reconcile 来源（`source_tag="reconciliation"`）创建的黑名单条目 `firewall_tag` 可以不在绑定内。此类条目在重算解封时既不被解封（不在目标集合），又被全量标记为已解封（`auto_unblocked=True`），导致「终端已解封、黑名单条目仍显示封锁中、但对账/重算却认为该条目已失效」的状态错位。
+
+#### 主要变更
+
+| 变更项 | 说明 |
+|--------|------|
+| 解封目标集合 | `_apply_compliance_result` 解封目标 = 终端绑定防火墙 ∪ active 黑名单条目的 `firewall_tag`（去重），reconcile/绑定外 tag 一并纳入解封 |
+| 按条目精确标记 | 仅标记成功解封防火墙对应的条目（None-tag 条目按 `source_tag` 绑定解析全部成功才算），失败防火墙对应条目保持 active，不再全量误标 |
+| 语义对齐 | 与加白即时路径 `apply_manual_whitelist_for_terminal` 的条目级语义一致 |
+| 数据库 | 无迁移 |
+
+#### 升级步骤（推荐：一键升级）
+
+    git checkout main
+    git pull origin main
+    ./manage.sh upgrade
+
+#### 升级注意事项
+
+- 本次无数据库迁移、无配置项变更，向后兼容。
+- 修复仅影响重算/首次发现路径的解封与黑名单条目标记行为；存量已误标为 `auto_unblocked=True` 但实际未解封防火墙的条目，在下次重算命中白名单/合规时会按新逻辑重新对账（已标记条目不在 active 查询范围，由防火墙对账服务兜底收敛，无需人工订正）。
+
+#### 文件变更清单
+
+    backend/app/services/compliance_service.py、backend/tests/test_compliance_service.py
 
 ## [v3.26.1] - 2026-11-03
 
