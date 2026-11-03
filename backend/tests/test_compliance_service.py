@@ -800,7 +800,7 @@ class TestCleanupExpiredBlacklist:
         # The expired entry should be marked as unblocked (soft delete, not unblocked on firewall)
         assert expired_entry.unblocked_at is not None
         assert expired_entry.unblocked_by == "system"
-        assert expired_entry.reason == "封锁时间到期自动解封"
+        assert expired_entry.unblock_reason == "封锁时间到期自动解封"
         assert result >= 1
 
     @pytest.mark.asyncio
@@ -871,7 +871,7 @@ class TestCleanupExpiredBlacklist:
         assert unblocked_terminal.status == "unblocked"
         assert unblocked_terminal.compliance_status == "compliant"
         # Expired entry should carry the independent unblock reason
-        assert expired_entry.reason == "封锁时间到期自动解封"
+        assert expired_entry.unblock_reason == "封锁时间到期自动解封"
 
 
 # ===========================================================================
@@ -1395,7 +1395,8 @@ class TestApplyResultUnblock:
         assert terminal.status == "unblocked"
         assert terminal.firewall_tag is None
         assert bl_entry.auto_unblocked is True
-        assert bl_entry.reason == "合规解封"
+        assert bl_entry.unblock_reason == "合规解封"
+        assert bl_entry.reason == "Auto-blocked: non-compliant"
 
     @pytest.mark.asyncio
     async def test_blocked_to_bypass_unblocks_with_whitelist_reason(self, service, mock_db):
@@ -1428,7 +1429,8 @@ class TestApplyResultUnblock:
 
         assert result["unblocked"] is True
         assert bl_entry.auto_unblocked is True
-        assert bl_entry.reason == "加入白名单"
+        assert bl_entry.unblock_reason == "加入白名单"
+        assert bl_entry.reason == "Auto-blocked: non-compliant"
 
     @pytest.mark.asyncio
     async def test_blocked_to_compliant_skips_unblock_on_cooldown(self, service, mock_db):
@@ -2562,7 +2564,8 @@ class TestApplyManualWhitelist:
         assert terminal.status == "unblocked"
         assert terminal.firewall_tag is None
         assert bl_entry.auto_unblocked is True
-        assert bl_entry.reason == "加入白名单（手动）"
+        assert bl_entry.unblock_reason == "加入白名单（手动）"
+        assert bl_entry.reason == "Auto-blocked: non-compliant"
         assert bl_entry.unblocked_by == "admin"
         assert bl_entry.unblocked_at is not None
 

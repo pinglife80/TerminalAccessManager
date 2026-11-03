@@ -466,6 +466,7 @@ const zh = {
     statsSuccessBlocked: '成功封锁',
     statsSuccessUnblocked: '成功解封',
     unblockEvent: '解封事件',
+    unblockReason: '解封原因',
     statsPendingRetryUnblock: '解封失败待重试',
     statsFirewallErrors: '防火墙异常',
     statsSuccessBlockedHint: '当前处于封堵状态的活跃黑名单条目数（防火墙已成功封锁）。',

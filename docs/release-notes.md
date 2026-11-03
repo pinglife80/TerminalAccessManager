@@ -1,12 +1,44 @@
 # 版本跟踪记录
 
-> 文档版本：v3.25.0 | 更新日期：2026-11-02
+> 文档版本：v3.25.1 | 更新日期：2026-11-03
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
 
 ---
+
+## [v3.25.1] - 2026-11-03
+
+### 修复黑名单封禁原因被解封原因覆盖（Patch 版本）
+
+#### 背景
+
+黑名单管理页「Successfully Block」列表中的 Reason（封禁原因）会同步更新为 Unblock Event 的 reason（解封原因），封禁原因被解封原因覆盖。根因是 `blacklist` 表单一 `reason` 字段既承载封禁原因、又被解封逻辑复写为解封原因，前端「Reason」列与「Unblock Event」列也都读取同一个 `item.reason`。
+
+#### 主要变更
+
+| 变更项 | 说明 |
+|--------|------|
+| 新增独立字段 | `blacklist.unblock_reason` 承载解封原因，`reason` 保持不可变的封禁原因 |
+| 解封写入口 | 后端 7 处解封逻辑由写 `reason` 改为写 `unblock_reason`（合规解封 / 白名单解封 / 到期自动解封 / 手动重试解封） |
+| 前端展示 | 「Unblock Event」列与详情弹窗改读 `unblock_reason` |
+| CSV 导出 | 追加 Unblock Reason 列 |
+
+#### 升级步骤（推荐：一键升级）
+
+    git checkout main
+    git pull origin main
+    ./manage.sh upgrade
+
+#### 升级注意事项
+
+- 本次含 Alembic 迁移 045（`blacklist` 新增可空列 `unblock_reason`，向后兼容，不迁移存量数据）。
+- 存量已解封记录因历史上 `reason` 已被覆盖，`unblock_reason` 默认为空，前端显示 `—`；不影响此后新产生的封禁/解封记录的正确性。
+
+#### 文件变更清单
+
+    backend/alembic/versions/045_blacklist_unblock_reason.py、backend/app/models/blacklist.py、backend/app/schemas/terminal.py、backend/app/services/compliance_service.py、backend/app/services/terminal_service.py、backend/app/api/v1/endpoints/blacklist.py、backend/tests/test_compliance_service.py、frontend/src/hooks/useTerminalData.ts、frontend/src/pages/Blacklist.tsx、frontend/src/i18n/locales/zh.ts、frontend/src/i18n/locales/en.ts、frontend/src/i18n/locales/ja.ts
 
 ## [v3.25.0] - 2026-11-02
 

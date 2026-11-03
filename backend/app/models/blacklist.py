@@ -15,6 +15,7 @@ class Blacklist(Base):
     mac_address = Column(String(17), nullable=True, index=True)
     mac_address_normalized = Column(String(12), nullable=True, index=True)
     reason = Column(Text, nullable=True)
+    unblock_reason = Column(Text, nullable=True)
     blocked_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True)
     expires_at = Column(DateTime(timezone=True), nullable=True, index=True)
     blocked_by = Column(String(50), nullable=False)

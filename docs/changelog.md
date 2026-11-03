@@ -1,6 +1,6 @@
 # 更新日志
 
-> 文档版本：v3.25.0  更新日期：2026-11-02
+> 文档版本：v3.25.1  更新日期：2026-11-03
 
 本文件记录 TerminalAccessManager 的所有重要变更。
 
@@ -8,6 +8,21 @@
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ***
+
+## [3.25.1] - 2026-11-03
+
+### 修复
+
+- **黑名单封禁原因被解封原因覆盖**：`blacklist` 表单一 `reason` 字段此前被解封逻辑复用写入解封原因，导致「Successfully Block」列表的封禁原因被「Unblock Event」的解封原因覆盖。现新增独立 `unblock_reason` 字段承载解封原因，`reason` 保持不可变的封禁原因；后端 7 处解封写入口改写 `unblock_reason`，前端「Unblock Event」列与详情弹窗改读 `unblock_reason`，CSV 导出追加 Unblock Reason 列
+  - 关联文件：`backend/alembic/versions/045_blacklist_unblock_reason.py`、`backend/app/models/blacklist.py`、`backend/app/schemas/terminal.py`、`backend/app/services/compliance_service.py`、`backend/app/services/terminal_service.py`、`backend/app/api/v1/endpoints/blacklist.py`、`frontend/src/hooks/useTerminalData.ts`、`frontend/src/pages/Blacklist.tsx`、`frontend/src/i18n/locales/{zh,en,ja}.ts`
+
+### 数据库
+
+- 新增迁移 `045_blacklist_unblock_reason`：`blacklist` 新增可空列 `unblock_reason`
+
+### 测试
+
+- 解封相关断言改读 `unblock_reason`，并新增「封禁原因保持不变」回归断言；后端全量 1631 用例通过
 
 ## [3.25.0] - 2026-11-02
 

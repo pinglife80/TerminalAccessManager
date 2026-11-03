@@ -34,6 +34,7 @@ export interface BlacklistEntry {
   ip_address: string | null;
   mac_address: string | null;
   reason: string | null;
+  unblock_reason: string | null;
   blocked_at: string;
   expires_at: string | null;
   blocked_by: string;

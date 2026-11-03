@@ -153,7 +153,7 @@ async def export_blacklist(
 
     writer.writerow([
         "ID", "MAC Address", "IP Address", "Status", "Firewall Tag",
-        "Reason", "Block Time", "Blocked By", "Source Tag", "Block Type", "Auto Unblocked"
+        "Reason", "Unblock Reason", "Block Time", "Blocked By", "Source Tag", "Block Type", "Auto Unblocked"
     ])
 
     for b in blacklist:
@@ -168,6 +168,7 @@ async def export_blacklist(
             status_label,
             b.firewall_tag or "",
             b.reason or "",
+            b.unblock_reason or "",
             b.blocked_at or "",
             b.blocked_by or "",
             b.source_tag or "",
