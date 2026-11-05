@@ -1,7 +1,7 @@
-from typing import Any, Dict, Optional, Tuple
 import asyncio
 from datetime import datetime, timedelta
 from enum import Enum
+from typing import Any
 
 import httpx
 from loguru import logger
@@ -18,9 +18,9 @@ TAM_DESCRIPTION_PREFIX = "TAM"
 API_PREFIX = "/api"
 
 # Global cache for SangforService instances to reuse connections
-_service_cache: Dict[str, 'SangforService'] = {}
+_service_cache: dict[str, 'SangforService'] = {}
 _cache_lock = asyncio.Lock()
-_token_expiry: Dict[str, datetime] = {}
+_token_expiry: dict[str, datetime] = {}
 
 # Firewall operation types
 class FirewallOperationType(Enum):
@@ -73,7 +73,7 @@ class SangforService:
             max_keepalive_connections=3,
             keepalive_expiry=300,
         )
-        self._operation_queue: asyncio.Queue[Tuple[FirewallOperationType, str, str, str]] = asyncio.Queue()
+        self._operation_queue: asyncio.Queue[tuple[FirewallOperationType, str, str, str]] = asyncio.Queue()
         self._semaphore = asyncio.Semaphore(MAX_CONCURRENT_OPERATIONS)
         self._queue_running = False
 
@@ -124,7 +124,7 @@ class SangforService:
                 self.session = self._create_client(
                     headers={'Content-Type': 'application/json'}
                 )
-            
+
             login_url = f"{self.base_url}{API_PREFIX}/v1/namespaces/public/login"
             logger.debug(f"Authenticating with Sangfor AF: {login_url}")
 
@@ -719,16 +719,16 @@ class SangforService:
         ca_bundle: str = "",
     ) -> 'SangforService':
         """Get or create a cached SangforService instance to reuse connections.
-        
+
         This prevents creating multiple authenticated sessions to the same firewall,
         which can exceed the firewall's concurrent user limit.
         """
         url_key = (base_url or settings.SANGFOR_BASE_URL or "").rstrip("/")
-        
+
         async with _cache_lock:
             if url_key in _service_cache:
                 service = _service_cache[url_key]
-                
+
                 if service.token:
                     expiry = _token_expiry.get(url_key)
                     if expiry and datetime.now() < expiry:
@@ -747,7 +747,7 @@ class SangforService:
                             f"will re-authenticate on next request"
                         )
                     return service
-            
+
             service = cls(
                 base_url=base_url,
                 username=username,
@@ -755,7 +755,7 @@ class SangforService:
                 verify_ssl=verify_ssl,
                 ca_bundle=ca_bundle,
             )
-            
+
             try:
                 await service._authenticate()
                 _service_cache[url_key] = service
@@ -764,19 +764,19 @@ class SangforService:
             except Exception as e:
                 logger.error(f"Failed to authenticate SangforService for {url_key}, not caching: {e}")
                 raise
-            
+
             return service
 
     async def close(self):
         """Close the HTTP session and remove from cache"""
         url_key = self.base_url
         self._queue_running = False
-        
+
         if self.session:
             await self.session.aclose()
             self.session = None
             self.token = None
-        
+
         async with _cache_lock:
             if url_key in _service_cache:
                 del _service_cache[url_key]
@@ -797,7 +797,7 @@ class SangforService:
                 op_type, ip, source_tag, reason = await asyncio.wait_for(
                     self._operation_queue.get(), timeout=5.0
                 )
-                
+
                 async with self._semaphore:
                     try:
                         if op_type == FirewallOperationType.BLOCK:
@@ -806,9 +806,9 @@ class SangforService:
                             await self._execute_unblock(ip)
                     except Exception as e:
                         logger.error(f"Failed to process {op_type.value} operation for {ip}: {str(e)}")
-                
+
                 self._operation_queue.task_done()
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 continue
             except Exception as e:
                 logger.error(f"Error processing operation queue: {str(e)}")

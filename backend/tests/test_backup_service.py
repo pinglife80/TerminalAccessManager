@@ -19,7 +19,6 @@ from app.core.config import settings
 from app.services import backup_service as bs
 from app.services.backup_service import BackupConfig, BackupJob, BackupService
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -316,18 +315,19 @@ class TestBackupDatabase:
     async def test_no_host_raises(self):
         svc = BackupService()
         with patch.object(settings, "DATABASE_URL", ""), \
-             patch.object(settings, "DB_HOST", ""):
-            with pytest.raises(Exception, match="not configured"):
-                await svc._backup_database("/tmp")
+             patch.object(settings, "DB_HOST", ""), pytest.raises(Exception, match="not configured"):
+            await svc._backup_database("/tmp")
 
     @pytest.mark.asyncio
     async def test_failure_returncode_raises(self):
         svc = BackupService()
         proc = _subprocess(returncode=1, stderr=b"dump error")
-        with patch.object(settings, "DATABASE_URL", "postgresql://u:p@h/db"), \
-             patch.object(bs.asyncio, "create_subprocess_exec", AsyncMock(return_value=proc)):
-            with pytest.raises(Exception, match="dump error"):
-                await svc._backup_database("/tmp")
+        with (
+            patch.object(settings, "DATABASE_URL", "postgresql://u:p@h/db"),
+            patch.object(bs.asyncio, "create_subprocess_exec", AsyncMock(return_value=proc)),
+            pytest.raises(Exception, match="dump error"),
+        ):
+            await svc._backup_database("/tmp")
 
 
 # ===========================================================================
@@ -351,12 +351,14 @@ class TestBackupConfigBackup:
         real_src = tmp_path / "docker-compose.yml"
         real_src.write_text("version: '3'")
 
-        with patch.object(os.path, "exists", side_effect=lambda p: p == str(real_src)):
-            # search_paths includes '.', so symlink cwd is avoided; instead
-            # shutil.copy is real but source only exists at tmp_path. Patch the
-            # search_paths indirectly by making copy a no-op for zip coverage.
-            with patch.object(bs.shutil, "copy", return_value=None):
-                result = await svc._backup_config(str(tmp_path))
+        # search_paths includes '.', so symlink cwd is avoided; instead
+        # shutil.copy is real but source only exists at tmp_path. Patch the
+        # search_paths indirectly by making copy a no-op for zip coverage.
+        with (
+            patch.object(os.path, "exists", side_effect=lambda p: p == str(real_src)),
+            patch.object(bs.shutil, "copy", return_value=None),
+        ):
+            result = await svc._backup_config(str(tmp_path))
 
         assert result == os.path.join(str(tmp_path), "config.zip")
 
@@ -421,7 +423,6 @@ class TestBackupSystemConfigDb:
             _ns(key="k1", value="v1", category="c", value_type="int",
                  description="d", is_readonly=False),
         ]
-        empty_rows = []
         db.execute = AsyncMock(side_effect=[
             _make_rows_result(rows),            # SystemConfig
             _make_rows_result([]),              # NotificationChannel
@@ -618,9 +619,8 @@ class TestUploadViaFtp:
         svc.config.storage_config = {"host": "h"}
         ftp = MagicMock()
         ftp.connect.side_effect = RuntimeError("conn")
-        with patch.object(bs.ftplib, "FTP", return_value=ftp):
-            with pytest.raises(RuntimeError):
-                await svc._upload_via_ftp(str(f))
+        with patch.object(bs.ftplib, "FTP", return_value=ftp), pytest.raises(RuntimeError):
+            await svc._upload_via_ftp(str(f))
 
 
 # ===========================================================================
@@ -673,9 +673,8 @@ class TestUploadViaSftp:
         svc.config.storage_config = {"host": "h"}
         ssh = MagicMock()
         ssh.connect.side_effect = RuntimeError("x")
-        with patch.object(bs.paramiko, "SSHClient", return_value=ssh):
-            with pytest.raises(RuntimeError):
-                await svc._upload_via_sftp(str(f))
+        with patch.object(bs.paramiko, "SSHClient", return_value=ssh), pytest.raises(RuntimeError):
+            await svc._upload_via_sftp(str(f))
 
 
 # ===========================================================================
@@ -986,7 +985,7 @@ class TestRunBackup:
         svc.cleanup_old_backups = AsyncMock()
 
         with patch("app.services.event_emitter.emit_backup_completed", AsyncMock()):
-            job = await svc.run_backup("database")
+            await svc.run_backup("database")
 
         svc.backup_database.assert_awaited_once()
         svc.backup_config.assert_not_called()
@@ -1110,9 +1109,11 @@ class TestRestoreWhitelist:
     @pytest.mark.asyncio
     async def test_corrupt_backup_raises(self):
         svc = BackupService()
-        with patch.object(svc, "verify_backup", AsyncMock(return_value=False)):
-            with pytest.raises(Exception, match="corrupted"):
-                await svc.restore_whitelist("/bad.zip")
+        with (
+            patch.object(svc, "verify_backup", AsyncMock(return_value=False)),
+            pytest.raises(Exception, match="corrupted"),
+        ):
+            await svc.restore_whitelist("/bad.zip")
 
     @pytest.mark.asyncio
     async def test_no_db_returns_false(self):
@@ -1189,9 +1190,11 @@ class TestRestoreBackup:
     @pytest.mark.asyncio
     async def test_corrupt_raises(self):
         svc = BackupService()
-        with patch.object(svc, "verify_backup", AsyncMock(return_value=False)):
-            with pytest.raises(Exception, match="corrupted"):
-                await svc.restore_backup("/bad.zip")
+        with (
+            patch.object(svc, "verify_backup", AsyncMock(return_value=False)),
+            pytest.raises(Exception, match="corrupted"),
+        ):
+            await svc.restore_backup("/bad.zip")
 
     @pytest.mark.asyncio
     async def test_full_restore_success(self, tmp_path):
@@ -1245,6 +1248,8 @@ class TestRestoreDatabase:
     async def test_failure_raises(self):
         svc = BackupService()
         proc = _subprocess(returncode=1, stderr=b"restore error")
-        with patch.object(bs.asyncio, "create_subprocess_exec", AsyncMock(return_value=proc)):
-            with pytest.raises(Exception, match="restore error"):
-                await svc._restore_database("/tmp/db.sql")
+        with (
+            patch.object(bs.asyncio, "create_subprocess_exec", AsyncMock(return_value=proc)),
+            pytest.raises(Exception, match="restore error"),
+        ):
+            await svc._restore_database("/tmp/db.sql")

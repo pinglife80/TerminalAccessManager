@@ -237,7 +237,7 @@ def api_engine():
 @pytest.fixture
 async def api_db(api_engine):
     """Fresh schema + a session for seeding data before each endpoint test."""
-    from sqlalchemy.ext.asyncio import async_sessionmaker, AsyncSession
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from app.core.database import Base
 
@@ -260,13 +260,13 @@ async def api_client(api_db, api_engine):
     from types import SimpleNamespace
 
     from httpx import ASGITransport, AsyncClient
-    from sqlalchemy.ext.asyncio import async_sessionmaker, AsyncSession
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+    import app.services.compliance_service as compliance_service_mod
+    import app.services.terminal_service as terminal_service_mod
     from app.core.database import get_db
     from app.core.security import get_current_user
     from app.main import app
-    import app.services.compliance_service as compliance_service_mod
-    import app.services.terminal_service as terminal_service_mod
 
     session_factory = async_sessionmaker(
         api_engine, class_=AsyncSession, expire_on_commit=False

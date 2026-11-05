@@ -11,6 +11,7 @@ import {
   usePreviewTerminalExclusion,
   TerminalExclusion,
   ExclusionImpact,
+  ExclusionUnblockResult,
   IpPatternType,
   MacPatternType,
   TerminalExclusionCondition,
@@ -33,6 +34,9 @@ const TerminalExclusions: React.FC = () => {
   const [showFormModal, setShowFormModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [showDetailsModal, setShowDetailsModal] = useState(false);
+  const [showUnblockConfirm, setShowUnblockConfirm] = useState(false);
+  const [enableRule, setEnableRule] = useState<TerminalExclusion | null>(null);
+  const [enableUnblockBlocked, setEnableUnblockBlocked] = useState(false);
   const [selectedRule, setSelectedRule] = useState<TerminalExclusion | null>(null);
   const [isEditing, setIsEditing] = useState(false);
 
@@ -43,6 +47,7 @@ const TerminalExclusions: React.FC = () => {
   const [macType, setMacType] = useState<MacPatternType>('mac_prefix');
   const [macValue, setMacValue] = useState('');
   const [comments, setComments] = useState('');
+  const [unblockBlocked, setUnblockBlocked] = useState(false);
   const [formError, setFormError] = useState('');
   const [preview, setPreview] = useState<ExclusionImpact | null>(null);
 
@@ -60,6 +65,7 @@ const TerminalExclusions: React.FC = () => {
     setMacType('mac_prefix');
     setMacValue('');
     setComments('');
+    setUnblockBlocked(false);
     setFormError('');
     setPreview(null);
   };
@@ -143,35 +149,65 @@ const TerminalExclusions: React.FC = () => {
     try {
       const impact = await previewMutation.mutateAsync(condition);
       setPreview(impact);
+      if (impact.blocked === 0) {
+        setUnblockBlocked(false);
+      }
     } catch (err: unknown) {
       setFormError(getErrorMessage(err));
     }
   };
 
-  const showImpactToast = (impact: ExclusionImpact) => {
+  const showImpactToast = (
+    impact: ExclusionImpact,
+    unblock?: ExclusionUnblockResult | null
+  ) => {
     toast.success(
       t('terminalExclusions.impactToast', {
         purged: impact.purgeable,
         retained: impact.retained,
       })
     );
+    if (!unblock || !unblock.requested) return;
+    const summary = t('terminalExclusions.unblockResult', {
+      unblocked: unblock.unblocked,
+      failed: unblock.failed,
+      skipped: unblock.skipped,
+    });
+    if (unblock.failed > 0 || unblock.skipped > 0) {
+      toast.warning(summary, {
+        description: unblock.errors.slice(0, 3).join('\n'),
+      });
+    } else {
+      toast.success(summary);
+    }
   };
 
-  const handleCreate = async () => {
-    if (!validateForm()) return;
+  const submitCreate = async (withUnblock: boolean) => {
     const condition = buildConditionPayload();
     if (!condition) return;
     try {
       const result = await createMutation.mutateAsync({
         ...condition,
         comments: comments.trim(),
+        unblock_blocked: withUnblock,
       });
-      showImpactToast(result.impact);
+      showImpactToast(result.impact, result.unblock);
       setShowFormModal(false);
+      setShowUnblockConfirm(false);
       resetForm();
     } catch (err: unknown) {
       setFormError(getErrorMessage(err));
+      setShowUnblockConfirm(false);
     }
+  };
+
+  const handleCreate = async () => {
+    if (!validateForm()) return;
+    if (unblockBlocked && (preview?.blocked || 0) > 0) {
+      setShowUnblockConfirm(true);
+      return;
+    }
+    await submitCreate(false);
   };
 
   const handleUpdate = async () => {
@@ -183,7 +219,7 @@ const TerminalExclusions: React.FC = () => {
         id: selectedRule.id,
         data: { ...condition, comments: comments.trim() },
       });
-      showImpactToast(result.impact);
+      showImpactToast(result.impact, result.unblock);
       setShowFormModal(false);
       resetForm();
     } catch (err: unknown) {
@@ -202,17 +238,36 @@ const TerminalExclusions: React.FC = () => {
     }
   };
 
-  const handleToggle = async (rule: TerminalExclusion) => {
+  const performToggle = async (rule: TerminalExclusion, withUnblock: boolean) => {
     try {
-      const result = await toggleMutation.mutateAsync(rule.id);
+      const result = await toggleMutation.mutateAsync({
+        id: rule.id,
+        unblock_blocked: withUnblock,
+      });
       if (rule.is_active) {
         toast.success(t('terminalExclusions.disabled'));
       } else {
-        showImpactToast(result.impact);
+        showImpactToast(result.impact, result.unblock);
       }
     } catch (err: unknown) {
       toast.error(getErrorMessage(err));
     }
+  };
+
+  const handleToggle = (rule: TerminalExclusion) => {
+    if (rule.is_active) {
+      void performToggle(rule, false);
+      return;
+    }
+    setEnableRule(rule);
+    setEnableUnblockBlocked(false);
+  };
+
+  const confirmEnable = async () => {
+    if (!enableRule) return;
+    const rule = enableRule;
+    setEnableRule(null);
+    await performToggle(rule, enableUnblockBlocked);
   };
 
   const openAddModal = () => {
@@ -480,7 +535,7 @@ const TerminalExclusions: React.FC = () => {
 
           {preview && (
             <div className="rounded-md border border-border bg-muted/40 p-3 text-sm">
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                 <div>
                   <div className="text-xs text-muted-foreground">{t('terminalExclusions.matched')}</div>
                   <div className="font-semibold text-foreground">{preview.matched}</div>
@@ -490,10 +545,33 @@ const TerminalExclusions: React.FC = () => {
                   <div className="font-semibold text-red-600 dark:text-red-400">{preview.purgeable}</div>
                 </div>
                 <div>
+                  <div className="text-xs text-muted-foreground">{t('terminalExclusions.blocked')}</div>
+                  <div className="font-semibold text-orange-600 dark:text-orange-400">{preview.blocked}</div>
+                </div>
+                <div>
                   <div className="text-xs text-muted-foreground">{t('terminalExclusions.retained')}</div>
                   <div className="font-semibold text-yellow-600 dark:text-yellow-400">{preview.retained}</div>
                 </div>
               </div>
+
+              {!isEditing && preview.blocked > 0 && (
+                <label className="mt-3 flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm dark:border-amber-500/40 dark:bg-amber-500/10">
+                  <input
+                    type="checkbox"
+                    checked={unblockBlocked}
+                    onChange={(e) => setUnblockBlocked(e.target.checked)}
+                    className="mt-0.5 h-4 w-4 rounded border-border"
+                  />
+                  <span>
+                    <span className="font-medium text-foreground">
+                      {t('terminalExclusions.unblockBlocked', { count: preview.blocked })}
+                    </span>
+                    <span className="mt-1 block text-xs text-muted-foreground">
+                      {t('terminalExclusions.unblockBlockedHint')}
+                    </span>
+                  </span>
+                </label>
+              )}
               {preview.samples.length > 0 && (
                 <div className="mt-3 max-h-40 overflow-auto rounded border border-border bg-card">
                   <table className="min-w-full text-xs">
@@ -545,6 +623,75 @@ const TerminalExclusions: React.FC = () => {
                 disabled={isEditing ? updateMutation.isPending : createMutation.isPending}
               />
             </div>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Unblock confirmation for create */}
+      <Modal
+        isOpen={showUnblockConfirm}
+        onClose={() => setShowUnblockConfirm(false)}
+        title={t('terminalExclusions.unblockConfirmTitle')}
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-foreground">
+            {t('terminalExclusions.unblockConfirmMessage', {
+              count: preview?.blocked || 0,
+            })}
+          </p>
+          <div className="flex justify-end gap-3">
+            <PrimaryButton
+              label={t('common.cancel')}
+              variant="secondary"
+              onClick={() => setShowUnblockConfirm(false)}
+            />
+            <PrimaryButton
+              label={createMutation.isPending ? t('common.saving') : t('common.confirm')}
+              variant="danger"
+              onClick={() => submitCreate(true)}
+              disabled={createMutation.isPending}
+            />
+          </div>
+        </div>
+      </Modal>
+
+      {/* Enable rule confirmation */}
+      <Modal
+        isOpen={enableRule !== null}
+        onClose={() => setEnableRule(null)}
+        title={t('terminalExclusions.enableConfirmTitle')}
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-foreground">
+            {t('terminalExclusions.enableConfirmMessage')}
+          </p>
+          <label className="flex items-start gap-2 rounded-md border border-border p-3 text-sm">
+            <input
+              type="checkbox"
+              checked={enableUnblockBlocked}
+              onChange={(e) => setEnableUnblockBlocked(e.target.checked)}
+              className="mt-0.5 h-4 w-4 rounded border-border"
+            />
+            <span>
+              <span className="font-medium text-foreground">
+                {t('terminalExclusions.unblockBlockedGeneric')}
+              </span>
+              <span className="mt-1 block text-xs text-muted-foreground">
+                {t('terminalExclusions.unblockBlockedHint')}
+              </span>
+            </span>
+          </label>
+          <div className="flex justify-end gap-3">
+            <PrimaryButton
+              label={t('common.cancel')}
+              variant="secondary"
+              onClick={() => setEnableRule(null)}
+            />
+            <PrimaryButton
+              label={toggleMutation.isPending ? t('common.saving') : t('common.confirm')}
+              onClick={confirmEnable}
+              disabled={toggleMutation.isPending}
+            />
           </div>
         </div>
       </Modal>

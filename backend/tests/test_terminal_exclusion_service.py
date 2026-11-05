@@ -1,6 +1,9 @@
 """Unit tests for TerminalExclusionService validation and matching helpers."""
 
+from unittest.mock import AsyncMock, patch
+
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.core.database import Base
@@ -8,8 +11,8 @@ from app.models.blacklist import Blacklist
 from app.models.terminal import Terminal
 from app.models.terminal_exclusion import TerminalExclusion
 from app.schemas.terminal_exclusion import TerminalExclusionCreate
+from app.services.compliance_service import ComplianceService
 from app.services.terminal_exclusion_service import TerminalExclusionService
-
 
 # ---------------------------------------------------------------------------
 # validate_and_normalize
@@ -448,7 +451,7 @@ async def test_create_rule_purges_unblocked_and_keeps_blocked():
         await session.commit()
 
         service = TerminalExclusionService(session)
-        rule, impact = await service.create_rule(
+        rule, impact, unblock = await service.create_rule(
             TerminalExclusionCreate(
                 mac_type="mac_prefix",
                 mac_value="AA:BB:CC",
@@ -461,6 +464,8 @@ async def test_create_rule_purges_unblocked_and_keeps_blocked():
         assert impact.matched == 2
         assert impact.purgeable == 1
         assert impact.retained == 1
+        assert impact.blocked == 1
+        assert unblock is None
 
         remaining = (await session.execute(Terminal.__table__.select())).all()
         remaining_ips = {row.ip_address for row in remaining}
@@ -494,7 +499,7 @@ async def test_active_blacklist_terminal_is_retained():
         await session.commit()
 
         service = TerminalExclusionService(session)
-        _, impact = await service.create_rule(
+        _, impact, _ = await service.create_rule(
             TerminalExclusionCreate(
                 ip_type="cidr",
                 ip_value="10.0.0.0/24",
@@ -506,6 +511,199 @@ async def test_active_blacklist_terminal_is_retained():
         assert impact.matched == 1
         assert impact.purgeable == 0
         assert impact.retained == 1
+        assert impact.blocked == 0
         assert impact.samples[0].reason == "active_blacklist"
+
+    await engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# Optional unblock of blocked terminals
+# ---------------------------------------------------------------------------
+
+async def _make_session(with_terminal: bool = True, **blacklist_kwargs):
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    tables = [Terminal.__table__, Blacklist.__table__, TerminalExclusion.__table__]
+    async with engine.begin() as conn:
+        await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=tables))
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    session = factory()
+    if with_terminal:
+        session.add(Terminal(
+            ip_address="10.0.0.9",
+            mac_address="AA:BB:CC:DD:EE:09",
+            mac_address_normalized="AABBCCDDEE09",
+            status="blocked",
+            compliance_status="non_compliant",
+        ))
+    session.add(Blacklist(
+        ip_address="10.0.0.9",
+        mac_address="AA:BB:CC:DD:EE:09",
+        mac_address_normalized="AABBCCDDEE09",
+        blocked_by="tester",
+        **blacklist_kwargs,
+    ))
+    await session.commit()
+    return engine, session
+
+
+def _rule_data(unblock: bool = True) -> TerminalExclusionCreate:
+    return TerminalExclusionCreate(
+        ip_type="single_ip",
+        ip_value="10.0.0.9",
+        comments="excluded printer",
+        unblock_blocked=unblock,
+    )
+
+
+@pytest.mark.asyncio
+async def test_unblock_blocked_terminal_success_removes_record():
+    engine, session = await _make_session(firewall_tag="fw1")
+    try:
+        with (
+            patch.object(
+                ComplianceService, "_unblock_on_firewall", AsyncMock(return_value=True)
+            ) as unblock_mock,
+            patch("app.services.event_emitter.emit_terminal_unblocked", AsyncMock()),
+        ):
+            _, impact, unblock = await TerminalExclusionService(session).create_rule(
+                _rule_data(), "operator"
+            )
+
+        assert impact.blocked == 1
+        assert impact.retained == 0
+        assert unblock is not None
+        assert (unblock.requested, unblock.unblocked, unblock.failed, unblock.skipped) == (
+            True, 1, 0, 0,
+        )
+        assert unblock.errors == []
+        # 解封审计归属当前操作人，而不是固定 system。
+        assert unblock_mock.await_args.kwargs["actor"] == "operator"
+
+        terminals = (await session.execute(select(Terminal))).scalars().all()
+        assert terminals == []
+
+        entry = (await session.execute(select(Blacklist))).scalars().one()
+        assert entry.auto_unblocked is True
+        assert entry.unblock_reason == "excluded_by_rule"
+        assert entry.last_operation_status == "success"
+        assert entry.unblocked_at is not None
+    finally:
+        await session.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_unblock_failure_keeps_terminal_and_flag():
+    engine, session = await _make_session(firewall_tag="fw1")
+    try:
+        with (
+            patch.object(
+                ComplianceService, "_unblock_on_firewall", AsyncMock(return_value=False)
+            ),
+            patch("app.services.event_emitter.emit_terminal_unblocked", AsyncMock()),
+        ):
+            _, impact, unblock = await TerminalExclusionService(session).create_rule(
+                _rule_data(), "operator"
+            )
+
+        assert impact.retained == 1
+        assert unblock is not None
+        assert (unblock.unblocked, unblock.failed, unblock.skipped) == (0, 1, 0)
+        assert unblock.errors
+
+        terminal = (await session.execute(select(Terminal))).scalars().one()
+        assert terminal.status == "blocked"
+        assert terminal.excluded_by_rule is True
+
+        entry = (await session.execute(select(Blacklist))).scalars().one()
+        assert entry.auto_unblocked is False
+        assert entry.unblock_reason is None
+    finally:
+        await session.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_unblock_skipped_without_firewall_binding():
+    engine, session = await _make_session()  # 无 firewall_tag / source_tag
+    try:
+        with (
+            patch.object(
+                ComplianceService, "_unblock_on_firewall", AsyncMock(return_value=True)
+            ) as unblock_mock,
+            patch("app.services.event_emitter.emit_terminal_unblocked", AsyncMock()),
+        ):
+            _, impact, unblock = await TerminalExclusionService(session).create_rule(
+                _rule_data(), "operator"
+            )
+
+        assert impact.retained == 1
+        assert unblock is not None
+        assert (unblock.unblocked, unblock.failed, unblock.skipped) == (0, 0, 1)
+        assert "no firewall binding" in unblock.errors[0]
+        unblock_mock.assert_not_awaited()
+
+        assert (await session.execute(select(Terminal))).scalars().one().status == "blocked"
+        assert (await session.execute(select(Blacklist))).scalars().one().auto_unblocked is False
+    finally:
+        await session.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_unblock_partial_multi_firewall_keeps_terminal():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    tables = [Terminal.__table__, Blacklist.__table__, TerminalExclusion.__table__]
+    async with engine.begin() as conn:
+        await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=tables))
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as session:
+        session.add(Terminal(
+            ip_address="10.0.0.9",
+            mac_address="AA:BB:CC:DD:EE:09",
+            mac_address_normalized="AABBCCDDEE09",
+            status="blocked",
+            compliance_status="non_compliant",
+        ))
+        session.add_all([
+            Blacklist(
+                ip_address="10.0.0.9", mac_address="AA:BB:CC:DD:EE:09",
+                mac_address_normalized="AABBCCDDEE09", blocked_by="tester",
+                firewall_tag="fw1",
+            ),
+            Blacklist(
+                ip_address="10.0.0.9", mac_address="AA:BB:CC:DD:EE:09",
+                mac_address_normalized="AABBCCDDEE09", blocked_by="tester",
+                firewall_tag="fw2",
+            ),
+        ])
+        await session.commit()
+
+        async def fake_unblock(ip, firewall_tag, *args, **kwargs):
+            return firewall_tag == "fw1"
+
+        with (
+            patch.object(
+                ComplianceService, "_unblock_on_firewall", AsyncMock(side_effect=fake_unblock)
+            ),
+            patch("app.services.event_emitter.emit_terminal_unblocked", AsyncMock()),
+        ):
+            _, impact, unblock = await TerminalExclusionService(session).create_rule(
+                _rule_data(), "operator"
+            )
+
+        assert impact.retained == 1
+        assert unblock is not None
+        assert (unblock.unblocked, unblock.failed, unblock.skipped) == (0, 1, 0)
+        assert (await session.execute(select(Terminal))).scalars().one().status == "blocked"
+
+        entries = {
+            entry.firewall_tag: entry
+            for entry in (await session.execute(select(Blacklist))).scalars().all()
+        }
+        assert entries["fw1"].auto_unblocked is True
+        assert entries["fw1"].unblock_reason == "excluded_by_rule（部分成功）"
+        assert entries["fw2"].auto_unblocked is False
 
     await engine.dispose()

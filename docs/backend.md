@@ -1,6 +1,6 @@
 # TerminalAccessManager 后端实现文档
 
-> 文档版本：v3.27.0  更新日期：2026-11-05
+> 文档版本：v3.28.0  更新日期：2026-11-05
 
 ## 1. 概述
 
@@ -1246,10 +1246,19 @@ API 响应中 IP 字段名兼容以下写法：
 | `match_ip` / `match_mac` | 单条件匹配（单 IP / CIDR / IP 段 / 完整 MAC / MAC 前缀） |
 | `matches_rule` / `matches_any` / `first_match` | 规则内 AND、多规则 OR 的匹配与诊断 |
 | `load_active_rules()` | 加载启用规则（供采集与合规流程复用） |
-| `preview_rule(rule)` | 评估存量影响，不落库 |
-| `create_rule` / `update_rule` / `delete_rule` / `toggle_rule` | 规则 CRUD 与启停，变更后联动清理/回收 |
-| `purge_matching(rule)` | 删除可清除终端；保留行批量置 `excluded_by_rule=True` |
+| `preview_rule(rule)` | 评估存量影响，不落库（含 `blocked` 计数） |
+| `create_rule` / `update_rule` / `delete_rule` / `toggle_rule` | 规则 CRUD 与启停，变更后联动清理/回收；创建与启停支持 `unblock_blocked` |
+| `purge_matching(rule, unblock_blocked=False, actor="system")` | 删除可清除终端；保留行批量置 `excluded_by_rule=True`；可选先解封已封锁终端 |
+| `_unblock_blocked_terminals(terminals, actor)` | 复用 `ComplianceService._unblock_on_firewall` 解封；全部防火墙成功才删除记录 |
 | `clear_stale_exclusion_flags()` | 回收不再命中任何启用规则的标记 |
+
+**可选解封：**
+
+- 仅在规则创建与「停用→启用」时生效，默认关闭；
+- 复用 `ComplianceService._get_bound_firewall_tags` 解析防火墙绑定、`_unblock_on_firewall(actor=...)` 执行解封并写入归属当前操作人的审计；
+- 解封成功的终端删除记录，对应黑名单条目置 `auto_unblocked=True`、`unblock_reason="excluded_by_rule"`，并触发 `emit_terminal_unblocked`；
+- 任一防火墙失败则终端保留并打标；部分成功的条目以 `excluded_by_rule（部分成功）` 标记；
+- 无有效黑名单记录或无防火墙绑定的终端计入 `skipped`，保持原状。
 
 **调用链：**
 
@@ -1419,9 +1428,10 @@ python cli.py role permissions
 | test_blacklist.py | TestBlacklistModel | 2 | 黑名单模型字段 |
 | test_compliance_service.py | TestComplianceService | 22 | 合规服务状态转换、自动封锁/解封、清理、白名单匹配、合规重算 |
 | test_app.py | TestGlobalExceptionHandler | 4 | 全局异常处理器 |
-| test_terminal_exclusion_service.py | TestTerminalExclusionService 等 | 72 | 规则校验、IP/CIDR/IP 段/MAC 前缀匹配、AND/OR 组合、清理与保留、标记回收 |
-| test_terminal_exclusion_integration.py | — | 4 | 排除规则 + 白名单采集链路、合规重算跳过、保留行打标与统计过滤、停用后统计恢复 |
-| **合计** | | **1756** | 后端全量（v3.27.0） |
+| test_terminal_exclusion_service.py | TestTerminalExclusionService 等 | 76 | 规则校验、IP/CIDR/IP 段/MAC 前缀匹配、AND/OR 组合、清理与保留、标记回收、可选解封（成功/失败/跳过/部分成功） |
+| test_terminal_exclusion_integration.py | — | 5 | 排除规则 + 白名单采集链路、合规重算跳过、保留行打标与统计过滤、停用后统计恢复、解封后统计归零 |
+| test_endpoints_terminal_exclusions.py | — | 3 | 解封参数的黑名单写权限校验、默认关闭回归、toggle 请求体兼容 |
+| **合计** | | **1764** | 后端全量 |
 
 ### 7.3 运行测试
 

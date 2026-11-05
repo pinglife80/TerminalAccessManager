@@ -91,6 +91,7 @@ const LDAPImportModal: React.FC<LDAPImportModalProps> = ({ isOpen, onClose, onIm
       const response = await apiClient.get(API_ENDPOINTS.LDAP_OUS);
       setOus(response.data);
     } catch (err) {
+      console.error('Failed to load LDAP OUs:', err);
     }
   };
 

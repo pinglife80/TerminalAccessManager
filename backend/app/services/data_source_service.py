@@ -720,7 +720,8 @@ class DataSourceService:
             # Note: source is expunged from session in get_data_source_by_id, so we
             # must use a direct UPDATE statement instead of ORM attribute assignment.
             if result.success and source.type == "sangfor":
-                from datetime import datetime, UTC
+                from datetime import UTC, datetime
+
                 from sqlalchemy import update as sa_update
                 stmt = sa_update(DataSource).where(DataSource.id == source_id).values(last_sync_at=datetime.now(UTC))
                 await self.db.execute(stmt)

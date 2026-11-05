@@ -17,7 +17,6 @@ from app.services.compliance_scope_service import (
     invalidate_scope_cache,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -127,9 +126,11 @@ class TestCreateScope:
     @pytest.mark.asyncio
     async def test_invalid_value_raises(self, service, mock_db):
         data = ComplianceScopeCreate(scope_type="ip_cidr", scope_value="192.168.1.0/33")
-        with patch("app.services.compliance_scope_service.invalidate_scope_cache") as inval:
-            with pytest.raises(ValueError):
-                await service.create_scope(data, "admin")
+        with (
+            patch("app.services.compliance_scope_service.invalidate_scope_cache") as inval,
+            pytest.raises(ValueError),
+        ):
+            await service.create_scope(data, "admin")
 
         mock_db.add.assert_not_called()
         inval.assert_not_called()

@@ -18,8 +18,6 @@ App mode config fields:
 from typing import Any
 
 import httpx
-
-from .base import format_timestamp
 from loguru import logger
 
 from app.services.notification_channels.base import (
@@ -28,6 +26,8 @@ from app.services.notification_channels.base import (
     NotificationEvent,
     NotificationResult,
 )
+
+from .base import format_timestamp
 
 WECOM_TOKEN_URL = "https://qyapi.weixin.qq.com/cgi-bin/gettoken"
 WECOM_MESSAGE_URL = "https://qyapi.weixin.qq.com/cgi-bin/message/send"

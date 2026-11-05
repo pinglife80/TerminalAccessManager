@@ -10,7 +10,7 @@ def _load_version() -> str:
         return env_version.strip()
     version_file = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "VERSION")
     if os.path.exists(version_file):
-        with open(version_file, "r") as f:
+        with open(version_file) as f:
             return f.read().strip()
     raise FileNotFoundError("VERSION file not found. Please create a VERSION file in the project root.")
 

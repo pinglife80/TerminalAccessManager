@@ -7,6 +7,7 @@ processes entries, and triggers compliance checks.
 
 import asyncio
 import re
+from contextlib import suppress
 from datetime import UTC, datetime
 from typing import Any
 
@@ -36,7 +37,6 @@ class ArpCollectorService:
         Connects to the switch, runs the configured command (e.g. 'show arp'),
         parses the output, and processes the entries.
         """
-        import asyncio
 
         config = source.config
         host = config.get("host", "")
@@ -681,13 +681,11 @@ class ArpCollectorService:
                             },
                             "ip_address": "System",
                         })
-                    try:
+                    with suppress(Exception):
                         await emit_terminal_offline(
                             ip_address=terminal.ip_address,
                             mac_address=terminal.mac_address or "",
                         )
-                    except Exception:
-                        pass
 
             if newly_offline > 0:
                 logger.info(

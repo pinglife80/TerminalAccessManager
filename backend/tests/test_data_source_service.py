@@ -17,7 +17,6 @@ from app.schemas.data_source import (
 )
 from app.services.data_source_service import DataSourceService
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -133,17 +132,21 @@ class TestCreateDataSource:
     async def test_duplicate_name(self, service):
         data = DataSourceCreate(name="s", type="arp_ssh", tag="lab", config={})
         existing = make_source(name="s", tag="other")
-        with patch.object(service, "_get_by_name_or_tag", AsyncMock(return_value=existing)):
-            with pytest.raises(ValueError, match="name"):
-                await service.create_data_source(data)
+        with (
+            patch.object(service, "_get_by_name_or_tag", AsyncMock(return_value=existing)),
+            pytest.raises(ValueError, match="name"),
+        ):
+            await service.create_data_source(data)
 
     @pytest.mark.asyncio
     async def test_duplicate_tag(self, service):
         data = DataSourceCreate(name="s", type="arp_ssh", tag="lab", config={})
         existing = make_source(name="other", tag="lab")
-        with patch.object(service, "_get_by_name_or_tag", AsyncMock(return_value=existing)):
-            with pytest.raises(ValueError, match="tag"):
-                await service.create_data_source(data)
+        with (
+            patch.object(service, "_get_by_name_or_tag", AsyncMock(return_value=existing)),
+            pytest.raises(ValueError, match="tag"),
+        ):
+            await service.create_data_source(data)
 
     @pytest.mark.asyncio
     async def test_success(self, service, mock_db):
@@ -184,9 +187,11 @@ class TestUpdateDataSource:
         mock_db.execute = AsyncMock(return_value=make_result(scalar=source))
         existing = make_source(name="new")
         data = DataSourceUpdate(name="new")
-        with patch.object(service, "_get_by_field", AsyncMock(return_value=existing)):
-            with pytest.raises(ValueError, match="name"):
-                await service.update_data_source(1, data)
+        with (
+            patch.object(service, "_get_by_field", AsyncMock(return_value=existing)),
+            pytest.raises(ValueError, match="name"),
+        ):
+            await service.update_data_source(1, data)
 
     @pytest.mark.asyncio
     async def test_tag_change_raises(self, service, mock_db):
@@ -499,40 +504,50 @@ class TestSangforConnection:
 class TestCreateBinding:
     @pytest.mark.asyncio
     async def test_arp_not_found(self, service):
-        with patch.object(service, "get_data_source_by_tag", AsyncMock(return_value=None)):
-            with pytest.raises(ValueError, match="ARP data source"):
-                await service.create_binding("lab", "fw1")
+        with (
+            patch.object(service, "get_data_source_by_tag", AsyncMock(return_value=None)),
+            pytest.raises(ValueError, match="ARP data source"),
+        ):
+            await service.create_binding("lab", "fw1")
 
     @pytest.mark.asyncio
     async def test_arp_wrong_type(self, service):
         arp = make_source(type_="sangfor", tag="lab")
-        with patch.object(service, "get_data_source_by_tag", AsyncMock(return_value=arp)):
-            with pytest.raises(ValueError, match="not an ARP source"):
-                await service.create_binding("lab", "fw1")
+        with (
+            patch.object(service, "get_data_source_by_tag", AsyncMock(return_value=arp)),
+            pytest.raises(ValueError, match="not an ARP source"),
+        ):
+            await service.create_binding("lab", "fw1")
 
     @pytest.mark.asyncio
     async def test_fw_not_found(self, service):
         arp = make_source(type_="arp_ssh", tag="lab")
-        with patch.object(service, "get_data_source_by_tag", AsyncMock(side_effect=[arp, None])):
-            with pytest.raises(ValueError, match="Firewall data source"):
-                await service.create_binding("lab", "fw1")
+        with (
+            patch.object(service, "get_data_source_by_tag", AsyncMock(side_effect=[arp, None])),
+            pytest.raises(ValueError, match="Firewall data source"),
+        ):
+            await service.create_binding("lab", "fw1")
 
     @pytest.mark.asyncio
     async def test_fw_wrong_type(self, service):
         arp = make_source(type_="arp_ssh", tag="lab")
         fw = make_source(type_="arp_api", tag="fw1")
-        with patch.object(service, "get_data_source_by_tag", AsyncMock(side_effect=[arp, fw])):
-            with pytest.raises(ValueError, match="not a firewall"):
-                await service.create_binding("lab", "fw1")
+        with (
+            patch.object(service, "get_data_source_by_tag", AsyncMock(side_effect=[arp, fw])),
+            pytest.raises(ValueError, match="not a firewall"),
+        ):
+            await service.create_binding("lab", "fw1")
 
     @pytest.mark.asyncio
     async def test_duplicate(self, service, mock_db):
         arp = make_source(type_="arp_ssh", tag="lab")
         fw = make_source(type_="sangfor", tag="fw1")
         mock_db.execute = AsyncMock(return_value=make_result(scalar=MagicMock()))
-        with patch.object(service, "get_data_source_by_tag", AsyncMock(side_effect=[arp, fw])):
-            with pytest.raises(ValueError, match="already exists"):
-                await service.create_binding("lab", "fw1")
+        with (
+            patch.object(service, "get_data_source_by_tag", AsyncMock(side_effect=[arp, fw])),
+            pytest.raises(ValueError, match="already exists"),
+        ):
+            await service.create_binding("lab", "fw1")
 
     @pytest.mark.asyncio
     async def test_success(self, service, mock_db):

@@ -24,7 +24,6 @@ from app.models.terminal_exclusion import TerminalExclusion
 from app.schemas.data_source import ComplianceCheckResult, SyncResult
 from app.services.arp_collector_service import ArpCollectorService
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -188,7 +187,7 @@ class TestAsUtcTimestamp:
         assert ArpCollectorService._as_utc_timestamp(naive) == ArpCollectorService._as_utc_timestamp(utc)
 
     def test_aware_preserves_offset(self):
-        utc = datetime(2026, 1, 1, 8, 0, 0, tzinfo=timezone.utc)
+        utc = datetime(2026, 1, 1, 8, 0, 0, tzinfo=UTC)
         shanghai = datetime(2026, 1, 1, 16, 0, 0, tzinfo=timezone(timedelta(hours=8)))
         assert ArpCollectorService._as_utc_timestamp(utc) == ArpCollectorService._as_utc_timestamp(shanghai)
 
@@ -633,7 +632,7 @@ class TestProcessArpEntries:
         entries = [{"ip_address": "10.0.0.1", "mac_address": "aa:bb:cc:dd:ee:ff"}]
         existing = make_terminal(ip="10.0.0.1", mac_norm="AABBCCDDEEFF")
         stale = make_terminal(ip="10.0.0.2", mac_norm="112233445566")
-        stale.updated_at = datetime(2025, 1, 1, tzinfo=timezone.utc)
+        stale.updated_at = datetime(2025, 1, 1, tzinfo=UTC)
 
         set_exec_sequence(
             mock_db,
@@ -644,7 +643,7 @@ class TestProcessArpEntries:
             ],
         )
 
-        fixed_now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        fixed_now = datetime(2026, 1, 1, tzinfo=UTC)
         with patch("app.core.timezone.now_utc", return_value=fixed_now), \
              patch("app.services.config_service.get_config_value", AsyncMock(side_effect=[300, 3])), \
              patch("app.services.event_emitter.emit_terminal_offline", AsyncMock()) as offline:
@@ -657,7 +656,7 @@ class TestProcessArpEntries:
         entries = [{"ip_address": "10.0.0.1", "mac_address": "aa:bb:cc:dd:ee:ff"}]
         existing = make_terminal(ip="10.0.0.1", mac_norm="AABBCCDDEEFF")
         recent = make_terminal(ip="10.0.0.2", mac_norm="112233445566")
-        recent.updated_at = datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+        recent.updated_at = datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC)
 
         set_exec_sequence(
             mock_db,
@@ -668,7 +667,7 @@ class TestProcessArpEntries:
             ],
         )
 
-        fixed_now = datetime(2026, 1, 1, 0, 1, 0, tzinfo=timezone.utc)  # 60s ago
+        fixed_now = datetime(2026, 1, 1, 0, 1, 0, tzinfo=UTC)  # 60s ago
         with patch("app.core.timezone.now_utc", return_value=fixed_now), \
              patch("app.services.config_service.get_config_value", AsyncMock(side_effect=[300, 3])), \
              patch("app.services.event_emitter.emit_terminal_offline", AsyncMock()) as offline:
@@ -703,7 +702,7 @@ class TestProcessArpEntries:
         existing = make_terminal(ip="10.0.0.1", mac_norm="AABBCCDDEEFF")
         stale = make_terminal(ip="10.0.0.2", mac_norm="112233445566")
         stale.block_state = None
-        stale.updated_at = datetime(2025, 1, 1, tzinfo=timezone.utc)
+        stale.updated_at = datetime(2025, 1, 1, tzinfo=UTC)
 
         set_exec_sequence(
             mock_db,
@@ -714,7 +713,7 @@ class TestProcessArpEntries:
             ],
         )
 
-        fixed_now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        fixed_now = datetime(2026, 1, 1, tzinfo=UTC)
         with patch("app.core.timezone.now_utc", return_value=fixed_now), \
              patch("app.services.config_service.get_config_value", AsyncMock(side_effect=[300, 3])), \
              patch("app.services.event_emitter.emit_terminal_offline", AsyncMock()) as offline, \
@@ -735,7 +734,7 @@ class TestProcessArpEntries:
         existing = make_terminal(ip="10.0.0.1", mac_norm="AABBCCDDEEFF")
         stale = make_terminal(ip="10.0.0.2", mac_norm="112233445566")
         stale.block_state = None
-        stale.updated_at = datetime(2025, 1, 1, tzinfo=timezone.utc)
+        stale.updated_at = datetime(2025, 1, 1, tzinfo=UTC)
 
         set_exec_sequence(
             mock_db,
@@ -754,7 +753,7 @@ class TestProcessArpEntries:
         audit_svc = MagicMock()
         audit_svc.log_action = AsyncMock()
 
-        fixed_now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        fixed_now = datetime(2026, 1, 1, tzinfo=UTC)
         with patch("app.services.compliance_service.ComplianceService", return_value=audit_svc), \
              patch("app.core.timezone.now_utc", return_value=fixed_now), \
              patch("app.services.config_service.get_config_value", AsyncMock(side_effect=[300, 3])), \
@@ -775,7 +774,7 @@ class TestProcessArpEntries:
         stale = make_terminal(ip="10.0.0.2", mac_norm="112233445566")
         stale.block_state = None
         stale.status = "blocked"
-        stale.updated_at = datetime(2025, 1, 1, tzinfo=timezone.utc)
+        stale.updated_at = datetime(2025, 1, 1, tzinfo=UTC)
 
         set_exec_sequence(
             mock_db,
@@ -786,7 +785,7 @@ class TestProcessArpEntries:
             ],
         )
 
-        fixed_now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        fixed_now = datetime(2026, 1, 1, tzinfo=UTC)
         with patch("app.core.timezone.now_utc", return_value=fixed_now), \
              patch("app.services.config_service.get_config_value", AsyncMock(side_effect=[300, 3])), \
              patch("app.services.event_emitter.emit_terminal_offline", AsyncMock()) as offline:
@@ -800,7 +799,7 @@ class TestProcessArpEntries:
         entries = [{"ip_address": "10.0.0.1", "mac_address": "aa:bb:cc:dd:ee:ff"}]
         existing = make_terminal(ip="10.0.0.1", mac_norm="AABBCCDDEEFF")
         existing.block_state = "offline"
-        existing.updated_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        existing.updated_at = datetime(2026, 1, 1, tzinfo=UTC)
 
         set_exec_sequence(
             mock_db,
@@ -826,7 +825,7 @@ class TestProcessArpEntries:
         entries = [{"ip_address": "10.0.0.1", "mac_address": "aa:bb:cc:dd:ee:ff"}]
         existing = make_terminal(ip="10.0.0.1", mac_norm="AABBCCDDEEFF")
         existing.block_state = "offline"
-        existing.updated_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        existing.updated_at = datetime(2026, 1, 1, tzinfo=UTC)
 
         sibling = make_terminal(ip="10.0.0.2", mac_norm="AABBCCDDEEFF")
         sibling.non_compliant_confirm_count = 3

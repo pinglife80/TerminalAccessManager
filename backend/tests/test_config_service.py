@@ -13,8 +13,8 @@ import pytest
 from app.core.config import settings
 from app.models.system_config import SystemConfig
 from app.schemas.system_config import (
-    ConfigValueType,
     ConfigUpdateResult,
+    ConfigValueType,
     SystemConfigUpdate,
 )
 from app.services import config_service as cs
@@ -24,7 +24,6 @@ from app.services.config_service import (
     _parse_value,
     get_config_value,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers

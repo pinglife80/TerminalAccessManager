@@ -14,7 +14,7 @@ import ipaddress
 import json
 import re
 import uuid
-from datetime import datetime, timedelta, UTC
+from datetime import UTC, datetime, timedelta
 
 from loguru import logger
 from sqlalchemy import select
@@ -23,6 +23,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import func
 
+from app.core.database import async_session_factory
 from app.models.blacklist import Blacklist
 from app.models.compliance_baseline import ComplianceBaseline
 from app.models.data_source import DataSource
@@ -34,7 +35,6 @@ from app.schemas.data_source import (
     AutoUnblockResult,
     ComplianceCheckResult,
 )
-from app.core.database import async_session_factory
 from app.services.config_service import get_config_value
 from app.services.terminal_exclusion_service import TerminalExclusionService
 
@@ -69,7 +69,7 @@ async def _get_redis():
 
 async def _acquire_compliance_lock() -> str | None:
     """Acquire a distributed lock for compliance recalculation.
-    
+
     Returns a lock token if acquired, None otherwise.
     The lock prevents concurrent compliance recalculation which can cause
     inconsistent terminal states.
@@ -791,7 +791,7 @@ class ComplianceService:
                         td = timedelta(minutes=value)
 
                 mac_norm = entry.mac_address.replace('-', '').replace(':', '').replace('.', '').upper() if entry.mac_address else None
-                
+
                 # Calculate detailed block reason (mirrors _apply_compliance_result)
                 block_reason = "自动封锁：不合规"
                 scope_data = await self._load_scope_cache()
@@ -887,8 +887,8 @@ class ComplianceService:
         # 避免"全部失败"（blocked=0）时 retry-block 的成败在审计日志中完全不可见。
         if not dry_run and (blocked > 0 or skipped > 0 or errors):
             if blocked > 0:
-                from app.services.event_emitter import emit_block_threshold_exceeded
                 from app.services.config_service import get_config_value
+                from app.services.event_emitter import emit_block_threshold_exceeded
 
                 block_threshold = await get_config_value("alert_block_count_threshold", 50)
                 if blocked > block_threshold:
@@ -1109,13 +1109,13 @@ class ComplianceService:
                 unblock_reason = self._build_unblock_reason(
                     bool(wl_match), use_ip_only, use_or_match, ipguard_data, current_ip, current_mac, ipguard_mac_prefixes
                 )
-                
+
                 logger.info(
                     f"Auto-unblock: Setting reason for {len(successfully_unblocked_entries)} entries: "
                     f"reason='{unblock_reason}', current_ip={current_ip}, current_mac={current_mac}, "
                     f"wl_match={wl_match is not None}, use_ip_only={use_ip_only}, ig_match={ig_match}"
                 )
-                
+
                 for bl_entry in successfully_unblocked_entries:
                     bl_entry.auto_unblocked = True
                     bl_entry.unblocked_at = datetime.now(UTC)
@@ -1185,13 +1185,13 @@ class ComplianceService:
                 partial_unblock_reason = self._build_unblock_reason(
                     bool(wl_match), use_ip_only, use_or_match, ipguard_data, current_ip, current_mac, ipguard_mac_prefixes
                 ) + "（部分成功）"
-                
+
                 logger.info(
                     f"Auto-unblock (partial): Setting reason for {len(successfully_unblocked_entries)} entries: "
                     f"reason='{partial_unblock_reason}', current_ip={current_ip}, current_mac={current_mac}, "
                     f"wl_match={wl_match is not None}, use_ip_only={use_ip_only}"
                 )
-                
+
                 for bl_entry in successfully_unblocked_entries:
                     bl_entry.auto_unblocked = True
                     bl_entry.unblocked_at = datetime.now(UTC)
@@ -1712,7 +1712,7 @@ class ComplianceService:
                     data = json.loads(cached if isinstance(cached, str) else cached.decode())
                     for mac_norm, did in (data.get("mac_to_device") or {}).items():
                         mac_to_device.setdefault(mac_norm, did)
-                    for did in (data.get("devices") or {}).keys():
+                    for did in (data.get("devices") or {}):
                         device_ids.add(did)
             except Exception:
                 pass
@@ -2029,6 +2029,7 @@ class ComplianceService:
     async def _unblock_on_firewall(
         self, ip_address: str, firewall_tag: str,
         terminal_id: int | None = None, mac_address: str | None = None,
+        actor: str = "system",
     ) -> bool:
         """Unblock an IP on the specified firewall (synchronous)"""
         resource_id = str(terminal_id) if terminal_id is not None else None
@@ -2041,7 +2042,7 @@ class ComplianceService:
 
             if not fw_source or not fw_source.enabled:
                 logger.warning(f"Firewall '{firewall_tag}' not found or disabled")
-                await self.log_action("system", "firewall_unblock", "terminal", resource_id, {
+                await self.log_action(actor, "firewall_unblock", "terminal", resource_id, {
                     "message": f"Failed to unblock IP {ip_address} on firewall {firewall_tag}: firewall not found or disabled",
                     "terminal_id": terminal_id,
                     "ip_address": ip_address,
@@ -2057,7 +2058,7 @@ class ComplianceService:
             config = fw_source.config
             if config:
                 config = decrypt_config(config)
-            
+
             svc = await SangforService.get_cached_service(
                 base_url=config.get("base_url", ""),
                 username=config.get("username", ""),
@@ -2072,7 +2073,7 @@ class ComplianceService:
                 logger.info(f"Unblocked {ip_address} on firewall '{firewall_tag}'")
             else:
                 logger.error(f"Failed to unblock {ip_address} on firewall '{firewall_tag}': {result.get('message', 'unknown error')}")
-            await self.log_action("system", "firewall_unblock", "terminal", resource_id, {
+            await self.log_action(actor, "firewall_unblock", "terminal", resource_id, {
                 "message": f"Unblocked IP {ip_address} on firewall {firewall_tag}" if success else f"Failed to unblock IP {ip_address} on firewall {firewall_tag}: {result.get('message', 'unknown error')}",
                 "terminal_id": terminal_id,
                 "ip_address": ip_address,
@@ -2083,7 +2084,7 @@ class ComplianceService:
             return success
         except Exception as e:
             logger.error(f"Failed to unblock {ip_address} on firewall '{firewall_tag}': {str(e)}")
-            await self.log_action("system", "firewall_unblock", "terminal", resource_id, {
+            await self.log_action(actor, "firewall_unblock", "terminal", resource_id, {
                 "message": f"Failed to unblock IP {ip_address} on firewall {firewall_tag}: {str(e)}",
                 "terminal_id": terminal_id,
                 "ip_address": ip_address,
@@ -2286,10 +2287,10 @@ class ComplianceService:
     ) -> dict:
         """
         Apply compliance result to a single terminal.
-        
+
         This is the shared method for updating terminal compliance status,
         ensuring consistent behavior across all compliance check paths.
-        
+
         Args:
             terminal: The terminal to update
             new_compliance: The new compliance status (bypass/compliant/non_compliant)
@@ -2300,7 +2301,7 @@ class ComplianceService:
             ig_match: Whether the IPGuard baseline confirmed compliance (recalc paths
                 only). When True and new_compliance == "compliant", unblock bypasses
                 cooldown. Default None preserves the original cooldown behavior.
-        
+
         Returns:
             dict: {"status_changed": bool, "new_compliance": str, "unblocked": bool,
                    "audit": dict | None}
@@ -2313,7 +2314,7 @@ class ComplianceService:
         _cooldown_skip_downgrade = False
 
         old_compliance = terminal.compliance_status
-        
+
         # Get detailed match info for non-compliant terminals
         block_reason = "自动封锁：不合规"
         non_compliant_type = None
@@ -2322,7 +2323,7 @@ class ComplianceService:
             use_ip_only = self._check_terminal_in_arp_scope(scope_data, ip_addr, mac_addr)
             use_or_match = self._check_terminal_in_or_scope(scope_data, ip_addr, mac_addr)
             ipguard_mac_prefixes = self._extract_ipguard_mac_prefixes(scope_data)
-            
+
             if use_ip_only and not use_or_match:
                 # IP-only scope, just say IP is non-compliant
                 block_reason = "IP 不合规"
@@ -2331,7 +2332,7 @@ class ComplianceService:
                 # Get detailed match info
                 ipguard_data = await self._load_all_ipguard_cache()
                 _, ip_found, mac_found = self._match_ipguard_in_memory(ipguard_data, ip_addr, mac_addr, ipguard_mac_prefixes)
-                
+
                 if not ip_found and not mac_found:
                     block_reason = "IP 和 MAC 都不合规"
                     non_compliant_type = "both"
@@ -2446,7 +2447,7 @@ class ComplianceService:
                     if fw_tags:
                         successful_fw_tags = []
                         failed_fw_tags = []
-                        
+
                         for fw_tag in fw_tags:
                             try:
                                 success = await self._unblock_on_firewall(ip_addr, fw_tag, terminal.id, mac_addr)
@@ -2458,7 +2459,7 @@ class ComplianceService:
                             except Exception as e:
                                 failed_fw_tags.append(fw_tag)
                                 logger.warning(f"Error auto-unblocking {ip_addr} on firewall '{fw_tag}': {e}")
-                        
+
                         if successful_fw_tags:
                             terminal.status = "unblocked"
                             terminal.firewall_tag = None
@@ -2469,7 +2470,7 @@ class ComplianceService:
                             if failed_fw_tags:
                                 unblock_comment += f" (failed on: {','.join(sorted(failed_fw_tags))})"
                             self._append_terminal_comment(terminal, unblock_comment)
-                            
+
                             # Device-grouping decision marker for traceability:
                             # whether this unblock was driven by device_id membership.
                             device_grouped_decision = False
@@ -2509,7 +2510,7 @@ class ComplianceService:
                                 f"reason='{compliance_unblock_reason}', ip={ip_addr}, mac={mac_addr}, "
                                 f"new_compliance={new_compliance}, old_status={terminal.status}"
                             )
-                            
+
                             # 按条目精确标记：仅标记成功解封防火墙（或经绑定解析全部成功的 None-tag 条目）
                             for bl_entry in bl_entries:
                                 entry_tag = bl_entry.firewall_tag
@@ -2536,7 +2537,7 @@ class ComplianceService:
                                         f"_apply_compliance_result: Kept blacklist entry id={bl_entry.id} active "
                                         f"(firewall '{entry_tag}' not successfully unblocked)"
                                     )
-                            
+
                             if failed_fw_tags:
                                 logger.warning(f"Partially auto-unblocked {ip_addr} (now {new_compliance}): succeeded on [{fw_info}], failed on [{','.join(sorted(failed_fw_tags))}]")
                             else:

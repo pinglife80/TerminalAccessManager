@@ -497,9 +497,11 @@ class TestLDAPProviderSearchDN:
         provider = self._provider(
             user_search_base="dc=example,dc=com", bind_dn="cn=admin,dc=example,dc=com"
         )
-        with patch.object(provider, "_build_server", return_value=MagicMock()):
-            with pytest.raises(ValueError, match="bind_password is missing"):
-                provider._search_user_dn("john")
+        with (
+            patch.object(provider, "_build_server", return_value=MagicMock()),
+            pytest.raises(ValueError, match="bind_password is missing"),
+        ):
+            provider._search_user_dn("john")
 
     def test_search_no_bind_dn_anonymous(self):
         provider = self._provider(user_search_base="dc=example,dc=com")
@@ -926,9 +928,14 @@ class TestTwoFactorService:
 
     @pytest.mark.asyncio
     async def test_generate_code_email_raises(self):
-        with patch("app.services.auth_providers.two_factor_service.send_email_code", new=AsyncMock(side_effect=RuntimeError("boom"))):
-            with pytest.raises(RuntimeError, match="boom"):
-                await self.service.generate_code(1, "a@b.c")
+        with (
+            patch(
+                "app.services.auth_providers.two_factor_service.send_email_code",
+                new=AsyncMock(side_effect=RuntimeError("boom")),
+            ),
+            pytest.raises(RuntimeError, match="boom"),
+        ):
+            await self.service.generate_code(1, "a@b.c")
 
     @pytest.mark.asyncio
     async def test_send_code(self):

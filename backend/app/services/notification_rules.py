@@ -4,9 +4,6 @@ Notification Rules Engine.
 Handles suppression, aggregation, and escalation rules for notifications.
 """
 
-import json
-from datetime import datetime
-from typing import Any
 
 from loguru import logger
 from sqlalchemy import select
@@ -35,7 +32,7 @@ class NotificationRulesEngine:
         try:
             stmt = select(NotificationRule).where(
                 NotificationRule.enabled == True,
-                (NotificationRule.event_type == event_type) | 
+                (NotificationRule.event_type == event_type) |
                 (NotificationRule.event_type == "*"),
             ).order_by(
                 (NotificationRule.event_type == event_type).desc(),

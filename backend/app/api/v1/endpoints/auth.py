@@ -1,9 +1,9 @@
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
-from pydantic import BaseModel
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import JWTError, jwt
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -503,11 +503,14 @@ async def update_profile(
             detail=f"Profile management is not supported for {current_user.provider} users. Please contact your {current_user.provider} administrator.",
         )
     if profile.email is not None:
-        if profile.email != current_user.email:
-            if current_user.provider == "local" and not profile.force_email:
-                result = await db.execute(select(User).where(User.email == profile.email, User.provider == "local"))
-                if result.scalar_one_or_none():
-                    raise HTTPException(status_code=400, detail="Email already in use by another local user")
+        if (
+            profile.email != current_user.email
+            and current_user.provider == "local"
+            and not profile.force_email
+        ):
+            result = await db.execute(select(User).where(User.email == profile.email, User.provider == "local"))
+            if result.scalar_one_or_none():
+                raise HTTPException(status_code=400, detail="Email already in use by another local user")
         current_user.email = profile.email
         await db.commit()
         await db.refresh(current_user)
@@ -544,7 +547,6 @@ async def change_password(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Password management is not supported for {current_user.provider} users. Please contact your {current_user.provider} administrator.",
         )
-    from app.core.security import verify_password
     if not verify_password(data.current_password, current_user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -781,11 +783,10 @@ async def admin_update_user(
         raise HTTPException(status_code=400, detail="Cannot remove your own superuser status")
 
     if user_data.email is not None:
-        if user_data.email != user.email:
-            if not user_data.force_email:
-                email_check = await db.execute(select(User).where(User.email == user_data.email, User.provider == "local"))
-                if email_check.scalar_one_or_none():
-                    raise HTTPException(status_code=400, detail="Email already in use by another local user")
+        if user_data.email != user.email and not user_data.force_email:
+            email_check = await db.execute(select(User).where(User.email == user_data.email, User.provider == "local"))
+            if email_check.scalar_one_or_none():
+                raise HTTPException(status_code=400, detail="Email already in use by another local user")
         user.email = user_data.email
 
     if user_data.is_active is not None:

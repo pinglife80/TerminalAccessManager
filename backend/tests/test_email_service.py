@@ -17,8 +17,8 @@ from app.core.config import settings
 from app.services import email_service
 from app.services.email_service import (
     EmailRateLimitError,
-    EmailSendError,
     EmailSender,
+    EmailSendError,
     check_email_rate_limit,
     generate_email_code,
     get_email_config,
@@ -31,7 +31,6 @@ from app.services.email_service import (
     send_verification_email,
     verify_email_code,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -106,10 +105,12 @@ class TestSendEmailCode:
 
     @pytest.mark.asyncio
     async def test_send_failure_is_re_raised(self, mock_redis):
-        with patch.object(email_service, "generate_email_code", AsyncMock(return_value="123456")), \
-             patch.object(email_service, "send_email", AsyncMock(side_effect=RuntimeError("send fail"))):
-            with pytest.raises(RuntimeError):
-                await send_email_code(1, "user@example.com")
+        with (
+            patch.object(email_service, "generate_email_code", AsyncMock(return_value="123456")),
+            patch.object(email_service, "send_email", AsyncMock(side_effect=RuntimeError("send fail"))),
+            pytest.raises(RuntimeError),
+        ):
+            await send_email_code(1, "user@example.com")
 
         # Code is still stored before the send attempt.
         assert mock_redis._data["email_code:verification:1"] == "123456"
@@ -363,9 +364,11 @@ class TestEmailSenderSend:
     @pytest.mark.asyncio
     async def test_rate_limit_exceeded_raises(self):
         sender = self._sender()
-        with patch.object(email_service, "check_email_rate_limit", AsyncMock(return_value=(False, 0))):
-            with pytest.raises(EmailRateLimitError):
-                await sender.send("x@y.com", "subject")
+        with (
+            patch.object(email_service, "check_email_rate_limit", AsyncMock(return_value=(False, 0))),
+            pytest.raises(EmailRateLimitError),
+        ):
+            await sender.send("x@y.com", "subject")
 
     @pytest.mark.asyncio
     async def test_send_via_http_relay(self):
@@ -401,30 +404,36 @@ class TestEmailSenderSend:
         client = _http_client(post=AsyncMock(side_effect=err))
 
         with patch.object(settings, "EMAIL_SMTP_URL", "http://relay.example.com/send"), \
-             patch.object(email_service.httpx, "AsyncClient", return_value=client):
-            with pytest.raises(EmailSendError) as ei:
-                await sender.send("x@y.com", "hi")
+             patch.object(email_service.httpx, "AsyncClient", return_value=client), pytest.raises(EmailSendError) as ei:
+            await sender.send("x@y.com", "hi")
 
         assert "HTTP 500" in str(ei.value)
 
     @pytest.mark.asyncio
     async def test_smtp_auth_error_wrapped(self):
         sender = self._sender()
-        with patch.object(settings, "EMAIL_SMTP_URL", None), \
-             patch.object(sender, "_send_via_smtp",
-                          AsyncMock(side_effect=smtplib.SMTPAuthenticationError(535, b"auth failed"))):
-            with pytest.raises(EmailSendError) as ei:
-                await sender.send("x@y.com", "hi")
+        with (
+            patch.object(settings, "EMAIL_SMTP_URL", None),
+            patch.object(
+                sender,
+                "_send_via_smtp",
+                AsyncMock(side_effect=smtplib.SMTPAuthenticationError(535, b"auth failed")),
+            ),
+            pytest.raises(EmailSendError) as ei,
+        ):
+            await sender.send("x@y.com", "hi")
 
         assert "AUTH_ERROR" in str(ei.value)
 
     @pytest.mark.asyncio
     async def test_generic_error_wrapped(self):
         sender = self._sender()
-        with patch.object(settings, "EMAIL_SMTP_URL", None), \
-             patch.object(sender, "_send_via_smtp", AsyncMock(side_effect=RuntimeError("boom"))):
-            with pytest.raises(EmailSendError) as ei:
-                await sender.send("x@y.com", "hi")
+        with (
+            patch.object(settings, "EMAIL_SMTP_URL", None),
+            patch.object(sender, "_send_via_smtp", AsyncMock(side_effect=RuntimeError("boom"))),
+            pytest.raises(EmailSendError) as ei,
+        ):
+            await sender.send("x@y.com", "hi")
 
         assert "boom" in str(ei.value)
 
@@ -579,7 +588,7 @@ class TestConnection:
         sender = EmailSender(host="smtp.real.com", port=587, use_ssl=False)
         client = _http_client()
         with patch.object(email_service.httpx, "AsyncClient", return_value=client):
-            result = await sender.test_connection()
+            await sender.test_connection()
         client.get.assert_awaited_once_with("http://smtp.real.com:587")
 
     @pytest.mark.asyncio

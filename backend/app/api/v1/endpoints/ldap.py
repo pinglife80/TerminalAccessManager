@@ -5,15 +5,15 @@ Provides endpoints for searching and importing LDAP users into the system.
 """
 
 import asyncio
-from typing import Any, List, Optional
-from fastapi import APIRouter, Body, Depends, HTTPException, status
+from typing import Any
+
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.security import require_permission
-from app.core.timezone import now
 from app.models.auth_config import AuthConfig
 from app.models.role import Role, UserRole
 from app.models.user import User
@@ -22,23 +22,23 @@ router = APIRouter(prefix="/ldap", tags=["LDAP"])
 
 
 class LDAPSearchRequest(BaseModel):
-    search_base: Optional[str] = None
-    search_filter: Optional[str] = None
-    username: Optional[str] = None
+    search_base: str | None = None
+    search_filter: str | None = None
+    username: str | None = None
     page_size: int = 10
     page_number: int = 1
 
 
 class LDAPSearchResponse(BaseModel):
-    users: List[dict[str, Any]]
+    users: list[dict[str, Any]]
     total: int
     page_size: int
     page_number: int
 
 
 class LDAPImportRequest(BaseModel):
-    user_dns: List[str]
-    role_ids: List[int]
+    user_dns: list[str]
+    role_ids: list[int]
 
 
 class LDAPImportResponse(BaseModel):
@@ -178,7 +178,7 @@ async def import_ldap_users(
                             db.add(UserRole(user_id=new_user.id, role_id=role_id))
 
                 imported_count += 1
-            except Exception as e:
+            except Exception:
                 continue
 
         await db.commit()
@@ -197,7 +197,7 @@ async def import_ldap_users(
         )
 
 
-@router.get("/ous", response_model=List[dict])
+@router.get("/ous", response_model=list[dict])
 async def get_ldap_ous(
     current_user: User = Depends(require_permission("user:write")),
     db: AsyncSession = Depends(get_db),

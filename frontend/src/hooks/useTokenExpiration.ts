@@ -110,7 +110,9 @@ export const useTokenExpiration = (): SessionWarning => {
         if (parsed?.exp) {
           sessionStorage.setItem('token_expires_at', parsed.exp.toString());
         }
-      } catch {}
+      } catch {
+        // token 解析失败时忽略，交由后续过期检查
+      }
 
       warningShown.current = false;
       // Auto-refresh (sliding session) only dismisses the expiry warning. It must

@@ -2,14 +2,20 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.security import get_client_ip, require_permission
+from app.core.security import (
+    get_client_ip,
+    get_user_permissions,
+    require_permission,
+)
 from app.models.user import User
 from app.schemas.terminal_exclusion import (
     ExclusionImpact,
+    ExclusionUnblockResult,
     TerminalExclusionCreate,
     TerminalExclusionListResponse,
     TerminalExclusionPreview,
     TerminalExclusionResponse,
+    TerminalExclusionToggle,
     TerminalExclusionUpdate,
     TerminalExclusionWithImpact,
 )
@@ -17,6 +23,27 @@ from app.services.terminal_exclusion_service import TerminalExclusionService
 from app.services.terminal_service import TerminalService
 
 router = APIRouter(prefix="/terminal-exclusions", tags=["terminal-exclusions"])
+
+
+async def _ensure_blacklist_write(db: AsyncSession, current_user: User) -> None:
+    """Unblocking also needs ``blacklist:write``; superusers bypass the check."""
+    if current_user.is_superuser:
+        return
+    permissions = await get_user_permissions(db, current_user.id)
+    if "blacklist:write" not in permissions:
+        raise HTTPException(status_code=403, detail="Permission denied: blacklist:write")
+
+
+def _unblock_details(unblock: ExclusionUnblockResult | None) -> dict:
+    if unblock is None:
+        return {}
+    return {
+        "unblock_requested": unblock.requested,
+        "unblocked": unblock.unblocked,
+        "unblock_failed": unblock.failed,
+        "unblock_skipped": unblock.skipped,
+        "unblock_errors": unblock.errors[:20],
+    }
 
 
 async def _log_exclusion_action(
@@ -86,8 +113,10 @@ async def create_rule(
     current_user: User = Depends(require_permission("compliance:write")),
 ):
     service = TerminalExclusionService(db)
+    if data.unblock_blocked:
+        await _ensure_blacklist_write(db, current_user)
     try:
-        rule, impact = await service.create_rule(data, current_user.username)
+        rule, impact, unblock = await service.create_rule(data, current_user.username)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     await _log_exclusion_action(
@@ -96,11 +125,13 @@ async def create_rule(
             "matched": impact.matched,
             "purged": impact.purgeable,
             "retained": impact.retained,
+            **_unblock_details(unblock),
         },
     )
     return TerminalExclusionWithImpact(
         rule=TerminalExclusionResponse.from_model(rule),
         impact=impact,
+        unblock=unblock,
     )
 
 
@@ -165,11 +196,17 @@ async def delete_rule(
 async def toggle_rule(
     rule_id: int,
     request: Request,
+    data: TerminalExclusionToggle | None = None,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_permission("compliance:write")),
 ):
     service = TerminalExclusionService(db)
-    rule, impact = await service.toggle_rule(rule_id)
+    unblock_blocked = bool(data and data.unblock_blocked)
+    if unblock_blocked:
+        await _ensure_blacklist_write(db, current_user)
+    rule, impact, unblock = await service.toggle_rule(
+        rule_id, unblock_blocked=unblock_blocked, actor=current_user.username
+    )
     if not rule:
         raise HTTPException(status_code=404, detail="Terminal exclusion rule not found")
     await _log_exclusion_action(
@@ -178,9 +215,11 @@ async def toggle_rule(
             "matched": impact.matched if impact else 0,
             "purged": impact.purgeable if impact else 0,
             "retained": impact.retained if impact else 0,
+            **_unblock_details(unblock),
         },
     )
     return TerminalExclusionWithImpact(
         rule=TerminalExclusionResponse.from_model(rule),
         impact=impact or ExclusionImpact(),
+        unblock=unblock,
     )

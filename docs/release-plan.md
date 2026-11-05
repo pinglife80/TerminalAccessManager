@@ -1,6 +1,6 @@
-# v3.27.0 发布方案
+# v3.28.0 发布方案
 
-> 文档版本：v3.27.0 | 更新日期：2026-11-05
+> 文档版本：v3.28.0 | 更新日期：2026-11-05
 > 文档性质：版本发布输出文档，记录发布准备、流程、部署步骤和回滚方案
 
 ---
@@ -9,227 +9,157 @@
 
 | 项目 | 内容 |
 |------|------|
-| **版本号** | v3.27.0 |
-| **发布类型** | Minor（新增功能，向后兼容） |
+| **版本号** | v3.28.0 |
+| **版本类型** | Minor |
+| **基线版本** | v3.27.0 |
 | **发布日期** | 2026-11-05 |
-| **前置版本** | v3.26.3 |
-| **主要功能** | 终端排除规则（入库前过滤 + 统计口径排除） |
-| **数据库迁移** | 046_terminal_exclusion、047_terminal_excluded_flag |
-| **生产就绪评分** | 9.0/10 |
+| **开发分支** | `develop` |
+| **发布分支** | `main` |
+| **数据库迁移** | 无 |
 
-### 版本号决策
+### 发布主题
 
-自 v3.26.3 以来新增了终端排除规则：新页面、7 个 API 端点、2 个数据库迁移，属于向后兼容的新功能。根据语义化版本：
-
-- **Minor 递增**：v3.26.3 → v3.**27**.0
-- 不用 v3.26.4（Patch 仅用于 bug 修复）
-- 不用 v4.0.0（无破坏性变更）
+**排除规则可选解封已封锁终端**，同时修复 CI 三个必然失败的 Job 并完成后端 ruff 告警清零。
 
 ---
 
-## 二、发布前状态
+## 二、变更内容
 
-### 2.1 Git 状态
+### 2.1 新功能
 
-| 项目 | 状态 |
+| 模块 | 内容 |
 |------|------|
-| develop 分支 | 当前功能提交（9 个提交批次），领先 main |
-| main 分支 | v3.26.3 |
-| 最新 tag | `v3.26.3` |
-| 发布方式 | 不创建 feature 分支，提交直接进入 develop；通过发布 PR 合并 main |
+| 后端 | 创建 / 停用→启用排除规则支持 `unblock_blocked`（默认 false）；仅当终端绑定的全部防火墙解封成功才删除终端记录，黑名单置 `auto_unblocked=true`、`unblock_reason=excluded_by_rule`；失败/部分成功/无绑定保留并打标 |
+| 接口 | `POST /terminal-exclusions`、`POST /terminal-exclusions/{id}/toggle` 接收 `unblock_blocked`；响应新增 `impact.blocked` 与 `unblock` 明细；勾选时额外校验 `blacklist:write` |
+| 前端 | 影响预览新增「已封锁」指标；解封勾选与二次确认；启停确认弹窗；toast 展示成功/失败/跳过 |
+| 可观测性 | 解封流程 ALL_SUCCESS / PARTIAL / SKIPPED / finished 分支日志；审计归属当前操作人 |
 
-### 2.2 版本号一致性
+### 2.2 工程化
 
-版本号单一来源为根目录 `VERSION`，`manage.sh`、`backend/app/core/config.py`、`frontend/vite.config.ts` 均读取该文件；`frontend/package.json` 版本不参与展示，本次不修改。
-
-| 位置 | 当前值 | 状态 |
-|------|--------|------|
-| 根目录 `VERSION` | 3.27.0 | 待提交 |
-| `manage.sh` / backend config / vite config | 读取根 `VERSION` | ✅ 无需修改 |
-| `frontend/package.json` | 3.12.1（不参与展示） | 不修改 |
-| 本次有内容变更的文档 | v3.27.0 | 待提交 |
-
-### 2.3 生产就绪评估
-
-- 综合评分 9.0/10，已达标
-- 无 Critical/High 阻塞项
-- 后端全量测试 1756 passed，前端构建通过
-
-### 2.4 CI/CD 状态
-
-- CI 流水线 6 个 job：`backend-lint`、`backend-test`、`frontend-lint`、`frontend-test`、`backend-build`、`frontend-build`
-- main 分支保护要求 PR + 4 个 status check 通过
+- 修复 CI 三个必然失败 Job：backend-lint（固定 `ruff==0.15.17`）、frontend-lint（空 catch + warning 阈值 30）、frontend-build（仓库根构建上下文 + `VERSION` 注入）。
+- CI 新增 `permissions`、`concurrency` 与各 Job `timeout-minutes`；前端 lint 统一走 `npm run lint`。
+- 后端 ruff 317 条告警全部修复，移除 22 条临时基线豁免，恢复零容忍门禁。
+- 行为验证：646 条定向回归 + 1764 条全量测试通过，解封冒烟输出与清理前一致。
 
 ---
 
-## 三、发布准备（在 develop 上完成）
+## 三、提交记录
 
-### Step 1: 更新版本号
-
-| 文件 | 修改 | 状态 |
-|------|------|------|
-| `VERSION` | `3.26.3` → `3.27.0` | 待提交 |
-
-### Step 2: 更新功能文档
-
-| 文件 | 更新内容 | 目标文档版本 |
-|------|----------|-------------|
-| `docs/api.md` | 新增第 18 章「终端排除规则」7 个端点；同步结果新增 `entries_excluded`；权限码补充 compliance | v3.27.0 |
-| `docs/database.md` | 新增 `terminal_exclusions` 表、`terminals.excluded_by_rule`、迁移 046/047 | v3.27.0 |
-| `docs/user-guide.md` | 新增「终端排除规则」章节（条件类型、AND/OR、预览、保留行与统计口径） | v3.27.0 |
-| `docs/architecture.md` | ARP 采集链路新增排除过滤阶段与标记回收 | v3.27.0 |
-| `docs/business-workflow.md` | 采集 → 排除过滤 → 合规 → 统计流程与保留行语义 | v3.27.0 |
-| `docs/backend.md` | 新增 TerminalExclusionService、排除端点、测试清单 | v3.27.0 |
-| `docs/operations-runbook.md` | 新增 2.11 终端排除规则排查（日志关键字、SQL） | v3.27.0 |
-| `README.md` | 核心概念补充终端排除规则 | 无版本号 |
-
-### Step 3: 更新 changelog.md
-
-新增 `## [3.27.0] - 2026-11-05`，按「新增 / 修复 / 数据库 / 测试」分类记录。✅
-
-### Step 4: 更新 release-notes.md
-
-新增 `## [v3.27.0] - 2026-11-05`，包含背景、主要变更、迁移、升级步骤、注意事项、回滚说明、验证结果与文件清单。✅
-
-### Step 5: 更新生产就绪评估文档
-
-`docs/production-readiness-assessment.md` 头部版本更新为 v3.27.0，文档版本跟踪表新增 v3.27.0 行。✅
-
-### Step 6: 分批提交到 develop
-
-共 9 个提交批次：
-
-1. 数据库迁移（046/047）
-2. 后端排除规则模型、Schema、服务
-3. 排除规则 API 端点
-4. 采集/合规流程接入
-5. 统计口径过滤修复
-6. 前端页面与三语
-7. 测试用例
-8. 功能文档
-9. 版本号与发布文档
-
-提交后推送：
-
-```bash
-git push origin develop
-```
+| # | 提交信息 | 内容 |
+|---|---------|------|
+| 1 | `feat(exclusions): 支持创建/启用排除规则时可选解封已封锁终端` | 后端 schema / service / compliance / API 与测试 |
+| 2 | `feat(frontend): 排除规则页面支持可选解封已封锁终端` | 页面、API client、三语文案 |
+| 3 | `docs(terminals): 补充排除规则可选解封说明` | api / backend / user-guide / operations-runbook |
+| 4 | `chore(ci): 修复工作流失败并统一 lint 门禁` | ci.yml、deployment.md、前端 lint 修复 |
+| 5 | `refactor(backend): 清零 ruff 告警并移除临时基线豁免` | 77 个后端文件的等价格式/静态修复 |
+| 6 | `chore(release): bump version to v3.28.0 and refresh docs` | VERSION 与发布文档 |
 
 ---
 
 ## 四、发布流程
 
-### Step 7: 创建发布 PR（develop → main）
+### 4.1 准备
 
-在 GitHub 网页手动创建 Pull Request: develop → main
-- 标题: `Release v3.27.0`
-- 描述: 从 release-notes.md 复制 `[v3.27.0]` 内容（变更概要、迁移 046/047、测试结果、升级与回滚说明）
+```bash
+cd /opt/TerminalAccessManager
+git checkout develop
+git pull origin develop
+```
 
-### Step 8: CI 验证
+本地验证（提交前已完成）：
 
-PR 创建后自动触发 CI（6 个 job 必须全部通过）：
-- backend-lint (ruff)
-- backend-test (pytest)
-- frontend-lint (ESLint)
-- frontend-test (vitest)
-- backend-build (Docker)
-- frontend-build (Docker)
+```bash
+cd backend && ruff check app/ tests/
+cd backend && VERSION=dev DATABASE_URL=sqlite+aiosqlite:///:memory: .venv/bin/python -m pytest tests/ -q --no-cov
+cd frontend && npm run lint && npx tsc --noEmit && npx vitest run && npm run build
+```
 
-### Step 9: 合并 PR
+### 4.2 推送与 CI
 
-CI 通过后，在 GitHub 上 Merge PR（使用 Merge commit，不用 Squash）。
+```bash
+git push origin develop
+```
 
-### Step 10: 打 tag
+等待 develop 的 6 个 CI Job 全部通过：backend-lint、backend-test、frontend-lint、frontend-test、backend-build、frontend-build。
+
+### 4.3 创建 PR
+
+- 方向：`develop` → `main`
+- 标题：`release: v3.28.0 排除规则可选解封 + CI 修复与 lint 清零`
+- 说明：使用下方模板
+
+```markdown
+## Summary
+- 排除规则创建/启用新增可选解封：全部防火墙成功才删除终端并标记黑名单，失败/部分成功/无绑定保留并打标
+- 修复 CI 三个必然失败 Job（ruff 未固定版本、ESLint 阈值、前端镜像构建上下文），新增并发取消与超时
+- 后端 ruff 317 条告警清零，移除全部临时基线豁免，恢复零容忍门禁
+
+## 行为影响
+- 解封为可选操作，默认关闭时与 v3.27.0 行为完全一致
+- lint 清理无行为变化：1764 条后端测试、75 条前端测试全部通过
+
+## Test plan
+- [ ] 后端 `pytest tests/` 1764 passed
+- [ ] 前端 `npm run lint` / `tsc` / `vitest run` / `vite build`
+- [ ] `docker build ./backend`、`docker build -f frontend/Dockerfile .`
+- [ ] `./manage.sh update && ./manage.sh health`
+- [ ] PR CI 6 个 Job 全部通过
+```
+
+### 4.4 合并与打标签
+
+PR CI 通过后合并（merge commit），然后：
 
 ```bash
 git checkout main
-git pull --ff-only origin main
-git tag -a v3.27.0 -m "release v3.27.0: terminal exclusion rules, excluded_by_rule stats filter"
-git push origin v3.27.0
+git pull origin main
+git tag -a v3.28.0 -m "release v3.28.0: optional unblock for excluded blocked terminals, CI fixes, zero-warning lint"
+git push origin v3.28.0
 ```
 
-> 只推送 `v3.27.0` 单个 tag，不使用 `--tags`，避免推送本地遗留 tag。
+创建 GitHub Release：标题 `v3.28.0`，正文复用 `docs/release-notes.md` 的 `[v3.28.0]` 段落。
 
-### Step 11: 创建 GitHub Release
-
-在 GitHub Releases 页面：
-1. 选择 tag: `v3.27.0`
-2. 标题: `v3.27.0`
-3. 内容: 从 release-notes.md 复制 `[v3.27.0]` 部分
-4. 发布
-
-### Step 12: 同步 develop
+### 4.5 同步 develop
 
 ```bash
 git checkout develop
-git pull --ff-only origin develop
 git merge main
 git push origin develop
 ```
 
 ---
 
-## 五、生产部署
+## 五、部署步骤
 
-### Step 13: 部署到生产服务器
+### 5.1 生产环境
 
 ```bash
-# 首次部署
-git clone https://github.com/pinglife80/TerminalAccessManager.git
-cd TerminalAccessManager
-git checkout v3.27.0
-chmod +x manage.sh
-./manage.sh deploy --prod
-
-# 后续升级（从旧版本）
-./manage.sh upgrade v3.27.0
+cd /opt/TerminalAccessManager
+git checkout main
+git pull origin main
+./manage.sh upgrade
+./manage.sh health
 ```
 
-`./manage.sh upgrade` 会自动执行 `alembic upgrade head`，应用迁移 046/047。
+### 5.2 本地开发环境
 
-### Step 14: 部署后验证
+```bash
+./manage.sh update
+./manage.sh health
+```
 
-| 验证项 | 方法 |
-|--------|------|
-| HTTPS 访问 | 浏览器访问 `https://<HOST_IP>:8443` |
-| 版本显示 | 系统设置页显示 3.27.0 |
-| 终端排除规则 | 新增规则 → 预览影响 → 保存 → 查看终端列表与仪表盘统计 |
-| 采集链路 | 触发数据源同步，检查 `entries_excluded` 与 `ARP exclusion summary` 日志 |
-| Docker 健康 | `./manage.sh health` |
-| 日志检查 | `./manage.sh logs backend -n 100` |
+本次无数据库迁移，无需执行 `alembic upgrade`。
 
 ---
 
 ## 六、回滚方案
 
-### 方案 A: 版本回退
-
 ```bash
-./manage.sh upgrade v3.26.3
+./manage.sh upgrade v3.27.0
 ```
 
-如需回退标记列（会丢失 `excluded_by_rule` 标记，终端数据保留）：
-
-```bash
-docker exec tam_backend python -m alembic downgrade 046_terminal_exclusion
-```
-
-`terminal_exclusions` 表可在应用回滚后保留，不影响旧版本运行。
-
-### 方案 B: 紧急修复（hotfix）
-
-```bash
-git checkout main
-git checkout -b hotfix/fix-critical-issue
-# ... 修复 ...
-git checkout main
-git merge --no-ff hotfix/fix-critical-issue
-git tag -a v3.27.1 -m "hotfix: fix critical issue"
-git push origin v3.27.1
-git checkout develop
-git merge hotfix/fix-critical-issue
-git push origin develop
-```
+- 无数据库迁移，回滚不涉及 schema 变更。
+- 若仅解封行为异常，取消勾选 `unblock_blocked` 即可恢复 v3.27.0 的默认行为。
 
 ---
 
@@ -237,33 +167,34 @@ git push origin develop
 
 | 文件 | 变更类型 | 说明 |
 |------|---------|------|
-| `VERSION` | 编辑 | 3.26.3 → 3.27.0 |
-| `backend/alembic/versions/046_terminal_exclusion.py` | 新增 | terminal_exclusions 表 |
-| `backend/alembic/versions/047_terminal_excluded_flag.py` | 新增 | terminals.excluded_by_rule + 索引 |
-| `backend/app/models/terminal_exclusion.py` | 新增 | 排除规则模型 |
-| `backend/app/services/terminal_exclusion_service.py` | 新增 | 排除规则服务 |
-| `backend/app/api/v1/endpoints/terminal_exclusions.py` | 新增 | 7 个 API 端点 |
-| `backend/app/services/{arp_collector_service,compliance_service,terminal_service}.py` | 编辑 | 排除过滤、合规守卫、统计过滤 |
-| `frontend/src/pages/TerminalExclusions.tsx` | 新增 | 终端排除规则页面 |
-| `frontend/src/api/terminalExclusions.ts` | 新增 | 前端 API client |
-| `backend/tests/test_terminal_exclusion_service.py` | 新增 | 单元测试 72 个 |
-| `backend/tests/test_terminal_exclusion_integration.py` | 新增 | 集成测试 4 个 |
-| `docs/changelog.md` | 编辑 | 新增 [3.27.0]，版本号 → v3.27.0 |
-| `docs/release-notes.md` | 编辑 | 新增 [v3.27.0]，版本号 → v3.27.0 |
-| `docs/release-plan.md` | 编辑 | 更新为 v3.27.0 发布方案 |
-| `docs/api.md` / `database.md` / `user-guide.md` / `architecture.md` / `business-workflow.md` / `backend.md` / `operations-runbook.md` | 编辑 | 功能文档更新，版本号 → v3.27.0 |
-| `docs/production-readiness-assessment.md` | 编辑 | 版本跟踪表新增 v3.27.0 |
-| `README.md` | 编辑 | 核心概念补充终端排除规则 |
+| `VERSION` | 编辑 | 3.27.0 → 3.28.0 |
+| `backend/app/schemas/terminal_exclusion.py` | 编辑 | `unblock_blocked`、`blocked`、`ExclusionUnblockResult`、`TerminalExclusionToggle` |
+| `backend/app/services/terminal_exclusion_service.py` | 编辑 | 解封编排、分支日志、失败/跳过统计 |
+| `backend/app/services/compliance_service.py` | 编辑 | `_unblock_on_firewall(actor=...)` |
+| `backend/app/api/v1/endpoints/terminal_exclusions.py` | 编辑 | 参数接收、`blacklist:write` 校验、响应与审计扩展 |
+| `backend/tests/test_terminal_exclusion_{service,integration}.py` | 编辑 | 解封分支与失败策略测试 |
+| `backend/tests/test_endpoints_terminal_exclusions.py` | 新增 | 端点级权限与参数测试 |
+| `frontend/src/pages/TerminalExclusions.tsx` | 编辑 | 已封锁指标、解封勾选与确认、结果提示 |
+| `frontend/src/api/terminalExclusions.ts` | 编辑 | 类型与 toggle 参数 |
+| `frontend/src/i18n/locales/{zh,en,ja}.ts` | 编辑 | 新增文案 |
+| `.github/workflows/ci.yml` | 编辑 | 修复 3 个 Job，新增权限/并发/超时 |
+| `frontend/package.json` | 编辑 | lint warning 阈值 30 |
+| `frontend/src/{components/LDAPImportModal.tsx,components/datasources/OperationSourceTab.tsx,hooks/useTokenExpiration.ts}` | 编辑 | 空 catch 修复 |
+| 后端 77 个 `app/`、`tests/` 文件 | 编辑 | ruff 告警等价修复 |
+| `docs/{api,backend,user-guide,operations-runbook,deployment}.md` | 编辑 | 功能/CI 说明与版本号 |
+| `docs/changelog.md` / `release-notes.md` / `release-plan.md` / `production-readiness-assessment.md` | 编辑 | 发布文档 |
 
 ---
 
 ## 八、验证清单
 
-- [ ] 根 `VERSION` = 3.27.0
-- [ ] 功能文档与发布文档版本统一为 v3.27.0
-- [ ] 9 个提交直接推送 develop，develop CI 6 个 job 全部通过
+- [ ] 根 `VERSION` = 3.28.0
+- [ ] 功能文档与发布文档版本统一为 v3.28.0
+- [ ] `ruff check app/ tests/` 零告警
+- [ ] 后端全量 1764 passed，前端 75 passed
+- [ ] 6 个提交已推送 develop，CI 全部通过
 - [ ] 发布 PR（develop → main）CI 通过并已合并
-- [ ] `v3.27.0` tag 已创建并推送
-- [ ] GitHub Release `v3.27.0` 已发布
+- [ ] `v3.28.0` tag 已创建并推送
+- [ ] GitHub Release `v3.28.0` 已发布
 - [ ] develop 已同步 main（包含 tag）
-- [ ] 生产部署后 `./manage.sh health` 通过，版本显示 3.27.0
+- [ ] 部署后 `./manage.sh health` 通过，版本显示 3.28.0

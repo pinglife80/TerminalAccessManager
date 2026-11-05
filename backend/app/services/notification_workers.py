@@ -16,7 +16,6 @@ from app.services.notification_channels import (
     NotificationChannelBase,
     NotificationEvent,
     NotificationResult,
-    get_channel,
 )
 
 QUEUE_KEY = "notify:queue:main"

@@ -14,7 +14,7 @@ import tempfile
 import time
 import zipfile
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import paramiko
@@ -23,11 +23,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.models.backup_config import BackupConfigModel
-from app.models.system_config import SystemConfig
-from app.models.notification import NotificationChannel, NotificationRule, NotificationTemplate
 from app.models.auth_config import AuthConfig
+from app.models.backup_config import BackupConfigModel
 from app.models.data_source import DataSource
+from app.models.notification import NotificationChannel, NotificationRule, NotificationTemplate
+from app.models.system_config import SystemConfig
 from app.models.whitelist import Whitelist
 
 
@@ -189,34 +189,30 @@ class BackupService:
             with tempfile.TemporaryDirectory() as temp_dir:
                 backup_files = []
 
-                if backup_type == "full" or backup_type == "database":
-                    if self.config.backup_database:
-                        db_path = await self.backup_database(temp_dir)
-                        backup_files.append(db_path)
+                if (backup_type == "full" or backup_type == "database") and self.config.backup_database:
+                    db_path = await self.backup_database(temp_dir)
+                    backup_files.append(db_path)
 
-                if backup_type == "full" or backup_type == "config":
-                    if self.config.backup_config:
-                        config_path = await self.backup_config(temp_dir)
-                        backup_files.append(config_path)
+                if (backup_type == "full" or backup_type == "config") and self.config.backup_config:
+                    config_path = await self.backup_config(temp_dir)
+                    backup_files.append(config_path)
 
-                        system_config_path = await self._backup_system_config_db(temp_dir)
-                        if system_config_path:
-                            backup_files.append(system_config_path)
+                    system_config_path = await self._backup_system_config_db(temp_dir)
+                    if system_config_path:
+                        backup_files.append(system_config_path)
 
-                        branding_path = await self._backup_branding(temp_dir)
-                        if branding_path:
-                            backup_files.append(branding_path)
+                    branding_path = await self._backup_branding(temp_dir)
+                    if branding_path:
+                        backup_files.append(branding_path)
 
-                if backup_type == "full" or backup_type == "whitelist":
-                    if self.config.backup_whitelist:
-                        whitelist_path = await self.backup_whitelist(temp_dir)
-                        if whitelist_path:
-                            backup_files.append(whitelist_path)
+                if (backup_type == "full" or backup_type == "whitelist") and self.config.backup_whitelist:
+                    whitelist_path = await self.backup_whitelist(temp_dir)
+                    if whitelist_path:
+                        backup_files.append(whitelist_path)
 
-                if backup_type == "full" or backup_type == "logs":
-                    if self.config.backup_logs:
-                        logs_path = await self._backup_logs(temp_dir)
-                        backup_files.append(logs_path)
+                if (backup_type == "full" or backup_type == "logs") and self.config.backup_logs:
+                    logs_path = await self._backup_logs(temp_dir)
+                    backup_files.append(logs_path)
 
                 archive_path = await self.create_archive(temp_dir, backup_files, backup_type)
                 job.file_path = archive_path
@@ -527,7 +523,7 @@ class BackupService:
             return False
 
         try:
-            with open(config_file, "r", encoding="utf-8") as f:
+            with open(config_file, encoding="utf-8") as f:
                 config_data = json.load(f)
 
             restore_sections = [
@@ -702,7 +698,7 @@ class BackupService:
                     logger.warning("whitelist.json not found in backup")
                     return False
 
-                with open(whitelist_file, "r", encoding="utf-8") as f:
+                with open(whitelist_file, encoding="utf-8") as f:
                     whitelist_data = json.load(f)
 
                 await self.db.execute(Whitelist.__table__.delete())
@@ -761,7 +757,7 @@ class BackupService:
         if self.db is None:
             return False
         try:
-            with open(json_path, "r", encoding="utf-8") as f:
+            with open(json_path, encoding="utf-8") as f:
                 whitelist_data = json.load(f)
 
             await self.db.execute(Whitelist.__table__.delete())
@@ -1155,7 +1151,7 @@ class BackupService:
                         mtime_dt = datetime.strptime(mtime_str, "%Y%m%d%H%M%S")
                         # FTP MDTM returns UTC time; convert to local timezone (UTC+8)
                         from app.core.timezone import get_timezone
-                        mtime_dt = mtime_dt.replace(tzinfo=timezone.utc).astimezone(get_timezone())
+                        mtime_dt = mtime_dt.replace(tzinfo=UTC).astimezone(get_timezone())
                         backups.append({
                             "filename": filename,
                             "file_path": f"{remote_path.rstrip('/')}/{filename}",
@@ -1210,7 +1206,7 @@ class BackupService:
                             "filename": entry.filename,
                             "file_path": f"{remote_path}/{entry.filename}",
                             "file_size": entry.st_size,
-                            "created_at": datetime.fromtimestamp(entry.st_mtime, tz=timezone.utc),
+                            "created_at": datetime.fromtimestamp(entry.st_mtime, tz=UTC),
                             "storage": "remote",
                         })
 

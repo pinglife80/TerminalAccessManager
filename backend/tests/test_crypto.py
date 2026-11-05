@@ -1,5 +1,4 @@
 """Unit tests for field-level encryption utilities (app/core/crypto.py)."""
-import pytest
 
 from app.core import crypto
 

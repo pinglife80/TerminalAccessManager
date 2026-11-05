@@ -11,11 +11,11 @@ Reconciliation runs PER FIREWALL independently to avoid cross-firewall corruptio
 - Never unblocks based solely on reconciliation mismatch
 """
 
-from datetime import UTC, datetime, timedelta
-from typing import Any, Dict, Set
+from datetime import UTC, datetime
+from typing import Any
 
 from loguru import logger
-from sqlalchemy import select, or_, and_, exists
+from sqlalchemy import and_, exists, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -32,7 +32,7 @@ class FirewallReconciliationService:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    async def reconcile(self) -> Dict[str, Any]:
+    async def reconcile(self) -> dict[str, Any]:
         """
         Reconcile firewall status with database.
         Reconciliation runs PER FIREWALL independently to avoid cross-firewall corruption.
@@ -235,7 +235,7 @@ class FirewallReconciliationService:
             logger.info(f"Self-healed {fixed} orphaned 'blocked' terminals (no active blacklist backing)")
         return fixed
 
-    def _parse_blocked_ips(self, response: Any) -> Set[str]:
+    def _parse_blocked_ips(self, response: Any) -> set[str]:
         """Parse blocked IPs from Sangfor API response"""
         ips = set()
         if not response or not isinstance(response, dict):
@@ -256,12 +256,12 @@ class FirewallReconciliationService:
                     ips.add(ip)
         return ips
 
-    async def _get_db_active_blacklist_by_firewall(self) -> Dict[str, Set[str]]:
+    async def _get_db_active_blacklist_by_firewall(self) -> dict[str, set[str]]:
         """
         Get all active blacklist entries grouped by firewall_tag.
         Returns: {fw_tag: set of ip_address}
         """
-        from datetime import datetime, UTC
+        from datetime import UTC, datetime
 
         stmt = select(
             Blacklist.ip_address,
@@ -280,15 +280,15 @@ class FirewallReconciliationService:
         result = await self.db.execute(stmt)
         rows = result.all()
 
-        by_fw: Dict[str, Set[str]] = {}
-        for ip, mac, mac_norm, fw_tag in rows:
+        by_fw: dict[str, set[str]] = {}
+        for ip, _mac, _mac_norm, fw_tag in rows:
             if fw_tag not in by_fw:
                 by_fw[fw_tag] = set()
             # Store IP for set comparison
             by_fw[fw_tag].add(ip)
         return by_fw
 
-    async def _create_db_entries_for_firewall(self, fw_tag: str, ip_addresses: Set[str]) -> int:
+    async def _create_db_entries_for_firewall(self, fw_tag: str, ip_addresses: set[str]) -> int:
         """
         Create blacklist entries for IPs found blocked on a specific firewall
         but missing from the database for that firewall.
@@ -432,7 +432,7 @@ class FirewallReconciliationService:
         return created
 
     async def _reblock_on_firewall(
-        self, fw_tag: str, svc: SangforService, ip_addresses: Set[str]
+        self, fw_tag: str, svc: SangforService, ip_addresses: set[str]
     ) -> int:
         """
         Re-block IPs on a firewall that are marked as blocked in active DB entries

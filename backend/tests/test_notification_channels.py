@@ -11,6 +11,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
+from app.services.notification_channels import (
+    DingTalkChannel,
+    FeishuChannel,
+    WebhookChannel,
+    WeComChannel,
+    get_channel,
+)
+from app.services.notification_channels import (
+    NotificationChannelBase as FactoryBase,
+)
 from app.services.notification_channels.base import (
     AsyncNotificationChannelBase,
     ChannelTestResult,
@@ -18,14 +28,6 @@ from app.services.notification_channels.base import (
     NotificationEvent,
     NotificationResult,
     format_timestamp,
-)
-from app.services.notification_channels import (
-    DingTalkChannel,
-    FeishuChannel,
-    NotificationChannelBase as FactoryBase,
-    WebhookChannel,
-    WeComChannel,
-    get_channel,
 )
 
 

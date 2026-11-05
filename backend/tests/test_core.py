@@ -3,7 +3,6 @@ Core business logic tests for TerminalAccessManager.
 Tests authentication, encryption, and search functionality.
 """
 
-import os
 import subprocess
 import sys
 from unittest.mock import AsyncMock, patch

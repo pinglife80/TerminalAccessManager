@@ -1,6 +1,6 @@
 # TerminalAccessManager - 运维操作手册
 
-> 文档版本：v3.27.0  更新日期：2026-11-05
+> 文档版本：v3.28.0  更新日期：2026-11-05
 
 ## 目录
 
@@ -570,8 +570,15 @@ FROM terminals WHERE excluded_by_rule = true ORDER BY id;
 |------|------|
 | `ARP exclusion hit` | 单条 ARP 命中排除规则（含规则描述、是否保留） |
 | `ARP exclusion summary` | 单个数据源每轮采集汇总（added/updated，保留行数量） |
-| `Terminal exclusion purge` | 规则创建/启用时的存量清理结果（matched/purged/retained） |
+| `Terminal exclusion purge` | 规则创建/启用时的存量清理结果（matched/purged/retained/unblocked/failed/skipped） |
 | `Terminal exclusion flags refreshed` | 规则停用/删除/条件变更后的标记回收 |
+
+**症状 B：勾选解封后终端仍在库中**
+
+1. 查看创建/启用响应中的 `unblock.failed` / `unblock.skipped` 与 `unblock.errors`；
+2. `skipped` 通常表示该终端没有有效黑名单记录，或黑名单条目未绑定 `firewall_tag`/`source_tag`；需先确认防火墙绑定关系；
+3. `failed` 表示防火墙解封接口返回失败，检查桑福设备连通性与审计日志 `firewall_unblock`；
+4. 失败的终端会保留 `excluded_by_rule=true`，不会重新计入合规统计；修复防火墙后可通过「停用→重新启用并勾选解封」重试。
 
 **SQL 核查**
 

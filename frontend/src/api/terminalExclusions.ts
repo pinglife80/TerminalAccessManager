@@ -27,6 +27,7 @@ export interface TerminalExclusionCondition {
 
 export interface TerminalExclusionCreate extends TerminalExclusionCondition {
   comments: string;
+  unblock_blocked?: boolean;
 }
 
 export interface TerminalExclusionUpdate extends TerminalExclusionCondition {
@@ -45,12 +46,22 @@ export interface ExclusionImpact {
   matched: number;
   purgeable: number;
   retained: number;
+  blocked: number;
   samples: ExclusionSample[];
+}
+
+export interface ExclusionUnblockResult {
+  requested: boolean;
+  unblocked: number;
+  failed: number;
+  skipped: number;
+  errors: string[];
 }
 
 export interface TerminalExclusionWithImpact {
   rule: TerminalExclusion;
   impact: ExclusionImpact;
+  unblock: ExclusionUnblockResult | null;
 }
 
 export interface TerminalExclusionListResponse {
@@ -120,9 +131,9 @@ export function useDeleteTerminalExclusion() {
 export function useToggleTerminalExclusion() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (id: number) =>
+    mutationFn: ({ id, unblock_blocked = false }: { id: number; unblock_blocked?: boolean }) =>
       apiClient
-        .post(`${API_ENDPOINTS.TERMINAL_EXCLUSIONS}${id}/toggle`)
+        .post(`${API_ENDPOINTS.TERMINAL_EXCLUSIONS}${id}/toggle`, { unblock_blocked })
         .then((response) => response.data as TerminalExclusionWithImpact),
     onSuccess: () => invalidateRelated(queryClient),
   });

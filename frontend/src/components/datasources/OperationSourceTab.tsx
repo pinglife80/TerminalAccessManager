@@ -257,7 +257,8 @@ const OperationSourceTab = forwardRef<{ openAddModal: () => void }, OperationSou
           setShowDisableWarning(true);
           return;
         }
-      } catch {
+      } catch (err) {
+        console.warn('Disable preview failed, continuing update:', err);
       }
     }
 
