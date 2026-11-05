@@ -1,6 +1,6 @@
 # 更新日志
 
-> 文档版本：v3.27.0  更新日期：2026-11-05
+> 文档版本：v3.28.0  更新日期：2026-11-05
 
 本文件记录 TerminalAccessManager 的所有重要变更。
 
@@ -8,6 +8,29 @@
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ***
+
+## [3.28.0] - 2026-11-05
+
+### 新增
+
+- **排除规则可选解封已封锁终端**：创建规则或在「停用 → 启用」时可勾选 `unblock_blocked`（默认关闭）。勾选后先对命中且处于 `blocked` 的终端执行防火墙解封，仅当该终端涉及的全部防火墙均成功时，才删除终端记录、将黑名单条目标记为已解封（`auto_unblocked=true`、原因 `excluded_by_rule`），终端随即退出全部统计
+  - 失败、部分成功或无法定位防火墙的终端保留在库中并保持 `excluded_by_rule` 标记，接口返回 `unblock.failed` / `unblock.skipped` 明细
+  - 预览影响新增 `blocked` 指标；创建与启停接口新增 `unblock_blocked` 参数，勾选时额外要求 `blacklist:write` 权限（超管直通），审计归属当前操作人
+  - 解封流程新增 ALL_SUCCESS / PARTIAL / SKIPPED / finished 分支日志，便于排查
+
+### 工程化
+
+- **CI 修复**：修复 backend-lint（固定 `ruff==0.15.17`）、frontend-lint（空 catch 与 warning 阈值）、frontend-build（改为仓库根构建上下文并注入 `VERSION`）三个必然失败的 Job；新增 `permissions`、`concurrency` 与 Job 超时
+- **lint 清零**：后端 317 条 ruff 告警全部修复并移除临时基线豁免，CI 恢复零容忍；前端 ESLint warning 基线为 30
+
+### 测试
+
+- 后端全量 1764 passed；前端 75 passed；解封流程定向回归 646 passed
+- 解封冒烟验证覆盖全部成功、部分成功、无黑名单、无防火墙绑定、黑名单过期分支，输出符合预期
+
+### 数据库
+
+- 本次无数据库迁移
 
 ## [3.27.0] - 2026-11-05
 

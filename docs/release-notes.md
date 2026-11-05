@@ -1,12 +1,65 @@
 # 版本跟踪记录
 
-> 文档版本：v3.27.0 | 更新日期：2026-11-05
+> 文档版本：v3.28.0 | 更新日期：2026-11-05
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
 
 ---
+
+## [v3.28.0] - 2026-11-05
+
+### 排除规则可选解封已封锁终端（Minor 版本）
+
+#### 背景
+
+v3.27.0 的终端排除规则在命中已封锁终端时，只保留记录并打标，终端仍保持防火墙封堵与 `blocked` 统计。运维在新增排除规则时，往往希望把这些「确定不再纳管」的终端一并解封并清出统计，但需要可控、可审计、失败可回退。
+
+#### 主要变更
+
+| 模块 | 内容 |
+|------|------|
+| 后端 | 创建 / 停用→启用支持 `unblock_blocked`（默认 false）；仅当终端绑定的全部防火墙解封成功才删除终端，黑名单置 `auto_unblocked=true`、`unblock_reason=excluded_by_rule`；失败/部分成功/无绑定保留并打标，返回 `unblock.unblocked/failed/skipped/errors` |
+| 权限与审计 | 勾选解封时额外校验 `blacklist:write`（超管直通）；防火墙解封审计归属当前操作人；创建/启停审计补充解封明细 |
+| 前端 | 影响预览新增「已封锁」指标；存在已封锁终端时显示解封勾选项与二次确认；启停操作增加确认弹窗，toast 展示成功/失败/跳过数量 |
+| 可观测性 | 解封流程新增 ALL_SUCCESS / PARTIAL / SKIPPED / finished 分支日志，记录终端、防火墙与黑名单条目 |
+| 工程化 | 修复 CI 三个失败 Job；后端 ruff 告警清零并移除临时基线豁免；前端 warning 基线 30 |
+
+#### 数据库迁移
+
+无。复用 v3.27.0 已有的 `terminal_exclusions` 表与 `terminals.excluded_by_rule` 字段。
+
+#### 升级步骤（推荐：一键升级）
+
+    git checkout main
+    git pull origin main
+    ./manage.sh upgrade
+
+本地开发环境：
+
+    ./manage.sh update
+
+#### 升级注意事项
+
+- `unblock_blocked` 默认为 false，不勾选时行为与 v3.27.0 完全一致；无破坏性 API 变更。
+- 解封是多防火墙原子语义：任一防火墙失败即保留终端记录，不会出现「防火墙已解封但终端被删除」的不一致。
+- 解封失败后如需再次尝试，停用并重新启用规则并勾选解封即可；`non_compliant` 终端的常规「重试解封」仍受震荡保护限制。
+- 勾选解封需要 `blacklist:write` 权限；仅有 `compliance:write` 的账号调用会被拒绝。
+
+#### 回滚说明
+
+    ./manage.sh upgrade v3.27.0
+
+本次无数据库迁移，回滚无需 `alembic downgrade`。若仅是解封行为异常，可取消勾选 `unblock_blocked` 立即恢复旧行为。
+
+#### 验证结果
+
+- 后端全量测试：1764 passed；定向回归（解封/统计/防火墙同步）646 passed
+- 前端：`tsc` / ESLint（0 error、29 warning）/ `vite build` 通过，vitest 75 passed
+- ruff：`ruff check app/ tests/` 零告警（已移除全部基线豁免）
+- 构建：`docker build ./backend`、`docker build -f frontend/Dockerfile --build-arg VERSION=$(cat VERSION) .` 通过
+- 本地重建与健康检查：`./manage.sh update`、`./manage.sh health` 全部通过
 
 ## [v3.27.0] - 2026-11-05
 
