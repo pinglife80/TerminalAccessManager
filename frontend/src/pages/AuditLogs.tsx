@@ -366,6 +366,12 @@ const DETAIL_KEY_LABELS: Record<string, string> = {
   compliance_status: 'auditLogs.detailKeys.compliance_status',
   old_block_state: 'auditLogs.detailKeys.old_block_state',
   new_block_state: 'auditLogs.detailKeys.new_block_state',
+  device_id: 'auditLogs.detailKeys.device_id',
+  device_grouped: 'auditLogs.detailKeys.device_grouped',
+  device_grouped_expanded: 'auditLogs.detailKeys.device_grouped_expanded',
+  expanded_trigger_ip: 'auditLogs.detailKeys.expanded_trigger_ip',
+  expanded_trigger_terminal_id: 'auditLogs.detailKeys.expanded_trigger_terminal_id',
+  device_expanded: 'auditLogs.detailKeys.device_expanded',
 };
 
 const TERMINAL_RESOURCE_TYPE = 'terminal';
