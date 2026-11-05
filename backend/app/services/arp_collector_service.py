@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.data_source import DataSource
 from app.models.terminal import Terminal, TerminalStatus
 from app.schemas.data_source import SyncResult
+from app.services.terminal_exclusion_service import TerminalExclusionService
 
 
 class ArpCollectorService:
@@ -275,9 +276,24 @@ class ArpCollectorService:
         """
         added = 0
         updated = 0
+        excluded = 0
+        excluded_retained = 0
         errors = []
         seen_pairs: set[tuple[str, str]] = set()
         new_terminals: list[Terminal] = []
+
+        # Terminal exclusion rules are applied before persistence: matching
+        # entries never enter the terminals table and therefore never take
+        # part in compliance calculation or statistics.
+        exclusion_service = TerminalExclusionService(self.db)
+        exclusion_rules: list[dict] = []
+        active_blacklist_ips: set[str] = set()
+        try:
+            exclusion_rules = await exclusion_service.load_active_rules()
+            if exclusion_rules:
+                active_blacklist_ips = await exclusion_service.load_active_blacklist_ips()
+        except Exception as exc:
+            logger.warning(f"Failed to load terminal exclusion rules: {exc}")
 
         # Device grouping: load MAC -> device_id reverse index once and stamp
         # terminal rows with their physical device id (best-effort). Gated behind
@@ -341,6 +357,54 @@ class ArpCollectorService:
             seen_pairs.add(pair_key)
 
             try:
+                # Exclusion filter: drop the entry before it is written. If a
+                # stale row already exists (rule created mid-collection or a
+                # historical leftover), remove it as well unless it is blocked
+                # or actively blacklisted.
+                if exclusion_rules and TerminalExclusionService.matches_any(
+                    exclusion_rules, ip_addr, mac_norm_key
+                ):
+                    matched_rule = TerminalExclusionService.first_match(
+                        exclusion_rules, ip_addr, mac_norm_key
+                    )
+                    excluded_stmt = select(Terminal).where(
+                        (Terminal.mac_address_normalized == mac_norm_key) &
+                        (Terminal.ip_address == ip_addr)
+                    )
+                    excluded_result = await self.db.execute(excluded_stmt)
+                    stale = excluded_result.scalar_one_or_none()
+                    if stale is not None and TerminalExclusionService.can_purge(
+                        stale, active_blacklist_ips
+                    ):
+                        await self.db.delete(stale)
+                        logger.info(
+                            f"ARP exclusion hit: {ip_addr}/{mac_normalized} matched "
+                            f"[{TerminalExclusionService.describe_rule(matched_rule)}] "
+                            f"(source={source_tag}); "
+                            f"entry dropped and stale record id={stale.id} purged"
+                        )
+                    elif stale is not None:
+                        # 保留行仍在 terminals 表中（封锁/有效黑名单不能被删除），
+                        # 打标让统计口径把它排除，同时不影响防火墙状态。
+                        stale.excluded_by_rule = True
+                        excluded_retained += 1
+                        logger.info(
+                            f"ARP exclusion hit: {ip_addr}/{mac_normalized} matched "
+                            f"[{TerminalExclusionService.describe_rule(matched_rule)}] "
+                            f"(source={source_tag}); entry dropped, stale record id={stale.id} "
+                            f"retained (status={stale.status}, actively blacklisted="
+                            f"{ip_addr in active_blacklist_ips}) and marked excluded_by_rule=True"
+                        )
+                    else:
+                        logger.info(
+                            f"ARP exclusion hit: {ip_addr}/{mac_normalized} matched "
+                            f"[{TerminalExclusionService.describe_rule(matched_rule)}] "
+                            f"(source={source_tag}); entry dropped before persistence, "
+                            f"no compliance calculation or statistics impact"
+                        )
+                    excluded += 1
+                    continue
+
                 # Upsert by (MAC, IP) composite identity; IP is part of the key.
                 stmt = select(Terminal).where(
                     (Terminal.mac_address_normalized == mac_norm_key) &
@@ -386,6 +450,17 @@ class ArpCollectorService:
 
             except Exception as e:
                 errors.append(f"Error processing {ip_addr}/{mac_normalized}: {str(e)}")
+
+        if excluded:
+            logger.info(
+                f"ARP exclusion summary for source '{source_tag}': {excluded} entries "
+                f"matched {len(exclusion_rules)} active rule(s) — added={added}, "
+                f"updated={updated}. New entries were dropped before persistence, so they "
+                f"take no part in compliance calculation, auto block/unblock or statistics. "
+                f"{excluded_retained} existing record(s) were retained because they are "
+                f"blocked or actively blacklisted; they are marked excluded_by_rule=True "
+                f"and filtered out of dashboard statistics."
+            )
 
         await self.db.commit()
 
@@ -636,10 +711,11 @@ class ArpCollectorService:
 
         return SyncResult(
             success=True,
-            message=f"Processed {len(entries)} ARP entries from '{source_tag}'",
+            message=f"Processed {len(entries)} ARP entries from '{source_tag}' (excluded {excluded})",
             entries_processed=len(entries),
             entries_added=added,
             entries_updated=updated,
+            entries_excluded=excluded,
             errors=errors,
         )
 
@@ -676,7 +752,8 @@ class ArpCollectorService:
                     f"success={sync_result.success}, "
                     f"processed={sync_result.entries_processed}, "
                     f"added={sync_result.entries_added}, "
-                    f"updated={sync_result.entries_updated}"
+                    f"updated={sync_result.entries_updated}, "
+                    f"excluded={sync_result.entries_excluded}"
                 )
 
                 if sync_result.errors:
