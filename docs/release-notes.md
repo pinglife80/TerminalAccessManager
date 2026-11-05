@@ -1,12 +1,87 @@
 # 版本跟踪记录
 
-> 文档版本：v3.26.3 | 更新日期：2026-11-05
+> 文档版本：v3.27.0 | 更新日期：2026-11-05
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
 
 ---
+
+## [v3.27.0] - 2026-11-05
+
+### 终端排除规则：入库前过滤 + 统计口径排除（Minor 版本）
+
+#### 背景
+
+部分终端（网络设备、打印机、测试网段等）明确不需要任何合规检查。此前只能通过白名单跳过合规计算，但会抬高白名单统计数量，运维无法区分「真正豁免的终端」与「无需纳管的终端」。本版本新增终端排除规则：在 ARP 采集入库前直接排除这些终端，使其不进入终端数据库，也不参与合规计算与统计。
+
+#### 主要变更
+
+| 变更项 | 说明 |
+|--------|------|
+| 排除条件 | 单个 IP / IP CIDR / IP Range / 完整 MAC / MAC 前缀，覆盖存量清理与后续采集 |
+| 规则语义 | 同一规则内 IP 与 MAC 为 AND；多条启用规则之间为 OR；至少提供一种条件 |
+| 入库前过滤 | 命中新条目在 `process_arp_entries` 写库前丢弃，不参与合规计算、自动封锁/解封、通知与统计 |
+| 存量清理 | 创建/启用规则时立即评估：可清除记录删除；已封锁或黑名单仍有效的记录保留并置 `excluded_by_rule=true` |
+| 统计口径 | `get_stats` 的 `total`、合规状态分布、`unblocked` 过滤 `excluded_by_rule=true`；`blocked` 仍按有效黑名单 IP 统计 |
+| 标记回收 | 规则停用、删除或条件收窄后自动清除不再命中的标记，终端重新计入统计 |
+| 合规守卫 | 合规重算、自动封锁、自动解封跳过命中排除规则的终端 |
+| API | 新增 `/api/v1/terminal-exclusions` 7 个端点（列表/预览/创建/详情/更新/删除/启停），权限 `compliance:read` / `compliance:write`，变更写审计 |
+| 前端 | 新增「终端排除规则」页面（三语），支持影响预览与启停 |
+| 数据源同步 | `SyncResult.entries_excluded` 返回本轮排除条目数 |
+
+#### 数据库迁移
+
+| 迁移 | 内容 |
+|------|------|
+| `046_terminal_exclusion` | 新建 `terminal_exclusions` 表（IP/MAC 条件、启用状态、创建人、时间戳） |
+| `047_terminal_excluded_flag` | `terminals` 新增 `excluded_by_rule BOOLEAN NOT NULL DEFAULT false` 与索引 `ix_terminals_excluded_by_rule` |
+
+#### 升级步骤（推荐：一键升级）
+
+    git checkout main
+    git pull origin main
+    ./manage.sh upgrade
+
+本地开发环境：
+
+    ./manage.sh update
+    docker exec tam_backend python -m alembic upgrade head
+
+#### 升级注意事项
+
+- 本次包含 2 个数据库迁移，升级时自动执行；无破坏性 API 变更，未配置排除规则时行为与 v3.26.3 完全一致。
+- 规则创建/启用会立即删除可清除的存量终端，请先用「预览影响」确认命中范围。
+- 已封锁或黑名单仍有效的终端不会被删除，仅打标并从统计口径排除；防火墙封堵状态保持不变。
+- `blocked` 统计仍以有效黑名单 IP 为准，保留的已封锁排除终端仍会计入 `blocked`，这是预期行为。
+
+#### 回滚说明
+
+    ./manage.sh upgrade v3.26.3
+
+如需回退标记列（会丢失 `excluded_by_rule` 标记，终端数据保留）：
+
+    docker exec tam_backend python -m alembic downgrade 046_terminal_exclusion
+
+`terminal_exclusions` 表可在应用回滚后按需保留，不影响旧版本运行。
+
+#### 验证结果
+
+- 后端全量测试：1756 passed（新增排除服务单元测试 38 个、集成测试 4 个）
+- 前端：`tsc` / ESLint / `vite build` 通过
+- 迁移：`alembic heads` = `047_terminal_excluded_flag`，容器内 `current` 已到 head，PostgreSQL 列与索引校验通过
+- 本地重建与健康检查：`./manage.sh update`、`./manage.sh health` 全部通过
+
+#### 文件变更清单
+
+    backend/alembic/versions/046_terminal_exclusion.py、047_terminal_excluded_flag.py
+    backend/app/models/{terminal.py, terminal_exclusion.py, __init__.py}
+    backend/app/schemas/{terminal_exclusion.py, data_source.py}
+    backend/app/services/{terminal_exclusion_service.py, arp_collector_service.py, compliance_service.py, terminal_service.py}
+    backend/app/api/v1/{api.py, endpoints/terminal_exclusions.py}
+    backend/tests/{test_terminal_exclusion_service.py, test_terminal_exclusion_integration.py, test_arp_collector_service.py, test_compliance_service.py, test_device_grouping.py}
+    frontend/src/{App.tsx, components/Sidebar.tsx, lib/constants.ts, i18n/locales/{zh,en,ja}.ts, api/terminalExclusions.ts, pages/TerminalExclusions.tsx}
 
 ## [v3.26.3] - 2026-11-05
 

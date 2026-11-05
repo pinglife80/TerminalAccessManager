@@ -1,6 +1,6 @@
 # 更新日志
 
-> 文档版本：v3.26.3  更新日期：2026-11-05
+> 文档版本：v3.27.0  更新日期：2026-11-05
 
 本文件记录 TerminalAccessManager 的所有重要变更。
 
@@ -8,6 +8,37 @@
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ***
+
+## [3.27.0] - 2026-11-05
+
+### 新增
+
+- **终端排除规则（入库前过滤）**：支持按单个 IP、IP CIDR、IP Range、完整 MAC、MAC 前缀排除无需合规检查的终端。命中规则的新条目在 ARP 采集写入 `terminals` 之前直接丢弃，不参与合规计算、自动封锁/解封、通知与统计；规则内 IP 与 MAC 条件为 AND，多规则为 OR
+  - 存量处理：创建/启用规则时立即评估存量终端，普通记录删除；已封锁或黑名单仍有效的记录保留并置 `excluded_by_rule=true`，避免破坏防火墙真实封堵状态
+  - 新增管理页面「终端排除规则」：规则列表、创建/编辑/删除、启用/停用、影响预览（命中/可删除/保留/样本）
+  - 新增 7 个 API 端点（`/api/v1/terminal-exclusions`），查询/预览需 `compliance:read`，变更需 `compliance:write`，变更操作写入审计日志（资源类型 `terminal_exclusion`）
+  - 采集汇总日志新增排除统计：新条目丢弃数与保留行数量（`excluded_retained`），并修正此前 "statistics are unaffected" 的不准确文案
+  - 关联文件：`backend/app/models/terminal_exclusion.py`、`backend/app/services/terminal_exclusion_service.py`、`backend/app/services/arp_collector_service.py`、`backend/app/services/compliance_service.py`、`backend/app/api/v1/endpoints/terminal_exclusions.py`、`frontend/src/pages/TerminalExclusions.tsx`
+
+- **数据源同步结果新增 `entries_excluded`**：返回本轮被排除规则丢弃/保留的条目数，便于核对采集结果
+  - 关联文件：`backend/app/schemas/data_source.py`
+
+### 修复
+
+- **排除规则保留行不再虚高终端统计**：`terminals` 新增 `excluded_by_rule` 标记，`get_stats` 的 `total`、合规状态分布与 `unblocked` 统计过滤该标记行；`blocked` 仍按有效黑名单 IP 统计以反映防火墙真实状态
+- **排除标记自动回收**：规则停用、删除或条件收窄后，`clear_stale_exclusion_flags()` 清除不再命中的标记，终端重新计入统计
+  - 关联文件：`backend/app/models/terminal.py`、`backend/app/services/terminal_service.py`、`backend/app/services/terminal_exclusion_service.py`
+
+### 数据库
+
+- 新增迁移 `046_terminal_exclusion`：创建 `terminal_exclusions` 表
+- 新增迁移 `047_terminal_excluded_flag`：`terminals` 增加 `excluded_by_rule BOOLEAN NOT NULL DEFAULT false` 与索引 `ix_terminals_excluded_by_rule`
+
+### 测试
+
+- 新增终端排除服务单元测试 38 个：IP 段/CIDR/MAC 前缀边界、规则内 AND/OR 组合、保留已封锁与有效黑名单终端、标记回收
+- 新增集成测试 4 个：排除规则与白名单共存采集链路、合规重算跳过、保留行打标且不计入统计、规则停用后统计恢复
+- 同步更新 ARP 采集、合规服务、设备归组用例；后端全量 1756 用例通过，前端 `tsc` / ESLint / `vite build` 通过
 
 ## [3.26.3] - 2026-11-05
 
