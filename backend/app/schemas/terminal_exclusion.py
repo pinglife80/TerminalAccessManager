@@ -3,7 +3,6 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-
 IpPatternType = Literal["single_ip", "cidr", "ip_range"]
 MacPatternType = Literal["mac", "mac_prefix"]
 
@@ -26,6 +25,17 @@ class TerminalExclusionCreate(BaseModel):
         description="MAC condition value: AA:BB:CC:DD:EE:FF or AA:BB:CC",
     )
     comments: str = Field(..., min_length=1, description="Why these terminals are excluded")
+    unblock_blocked: bool = Field(
+        default=False,
+        description="Unblock matched terminals that are currently blocked before deleting them",
+    )
+
+
+class TerminalExclusionToggle(BaseModel):
+    unblock_blocked: bool = Field(
+        default=False,
+        description="Unblock matched terminals that are currently blocked before deleting them",
+    )
 
 
 class TerminalExclusionUpdate(BaseModel):
@@ -85,12 +95,22 @@ class ExclusionImpact(BaseModel):
     matched: int = 0
     purgeable: int = 0
     retained: int = 0
+    blocked: int = 0
     samples: list[ExclusionSample] = Field(default_factory=list)
+
+
+class ExclusionUnblockResult(BaseModel):
+    requested: bool = False
+    unblocked: int = 0
+    failed: int = 0
+    skipped: int = 0
+    errors: list[str] = Field(default_factory=list)
 
 
 class TerminalExclusionWithImpact(BaseModel):
     rule: TerminalExclusionResponse
     impact: ExclusionImpact
+    unblock: ExclusionUnblockResult | None = None
 
 
 class TerminalExclusionListResponse(BaseModel):

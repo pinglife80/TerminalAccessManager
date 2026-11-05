@@ -27,6 +27,7 @@ from app.models.system_config import SystemConfig
 from app.models.terminal import Terminal
 from app.models.terminal_exclusion import TerminalExclusion
 from app.models.whitelist import Whitelist
+from app.schemas.terminal_exclusion import TerminalExclusionCreate
 from app.services.arp_collector_service import ArpCollectorService
 from app.services.compliance_service import ComplianceService
 from app.services.terminal_exclusion_service import TerminalExclusionService
@@ -117,7 +118,8 @@ async def test_collection_flow_with_exclusion_and_whitelist(session):
     ]
 
     patches = external_patches()
-    stack = [p.start() for p in patches]
+    for p in patches:
+        p.start()
     try:
         result = await ArpCollectorService(session).process_arp_entries(entries, "lab")
     finally:
@@ -289,6 +291,57 @@ async def test_retained_excluded_terminal_is_flagged_and_filtered_from_stats(ses
 
 
 @pytest.mark.asyncio
+async def test_create_rule_with_unblock_removes_blocked_terminal_from_stats(session):
+    """勾选解封后：防火墙解封、黑名单置已解封、终端行删除、统计归零。"""
+    db = session
+    db.add(DataSource(name="lab-switch", type="arp_api", tag="lab", config={}, enabled=True))
+    db.add(Terminal(
+        ip_address="10.70.0.9", mac_address="00-11-22-33-44-09",
+        mac_address_normalized="001122334409", source_tag="lab", source="arp",
+        compliance_status="non_compliant", status="blocked",
+        updated_at=datetime.now(UTC),
+    ))
+    db.add(Blacklist(
+        ip_address="10.70.0.9", mac_address="00-11-22-33-44-09",
+        mac_address_normalized="001122334409", blocked_by="tester",
+        reason="pre-existing block", firewall_tag="fw-lab",
+        expires_at=datetime.now(UTC) + timedelta(days=1),
+    ))
+    await db.commit()
+
+    with (
+        patch.object(
+            ComplianceService, "_unblock_on_firewall", AsyncMock(return_value=True)
+        ),
+        patch("app.services.event_emitter.emit_terminal_unblocked", AsyncMock()),
+    ):
+        _, impact, unblock = await TerminalExclusionService(db).create_rule(
+            TerminalExclusionCreate(
+                ip_type="cidr",
+                ip_value="10.70.0.0/24",
+                comments="excluded range",
+                unblock_blocked=True,
+            ),
+            "operator",
+        )
+
+    assert impact.matched == 1
+    assert impact.blocked == 1
+    assert impact.retained == 0
+    assert unblock is not None
+    assert (unblock.unblocked, unblock.failed, unblock.skipped) == (1, 0, 0)
+
+    assert (await db.execute(select(Terminal))).scalars().all() == []
+    entry = (await db.execute(select(Blacklist))).scalars().one()
+    assert entry.auto_unblocked is True
+    assert entry.unblock_reason == "excluded_by_rule"
+
+    stats = await TerminalService(db).get_stats()
+    assert stats["total"] == 0
+    assert stats["blocked"] == 0
+
+
+@pytest.mark.asyncio
 async def test_disabling_rule_clears_flag_and_restores_stats(session):
     """规则停用后保留行标记被回收、统计恢复；重新启用后再次打标。"""
     db = session
@@ -320,9 +373,10 @@ async def test_disabling_rule_clears_flag_and_restores_stats(session):
     assert (await TerminalService(db).get_stats())["total"] == 1
 
     service = TerminalExclusionService(db)
-    toggled, impact = await service.toggle_rule(rule.id)
+    toggled, impact, unblock = await service.toggle_rule(rule.id)
     assert toggled.is_active is False
     assert impact is None
+    assert unblock is None
 
     rows = (await db.execute(select(Terminal))).scalars().all()
     by_ip = {row.ip_address: row for row in rows}
@@ -333,11 +387,12 @@ async def test_disabling_rule_clears_flag_and_restores_stats(session):
     assert stats["non_compliant"] == 1
 
     # 重新启用：保留行再次被命中并打标
-    toggled, impact = await service.toggle_rule(rule.id)
+    toggled, impact, unblock = await service.toggle_rule(rule.id)
     assert toggled.is_active is True
     assert impact is not None
     assert impact.matched == 1
     assert impact.retained == 1
+    assert unblock is None
 
     rows = (await db.execute(select(Terminal))).scalars().all()
     by_ip = {row.ip_address: row for row in rows}
