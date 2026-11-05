@@ -1,6 +1,6 @@
 # TerminalAccessManager API 文档
 
-> 文档版本：v3.27.0  更新日期：2026-11-05
+> 文档版本：v3.28.0  更新日期：2026-11-05
 
 > 基于 MAC 地址和 IP 地址的网络终端准入管理平台
 
@@ -4166,7 +4166,9 @@ POST /api/v1/backup/test
 
 v3.27.0 新增。命中排除规则的终端在**入库前**被丢弃，不写入 `terminals` 表，因此不参与合规计算、自动封锁/解封与统计；因已封锁或有效黑名单而保留下来的记录会被标记 `excluded_by_rule=true`，并从仪表盘统计中排除（防火墙封锁状态保持不变）。
 
-**认证要求**：查询/预览需要 `compliance:read`；创建/更新/删除/启停需要 `compliance:write`。
+创建规则或停用后重新启用时，可通过可选参数 `unblock_blocked` 对命中的**已封锁终端**先行解封：解封成功（该终端所有相关防火墙均成功）后删除终端记录并退出统计；失败、部分成功或无法定位防火墙的终端保持封锁并打排除标记，规则仍正常创建/启用。
+
+**认证要求**：查询/预览需要 `compliance:read`；创建/更新/删除/启停需要 `compliance:write`；当请求携带 `unblock_blocked=true` 时还需额外的 `blacklist:write`（超管不受限），否则返回 `403`。
 
 **条件语义**
 
@@ -4233,6 +4235,7 @@ v3.27.0 新增。命中排除规则的终端在**入库前**被丢弃，不写�
   "matched": 3,
   "purgeable": 2,
   "retained": 1,
+  "blocked": 1,
   "samples": [
     {
       "ip_address": "10.70.0.9",
@@ -4249,11 +4252,12 @@ v3.27.0 新增。命中排除规则的终端在**入库前**被丢弃，不写�
 | matched | 命中规则的存量终端数 |
 | purgeable | 可删除的终端数 |
 | retained | 因已封锁或有效黑名单而保留的终端数 |
+| blocked | 其中处于 `blocked` 状态的终端数（`unblock_blocked` 的作用范围） |
 | samples | 最多 20 条样本，用于前端预览 |
 
 ### 18.3 POST /terminal-exclusions/
 
-创建规则并立即对存量终端执行清理。
+创建规则并立即对存量终端执行清理。可选 `unblock_blocked` 对命中的已封锁终端先解封再删除。
 
 **请求体**
 
@@ -4263,17 +4267,31 @@ v3.27.0 新增。命中排除规则的终端在**入库前**被丢弃，不写�
   "ip_value": "10.70.0.0/24",
   "mac_type": "mac_prefix",
   "mac_value": "0A:0B:0C",
-  "comments": "测试网段终端无需合规检查"
+  "comments": "测试网段终端无需合规检查",
+  "unblock_blocked": true
 }
 ```
 
-**成功响应** `200`（返回结构与 18.5 相同）
+| 字段 | 必填 | 默认 | 说明 |
+|------|------|------|------|
+| unblock_blocked | 否 | `false` | 是否对命中且 `status=blocked` 的终端执行解封流程 |
+
+**解封语义**
+
+- 仅作用于 `status=blocked` 的命中终端；未勾选时行为与 v3.27.0 完全一致。
+- 依次调用终端黑名单记录关联的防火墙解封接口；仅当**该终端所有相关防火墙均成功**时，才视为解封成功。
+- 解封成功后：删除 `terminals` 记录并退出全部统计；对应黑名单记录置 `auto_unblocked=true`、`unblock_reason="excluded_by_rule"`。
+- 解封失败/部分成功/无防火墙绑定：终端保留并打 `excluded_by_rule` 标记；部分成功的黑名单条目仍按实际结果标记（原因 `excluded_by_rule（部分成功）`）。
+- 解封审计归属当前操作人；每个成功终端额外触发一次终端解封事件。
+
+**成功响应** `200`（返回结构与 18.5 相同，`unblock` 为解封结果）
 
 **错误响应**
 
 | 状态码 | 说明 |
 |--------|------|
 | 400 | 条件缺失、格式非法或 IP 段起止值不合法 |
+| 403 | 请求 `unblock_blocked=true` 但缺少 `blacklist:write` 权限 |
 
 ### 18.4 GET /terminal-exclusions/{rule_id}
 
@@ -4316,10 +4334,28 @@ v3.27.0 新增。命中排除规则的终端在**入库前**被丢弃，不写�
     "matched": 3,
     "purgeable": 2,
     "retained": 1,
+    "blocked": 1,
     "samples": []
+  },
+  "unblock": {
+    "requested": true,
+    "unblocked": 1,
+    "failed": 0,
+    "skipped": 0,
+    "errors": []
   }
 }
 ```
+
+| 字段 | 说明 |
+|------|------|
+| impact | 规则评估结果；`retained` 已扣除成功解封并删除的终端 |
+| unblock | 解封结果，未请求时为 `null` |
+| unblock.requested | 是否请求了解封 |
+| unblock.unblocked | 解封成功并已删除的终端数 |
+| unblock.failed | 解封失败的终端数（仍在库中保留） |
+| unblock.skipped | 无有效黑名单记录或无法定位防火墙的终端数（仍在库中保留） |
+| unblock.errors | 失败/跳过原因摘要（最多 20 条） |
 
 ### 18.6 DELETE /terminal-exclusions/{rule_id}
 
@@ -4338,10 +4374,18 @@ v3.27.0 新增。命中排除规则的终端在**入库前**被丢弃，不写�
 
 启用/停用规则。启用时立即清理可删除的存量终端并为保留行打标；停用时仅回收标记，不删除终端。
 
+请求体可选；仅在**启用**方向且携带 `unblock_blocked=true` 时执行解封，并要求 `blacklist:write` 权限。
+
+```json
+{
+  "unblock_blocked": false
+}
+```
+
 **成功响应** `200`，返回结构同 18.5。
 
 ---
 
 **审计说明**
 
-所有变更操作写入审计日志（资源类型 `terminal_exclusion`），动作分别为 `create_exclusion` / `update_exclusion` / `delete_exclusion` / `toggle_exclusion`，详情包含命中数、删除数与保留数。
+所有变更操作写入审计日志（资源类型 `terminal_exclusion`），动作分别为 `create_exclusion` / `update_exclusion` / `delete_exclusion` / `toggle_exclusion`，详情包含命中数、删除数、保留数；请求解封时额外记录 `unblock_requested` / `unblocked` / `unblock_failed` / `unblock_skipped` / `unblock_errors`。
