@@ -20,6 +20,7 @@ export const NAV_ITEMS: NavItem[] = [
   { path: '/audit-logs', label: 'Audit Logs', iconName: 'FileText', adminOnly: false, requiredPermission: 'audit:read' },
   { path: '/data-sources', label: 'Data Sources', iconName: 'Database', adminOnly: true, requiredPermission: 'datasource:read' },
   { path: '/compliance-scopes', label: 'Compliance Scope', iconName: 'Filter', adminOnly: true, requiredPermission: 'compliance:read' },
+  { path: '/terminal-exclusions', label: 'Terminal Exclusions', iconName: 'Ban', adminOnly: true, requiredPermission: 'compliance:read' },
   { 
     path: '/system-settings', 
     label: 'System Settings', 
@@ -77,6 +78,8 @@ export const API_ENDPOINTS = {
   COMPLIANCE_BASELINE_DELETE_PREVIEW: '/compliance-baselines/',
   COMPLIANCE_SCOPE: '/compliance-scope/',
   COMPLIANCE_SCOPE_TOGGLE: '/compliance-scope/',
+  TERMINAL_EXCLUSIONS: '/terminal-exclusions/',
+  TERMINAL_EXCLUSIONS_PREVIEW: '/terminal-exclusions/preview',
   SETTINGS: '/settings/',
   SETTINGS_BRANDING: '/settings/branding',
   ROLES: '/roles/',
