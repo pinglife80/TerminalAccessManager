@@ -1,6 +1,6 @@
 # TerminalAccessManager - 部署与运维手册
 
-> 文档版本：v3.10.4  更新日期：2026-08-10
+> 文档版本：v3.28.0  更新日期：2026-11-05
 
 ## 目录
 
@@ -796,12 +796,14 @@ ls -lh backups/
 
 | Job | 说明 |
 |-----|------|
-| lint-backend | ruff 检查后端代码质量 |
-| test-backend | pytest 运行后端测试 |
-| lint-frontend | eslint 检查前端代码质量 |
-| test-frontend | vitest 运行前端测试 |
-| build-backend | Docker 构建后端镜像 |
-| build-frontend | Docker 构建前端镜像 |
+| backend-lint | ruff 检查后端代码质量（固定版本 `ruff==0.15.17`） |
+| backend-test | pytest 运行后端测试（覆盖率门槛 20%） |
+| frontend-lint | eslint 检查前端代码质量（warning 基线 30） |
+| frontend-test | vitest 运行前端测试 |
+| backend-build | Docker 构建后端镜像（上下文 `./backend`） |
+| frontend-build | Docker 构建前端镜像（使用仓库根上下文与 `frontend/Dockerfile`，并注入 `VERSION`） |
+
+> lint 采用「固定工具版本」策略：后端固定 `ruff==0.15.17` 且要求**零告警**（历史存量已全部清理，不再保留基线豁免）；前端 warning 上限为 30（当前存量 29），后续清理后逐步收紧。
 
 ---
 
