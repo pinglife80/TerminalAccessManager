@@ -28,6 +28,17 @@ from tests.test_compliance_service import (
 # Fixtures
 # ---------------------------------------------------------------------------
 
+@pytest.fixture(autouse=True)
+def _stub_terminal_exclusion_rules():
+    """Stub exclusion rules to empty so scripted DB sequences stay aligned."""
+    from app.services.terminal_exclusion_service import TerminalExclusionService
+
+    with patch.object(
+        TerminalExclusionService, "load_active_rules", AsyncMock(return_value=[])
+    ):
+        yield
+
+
 @pytest.fixture
 def mock_db(mock_async_session):
     """ComplianceService backing session (mock)."""

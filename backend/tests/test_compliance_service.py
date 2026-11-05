@@ -245,6 +245,23 @@ def created_blacklists(mock_db):
 # Fixtures
 # ---------------------------------------------------------------------------
 
+@pytest.fixture(autouse=True)
+def _stub_terminal_exclusion_rules():
+    """Stub exclusion rules to empty for scripted-execute tests.
+
+    The compliance paths issue one extra query to load terminal exclusion
+    rules. Tests here script DB results positionally, so returning [] keeps
+    their sequences unchanged; exclusion-specific behaviour is covered by
+    dedicated tests that override this stub.
+    """
+    from app.services.terminal_exclusion_service import TerminalExclusionService
+
+    with patch.object(
+        TerminalExclusionService, "load_active_rules", AsyncMock(return_value=[])
+    ):
+        yield
+
+
 @pytest.fixture
 def mock_db(mock_async_session):
     """Mock AsyncSession with correct sync/async method split."""
@@ -5043,3 +5060,94 @@ class TestAutoUnblockEdges:
         assert terminal.status == "unblocked"
         assert terminal.compliance_status == "bypass"
         cooldown_mock.assert_not_called()
+
+
+# ===========================================================================
+# TestExclusionGuards
+# ===========================================================================
+
+class TestExclusionGuards:
+    """排除规则在合规链路上的防御纵深（正常情况下命中终端根本不入库）。"""
+
+    RULE = {
+        "ip_pattern": "10.9.9.0/24",
+        "ip_pattern_type": "cidr",
+        "mac_address": None,
+        "mac_pattern_type": None,
+    }
+
+    @staticmethod
+    def _patch_rules(rules):
+        from app.services.terminal_exclusion_service import TerminalExclusionService
+
+        return patch.object(
+            TerminalExclusionService, "load_active_rules", AsyncMock(return_value=rules)
+        )
+
+    @pytest.mark.asyncio
+    async def test_auto_block_skips_excluded_terminal(self, service, mock_db):
+        terminal = create_mock_terminal(
+            ip="10.9.9.9",
+            mac="AA:BB:CC:DD:EE:FF",
+            compliance_status="non_compliant",
+            status="unblocked",
+        )
+        mock_db.execute = scripted_execute([
+            make_result(all_rows=[]),              # active blacklist pairs
+            make_result(scalars_all=[terminal]),   # non-compliant terminals
+        ])
+
+        with self._patch_rules([self.RULE]), \
+             patch.object(service, "_is_device_grouping_enabled", return_value=False), \
+             patch.object(service, "_get_block_time", return_value="30d"):
+            result = await service.auto_block_non_compliant("lab")
+
+        assert result.total_non_compliant == 0
+        assert result.blocked == 0
+        mock_db.add.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_auto_unblock_skips_excluded_terminal(self, service, mock_db):
+        bl_entry = create_mock_blacklist(
+            ip="10.9.9.9", mac="AA:BB:CC:DD:EE:FF", mac_normalized="AABBCCDDEEFF"
+        )
+        mock_db.execute = scripted_execute([make_result(scalars_all=[bl_entry])])
+
+        with self._patch_rules([self.RULE]), \
+             patch.object(service, "_load_whitelist_cache", return_value=[]), \
+             patch.object(service, "_load_scope_cache", return_value=[]), \
+             patch.object(service, "_load_all_ipguard_cache", return_value={}), \
+             patch.object(service, "_unblock_on_firewall", return_value=True) as unblock_fw:
+            result = await service.auto_unblock_compliant()
+
+        assert result.unblocked == 0
+        assert result.skipped == 1
+        assert bl_entry.auto_unblocked is False
+        unblock_fw.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_recalculate_counts_excluded_skip(self, service, mock_db):
+        terminal = create_mock_terminal(
+            ip="10.9.9.9",
+            mac="AA:BB:CC:DD:EE:FF",
+            compliance_status="compliant",
+            status="unblocked",
+        )
+        mock_db.execute = scripted_execute([make_result(scalars_all=[terminal])])
+
+        with self._patch_rules([self.RULE]), \
+             patch.object(service, "_load_whitelist_cache", return_value=[]), \
+             patch.object(service, "_load_all_ipguard_cache", return_value={
+                 "lab": [{"ip_address": "10.0.0.99", "mac_address": "11-22-33-44-55-66"}]
+             }), \
+             patch.object(service, "_load_scope_cache", return_value=[]), \
+             patch.object(service, "_is_ipguard_cache_stale", return_value=False), \
+             patch.object(service, "_is_device_grouping_enabled", return_value=False):
+            result = await service.recalculate_all_compliance()
+
+        assert result["total"] == 1
+        assert result["excluded_skip_count"] == 1
+        assert result["unchanged"] == 0
+        assert result["compliant"] == 0
+        assert result["non_compliant"] == 0
+
