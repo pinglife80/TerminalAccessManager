@@ -1,12 +1,47 @@
 # 版本跟踪记录
 
-> 文档版本：v3.26.2 | 更新日期：2026-11-03
+> 文档版本：v3.26.3 | 更新日期：2026-11-05
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
 
 ---
+
+## [v3.26.3] - 2026-11-05
+
+### 设备归组连带效果的可识别与追溯增强（Patch 版本）
+
+#### 背景
+
+`device_grouping` 开启后，整机不合规会将同设备当前 ARP 可见的兄弟 IP 一并封锁。但连带条目的黑名单 `reason` 只写单机判定文案（如「IP 和 MAC 都不合规」），运维无法区分「自身不合规」与「因同设备其他网卡被连带」；解封原因也无法体现判定来自设备归组；`firewall_block` / `auto_block_terminal` / `auto_unblock_terminal` / `compliance_status_changed` 审计均无设备维度，事后难以追溯触发源。
+
+#### 主要变更
+
+| 变更项 | 说明 |
+|--------|------|
+| 封锁原因 | 连带条目 `reason` 追加「（设备归组连带：触发 {trigger_ip}，设备 {device_id}）」；防火墙/通知 `reason` 追加 `device_grouped=true, device_id=..., trigger_ip=...`；触发条目保持原判定文案 |
+| 解封原因 | 设备归组判定合规的解封，`unblock_reason` 追加「（设备归组判定：设备 {device_id} 合规）」；白名单解封保持「加入白名单」 |
+| 审计字段 | `firewall_block`：`device_id` / `device_grouped` / `device_grouped_expanded` / `expanded_trigger_ip` / `expanded_trigger_terminal_id`；`auto_block_terminal`：顶层 `device_expanded` 与 `terminals[]` 设备字段；`auto_unblock_terminal`：`terminals[].device_id`；`compliance_status_changed`：`device_id` / `device_grouped` |
+| 兼容 | 未归组终端或开关关闭时不写入新字段，审计结构与旧版一致；旧数据不回溯 |
+| 前端 | 审计详情新增 6 个字段的中/英/日标签，未映射字段已全部覆盖 |
+| 数据库 | 无迁移（`blacklist.reason` / `unblock_reason` 为 Text，无截断风险） |
+
+#### 升级步骤（推荐：一键升级）
+
+    git checkout main
+    git pull origin main
+    ./manage.sh upgrade
+
+#### 升级注意事项
+
+- 本次无数据库迁移、无配置项变更，向后兼容。
+- 仅新产生的封锁/解封记录与审计带设备归组标记；历史记录保持原样。
+- 开关关闭时行为与 v3.26.2 完全一致。
+
+#### 文件变更清单
+
+    backend/app/services/compliance_service.py、backend/tests/test_device_grouping.py、backend/tests/test_compliance_service.py、frontend/src/pages/AuditLogs.tsx、frontend/src/i18n/locales/{zh,en,ja}.ts
 
 ## [v3.26.2] - 2026-11-03
 

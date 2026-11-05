@@ -652,6 +652,12 @@ const ja = {
       compliance_status: 'コンプライアンス状態',
       old_block_state: '旧ブロック状態',
       new_block_state: '新ブロック状態',
+      device_id: 'デバイスID',
+      device_grouped: 'デバイスグルーピング',
+      device_grouped_expanded: 'デバイスグルーピング連動',
+      expanded_trigger_ip: '連動トリガーIP',
+      expanded_trigger_terminal_id: '連動トリガー端末ID',
+      device_expanded: '連動件数',
     },
   },
   dataSources: {

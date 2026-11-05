@@ -63,6 +63,11 @@ def create_mock_terminal(
     t.timestamp = None
     t.compliance_checked_at = None
     t.compliant_checked_at = None
+    # Device grouping columns (v3.25.0); default to "not grouped" so audit
+    # payloads stay JSON-serializable and match non-grouped deployments.
+    t.device_id = None
+    t.device_name = None
+    t.device_serial = None
     return t
 
 

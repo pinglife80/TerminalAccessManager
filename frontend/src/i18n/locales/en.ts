@@ -652,6 +652,12 @@ const en = {
       compliance_status: 'Compliance Status',
       old_block_state: 'Previous Block State',
       new_block_state: 'New Block State',
+      device_id: 'Device ID',
+      device_grouped: 'Device Grouped',
+      device_grouped_expanded: 'Device-Grouped Side Effect',
+      expanded_trigger_ip: 'Side-Effect Trigger IP',
+      expanded_trigger_terminal_id: 'Side-Effect Trigger Terminal ID',
+      device_expanded: 'Device-Grouped Side Effects',
     },
   },
   dataSources: {

@@ -652,6 +652,12 @@ const zh = {
       compliance_status: '合规状态',
       old_block_state: '原封禁状态',
       new_block_state: '新封禁状态',
+      device_id: '设备ID',
+      device_grouped: '设备归组',
+      device_grouped_expanded: '设备归组连带',
+      expanded_trigger_ip: '连带触发IP',
+      expanded_trigger_terminal_id: '连带触发终端ID',
+      device_expanded: '设备归组连带数量',
     },
   },
   dataSources: {
