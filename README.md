@@ -7,6 +7,7 @@
 - **终端合规状态**：`compliant` / `non_compliant` / `bypass` / `unknown`
 - **合规引擎**：白名单 → bypass，黑名单 → non_compliant，IPGuard 匹配 → compliant，否则 unknown
 - **封堵路由**：ARP 数据源 → 绑定关系 → 防火墙 Tag → Sangfor API 封堵/解封
+- **终端排除规则**：按单 IP / CIDR / IP 段 / MAC / MAC 前缀在入库前排除终端，命中者不参与合规计算与统计
 - **权限体系**：5 角色（superadmin / admin / operator / auditor / viewer）× 29 权限码，superadmin 系统保留
 
 ## 快速开始

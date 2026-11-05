@@ -1,6 +1,6 @@
 # TerminalAccessManager - 运维操作手册
 
-> 文档版本：v3.12.1  更新日期：2026-08-20
+> 文档版本：v3.27.0  更新日期：2026-11-05
 
 ## 目录
 
@@ -546,6 +546,46 @@ HAVING COUNT(*) > 1
 - v3.12.1升级执行035迁移后，历史孤儿记录会被自动清理，三个位置计数自动对齐
 - 如升级后仍有1-2条差异，手动触发一次防火墙对账即可自动修复
 - v3.12.1版本后新代码保证不会再产生新的不一致
+
+---
+
+### 2.11 终端排除规则相关排查（v3.27.0+）
+
+**症状 A：已排除的终端仍出现在终端管理或统计中**
+
+1. 确认规则启用：`GET /api/v1/terminal-exclusions/`
+2. 确认匹配语义：同一规则内 IP 与 MAC 为 AND，多规则为 OR；IP 段格式为 `192.168.1.10-20`
+3. 确认是否为保留行（已封锁或有效黑名单）：
+
+```sql
+SELECT id, ip_address, mac_address, status, excluded_by_rule
+FROM terminals WHERE excluded_by_rule = true ORDER BY id;
+```
+
+4. 若规则刚停用/删除，标记会在本次请求内回收，查看日志 `Terminal exclusion flags refreshed: cleared=...`
+
+**日志关键字**
+
+| 日志 | 含义 |
+|------|------|
+| `ARP exclusion hit` | 单条 ARP 命中排除规则（含规则描述、是否保留） |
+| `ARP exclusion summary` | 单个数据源每轮采集汇总（added/updated，保留行数量） |
+| `Terminal exclusion purge` | 规则创建/启用时的存量清理结果（matched/purged/retained） |
+| `Terminal exclusion flags refreshed` | 规则停用/删除/条件变更后的标记回收 |
+
+**SQL 核查**
+
+```sql
+-- 查看规则
+SELECT id, ip_pattern, ip_pattern_type, mac_address, mac_pattern_type, is_active
+FROM terminal_exclusions ORDER BY id;
+
+-- 按状态与标记观察统计口径
+SELECT compliance_status, status, excluded_by_rule, count(*)
+FROM terminals GROUP BY compliance_status, status, excluded_by_rule;
+```
+
+> 注意：`blocked` 统计按有效黑名单 IP 计算，因此保留的已封锁排除终端仍会计入 `blocked`，这是预期行为；`total`、合规状态分布与 `unblocked` 不含这些行。
 
 ---
 
