@@ -82,6 +82,7 @@ class SyncResult(BaseModel):
     entries_processed: int = 0
     entries_added: int = 0
     entries_updated: int = 0
+    entries_excluded: int = 0
     errors: list[str] = []
 
 

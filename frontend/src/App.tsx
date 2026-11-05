@@ -27,6 +27,7 @@ const AuthProviders = lazy(() => import('./pages/AuthProviders'));
 const Backup = lazy(() => import('./pages/Backup'));
 const Notifications = lazy(() => import('./pages/Notifications'));
 const ComplianceScope = lazy(() => import('./pages/ComplianceScope'));
+const TerminalExclusions = lazy(() => import('./pages/TerminalExclusions'));
 const SystemSettings = lazy(() => import('./pages/SystemSettings'));
 const GeneralSettings = lazy(() => import('./pages/GeneralSettings'));
 const EmailSettings = lazy(() => import('./pages/EmailSettings'));
@@ -40,6 +41,7 @@ export const pagePreloadMap: Record<string, () => Promise<unknown>> = {
   '/blacklist': () => import('./pages/Blacklist'),
   '/data-sources': () => import('./pages/DataSources'),
   '/audit-logs': () => import('./pages/AuditLogs'),
+  '/terminal-exclusions': () => import('./pages/TerminalExclusions'),
   '/profile': () => import('./pages/Profile'),
   '/users': () => import('./pages/Users'),
   '/roles': () => import('./pages/Roles'),
@@ -198,6 +200,7 @@ const App: React.FC = () => {
               <Route path="blacklist" element={<ProtectedRoute requiredPermission="blacklist:read"><Blacklist /></ProtectedRoute>} />
               <Route path="data-sources" element={<ProtectedRoute requiredPermission="datasource:read"><DataSources /></ProtectedRoute>} />
               <Route path="compliance-scopes" element={<ProtectedRoute requiredPermission="compliance:read"><ComplianceScope /></ProtectedRoute>} />
+              <Route path="terminal-exclusions" element={<ProtectedRoute requiredPermission="compliance:read"><TerminalExclusions /></ProtectedRoute>} />
               <Route path="audit-logs" element={<ProtectedRoute requiredPermission="audit:read"><AuditLogs /></ProtectedRoute>} />
               <Route path="system-settings" element={<ProtectedRoute requiredPermission="settings:read"><SystemSettings /></ProtectedRoute>} />
               <Route path="general-settings" element={<ProtectedRoute requiredPermission="settings:read"><GeneralSettings /></ProtectedRoute>} />

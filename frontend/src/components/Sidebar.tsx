@@ -21,6 +21,7 @@ import {
   Bell,
   Mail,
   X,
+  Ban,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useAuthStore } from '@/store/auth';
@@ -43,6 +44,7 @@ const iconMap: Record<string, React.ComponentType<{ className?: string }>> = {
   HardDrive,
   Bell,
   Mail,
+  Ban,
 };
 
 // Map NAV_ITEMS label to i18n key
@@ -53,6 +55,7 @@ const navLabelKeyMap: Record<string, string> = {
   'Blocked': 'nav.blacklist',
   'Audit Logs': 'nav.auditLogs',
   'Data Sources': 'nav.dataSources',
+  'Terminal Exclusions': 'nav.terminalExclusions',
   'System Settings': 'nav.systemSettings',
   'General': 'nav.general',
   'Auth Providers': 'nav.authProviders',

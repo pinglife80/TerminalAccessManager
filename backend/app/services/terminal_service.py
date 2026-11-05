@@ -105,6 +105,16 @@ def _enabled_arp_source_tag_condition():
     )
 
 
+def _dashboard_terminal_condition():
+    """Dashboard stats scope: enabled ARP terminals that are *not* excluded.
+
+    Rows kept only because they are blocked / actively blacklisted carry
+    ``excluded_by_rule=True``; they must not inflate total, compliance or
+    status counts.
+    """
+    return _enabled_arp_source_tag_condition() & Terminal.excluded_by_rule.is_(False)
+
+
 def _parse_date_range(start_date: str | None, end_date: str | None):
     """Parse date range strings into datetime objects for filtering"""
     conditions = []
@@ -320,14 +330,14 @@ class TerminalService:
             # 合规轴·终端数：Terminal 一行 = 一个 (IP, MAC) 终端。
             # 同 MAC 多 IP（如桥接虚拟机）计为多行，与终端管理列表一致。
             total_result = await self.db.execute(
-                select(func.count()).select_from(Terminal).where(_enabled_arp_source_tag_condition())
+                select(func.count()).select_from(Terminal).where(_dashboard_terminal_condition())
             )
             total = total_result.scalar() or 0
 
             # Count by compliance_status（合规轴·终端数，可加和）
             compliance_result = await self.db.execute(
                 select(Terminal.compliance_status, func.count())
-                .where(_enabled_arp_source_tag_condition())
+                .where(_dashboard_terminal_condition())
                 .group_by(Terminal.compliance_status)
             )
             compliance_counts = dict(compliance_result.all())
@@ -335,7 +345,7 @@ class TerminalService:
             # Count by status（防火墙封锁状态，blocked/unblocked）
             status_result = await self.db.execute(
                 select(Terminal.status, func.count())
-                .where(_enabled_arp_source_tag_condition())
+                .where(_dashboard_terminal_condition())
                 .group_by(Terminal.status)
             )
             status_counts = dict(status_result.all())
@@ -346,7 +356,8 @@ class TerminalService:
             # Blocked count（封锁轴·IP）: count distinct active blacklist IPs.
             # This aligns dashboard with blacklist page total and firewall actual state
             # (synced via reconciliation), including NULL-MAC reconciliation entries
-            # that have no corresponding terminal record.
+            # that have no corresponding terminal record. Intentionally NOT filtered
+            # by excluded_by_rule: the firewall really is blocking these IPs.
             _now = datetime.now(UTC)
             blocked_stmt = select(func.count(func.distinct(Blacklist.ip_address))).where(
                 (Blacklist.auto_unblocked == False) &

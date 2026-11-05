@@ -1,6 +1,6 @@
 # TerminalAccessManager API 文档
 
-> 文档版本：v3.10.0  更新日期：2026-08-06
+> 文档版本：v3.27.0  更新日期：2026-11-05
 
 > 基于 MAC 地址和 IP 地址的网络终端准入管理平台
 
@@ -1458,6 +1458,7 @@ curl -X POST https://<HOST_IP>:8443/api/v1/data-sources/1/test \
   - `arp_ssh`：通过 SSH（netmiko）收集 ARP 表，支持 Huawei/H3C/Cisco 自动设备类型检测
   - `arp_api`：通过 API 收集 ARP 表
   - `sangfor`：不适用。Sangfor 为推送型防火墙，无数据同步语义；前端已隐藏同步按钮，接口返回"Sync is not applicable"提示
+- 命中终端排除规则的条目在入库前丢弃，`entries_excluded` 返回本次被排除的条目数（新条目不入库，已封锁/有效黑名单的保留行会被标记 `excluded_by_rule`）
 
 **成功响应** `200`
 
@@ -1468,6 +1469,7 @@ curl -X POST https://<HOST_IP>:8443/api/v1/data-sources/1/test \
   "entries_processed": 120,
   "entries_added": 5,
   "entries_updated": 3,
+  "entries_excluded": 3,
   "errors": []
 }
 ```
@@ -4117,7 +4119,7 @@ POST /api/v1/backup/test
 
 ## 17. 权限码参考
 
-系统共定义35个权限码，按12个功能模块分组：
+系统共定义37个权限码，按13个功能模块分组：
 
 | 模块 | 权限码 | 名称 |
 |------|--------|------|
@@ -4152,6 +4154,194 @@ POST /api/v1/backup/test
 | role | `role:delete` | 删除角色 |
 | notification | `notification:read` | 查看通知 |
 | notification | `notification:write` | 管理通知 |
+| compliance | `compliance:read` | 查看合规范围 |
+| compliance | `compliance:write` | 管理合规范围 |
 | backup | `backup:write` | 管理备份 |
 | auth | `settings:write` | 管理认证提供者（使用 settings:write） |
 | system | `system:manage` | 系统管理（超管） |
+
+---
+
+## 18. 终端排除规则 /terminal-exclusions
+
+v3.27.0 新增。命中排除规则的终端在**入库前**被丢弃，不写入 `terminals` 表，因此不参与合规计算、自动封锁/解封与统计；因已封锁或有效黑名单而保留下来的记录会被标记 `excluded_by_rule=true`，并从仪表盘统计中排除（防火墙封锁状态保持不变）。
+
+**认证要求**：查询/预览需要 `compliance:read`；创建/更新/删除/启停需要 `compliance:write`。
+
+**条件语义**
+
+| 字段 | 取值 | 说明 |
+|------|------|------|
+| `ip_type` | `single_ip` / `cidr` / `ip_range` | IP 条件类型 |
+| `ip_value` | `10.0.0.5` / `10.0.0.0/24` / `10.0.0.10-20` | IP 条件值，IP 段格式为「前三段.起始-结束」 |
+| `mac_type` | `mac` / `mac_prefix` | MAC 条件类型 |
+| `mac_value` | `AA:BB:CC:DD:EE:FF` / `AA:BB:CC` | MAC 条件值 |
+
+- 同一规则内 IP 与 MAC 条件同时存在时为 **AND**；
+- 多条启用规则之间为 **OR**；
+- 至少需要提供 IP 或 MAC 条件之一。
+
+### 18.1 GET /terminal-exclusions/
+
+列出排除规则，可按启用状态过滤。
+
+| 参数 | 位置 | 类型 | 必填 | 说明 |
+|------|------|------|------|------|
+| is_active | Query | bool | 否 | 仅返回启用/停用的规则 |
+
+**成功响应** `200`
+
+```json
+{
+  "items": [
+    {
+      "id": 1,
+      "ip_type": "cidr",
+      "ip_value": "10.70.0.0/24",
+      "mac_type": null,
+      "mac_value": null,
+      "comments": "测试网段终端无需合规检查",
+      "is_active": true,
+      "created_by": "admin",
+      "created_at": "2026-11-05T09:00:00+08:00",
+      "updated_at": null
+    }
+  ],
+  "total": 1
+}
+```
+
+### 18.2 POST /terminal-exclusions/preview
+
+预览规则会影响的存量终端（不落库）。
+
+**请求体**
+
+```json
+{
+  "ip_type": "cidr",
+  "ip_value": "10.70.0.0/24",
+  "mac_type": null,
+  "mac_value": null
+}
+```
+
+**成功响应** `200`
+
+```json
+{
+  "matched": 3,
+  "purgeable": 2,
+  "retained": 1,
+  "samples": [
+    {
+      "ip_address": "10.70.0.9",
+      "mac_address": "00:11:22:33:44:09",
+      "status": "blocked",
+      "reason": "blocked"
+    }
+  ]
+}
+```
+
+| 字段 | 说明 |
+|------|------|
+| matched | 命中规则的存量终端数 |
+| purgeable | 可删除的终端数 |
+| retained | 因已封锁或有效黑名单而保留的终端数 |
+| samples | 最多 20 条样本，用于前端预览 |
+
+### 18.3 POST /terminal-exclusions/
+
+创建规则并立即对存量终端执行清理。
+
+**请求体**
+
+```json
+{
+  "ip_type": "cidr",
+  "ip_value": "10.70.0.0/24",
+  "mac_type": "mac_prefix",
+  "mac_value": "0A:0B:0C",
+  "comments": "测试网段终端无需合规检查"
+}
+```
+
+**成功响应** `200`（返回结构与 18.5 相同）
+
+**错误响应**
+
+| 状态码 | 说明 |
+|--------|------|
+| 400 | 条件缺失、格式非法或 IP 段起止值不合法 |
+
+### 18.4 GET /terminal-exclusions/{rule_id}
+
+获取单条规则，不存在返回 `404`。
+
+### 18.5 PUT /terminal-exclusions/{rule_id}
+
+更新规则或启用状态。条件变化时会重新评估存量终端并回收不再命中的 `excluded_by_rule` 标记。
+
+**请求体**
+
+```json
+{
+  "ip_type": "cidr",
+  "ip_value": "10.70.0.0/24",
+  "mac_type": null,
+  "mac_value": null,
+  "comments": "测试网段终端无需合规检查",
+  "is_active": true
+}
+```
+
+**成功响应** `200`
+
+```json
+{
+  "rule": {
+    "id": 1,
+    "ip_type": "cidr",
+    "ip_value": "10.70.0.0/24",
+    "mac_type": null,
+    "mac_value": null,
+    "comments": "测试网段终端无需合规检查",
+    "is_active": true,
+    "created_by": "admin",
+    "created_at": "2026-11-05T09:00:00+08:00",
+    "updated_at": "2026-11-05T10:00:00+08:00"
+  },
+  "impact": {
+    "matched": 3,
+    "purgeable": 2,
+    "retained": 1,
+    "samples": []
+  }
+}
+```
+
+### 18.6 DELETE /terminal-exclusions/{rule_id}
+
+删除规则并回收其标记；不会删除已保留的终端记录。
+
+**成功响应** `200`
+
+```json
+{
+  "success": true,
+  "message": "Deleted terminal exclusion rule 1"
+}
+```
+
+### 18.7 POST /terminal-exclusions/{rule_id}/toggle
+
+启用/停用规则。启用时立即清理可删除的存量终端并为保留行打标；停用时仅回收标记，不删除终端。
+
+**成功响应** `200`，返回结构同 18.5。
+
+---
+
+**审计说明**
+
+所有变更操作写入审计日志（资源类型 `terminal_exclusion`），动作分别为 `create_exclusion` / `update_exclusion` / `delete_exclusion` / `toggle_exclusion`，详情包含命中数、删除数与保留数。

@@ -1,6 +1,6 @@
 # TerminalAccessManager 系统架构设计文档
 
-> 文档版本：v3.11.0  更新日期：2026-08-20
+> 文档版本：v3.27.0  更新日期：2026-11-05
 
 ## 1. 系统概述
 
@@ -129,7 +129,25 @@ Nginx → RateLimitMiddleware → RequestLoggingMiddleware → RequestIDMiddlewa
 
 ## 3. 核心业务流程
 
-### 3.1 合规检查流程
+### 3.1 终端排除过滤（v3.27.0 新增）
+
+在 ARP 条目写入 `terminals` 之前，`ArpCollectorService.process_arp_entries` 会调用 `TerminalExclusionService.matches_any` 执行排除过滤：
+
+```
+ARP 条目解析 → 加载启用规则 → 命中排除规则?
+                                 ├─ 是 + 新条目 → 直接丢弃（不入库）
+                                 ├─ 是 + 已封锁/有效黑名单的存量记录 → 保留并置 excluded_by_rule=true
+                                 └─ 否 → 正常 upsert → 合规检查
+```
+
+- **入库前丢弃**：命中规则的新条目不会写入 `terminals`，因此不参与合规计算、自动封锁/解封、通知与统计；
+- **保留行打标**：为避免破坏防火墙真实封堵状态，已封锁或有效黑名单的存量记录不会被删除，而是标记 `excluded_by_rule=true`；
+- **标记回收**：规则停用、删除或条件变更后，`clear_stale_exclusion_flags()` 会清除不再命中的标记；
+- **统计口径**：`get_stats` 的 `total` / 合规状态 / `unblocked` 统计过滤该标记；`blocked` 仍按有效黑名单 IP 统计（反映防火墙真实状态）。
+
+排除规则的匹配语义为「规则内 IP 与 MAC 为 AND、多规则为 OR」，支持单 IP、CIDR、IP 段、完整 MAC 与 MAC 前缀。
+
+### 3.2 合规检查流程
 
 ```
 ARP 数据采集          合规判定              准入执行
@@ -168,7 +186,7 @@ ARP 数据采集          合规判定              准入执行
 
 **详细步骤：**
 
-1. **ARP 数据采集** -- 定时任务通过 SSH 或 API 从交换机获取 ARP 表，解析后写入 `Terminal` 表（`compliance_status=unknown`）；已有终端更新时重置 `compliance_status=unknown` 确保重新评估
+1. **ARP 数据采集** -- 定时任务通过 SSH 或 API 从交换机获取 ARP 表，解析后先经终端排除规则过滤（命中新条目丢弃，已封锁/有效黑名单的存量记录保留并打标），其余写入 `Terminal` 表（`compliance_status=unknown`）；已有终端更新时重置 `compliance_status=unknown` 确保重新评估
 2. **白名单匹配** -- IP 精确匹配 / CIDR 匹配 / IP 范围匹配 + MAC 精确匹配 → `bypass`，记录 `wl_match_type`（`mac` / `ip` / `both`）。白名单终端跳过后续合规计算
 3. **Scope 条件检查（v3.11.0 新增）** -- 非白名单终端检查是否命中 ComplianceScope 条件：
    - 条件类型支持：`ip_cidr`（IP 网段，最小 /24）、`ip_range`（IP 范围）、`mac_prefix`（MAC 前缀 3-5 段）
@@ -220,7 +238,7 @@ Status 描述的是终端在网络层的实际封堵情况，Compliance 描述�
 
 黑名单管理页面定位为审计视图，仅提供黑名单记录的查看与搜索功能，移除了手动添加黑名单功能。封堵操作统一从终端管理页面发起，确保操作入口唯一、审计链路完整。
 
-### 3.2 数据源路由机制
+### 3.3 数据源路由机制
 
 系统通过 `DataSource` + `DataSourceBinding` 实现多数据源灵活路由：
 
@@ -256,7 +274,7 @@ Status 描述的是终端在网络层的实际封堵情况，Compliance 描述�
 4. 实例化 `SangforService` 调用封禁/解封 API
 5. 每个防火墙创建独立的 `Blacklist` 记录，携带 `firewall_tag` 字段
 
-### 3.3 认证与授权流程
+### 3.4 认证与授权流程
 
 ```
 ┌────────┐    GET /auth/captcha     ┌──────────────┐

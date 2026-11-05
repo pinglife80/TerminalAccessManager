@@ -20,6 +20,7 @@ import pytest
 
 from app.models.data_source import DataSource
 from app.models.terminal import Terminal, TerminalStatus
+from app.models.terminal_exclusion import TerminalExclusion
 from app.schemas.data_source import ComplianceCheckResult, SyncResult
 from app.services.arp_collector_service import ArpCollectorService
 
@@ -66,6 +67,17 @@ def make_terminal(ip="10.0.0.1", mac="AA-BB-CC-DD-EE-FF", mac_norm="AABBCCDDEEFF
     return t
 
 
+def make_exclusion_rule(ip_pattern=None, ip_pattern_type=None,
+                        mac_address=None, mac_pattern_type=None):
+    """Create a mock TerminalExclusion with the attributes the service reads."""
+    rule = MagicMock(spec=TerminalExclusion)
+    rule.ip_pattern = ip_pattern
+    rule.ip_pattern_type = ip_pattern_type
+    rule.mac_address = mac_address
+    rule.mac_pattern_type = mac_pattern_type
+    return rule
+
+
 def make_exec_result(scalar=None, rows=None):
     """Build a mock SQLAlchemy Result supporting scalar_one_or_none / scalars().all()."""
     result = MagicMock()
@@ -75,13 +87,25 @@ def make_exec_result(scalar=None, rows=None):
     return result
 
 
-def set_exec_sequence(mock_db, results):
+def set_exec_sequence(mock_db, results, exclusion_rules=None, blacklist_ips=None,
+                      preload_rows=None):
     """Make mock_db.execute replay a fixed sequence of Result mocks.
 
-    The collector issues a MAC→IP pre-load query before the upsert loop; feed
-    an empty result for it first so callers keep their fixed per-query order.
+    The collector issues a terminal-exclusion query, an optional active
+    blacklist query, then a MAC→IP pre-load query before the upsert loop.
+    Feed empty results for those first so callers keep their fixed per-query
+    order.
     """
-    results = [make_exec_result(rows=[])] + list(results)
+    exclusion_rules = list(exclusion_rules or [])
+    prefix = [make_exec_result(rows=exclusion_rules)]
+    if exclusion_rules:
+        blacklist_result = make_exec_result()
+        blacklist_result.all.return_value = [
+            (ip,) for ip in (blacklist_ips or [])
+        ]
+        prefix.append(blacklist_result)
+    prefix.append(make_exec_result(rows=list(preload_rows or [])))
+    results = prefix + list(results)
     it = iter(results)
 
     async def _side_effect(stmt):
@@ -343,21 +367,15 @@ class TestProcessArpEntries:
         old = make_terminal(ip="10.0.0.1", mac_norm="AABBCCDDEEFF")
         entries = [{"ip_address": "10.0.0.2", "mac_address": "aa:bb:cc:dd:ee:ff"}]
 
-        results = [
-            make_exec_result(rows=[old]),   # preload: MAC presently at .1
-            make_exec_result(scalar=None),  # upsert (.2) -> new record
-            make_exec_result(rows=[]),      # batch check
-            make_exec_result(rows=[]),      # offline
-        ]
-        it = iter(results)
-
-        async def _side_effect(stmt):
-            try:
-                return next(it)
-            except StopIteration:
-                return make_exec_result()
-
-        mock_db.execute = AsyncMock(side_effect=_side_effect)
+        set_exec_sequence(
+            mock_db,
+            [
+                make_exec_result(scalar=None),  # upsert (.2) -> new record
+                make_exec_result(rows=[]),      # batch check
+                make_exec_result(rows=[]),      # offline
+            ],
+            preload_rows=[old],                 # MAC presently at .1
+        )
 
         with patch("app.services.event_emitter.emit_terminal_online", AsyncMock()) as online, \
              patch("app.services.config_service.get_config_value", AsyncMock(side_effect=[300, 3])), \
@@ -836,6 +854,102 @@ class TestProcessArpEntries:
         assert sibling.compliant_confirm_count == 0
         offline.assert_not_called()
         assert_logged_any(info_logger, "ARP online", "AA-BB-CC-DD-EE-FF", "cleared offline mark")
+
+    @pytest.mark.asyncio
+    async def test_exclusion_rule_skips_entry_without_persisting(self, service, mock_db):
+        # 命中排除规则的条目在入库前被丢弃：既不写 terminals，也不进入合规计算。
+        entries = [{"ip_address": "10.9.9.9", "mac_address": "aa:bb:cc:dd:ee:ff"}]
+        rule = make_exclusion_rule(ip_pattern="10.9.9.0/24", ip_pattern_type="cidr")
+
+        set_exec_sequence(
+            mock_db,
+            [
+                make_exec_result(rows=[]),  # compliance batch check
+                make_exec_result(rows=[]),  # offline detection
+            ],
+            exclusion_rules=[rule],
+        )
+
+        with patch("app.services.event_emitter.emit_terminal_online", AsyncMock()) as online, \
+             patch(
+                 "app.services.compliance_service.ComplianceService.batch_check_compliance",
+                 AsyncMock(),
+             ) as batch_check:
+            result = await service.process_arp_entries(entries, "lab")
+
+        assert result.entries_added == 0
+        assert result.entries_excluded == 1
+        assert "excluded 1" in result.message
+        mock_db.add.assert_not_called()
+        online.assert_not_called()
+        batch_check.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_exclusion_rule_purges_stale_unblocked_row(self, service, mock_db):
+        # 规则建立后残留的未封锁记录在采集时自愈删除。
+        entries = [{"ip_address": "10.9.9.9", "mac_address": "aa:bb:cc:dd:ee:ff"}]
+        rule = make_exclusion_rule(mac_address="AA-BB-CC-DD-EE-FF", mac_pattern_type="mac")
+        stale = make_terminal(ip="10.9.9.9", mac_norm="AABBCCDDEEFF")
+
+        set_exec_sequence(
+            mock_db,
+            [
+                make_exec_result(scalar=stale),  # stale lookup
+                make_exec_result(rows=[]),       # compliance batch check
+                make_exec_result(rows=[]),       # offline detection
+            ],
+            exclusion_rules=[rule],
+        )
+
+        result = await service.process_arp_entries(entries, "lab")
+
+        assert result.entries_excluded == 1
+        mock_db.delete.assert_awaited_once_with(stale)
+
+    @pytest.mark.asyncio
+    async def test_exclusion_rule_keeps_blocked_row(self, service, mock_db):
+        # 已封锁终端保留：防火墙状态与黑名单一致性优先。
+        entries = [{"ip_address": "10.9.9.9", "mac_address": "aa:bb:cc:dd:ee:ff"}]
+        rule = make_exclusion_rule(ip_pattern="10.9.9.9", ip_pattern_type="single_ip")
+        stale = make_terminal(ip="10.9.9.9", mac_norm="AABBCCDDEEFF", status="blocked")
+
+        set_exec_sequence(
+            mock_db,
+            [
+                make_exec_result(scalar=stale),
+                make_exec_result(rows=[]),
+                make_exec_result(rows=[]),
+            ],
+            exclusion_rules=[rule],
+        )
+
+        result = await service.process_arp_entries(entries, "lab")
+
+        assert result.entries_excluded == 1
+        mock_db.delete.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_exclusion_rule_keeps_actively_blacklisted_row(self, service, mock_db):
+        # 存在有效黑名单的终端即使命中规则也保留，避免黑名单统计口径失真。
+        entries = [{"ip_address": "10.9.9.9", "mac_address": "aa:bb:cc:dd:ee:ff"}]
+        rule = make_exclusion_rule(ip_pattern="10.9.9.0/24", ip_pattern_type="cidr")
+        stale = make_terminal(ip="10.9.9.9", mac_norm="AABBCCDDEEFF")
+
+        set_exec_sequence(
+            mock_db,
+            [
+                make_exec_result(scalar=stale),
+                make_exec_result(rows=[]),
+                make_exec_result(rows=[]),
+            ],
+            exclusion_rules=[rule],
+            blacklist_ips=["10.9.9.9"],
+        )
+
+        result = await service.process_arp_entries(entries, "lab")
+
+        assert result.entries_excluded == 1
+        mock_db.delete.assert_not_awaited()
 
 
 # ===========================================================================

@@ -1,6 +1,6 @@
 # TerminalAccessManager 后端实现文档
 
-> 文档版本：v3.10.0  更新日期：2026-08-06
+> 文档版本：v3.27.0  更新日期：2026-11-05
 
 ## 1. 概述
 
@@ -49,6 +49,7 @@ backend/
 │   │   ├── role.py                      # RBAC 模型（Role, Permission, UserRole, RolePermission）
 │   │   ├── notification.py              # 通知模型（NotificationChannel, NotificationLog）
 │   │   ├── auth_provider.py             # 认证提供者模型
+│   │   ├── terminal_exclusion.py        # 终端排除规则模型（v3.27.0+）
 │   ├── schemas/
 │   │   ├── __init__.py
 │   │   ├── auth.py                      # 认证相关 Schema
@@ -57,6 +58,7 @@ backend/
 │   │   ├── system_config.py             # 系统配置 Schema
 │   │   ├── data_source.py              # 数据源 + 合规检查 Schema
 │   │   ├── role.py                      # 角色 Schema
+│   │   ├── terminal_exclusion.py        # 终端排除规则 Schema（v3.27.0+）
 │   ├── services/
 │   │   ├── __init__.py
 │   │   ├── terminal_service.py          # 终端管理服务
@@ -64,7 +66,8 @@ backend/
 │   │   ├── arp_collector_service.py     # ARP 数据采集服务
 │   │   ├── config_service.py            # 系统配置服务
 │   │   ├── sangfor_service.py           # 深信服防火墙 API 服务
-│   │   └── data_source_service.py       # 数据源管理服务
+│   │   ├── data_source_service.py       # 数据源管理服务
+│   │   └── terminal_exclusion_service.py # 终端排除规则服务（v3.27.0+）
 │   └── api/
 │       └── v1/
 │           ├── __init__.py
@@ -81,6 +84,7 @@ backend/
 │               ├── data_sources.py      # 数据源端点
 │               ├── compliance_baselines.py  # 合规基准端点
 │               ├── roles.py            # 角色管理端点
+│               ├── terminal_exclusions.py  # 终端排除规则端点（v3.27.0+）
 ├── alembic/                             # 数据库迁移
 ├── tests/                               # 测试
 │   ├── conftest.py                      # 测试配置（mock_redis fixture）
@@ -1230,6 +1234,35 @@ API 响应中 IP 字段名兼容以下写法：
 
 修复升级规则（escalation rule）的中断判定逻辑：当事件满足升级条件（`check_escalation` 返回 True）时，将事件严重级别提升至 `escalate_severity` 并标记 `event.data["escalated"] = True`，后续投递时已升级的事件会绕过抑制规则（bypass_suppression），确保升级后的关键告警不受抑制窗口限制，必定送达。
 
+### 4.9 TerminalExclusionService (services/terminal_exclusion_service.py, v3.27.0+)
+
+终端排除规则的校验、匹配、CRUD、存量影响评估与标记回收。
+
+**核心方法：**
+
+| 方法 | 说明 |
+|------|------|
+| `validate_and_normalize(ip_type, ip_value, mac_type, mac_value)` | 校验并归一化条件；至少需要 IP 或 MAC 之一 |
+| `match_ip` / `match_mac` | 单条件匹配（单 IP / CIDR / IP 段 / 完整 MAC / MAC 前缀） |
+| `matches_rule` / `matches_any` / `first_match` | 规则内 AND、多规则 OR 的匹配与诊断 |
+| `load_active_rules()` | 加载启用规则（供采集与合规流程复用） |
+| `preview_rule(rule)` | 评估存量影响，不落库 |
+| `create_rule` / `update_rule` / `delete_rule` / `toggle_rule` | 规则 CRUD 与启停，变更后联动清理/回收 |
+| `purge_matching(rule)` | 删除可清除终端；保留行批量置 `excluded_by_rule=True` |
+| `clear_stale_exclusion_flags()` | 回收不再命中任何启用规则的标记 |
+
+**调用链：**
+
+```
+ArpCollectorService.process_arp_entries
+  → TerminalExclusionService.load_active_rules / matches_any
+  → 命中：丢弃新条目 / 保留行 excluded_by_rule=True
+  → ComplianceService（recalculate / auto_block / auto_unblock）跳过命中终端
+  → TerminalService.get_stats 过滤 excluded_by_rule=True
+```
+
+日志关键字：`ARP exclusion hit`、`ARP exclusion summary`、`Terminal exclusion purge`、`Terminal exclusion flags refreshed`。
+
 ---
 
 ## 5. 定时任务
@@ -1386,7 +1419,9 @@ python cli.py role permissions
 | test_blacklist.py | TestBlacklistModel | 2 | 黑名单模型字段 |
 | test_compliance_service.py | TestComplianceService | 22 | 合规服务状态转换、自动封锁/解封、清理、白名单匹配、合规重算 |
 | test_app.py | TestGlobalExceptionHandler | 4 | 全局异常处理器 |
-| **合计** | | **65+** | |
+| test_terminal_exclusion_service.py | TestTerminalExclusionService 等 | 72 | 规则校验、IP/CIDR/IP 段/MAC 前缀匹配、AND/OR 组合、清理与保留、标记回收 |
+| test_terminal_exclusion_integration.py | — | 4 | 排除规则 + 白名单采集链路、合规重算跳过、保留行打标与统计过滤、停用后统计恢复 |
+| **合计** | | **1756** | 后端全量（v3.27.0） |
 
 ### 7.3 运行测试
 
@@ -1464,6 +1499,20 @@ python -m pytest tests/test_security.py -v
 |------|-------------|------|
 | `PUT /settings/` | `update_config` | 更新系统配置 |
 | `POST /settings/upload` | `upload_branding` | 上传品牌资源（登录背景图/Favicon），正确记录请求来源 IP 地址 |
+
+### 8.6 终端排除规则端点 (terminal_exclusions.py, v3.27.0+)
+
+| 端点 | 权限 | 审计 action |
+|------|------|-------------|
+| `GET /terminal-exclusions/` | `compliance:read` | — |
+| `POST /terminal-exclusions/preview` | `compliance:read` | — |
+| `POST /terminal-exclusions/` | `compliance:write` | `create_exclusion` |
+| `GET /terminal-exclusions/{id}` | `compliance:read` | — |
+| `PUT /terminal-exclusions/{id}` | `compliance:write` | `update_exclusion` |
+| `DELETE /terminal-exclusions/{id}` | `compliance:write` | `delete_exclusion` |
+| `POST /terminal-exclusions/{id}/toggle` | `compliance:write` | `toggle_exclusion` |
+
+审计资源类型为 `terminal_exclusion`，详情记录命中数、删除数与保留数。
 
 ---
 

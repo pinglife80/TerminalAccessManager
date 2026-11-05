@@ -36,6 +36,7 @@ from app.schemas.data_source import (
 )
 from app.core.database import async_session_factory
 from app.services.config_service import get_config_value
+from app.services.terminal_exclusion_service import TerminalExclusionService
 
 # Redis cache key patterns and TTLs
 IPGUARD_CACHE_PREFIX = "ipguard:"
@@ -533,6 +534,33 @@ class ComplianceService:
             e for e in non_compliant_entries if not is_already_blacklisted(e)
         ]
 
+        # Terminals covered by an exclusion rule must never be blocked: they are
+        # intentionally outside the compliance scope (normally they are not
+        # persisted at all; this is defense-in-depth for leftovers).
+        exclusion_rules = await TerminalExclusionService(self.db).load_active_rules()
+        if exclusion_rules:
+            before_exclusion = len(non_compliant_entries)
+            entries_after_exclusion: list[Terminal] = []
+            for entry in non_compliant_entries:
+                matched_rule = TerminalExclusionService.first_match(
+                    exclusion_rules, entry.ip_address or "", entry.mac_address or ""
+                )
+                if matched_rule:
+                    logger.info(
+                        f"Auto-block skip excluded: {entry.ip_address}/{entry.mac_address} "
+                        f"matched [{TerminalExclusionService.describe_rule(matched_rule)}] "
+                        f"(source={arp_source_tag}); terminal is outside compliance scope, "
+                        f"firewall block not issued"
+                    )
+                else:
+                    entries_after_exclusion.append(entry)
+            non_compliant_entries = entries_after_exclusion
+            if len(non_compliant_entries) != before_exclusion:
+                logger.info(
+                    f"Auto-block skipped {before_exclusion - len(non_compliant_entries)} "
+                    "terminals matching exclusion rules"
+                )
+
         # Authoritative whitelist pre-check: whitelist is admin-configured truth;
         # compliance_status may be stale due to historical crashes, so never block a
         # whitelist-matched terminal here. Self-heal it to bypass and skip blocking.
@@ -937,6 +965,7 @@ class ComplianceService:
         scope_data = await self._load_scope_cache()
         ipguard_data = await self._load_all_ipguard_cache()
         ipguard_mac_prefixes = self._extract_ipguard_mac_prefixes(scope_data)
+        exclusion_rules = await TerminalExclusionService(self.db).load_active_rules()
 
         # Group entries by normalized MAC (IP may change due to DHCP,
         # MAC is the stable identifier for a network interface).
@@ -959,6 +988,20 @@ class ComplianceService:
         details = []
 
         for (group_mac_norm, group_ip), entries in entry_groups.items():
+
+            # Excluded terminals are outside the compliance scope: never
+            # auto-unblock them (firewall state stays untouched).
+            matched_rule = TerminalExclusionService.first_match(
+                exclusion_rules, group_ip or "", group_mac_norm or ""
+            ) if exclusion_rules else None
+            if matched_rule:
+                skipped += len(entries)
+                logger.info(
+                    f"Auto-unblock skipped for {group_ip}/{group_mac_norm}: "
+                    f"exclusion rule [{TerminalExclusionService.describe_rule(matched_rule)}] "
+                    f"matched, firewall state left untouched ({len(entries)} blacklist record(s))"
+                )
+                continue
 
             # Lookup current terminal record: by (MAC, IP) for MAC-bearing groups,
             # by IP for NULL-MAC groups.
@@ -2780,6 +2823,7 @@ class ComplianceService:
             ipguard_data = await self._load_all_ipguard_cache()
             scope_data = await self._load_scope_cache()
             ipguard_mac_prefixes = self._extract_ipguard_mac_prefixes(scope_data)
+            exclusion_rules = await TerminalExclusionService(self.db).load_active_rules()
 
             logger.debug(f"Loaded {len(whitelist_data)} whitelist entries")
             ipguard_total = sum(len(v) for v in ipguard_data.values())
@@ -2832,6 +2876,7 @@ class ComplianceService:
             corrected_count = 0
             stale_skip_count = 0
             offline_skip_count = 0
+            excluded_skip_count = 0
 
             for batch_start in range(0, len(terminals), BATCH_SIZE):
                 batch_terminals = terminals[batch_start:batch_start + BATCH_SIZE]
@@ -2852,6 +2897,21 @@ class ComplianceService:
                         logger.info(
                             f"Recalc skip offline: {terminal.ip_address}/{terminal.mac_address} "
                             f"(block_state=offline, status={terminal.status})"
+                        )
+                        continue
+
+                    # Excluded terminals are outside the compliance scope. They
+                    # normally never enter the DB; skip leftovers defensively.
+                    matched_exclusion = TerminalExclusionService.first_match(
+                        exclusion_rules, terminal.ip_address or "", terminal.mac_address or ""
+                    ) if exclusion_rules else None
+                    if matched_exclusion:
+                        excluded_skip_count += 1
+                        logger.info(
+                            f"Recalc skip excluded: {terminal.ip_address}/{terminal.mac_address} "
+                            f"matched [{TerminalExclusionService.describe_rule(matched_exclusion)}] "
+                            f"(source={terminal.source_tag}, status={terminal.status}); "
+                            "compliance status left unchanged"
                         )
                         continue
                     ip_addr = terminal.ip_address or ""
@@ -3155,6 +3215,7 @@ class ComplianceService:
                                f"{bypass_count} → bypass, {compliant_count} → compliant, "
                                f"{non_compliant_count} → non_compliant, {corrected_count} corrected, "
                                f"{stale_skip_count} stale-held, {offline_skip_count} offline-skipped, "
+                               f"{excluded_skip_count} excluded-skipped, "
                                f"{unblocked_count} auto-unblocked",
                     "total": len(terminals),
                     "bypass": bypass_count,
@@ -3163,6 +3224,7 @@ class ComplianceService:
                     "corrected": corrected_count,
                     "stale_skip_count": stale_skip_count,
                     "offline_skip_count": offline_skip_count,
+                    "excluded_skip_count": excluded_skip_count,
                     "ipguard_cache_stale": ipguard_cache_stale,
                     "unchanged": unchanged_count,
                     "unblocked": unblocked_count,
@@ -3177,6 +3239,7 @@ class ComplianceService:
                 f"{bypass_count} → bypass, {compliant_count} → compliant, "
                 f"{non_compliant_count} → non_compliant, {corrected_count} corrected, "
                 f"{stale_skip_count} stale-held, {offline_skip_count} offline-skipped, "
+                f"{excluded_skip_count} excluded-skipped, "
                 f"{unchanged_count} unchanged, {unblocked_count} auto-unblocked, "
                 f"cache_stale={ipguard_cache_stale}, duration={duration_ms:.2f}ms"
             )
@@ -3189,6 +3252,7 @@ class ComplianceService:
                 "corrected": corrected_count,
                 "stale_skip_count": stale_skip_count,
                 "offline_skip_count": offline_skip_count,
+                "excluded_skip_count": excluded_skip_count,
                 "ipguard_cache_stale": ipguard_cache_stale,
                 "unchanged": unchanged_count,
                 "unblocked": unblocked_count,

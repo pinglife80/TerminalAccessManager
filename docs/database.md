@@ -1,6 +1,6 @@
 # TerminalAccessManager 数据库设计文档
 
-> 文档版本：v3.21.3  更新日期：2026-10-13
+> 文档版本：v3.27.0  更新日期：2026-11-05
 
 ## 1. 概述
 
@@ -222,8 +222,11 @@ docker-compose.yml 中 PostgreSQL 的 `command` 参数列表如下：
 | non_compliant_confirm_count | INTEGER | | 0 | 连续不合规确认计数（降级用） |
 | compliant_confirm_count | INTEGER | | 0 | 连续合规确认计数（升级用，v3.12+） |
 | ip_changed_at | TIMESTAMP WITH TZ | | NULL | 最近IP变更时间戳（用于宽限期判断，v3.12+） |
+| excluded_by_rule | BOOLEAN | NOT NULL, INDEX | false | 命中终端排除规则但因已封锁/有效黑名单而保留（v3.27.0+），统计口径会排除该行 |
 
 > **v3.12 重要变更**：终端记录以 MAC 地址为唯一标识，一个 MAC 对应一条记录，IP 地址作为可变属性在 DHCP 换 IP 时更新，不再产生重复记录。双网卡终端每个 MAC 独立一条记录。
+>
+> **v3.27 统计口径**：`excluded_by_rule=true` 的记录仅因防火墙已封锁或黑名单仍有效而保留，不参与仪表盘 `total` / 合规状态 / `unblocked` 统计；`blocked` 统计仍以黑名单有效 IP 为准。规则停用或删除后标记会自动回收。
 
 **索引：**
 
@@ -232,6 +235,7 @@ docker-compose.yml 中 PostgreSQL 的 `command` 参数列表如下：
 | idx_mac_timestamp | COMPOSITE | (mac_address, timestamp) |
 | idx_ip_status | COMPOSITE | (ip_address, status) |
 | uq_terminal_mac | UNIQUE | mac_address_normalized | MAC 标准化列唯一索引，一个MAC一条记录 |
+| ix_terminals_excluded_by_rule | BTREE | excluded_by_rule（统计口径过滤排除行，v3.27.0+） |
 
 **约束：**
 
@@ -799,6 +803,38 @@ docker-compose.yml 中 PostgreSQL 的 `command` 参数列表如下：
 
 ---
 
+### 3.17 terminal_exclusions — 终端排除规则表（v3.27.0+）
+
+存储入库前的终端排除规则。命中启用规则的终端不会被写入 `terminals` 表；已封锁或有效黑名单的存量记录保留并打 `excluded_by_rule` 标记。
+
+| 字段 | 类型 | 约束 | 默认值 | 说明 |
+|---|---|---|---|---|
+| id | INTEGER | PK, INDEX | 自增 | 主键 |
+| ip_pattern | VARCHAR(100) | | NULL | IP 条件值（单 IP / CIDR / IP 段） |
+| ip_pattern_type | VARCHAR(20) | | NULL | `single_ip` / `cidr` / `ip_range` |
+| mac_address | VARCHAR(17) | | NULL | MAC 条件值（完整 MAC 或前缀，格式 AA:BB:CC:DD:EE:FF） |
+| mac_pattern_type | VARCHAR(20) | | NULL | `mac` / `mac_prefix` |
+| comments | TEXT | | NULL | 排除原因说明 |
+| is_active | BOOLEAN | NOT NULL, INDEX | true | 是否启用 |
+| created_by | VARCHAR(50) | NOT NULL | — | 创建人用户名 |
+| created_at | TIMESTAMP WITH TZ | | utcnow | 创建时间 |
+| updated_at | TIMESTAMP WITH TZ | | NULL | 更新时间 |
+
+**规则语义：**
+
+- 同一规则内 IP 与 MAC 条件同时存在时为 **AND**，多条启用规则之间为 **OR**；
+- `ip_range` 仅支持同一 /24 网段内的最后一段范围（如 `192.168.1.10-20`）；
+- `mac_prefix` 支持 3-5 段（6/8/10 个十六进制字符）；
+- 规则与 `terminals` 无外键关系，删除规则不会级联删除终端记录。
+
+**索引：**
+
+| 索引名 | 类型 | 字段 |
+|---|---|---|
+| ix_terminal_exclusions_is_active | BTREE | is_active |
+
+---
+
 ## 4. 数据字典汇总
 
 ### 4.1 TerminalStatus（终端状态）
@@ -1009,6 +1045,9 @@ docker-compose.yml 中 PostgreSQL 的 `command` 参数列表如下：
 | 033_terminal_mac_unique.py | 数据去重后删除旧联合约束，添加 mac_address_normalized 唯一约束 uq_terminal_mac（v3.12.0） |
 | 034_compliance_oscillation_fixes.py | terminals 表新增 compliant_confirm_count、ip_changed_at 字段（v3.12.0） |
 | 035_blacklist_fix_sync_issues.py | blacklist表修复同步问题：清理孤儿记录、去重、更新唯一索引为(ip, mac, firewall_tag)（v3.12.1） |
+| ... (036-045 版本迁移省略) |
+| 046_terminal_exclusion.py | 新增 terminal_exclusions 终端排除规则表（v3.27.0） |
+| 047_terminal_excluded_flag.py | terminals 表新增 excluded_by_rule 布尔列与索引，用于统计口径排除保留行（v3.27.0） |
 
 ### 035_blacklist_fix_sync_issues.py 详情
 
