@@ -1,6 +1,6 @@
 # 更新日志
 
-> 文档版本：v3.26.2  更新日期：2026-11-03
+> 文档版本：v3.26.3  更新日期：2026-11-05
 
 本文件记录 TerminalAccessManager 的所有重要变更。
 
@@ -8,6 +8,21 @@
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ***
+
+## [3.26.3] - 2026-11-05
+
+### 优化
+
+- **设备归组连带效果在封锁原因、解封原因与审计日志中可识别可追溯**：`device_grouping` 开启后整机不合规会连带封锁同设备其他可见 IP，此前连带条目与其他条目文案无差别、审计无设备维度；现：
+  - 连带封锁的黑名单 `reason` 追加「（设备归组连带：触发 {触发IP}，设备 {设备ID}）」，触发条目保持原判定文案；防火墙/通知 `reason` 追加 `device_grouped=true, device_id=..., trigger_ip=...`
+  - 设备归组判定合规的解封，`unblock_reason` 追加「（设备归组判定：设备 {设备ID} 合规）」；白名单解封保持「加入白名单」
+  - `firewall_block` 审计新增 `device_id`、`device_grouped`、`device_grouped_expanded`、`expanded_trigger_ip`、`expanded_trigger_terminal_id`；`auto_block_terminal` 汇总新增 `device_expanded` 计数与 `terminals[].device_id/device_grouped/expanded_trigger_ip`；`auto_unblock_terminal` 汇总 `terminals[]` 新增 `device_id`；`compliance_status_changed` 新增 `device_id`、`device_grouped`
+  - 归组关闭或未归组终端时字段不写入，审计结构与旧版完全一致；无数据库迁移
+  - 关联文件：`backend/app/services/compliance_service.py`、`frontend/src/pages/AuditLogs.tsx`、`frontend/src/i18n/locales/{zh,en,ja}.ts`
+
+### 测试
+
+- 更新设备归组扩展用例（断言返回触发源映射），新增连带封锁原因、`firewall_block` 审计字段、汇总审计计数、解封原因设备标记、非归组回归、白名单解封不带设备标记共 6 个用例；后端全量 1673 用例通过
 
 ## [3.26.2] - 2026-11-03
 
