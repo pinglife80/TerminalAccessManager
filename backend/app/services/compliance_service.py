@@ -516,8 +516,11 @@ class ComplianceService:
         # Device granularity: when grouping is on and block granularity is device,
         # a non-compliant device blocks ALL its currently-visible IPs (sibling
         # terminals sharing device_id), not just the row(s) independently flagged.
-        if await self._is_device_grouping_enabled() and await self._is_device_block_granularity_device():
-            non_compliant_entries = await self._expand_non_compliant_to_device(
+        # expansion maps sibling terminal id -> trigger source for reason/audit.
+        expansion: dict[int, dict] = {}
+        grouping_enabled = await self._is_device_grouping_enabled()
+        if grouping_enabled and await self._is_device_block_granularity_device():
+            non_compliant_entries, expansion = await self._expand_non_compliant_to_device(
                 non_compliant_entries, arp_source_tag
             )
 
@@ -622,6 +625,29 @@ class ComplianceService:
         details = []
 
         for entry in non_compliant_entries:
+            # Device-grouping metadata: siblings pulled in by a device-level block
+            # carry the trigger source so reasons/audit show the side effect.
+            exp = expansion.get(entry.id)
+            fw_reason_suffix = ""
+            audit_device_fields = {}
+            if exp:
+                fw_reason_suffix = (
+                    f", device_grouped=true, device_id={exp['device_id']}, "
+                    f"trigger_ip={exp['trigger_ip']}"
+                )
+                audit_device_fields = {
+                    "device_id": exp["device_id"],
+                    "device_grouped": True,
+                    "device_grouped_expanded": True,
+                    "expanded_trigger_ip": exp["trigger_ip"],
+                    "expanded_trigger_terminal_id": exp["trigger_terminal_id"],
+                }
+            elif grouping_enabled and entry.device_id:
+                audit_device_fields = {
+                    "device_id": entry.device_id,
+                    "device_grouped": True,
+                    "device_grouped_expanded": False,
+                }
             if dry_run:
                 details.append({
                     "ip_address": entry.ip_address,
@@ -651,13 +677,14 @@ class ComplianceService:
                         "firewall_tag": fw_tag,
                         "success": False,
                         "error": "service_not_available",
+                        **audit_device_fields,
                     }, ip_address="System")
                     continue
                 try:
                     result = await svc.block_ip(
                         [entry.ip_address],
                         source_tag=fw_tag,
-                        reason=f"Auto-blocked: non-compliant (source={arp_source_tag})"
+                        reason=f"Auto-blocked: non-compliant (source={arp_source_tag}){fw_reason_suffix}"
                     )
                     is_blocked, newly_blocked = self._block_outcome(result)
                     if is_blocked:
@@ -673,7 +700,8 @@ class ComplianceService:
                             "firewall_tag": fw_tag,
                             "success": True,
                             "newly_blocked": newly_blocked,
-                            "reason": f"Auto-blocked: non-compliant (source={arp_source_tag})",
+                            "reason": f"Auto-blocked: non-compliant (source={arp_source_tag}){fw_reason_suffix}",
+                            **audit_device_fields,
                         }, ip_address="System")
                     else:
                         error_msg = result.get("message", "unknown error")
@@ -688,6 +716,7 @@ class ComplianceService:
                             "firewall_tag": fw_tag,
                             "success": False,
                             "error": error_msg,
+                            **audit_device_fields,
                         }, ip_address="System")
                 except Exception as e:
                     msg = f"Error blocking {entry.ip_address} on firewall '{fw_tag}': {str(e)}"
@@ -701,6 +730,7 @@ class ComplianceService:
                         "firewall_tag": fw_tag,
                         "success": False,
                         "error": str(e),
+                        **audit_device_fields,
                     }, ip_address="System")
 
             any_success = len(successfully_blocked_fw) > 0
@@ -757,7 +787,15 @@ class ComplianceService:
                         block_reason = "MAC 不合规，IP 合规"
                     else:
                         block_reason = "自动封锁：不合规"
-                
+
+                # Device-grouping side effect: label the sibling IP as pulled in by
+                # a device-level block so operators can tell it apart from a direct hit.
+                if exp:
+                    block_reason = (
+                        f"{block_reason}（设备归组连带：触发 {exp['trigger_ip']}，"
+                        f"设备 {exp['device_id']}）"
+                    )
+
                 for fw_tag in successfully_blocked_fw:
                     # Idempotency per firewall: active entries are keyed by (ip, firewall)
                     # to mirror the firewall's IP-only blocking. Reused IPs update MAC in place.
@@ -785,6 +823,7 @@ class ComplianceService:
                     "action": "blocked",
                     "firewall_tags": successfully_blocked_fw,
                     "errors": entry_errors if entry_errors else None,
+                    **audit_device_fields,
                 })
 
                 # Emit terminal.blocked event only for genuinely new blocks.
@@ -793,7 +832,7 @@ class ComplianceService:
                     await emit_terminal_blocked(
                         ip_address=entry.ip_address,
                         mac_address=entry.mac_address or "",
-                        reason=f"Auto-blocked: non-compliant (source={arp_source_tag})",
+                        reason=f"Auto-blocked: non-compliant (source={arp_source_tag}){fw_reason_suffix}",
                         blocked_by="system",
                     )
             else:
@@ -827,7 +866,17 @@ class ComplianceService:
                 if blocked > block_threshold:
                     await emit_block_threshold_exceeded(block_threshold, blocked)
 
-            terminal_list = [{"terminal_id": d.get("terminal_id"), "ip_address": d["ip_address"], "mac_address": d["mac_address"]} for d in details]
+            terminal_list = [
+                {
+                    "terminal_id": d.get("terminal_id"),
+                    "ip_address": d["ip_address"],
+                    "mac_address": d["mac_address"],
+                    **({"device_id": d["device_id"]} if d.get("device_id") else {}),
+                    **({"device_grouped": d["device_grouped"]} if "device_grouped" in d else {}),
+                    **({"expanded_trigger_ip": d["expanded_trigger_ip"]} if d.get("expanded_trigger_ip") else {}),
+                }
+                for d in details
+            ]
             # Queued on the current session so the summary audit is committed
             # atomically with the blacklist state in the same commit below.
             self._record_audit_inline("system", "auto_block_terminal", "terminal", None, {
@@ -837,6 +886,9 @@ class ComplianceService:
                 "skipped": skipped,
                 "errors": len(errors),
                 "firewall_tags": firewall_tags,
+                # Only present when device grouping actually pulled in siblings,
+                # so non-grouped deployments keep the previous audit shape.
+                **({"device_expanded": len(expansion)} if expansion else {}),
                 "terminals": terminal_list,
                 "total_terminals": len(terminal_list),
             }, ip_address="System")
@@ -1080,6 +1132,7 @@ class ComplianceService:
                     "mac_address": current_mac,
                     "action": "unblocked",
                     "reason": "now_compliant",
+                    "device_id": terminal_record.device_id if terminal_record else None,
                 })
             else:
                 # Partial failure — only mark successfully unblocked entries
@@ -1117,7 +1170,15 @@ class ComplianceService:
 
             # Queued on the current session so the summary audit is committed
             # atomically with the blacklist state in the same commit below.
-            terminal_list = [{"terminal_id": d.get("terminal_id"), "ip_address": d["ip_address"], "mac_address": d["mac_address"]} for d in details]
+            terminal_list = [
+                {
+                    "terminal_id": d.get("terminal_id"),
+                    "ip_address": d["ip_address"],
+                    "mac_address": d["mac_address"],
+                    **({"device_id": d["device_id"]} if d.get("device_id") else {}),
+                }
+                for d in details
+            ]
             self._record_audit_inline("system", "auto_unblock_terminal", "terminal", None, {
                 "message": f"Auto-unblocked {unblocked} compliant terminals",
                 "unblocked": unblocked,
@@ -1640,16 +1701,20 @@ class ComplianceService:
 
     async def _expand_non_compliant_to_device(
         self, entries: list[Terminal], arp_source_tag: str
-    ) -> list[Terminal]:
+    ) -> tuple[list[Terminal], dict[int, dict]]:
         """Expand a non-compliant set to include every ARP-visible IP of the same
         physical device, so a device-level block covers all its NICs.
-
         Only adds sibling terminals sharing a device_id (and not already blocked);
         callers re-apply the blacklist/whitelist filters afterward.
+
+        Returns (merged, expansion). expansion maps each newly-added sibling's
+        terminal id to {"device_id", "trigger_terminal_id", "trigger_ip"} so block
+        reasons and audit logs can distinguish device-grouped side effects from
+        direct hits.
         """
         device_ids = {e.device_id for e in entries if e.device_id}
         if not device_ids:
-            return entries
+            return entries, {}
         try:
             stmt = select(Terminal).where(
                 (Terminal.source_tag == arp_source_tag) &
@@ -1659,14 +1724,26 @@ class ComplianceService:
             result = await self.db.execute(stmt)
             siblings = result.scalars().all()
         except Exception:
-            return entries
+            return entries, {}
+        triggers: dict[str, Terminal] = {}
+        for e in entries:
+            if e.device_id and e.device_id not in triggers:
+                triggers[e.device_id] = e
         seen_ids = {e.id for e in entries}
         merged = list(entries)
+        expansion: dict[int, dict] = {}
         for s in siblings:
             if s.id not in seen_ids:
                 seen_ids.add(s.id)
                 merged.append(s)
-        return merged
+                trigger = triggers.get(s.device_id)
+                if trigger is not None:
+                    expansion[s.id] = {
+                        "device_id": s.device_id,
+                        "trigger_terminal_id": trigger.id,
+                        "trigger_ip": trigger.ip_address,
+                    }
+        return merged, expansion
 
     # ------------------------------------------------------------------
     # Firewall Operations
@@ -2350,6 +2427,19 @@ class ComplianceService:
                                 unblock_comment += f" (failed on: {','.join(sorted(failed_fw_tags))})"
                             self._append_terminal_comment(terminal, unblock_comment)
                             
+                            # Device-grouping decision marker for traceability:
+                            # whether this unblock was driven by device_id membership.
+                            device_grouped_decision = False
+                            grouped_device_id = None
+                            if new_compliance != "bypass" and await self._is_device_grouping_enabled():
+                                mac2dev, grouped_ids = await self._load_device_grouping_cache()
+                                grouped_device_id = terminal.device_id or mac2dev.get(
+                                    self._norm_mac_key(mac_addr)
+                                )
+                                device_grouped_decision = (
+                                    grouped_device_id is not None and grouped_device_id in grouped_ids
+                                )
+
                             # Determine unblock reason based on new compliance status
                             # (IP/MAC combination, consistent with block)
                             if new_compliance == "bypass":
@@ -2363,7 +2453,14 @@ class ComplianceService:
                                 compliance_unblock_reason = self._build_unblock_reason(
                                     False, use_ip_only, use_or_match, ipguard_data, ip_addr, mac_addr, ipguard_mac_prefixes
                                 )
-                            
+
+                            # Mark device-grouping driven unblocks for traceability.
+                            if device_grouped_decision:
+                                compliance_unblock_reason = (
+                                    f"{compliance_unblock_reason}"
+                                    f"（设备归组判定：设备 {grouped_device_id} 合规）"
+                                )
+
                             logger.info(
                                 f"_apply_compliance_result: Setting reason for unblock: "
                                 f"reason='{compliance_unblock_reason}', ip={ip_addr}, mac={mac_addr}, "
@@ -2617,6 +2714,17 @@ class ComplianceService:
         final_changed = final_compliance != old_compliance
         audit = None
         if final_changed:
+            # Device-grouping metadata: only resolved when a transition is actually
+            # recorded, to avoid an extra Redis read on every untouched terminal.
+            audit_device_fields = {}
+            if await self._is_device_grouping_enabled():
+                mac2dev, grouped_ids = await self._load_device_grouping_cache()
+                audit_device_id = terminal.device_id or mac2dev.get(self._norm_mac_key(mac_addr))
+                if audit_device_id is not None:
+                    audit_device_fields = {
+                        "device_id": audit_device_id,
+                        "device_grouped": audit_device_id in grouped_ids,
+                    }
             audit = {
                 "username": "system",
                 "action": "compliance_status_changed",
@@ -2630,6 +2738,7 @@ class ComplianceService:
                     "old_compliance": old_compliance,
                     "new_compliance": final_compliance,
                     "wl_match_type": terminal.wl_match_type,
+                    **audit_device_fields,
                 },
                 "ip_address": "System",
             }
