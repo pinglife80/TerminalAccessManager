@@ -14,7 +14,6 @@ import pytest
 from app.api.v1.endpoints.system import get_system_status
 from app.core.config import settings
 
-
 # ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
@@ -197,8 +196,9 @@ class TestFirewallReconciliation:
         with patch(
             "app.services.firewall_reconciliation_service.FirewallReconciliationService",
             return_value=mock_recon,
-        ), patch("app.main._cache_reconcile_result", new=AsyncMock()) as cache_fn:
-            with pytest.raises(RuntimeError, match="reconcile boom"):
-                await api_client.post("/api/v1/system/firewall-reconciliation")
+        ), \
+             patch("app.main._cache_reconcile_result", new=AsyncMock()) as cache_fn, \
+             pytest.raises(RuntimeError, match="reconcile boom"):
+            await api_client.post("/api/v1/system/firewall-reconciliation")
 
         cache_fn.assert_not_awaited()

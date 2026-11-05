@@ -16,7 +16,6 @@ Methods under test:
 - _execute_block / _execute_unblock / enqueue_operation
 """
 
-import asyncio
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -29,7 +28,6 @@ from app.services.sangfor_service import (
     _service_cache,
     _token_expiry,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -345,9 +343,8 @@ class TestRequestWithBackoff:
     async def test_exhausted_raises(self, service):
         retry = AsyncMock(side_effect=httpx.ConnectError("x"))
         with patch.object(service, "_request_with_retry", retry), \
-             patch("asyncio.sleep", AsyncMock()):
-            with pytest.raises(httpx.ConnectError):
-                await service._request_with_backoff("GET", "http://x")
+             patch("asyncio.sleep", AsyncMock()), pytest.raises(httpx.ConnectError):
+            await service._request_with_backoff("GET", "http://x")
 
         assert retry.call_count == 4  # max_retries=3 -> 4 attempts
 
@@ -365,9 +362,8 @@ class TestRequestWithBackoff:
     async def test_4xx_no_retry(self, service):
         retry = AsyncMock(side_effect=make_http_error(400))
         with patch.object(service, "_request_with_retry", retry), \
-             patch("asyncio.sleep", AsyncMock()) as sleep:
-            with pytest.raises(httpx.HTTPStatusError):
-                await service._request_with_backoff("GET", "http://x")
+             patch("asyncio.sleep", AsyncMock()) as sleep, pytest.raises(httpx.HTTPStatusError):
+            await service._request_with_backoff("GET", "http://x")
 
         assert retry.call_count == 1
         sleep.assert_not_called()
@@ -433,9 +429,11 @@ class TestGetBlockedIps:
 
     @pytest.mark.asyncio
     async def test_exception_raises(self, service):
-        with patch.object(service, "_request_with_backoff", AsyncMock(side_effect=Exception("boom"))):
-            with pytest.raises(Exception):
-                await service.get_blocked_ips()
+        with (
+            patch.object(service, "_request_with_backoff", AsyncMock(side_effect=httpx.ConnectError("boom"))),
+            pytest.raises(httpx.ConnectError, match="boom"),
+        ):
+            await service.get_blocked_ips()
 
     @pytest.mark.asyncio
     async def test_nonzero_code(self, service):
@@ -872,9 +870,11 @@ class TestGetCachedService:
 
     @pytest.mark.asyncio
     async def test_cache_miss_auth_failure_not_cached(self):
-        with patch.object(SangforService, "_authenticate", AsyncMock(side_effect=Exception("auth fail"))):
-            with pytest.raises(Exception):
-                await SangforService.get_cached_service(base_url="https://fw.example.com")
+        with (
+            patch.object(SangforService, "_authenticate", AsyncMock(side_effect=ConnectionError("auth fail"))),
+            pytest.raises(ConnectionError, match="auth fail"),
+        ):
+            await SangforService.get_cached_service(base_url="https://fw.example.com")
 
         assert "https://fw.example.com" not in _service_cache
 
@@ -1100,7 +1100,7 @@ class TestProcessQueue:
             if calls["n"] == 0:
                 calls["n"] += 1
                 service._queue_running = False  # stop loop after first timeout
-                raise asyncio.TimeoutError()
+                raise TimeoutError()
             return await coro
 
         with patch("asyncio.wait_for", side_effect=_wait_for):

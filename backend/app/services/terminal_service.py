@@ -4,25 +4,24 @@ import ipaddress
 import json
 import os
 import re
-from datetime import datetime, timedelta, UTC
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytz
-
 from loguru import logger
 from sqlalchemy import and_, desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
+from app.core.config import settings
+from app.core.crypto import decrypt_config
+from app.core.database import async_session_factory
 from app.models.blacklist import Blacklist
 from app.models.data_source import DataSource
 from app.models.log import AuditLog
 from app.models.terminal import Terminal, TerminalStatus
 from app.models.whitelist import Whitelist
 from app.schemas.terminal import AuditLogQuery, BlacklistQuery, TerminalQuery, WhitelistQuery
-from app.core.crypto import decrypt_config
-from app.core.config import settings
-from app.core.database import async_session_factory
 from app.services.sangfor_service import SangforService
 
 
@@ -119,7 +118,7 @@ def _parse_date_range(start_date: str | None, end_date: str | None):
     """Parse date range strings into datetime objects for filtering"""
     conditions = []
     tz = pytz.timezone(settings.TZ)
-    
+
     if start_date:
         try:
             naive_start = datetime.strptime(start_date, "%Y-%m-%d")
@@ -787,7 +786,7 @@ class TerminalService:
                 old_mac = existing.mac_address
                 old_ip_pattern = existing.ip_pattern
                 old_comments = existing.comments
-                
+
                 existing.comments = comments
                 if normalized_prefix:
                     existing.mac_address = normalized_prefix
@@ -798,7 +797,7 @@ class TerminalService:
                 if ip_pattern:
                     existing.ip_pattern = ip_pattern
                     existing.pattern_type = pattern_type
-                
+
                 log_details = {
                     "message": f"Updated whitelist entry {old_mac or old_ip_pattern}",
                     "old_mac_address": old_mac,
@@ -827,7 +826,7 @@ class TerminalService:
                     added_by=username
                 )
                 self.db.add(whitelist_entry)
-                
+
                 log_details = {
                     "message": f"Created whitelist entry for {stored_mac_value or ip_pattern}",
                     "mac_address": stored_mac_value,
@@ -1322,7 +1321,7 @@ class TerminalService:
                         result["failed_count"] = 1
                         return result
 
-                    with open(whitelist_file, "r", encoding="utf-8") as f:
+                    with open(whitelist_file, encoding="utf-8") as f:
                         whitelist_data = json.load(f)
             except zipfile.BadZipFile:
                 result["errors"].append({

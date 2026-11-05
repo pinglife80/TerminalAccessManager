@@ -369,7 +369,7 @@ class TestAddToWhitelistMatching:
     async def test_ip_only_applies_only_to_matching_ip(self, mock_async_session):
         """ip_only: same MAC with two IPs -> only the terminal holding the target IP is matched."""
         t_32 = self._terminal("10.8.14.32")
-        t_100 = self._terminal("10.8.14.100")
+        self._terminal("10.8.14.100")
 
         mock_async_session.execute = AsyncMock(
             side_effect=[self._no_existing_result(), self._matched_result([t_32])]
@@ -391,7 +391,7 @@ class TestAddToWhitelistMatching:
     async def test_both_applies_only_to_exact_mac_ip_match(self, mock_async_session):
         """both: same MAC with two IPs -> only the exact (MAC, IP) pair is matched, not the sibling IP."""
         t_32 = self._terminal("10.8.14.32")
-        t_100 = self._terminal("10.8.14.100")
+        self._terminal("10.8.14.100")
 
         mock_async_session.execute = AsyncMock(
             side_effect=[self._no_existing_result(), self._matched_result([t_32])]

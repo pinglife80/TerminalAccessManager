@@ -9,18 +9,16 @@ os.environ["ENVIRONMENT"] = "test"
 os.environ["SECRET_KEY"] = "test-secret-key-at-least-32-characters-long-for-testing"
 os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
 
-from app.services.notification_channels.event_types import ChannelType, EventType
-from app.services.notification_service import NotificationService
+import types
+from datetime import datetime
+
 from app.services.notification_channels.base import (
     ChannelTestResult,
     NotificationEvent,
     NotificationResult,
 )
-
-import types
-from datetime import datetime
-
-from tests.conftest import make_mock_async_session
+from app.services.notification_channels.event_types import ChannelType, EventType
+from app.services.notification_service import NotificationService
 
 
 @pytest.fixture

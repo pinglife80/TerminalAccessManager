@@ -18,13 +18,14 @@ from typing import Any
 import httpx
 from loguru import logger
 
-from .base import format_timestamp
 from app.services.notification_channels.base import (
     ChannelTestResult,
     NotificationChannelBase,
     NotificationEvent,
     NotificationResult,
 )
+
+from .base import format_timestamp
 
 FEISHU_TOKEN_URL = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
 FEISHU_MESSAGE_URL = "https://open.feishu.cn/open-apis/im/v1/messages"

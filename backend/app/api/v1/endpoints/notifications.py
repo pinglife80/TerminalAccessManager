@@ -12,7 +12,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.security import get_client_ip, get_current_user, require_permission
-from app.services.terminal_service import TerminalService
 from app.models.notification import NotificationLog, NotificationRule, NotificationTemplate
 from app.models.user import User
 from app.schemas.notification import (
@@ -41,6 +40,7 @@ from app.schemas.notification import (
 )
 from app.services.notification_channels.event_types import CHANNEL_METADATA, EVENT_METADATA
 from app.services.notification_service import NotificationService
+from app.services.terminal_service import TerminalService
 
 router = APIRouter(prefix="/notifications", tags=["Notifications"])
 
@@ -148,7 +148,7 @@ async def delete_channel(
     if not channel:
         raise HTTPException(status_code=404, detail="Channel not found")
     channel_name = channel.name
-    deleted = await notification_service.delete_channel(channel_id)
+    await notification_service.delete_channel(channel_id)
     ts = TerminalService(db)
     await ts.log_action(
         current_user.username, "delete_notification_channel", "notification_channel",

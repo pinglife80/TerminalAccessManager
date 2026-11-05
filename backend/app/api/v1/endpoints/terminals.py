@@ -8,7 +8,7 @@ from app.core.database import get_db
 from app.core.security import require_permission
 from app.models.terminal import Terminal
 from app.models.user import User
-from app.schemas.terminal import PaginatedResponse, ResponseMessage, TerminalQuery, TerminalResponse
+from app.schemas.terminal import PaginatedResponse, TerminalQuery, TerminalResponse
 from app.services.terminal_service import TerminalService
 
 router = APIRouter(prefix="/terminals", tags=["Terminals"])
@@ -80,9 +80,10 @@ async def export_terminals(
     current_user: User = Depends(require_permission("terminal:read"))
 ):
     """Export terminals as CSV with filtering support"""
-    from sqlalchemy import select, or_, and_, desc, func
+    from sqlalchemy import and_, desc, or_, select
+
     from app.models.blacklist import Blacklist
-    from app.services.terminal_service import _parse_date_range, _escape_like, _normalize_mac
+    from app.services.terminal_service import _escape_like, _normalize_mac, _parse_date_range
 
     conditions = []
 

@@ -24,7 +24,6 @@ from app.models.terminal import Terminal, TerminalStatus
 from app.services.firewall_reconciliation_service import FirewallReconciliationService
 from app.services.sangfor_service import SangforService
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

@@ -14,11 +14,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.models.blacklist import Blacklist
-from app.models.terminal import Terminal, TerminalStatus
+from app.models.terminal import TerminalStatus
 from app.models.whitelist import Whitelist
 from app.services.compliance_service import (
     COMPLIANCE_RECALC_LOCK_KEY,
-    COMPLIANCE_RECALC_LOCK_TTL,
     IPGUARD_BACKUP_CACHE_PREFIX,
     IPGUARD_CACHE_PREFIX,
     SCOPE_CACHE_KEY,
@@ -1649,7 +1648,7 @@ class TestApplyResultBlock:
             make_result(all_rows=[]),   # active blacklist -> []
         ]
         with apply_result_mocks(service, mock_db, results, bound_fw_tags=[]):
-            result = await service._apply_compliance_result(
+            await service._apply_compliance_result(
                 terminal, "non_compliant", None, None,
                 "192.168.1.100", "AA:BB:CC:DD:EE:FF",
             )
@@ -1670,7 +1669,7 @@ class TestApplyResultBlock:
             make_result(one=None),               # block idempotency (fw2) -> None
         ]
         with apply_result_mocks(service, mock_db, results, bound_fw_tags=["fw1", "fw2"]):
-            result = await service._apply_compliance_result(
+            await service._apply_compliance_result(
                 terminal, "non_compliant", None, None,
                 "192.168.1.100", "AA:BB:CC:DD:EE:FF",
             )
@@ -1695,7 +1694,7 @@ class TestApplyResultBlock:
         ]
         with apply_result_mocks(service, mock_db, results, bound_fw_tags=["fw1"],
                                 block_on_firewall=False):
-            result = await service._apply_compliance_result(
+            await service._apply_compliance_result(
                 terminal, "non_compliant", None, None,
                 "192.168.1.100", "AA:BB:CC:DD:EE:FF",
             )
@@ -1716,7 +1715,7 @@ class TestApplyResultBlock:
             make_result(one=MagicMock()),  # block cooldown -> recent unblock (truthy)
         ]
         with apply_result_mocks(service, mock_db, results, bound_fw_tags=["fw1"]):
-            result = await service._apply_compliance_result(
+            await service._apply_compliance_result(
                 terminal, "non_compliant", None, None,
                 "192.168.1.100", "AA:BB:CC:DD:EE:FF",
             )
@@ -1932,9 +1931,9 @@ class TestTimeline10182183:
              patch.object(service, "_is_ipguard_cache_stale", return_value=False), \
              patch.object(service, "_get_confirm_threshold", return_value=2), \
              patch.object(service, "_match_ipguard_in_memory", return_value=(True, True, True)), \
-             patch("app.services.event_emitter.emit_terminal_compliant", AsyncMock()):
-            with pytest.raises(RuntimeError):
-                await service.recalculate_all_compliance()
+             patch("app.services.event_emitter.emit_terminal_compliant", AsyncMock()), \
+             pytest.raises(RuntimeError):
+            await service.recalculate_all_compliance()
 
         # The audit emit loop runs only after a successful batch commit; on
         # failure it must never have run (a transition happened but was not
@@ -2285,7 +2284,7 @@ class TestApplyResultBlockEdges:
             make_result(all_rows=[("fw1",)]),    # active blacklist -> {fw1}
         ]
         with apply_result_mocks(service, mock_db, results, bound_fw_tags=["fw1"]):
-            result = await service._apply_compliance_result(
+            await service._apply_compliance_result(
                 terminal, "non_compliant", None, None,
                 "192.168.1.100", "AA:BB:CC:DD:EE:FF",
             )
@@ -2316,7 +2315,7 @@ class TestApplyResultBlockEdges:
         ]
         with apply_result_mocks(service, mock_db, results, bound_fw_tags=["fw1"],
                                 block_on_firewall=fake_block):
-            result = await service._apply_compliance_result(
+            await service._apply_compliance_result(
                 terminal, "non_compliant", None, None,
                 "192.168.1.100", "AA:BB:CC:DD:EE:FF",
             )
@@ -2338,7 +2337,7 @@ class TestApplyResultBlockEdges:
             make_result(one=MagicMock()),  # block idempotency -> existing (truthy)
         ]
         with apply_result_mocks(service, mock_db, results, bound_fw_tags=["fw1"]):
-            result = await service._apply_compliance_result(
+            await service._apply_compliance_result(
                 terminal, "non_compliant", None, None,
                 "192.168.1.100", "AA:BB:CC:DD:EE:FF",
             )
@@ -4041,7 +4040,7 @@ class TestRecalculateComplianceEdges:
              patch.object(service, "_match_ipguard_in_memory", return_value=(False, False, False)), \
              patch.object(service, "_apply_compliance_result", new=fake_apply), \
              patch("app.services.compliance_service.logger.info") as info_logger:
-            result = await service.recalculate_all_compliance()
+            await service.recalculate_all_compliance()
 
         assert terminal.non_compliant_confirm_count == 0
         assert applied["new_compliance"] == "unknown"
@@ -4082,7 +4081,7 @@ class TestRecalculateComplianceEdges:
              patch.object(service, "_match_ipguard_in_memory", return_value=(False, False, False)), \
              patch.object(service, "_apply_compliance_result", new=fake_apply), \
              patch("app.services.compliance_service.logger.info") as info_logger:
-            result = await service.recalculate_all_compliance()
+            await service.recalculate_all_compliance()
 
         assert terminal.non_compliant_confirm_count == 0
         assert applied["new_compliance"] == "compliant"
@@ -4123,7 +4122,7 @@ class TestRecalculateComplianceEdges:
              patch.object(service, "_match_ipguard_in_memory", return_value=(False, False, False)), \
              patch.object(service, "_apply_compliance_result", new=fake_apply), \
              patch("app.services.compliance_service.logger.info") as info_logger:
-            result = await service.recalculate_all_compliance()
+            await service.recalculate_all_compliance()
 
         assert terminal.non_compliant_confirm_count == 0
         assert applied["new_compliance"] == "compliant"
@@ -4167,7 +4166,7 @@ class TestRecalculateComplianceEdges:
              patch.object(service, "_get_confirm_min_interval_seconds", return_value=300), \
              patch.object(service, "_match_ipguard_in_memory", return_value=(False, True, False)), \
              patch.object(service, "_apply_compliance_result", new=fake_apply):
-            result = await service.recalculate_all_compliance()
+            await service.recalculate_all_compliance()
 
         assert applied["new_compliance"] == "non_compliant"
         assert terminal.compliance_checked_at is not None  # 累加时刷新了时间戳
@@ -4211,7 +4210,7 @@ class TestRecalculateComplianceEdges:
              patch.object(service, "_get_ipguard_absence_threshold", new=absence_threshold), \
              patch.object(service, "_match_ipguard_in_memory", return_value=(False, False, False)), \
              patch.object(service, "_apply_compliance_result", new=fake_apply):
-            result = await service.recalculate_all_compliance()
+            await service.recalculate_all_compliance()
 
         absence_threshold.assert_awaited_once()
         assert applied["new_compliance"] == "unknown"       # 长阈值下仍 hold
@@ -4254,7 +4253,7 @@ class TestRecalculateComplianceEdges:
              patch.object(service, "_get_ipguard_absence_threshold", new=absence_threshold), \
              patch.object(service, "_match_ipguard_in_memory", return_value=(False, False, False)), \
              patch.object(service, "_apply_compliance_result", new=fake_apply):
-            result = await service.recalculate_all_compliance()
+            await service.recalculate_all_compliance()
 
         absence_threshold.assert_awaited_once()
         assert applied["new_compliance"] == "compliant"
@@ -4296,7 +4295,7 @@ class TestRecalculateComplianceEdges:
              patch.object(service, "_get_ipguard_absence_threshold", new=absence_threshold), \
              patch.object(service, "_match_ipguard_in_memory", return_value=(False, True, False)), \
              patch.object(service, "_apply_compliance_result", new=fake_apply):
-            result = await service.recalculate_all_compliance()
+            await service.recalculate_all_compliance()
 
         absence_threshold.assert_not_awaited()
         assert applied["new_compliance"] == "compliant"
@@ -4341,7 +4340,7 @@ class TestRecalculateComplianceEdges:
              patch.object(service, "_match_ipguard_in_memory", return_value=(False, False, False)), \
              patch.object(service, "_match_ipguard_ip_only_in_memory", return_value=False), \
              patch.object(service, "_apply_compliance_result", new=fake_apply):
-            result = await service.recalculate_all_compliance()
+            await service.recalculate_all_compliance()
 
         absence_threshold.assert_awaited_once()
         assert applied["new_compliance"] == "compliant"
@@ -4384,7 +4383,7 @@ class TestRecalculateComplianceEdges:
              patch.object(service, "_match_ipguard_ip_only_in_memory", return_value=False), \
              patch.object(service, "_apply_compliance_result", new=fake_apply), \
              patch("app.services.compliance_service.logger.info") as info_logger:
-            result = await service.recalculate_all_compliance()
+            await service.recalculate_all_compliance()
 
         assert applied["new_compliance"] == "compliant"
         assert terminal.non_compliant_confirm_count == 0

@@ -16,12 +16,13 @@ Architecture (P3 async/retry):
 """
 
 import json
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime
-from typing import Any, AsyncIterator
+from typing import Any
 
 from loguru import logger
-from sqlalchemy import Integer, func, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.crypto import decrypt_config, has_encrypted_config
@@ -36,7 +37,11 @@ from app.services.notification_channels import (
     NotificationResult,
     get_channel,
 )
-from app.services.notification_channels.event_types import CHANNEL_METADATA, DEFAULT_SUBSCRIBED_EVENTS, EVENT_METADATA, EventType
+from app.services.notification_channels.event_types import (
+    CHANNEL_METADATA,
+    DEFAULT_SUBSCRIBED_EVENTS,
+    EVENT_METADATA,
+)
 
 
 class NotificationService:
@@ -507,7 +512,6 @@ class NotificationService:
 
             avg_latency_ms = None
             try:
-                from sqlalchemy import extract
 
                 latency_stmt = select(
                     func.avg(
@@ -679,4 +683,3 @@ class NotificationService:
                     count += 1
             return count
 
-    

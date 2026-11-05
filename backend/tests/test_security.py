@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from fastapi import HTTPException
 from jose import jwt
+from redis.exceptions import ConnectionError as RedisConnectionError
 from starlette.requests import Request
 
 from app.core.config import settings
@@ -293,9 +294,14 @@ class TestGenerateCaptcha:
 
     @pytest.mark.asyncio
     async def test_generate_redis_unavailable_raises(self):
-        with patch("app.core.security.get_redis_client", side_effect=Exception("Redis down")):
-            with pytest.raises(Exception):
-                await generate_captcha()
+        with (
+            patch(
+                "app.core.security.get_redis_client",
+                side_effect=RedisConnectionError("Redis down"),
+            ),
+            pytest.raises(RedisConnectionError, match="Redis down"),
+        ):
+            await generate_captcha()
 
 
 class TestVerifyCaptchaNormal:

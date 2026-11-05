@@ -1,7 +1,6 @@
 import ipaddress
 import logging
 import re
-from typing import Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -31,14 +30,14 @@ class ComplianceScopeService:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    async def list_scopes(self, is_active: Optional[bool] = None) -> list[ComplianceScope]:
+    async def list_scopes(self, is_active: bool | None = None) -> list[ComplianceScope]:
         stmt = select(ComplianceScope).order_by(ComplianceScope.created_at.desc())
         if is_active is not None:
             stmt = stmt.where(ComplianceScope.is_active == is_active)
         result = await self.db.execute(stmt)
         return list(result.scalars().all())
 
-    async def get_scope(self, scope_id: int) -> Optional[ComplianceScope]:
+    async def get_scope(self, scope_id: int) -> ComplianceScope | None:
         stmt = select(ComplianceScope).where(ComplianceScope.id == scope_id)
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
@@ -61,7 +60,7 @@ class ComplianceScopeService:
 
     async def update_scope(
         self, scope_id: int, data: ComplianceScopeUpdate
-    ) -> Optional[ComplianceScope]:
+    ) -> ComplianceScope | None:
         scope = await self.get_scope(scope_id)
         if not scope:
             return None
@@ -87,7 +86,7 @@ class ComplianceScopeService:
         logger.info(f"Deleted compliance scope: id={scope_id}")
         return True
 
-    async def toggle_scope(self, scope_id: int) -> Optional[ComplianceScope]:
+    async def toggle_scope(self, scope_id: int) -> ComplianceScope | None:
         scope = await self.get_scope(scope_id)
         if not scope:
             return None

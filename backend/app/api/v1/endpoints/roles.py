@@ -228,7 +228,7 @@ async def update_role(
                         resource_name=role.name,
                         user_id=current_user.id)
 
-    from app.services.event_emitter import emit_role_changed, emit_permission_changed
+    from app.services.event_emitter import emit_permission_changed, emit_role_changed
     await emit_role_changed(role.name, current_user.username, "updated", {"changes": changes})
     if "permission_ids" in changes:
         await emit_permission_changed(role.name, current_user.username, "role_permissions", "updated")

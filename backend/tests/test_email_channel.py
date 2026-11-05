@@ -15,9 +15,7 @@ import pytest
 
 import app.services.notification_channels.email_channel as email_channel
 from app.services.notification_channels.base import (
-    ChannelTestResult,
     NotificationEvent,
-    NotificationResult,
 )
 from app.services.notification_channels.email_channel import (
     EmailChannel,

@@ -7,6 +7,7 @@ Supports Active Directory and OpenLDAP authentication.
 import re
 import ssl
 from typing import Any
+
 from loguru import logger
 
 from app.services.auth_providers.base import AuthProviderBase, AuthProviderType, AuthResult
@@ -415,7 +416,7 @@ class LDAPProvider(AuthProviderBase):
                 "message": f"Connection test failed: {str(e)}",
             }
 
-    def search_users(self, search_base: str = None, search_filter: str = None, 
+    def search_users(self, search_base: str = None, search_filter: str = None,
                      username: str = None, page_size: int = 10, page_number: int = 1) -> dict:
         """Search for users in LDAP directory"""
         try:
@@ -472,15 +473,15 @@ class LDAPProvider(AuthProviderBase):
 
                 base_filter = "(objectClass=user)"
                 filters_to_combine = [base_filter]
-                
+
                 if username:
                     escaped_username = escape_ldap_special_chars(username)
                     user_filter = user_search_filter.format(username=f"*{escaped_username}*")
                     filters_to_combine.append(user_filter)
-                
+
                 if search_filter:
                     filters_to_combine.append(search_filter)
-                
+
                 if len(filters_to_combine) > 1:
                     final_filter = f"(&{' '.join(filters_to_combine)})"
                 else:

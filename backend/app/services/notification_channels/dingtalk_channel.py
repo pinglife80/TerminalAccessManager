@@ -23,8 +23,6 @@ import time
 import urllib.parse
 from typing import Any
 
-from .base import format_timestamp
-
 import httpx
 from loguru import logger
 
@@ -34,6 +32,8 @@ from app.services.notification_channels.base import (
     NotificationEvent,
     NotificationResult,
 )
+
+from .base import format_timestamp
 
 DINGTALK_TOKEN_URL = "https://oapi.dingtalk.com/gettoken"
 DINGTALK_WORK_NOTIFICATION_URL = "https://oapi.dingtalk.com/topapi/message/corpconversation/asyncsend_v2"

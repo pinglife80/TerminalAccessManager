@@ -186,7 +186,7 @@ async def test_email_configuration(
     fallback. Useful for validating the configuration after changing it
     on the Email Settings page.
     """
-    from app.services.email_service import EmailSendError, EmailRateLimitError, send_email
+    from app.services.email_service import EmailRateLimitError, EmailSendError, send_email
 
     test_subject = "[TAM] Email Configuration Test"
     test_html = """

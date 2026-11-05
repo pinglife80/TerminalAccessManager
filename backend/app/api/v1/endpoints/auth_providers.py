@@ -12,7 +12,6 @@ from app.core.database import get_db
 from app.core.security import get_client_ip, get_current_user, require_permission
 from app.models.auth_config import AuthConfig
 from app.models.user import User
-from app.services.terminal_service import TerminalService
 from app.schemas.auth_provider import (
     AuthProviderCreate,
     AuthProviderResponse,
@@ -20,6 +19,7 @@ from app.schemas.auth_provider import (
     AuthTestResult,
 )
 from app.services.auth_providers.provider_factory import AuthProviderFactory
+from app.services.terminal_service import TerminalService
 
 router = APIRouter(prefix="/auth/providers", tags=["Authentication Providers"])
 
@@ -28,6 +28,7 @@ router = APIRouter(prefix="/auth/providers", tags=["Authentication Providers"])
 async def get_available_providers(db: AsyncSession = Depends(get_db)):
     """Get all enabled authentication providers for login selection"""
     from sqlalchemy import select
+
     from app.services.auth_providers.base import AuthProviderType
 
     providers = []

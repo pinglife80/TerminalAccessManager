@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
 from app.core.config import settings
@@ -16,4 +16,4 @@ def now() -> datetime:
 
 def now_utc() -> datetime:
     """Get current datetime in UTC timezone."""
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)

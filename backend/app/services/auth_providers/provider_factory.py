@@ -150,8 +150,8 @@ class AuthProviderFactory:
             Authentication result dictionary
         """
         from app.models.auth_config import AuthConfig
-        from app.models.user import User
         from app.models.role import Role, UserRole
+        from app.models.user import User
 
         config = {}
         if provider_type != AuthProviderType.LOCAL.value:

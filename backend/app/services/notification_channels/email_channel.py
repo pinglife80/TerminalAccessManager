@@ -9,13 +9,14 @@ from typing import Any
 import httpx
 from loguru import logger
 
-from .base import format_timestamp
 from app.services.notification_channels.base import (
     ChannelTestResult,
     NotificationChannelBase,
     NotificationEvent,
     NotificationResult,
 )
+
+from .base import format_timestamp
 
 _email_http_client: httpx.AsyncClient | None = None
 

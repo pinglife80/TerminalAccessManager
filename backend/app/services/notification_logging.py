@@ -4,13 +4,11 @@ Notification Logging and Template Rendering.
 Handles notification logging to database and Jinja2 template rendering.
 """
 
-import json
 from datetime import datetime
-from typing import Any
 
 import jinja2
 from loguru import logger
-from sqlalchemy import Integer, func, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.timezone import now
@@ -39,7 +37,7 @@ class NotificationLogger:
     ) -> dict[str, str] | None:
         try:
             from app.core.database import async_session_factory
-            
+
             if db is not None:
                 session = db
                 own_session = False
@@ -51,7 +49,7 @@ class NotificationLogger:
             try:
                 stmt = select(NotificationTemplate).where(
                     NotificationTemplate.channel_type == channel_type,
-                    (NotificationTemplate.event_type == event.type) | 
+                    (NotificationTemplate.event_type == event.type) |
                     (NotificationTemplate.event_type == "*"),
                 ).order_by(
                     (NotificationTemplate.event_type == event.type).desc(),
@@ -99,7 +97,7 @@ class NotificationLogger:
     ) -> None:
         try:
             from app.core.database import async_session_factory
-            
+
             if db is not None:
                 session = db
                 own_session = False
@@ -134,7 +132,7 @@ class NotificationLogger:
     ) -> None:
         try:
             from app.core.database import async_session_factory
-            
+
             if db is not None:
                 session = db
                 own_session = False
@@ -172,7 +170,7 @@ class NotificationLogger:
     ) -> None:
         try:
             from app.core.database import async_session_factory
-            
+
             if db is not None:
                 session = db
                 own_session = False
@@ -223,7 +221,7 @@ class NotificationLogger:
     ) -> None:
         try:
             from app.core.database import async_session_factory
-            
+
             if db is not None:
                 session = db
                 own_session = False

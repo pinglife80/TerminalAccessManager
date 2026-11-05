@@ -3,7 +3,6 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-
 ScopeType = Literal[
     "ip_cidr", "ip_range", "mac_prefix_arp", "mac_prefix_ipguard",
     "ip_cidr_any", "ip_range_any", "mac_prefix_any",

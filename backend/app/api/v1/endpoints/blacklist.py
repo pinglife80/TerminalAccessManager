@@ -1,14 +1,20 @@
 import csv
-from io import StringIO
 from datetime import UTC, datetime
+from io import StringIO
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.security import get_client_ip, require_permission
 from app.models.user import User
-from app.schemas.terminal import BlacklistCheckItem, BlacklistCheckRequest, BlacklistQuery, BlacklistResponse, PaginatedResponse
+from app.schemas.terminal import (
+    BlacklistCheckItem,
+    BlacklistCheckRequest,
+    BlacklistQuery,
+    BlacklistResponse,
+    PaginatedResponse,
+)
 from app.services.terminal_service import TerminalService
 
 router = APIRouter(prefix="/blacklist", tags=["Blacklist"])
@@ -100,9 +106,10 @@ async def export_blacklist(
     current_user: User = Depends(require_permission("blacklist:read"))
 ):
     """Export blacklist as CSV with filtering support"""
-    from sqlalchemy import select, or_, and_, desc
+    from sqlalchemy import and_, desc, or_, select
+
     from app.models.blacklist import Blacklist
-    from app.services.terminal_service import _parse_date_range, _escape_like, _normalize_mac
+    from app.services.terminal_service import _escape_like, _normalize_mac, _parse_date_range
 
     conditions = []
 

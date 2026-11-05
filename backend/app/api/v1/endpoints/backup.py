@@ -12,10 +12,9 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import get_client_ip, get_current_user, require_permission
 from app.core.database import get_db
+from app.core.security import get_client_ip, require_permission
 from app.models.user import User
-from app.services.terminal_service import TerminalService
 from app.schemas.backup import (
     BackupConfigResponse,
     BackupConfigUpdate,
@@ -26,6 +25,7 @@ from app.schemas.backup import (
     BackupTestResult,
 )
 from app.services.backup_service import BackupService
+from app.services.terminal_service import TerminalService
 
 router = APIRouter(prefix="/backup", tags=["Backup"])
 

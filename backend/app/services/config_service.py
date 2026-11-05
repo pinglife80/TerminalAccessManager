@@ -19,8 +19,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.models.system_config import SystemConfig
 from app.schemas.system_config import (
-    AllConfigsResponse,
     AlertConfigResponse,
+    AllConfigsResponse,
     BrandingConfigResponse,
     CacheConfigResponse,
     ComplianceConfigResponse,

@@ -26,8 +26,8 @@ def _make_log(**overrides) -> AuditLog:
 
 
 async def _seed(db, *logs) -> None:
-    for l in logs:
-        db.add(l)
+    for log in logs:
+        db.add(log)
     await db.commit()
 
 

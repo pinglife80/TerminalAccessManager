@@ -1,6 +1,6 @@
 import asyncio
 import os
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
@@ -15,8 +15,6 @@ from app.core.config import settings
 from app.core.database import async_session_factory, init_db
 from app.core.logging_config import setup_logging
 from app.core.security import close_redis_client
-from app.services.config_service import get_config_value
-from app.services.event_emitter import emit_compliance_alert
 from app.middleware.error_handler import (
     http_exception_handler,
     unhandled_exception_handler,
@@ -25,6 +23,8 @@ from app.middleware.error_handler import (
 from app.middleware.logging import RequestLoggingMiddleware
 from app.middleware.rate_limit import RateLimitMiddleware
 from app.middleware.request_id import RequestIDMiddleware
+from app.services.config_service import get_config_value
+from app.services.event_emitter import emit_compliance_alert
 
 # Configure logging (centralized: loguru + intercept stdlib logging)
 setup_logging()
@@ -86,8 +86,9 @@ async def _get_scheduler_interval(key: str, default: int) -> int:
 async def _record_task_heartbeat(task_name: str, ttl_seconds: int) -> None:
     """Write a liveness heartbeat key to Redis (silent, non-blocking on failure)."""
     try:
+        from datetime import UTC, datetime
+
         from app.core.security import get_redis_client
-        from datetime import datetime, UTC
         redis_client = await get_redis_client()
         await redis_client.setex(f"scheduler:heartbeat:{task_name}", ttl_seconds, datetime.now(UTC).isoformat())
     except Exception:
@@ -99,7 +100,8 @@ async def _cache_reconcile_result(results: dict) -> None:
     Key: reconcile:latest, TTL 1 hour."""
     try:
         import json
-        from datetime import datetime, UTC
+        from datetime import UTC, datetime
+
         from app.core.security import get_redis_client
         redis_client = await get_redis_client()
         payload = {
@@ -153,17 +155,18 @@ async def cleanup_expired_logs():
                 async with async_session_factory() as db:
                     from app.services.config_service import ConfigService
                     config_service = ConfigService(db)
-                    
+
                     retention_days = await config_service.get_value("audit_log_retention_days")
                     if retention_days is None:
                         retention_days = 90
                     else:
                         retention_days = int(retention_days)
 
-                    from datetime import datetime, timedelta, UTC
+                    from datetime import UTC, datetime, timedelta
                     cutoff_time = datetime.now(UTC) - timedelta(days=retention_days)
 
-                    from sqlalchemy import delete, select, func
+                    from sqlalchemy import delete
+
                     from app.models.log import AuditLog
                     from app.models.notification import NotificationLog
 
@@ -310,8 +313,11 @@ async def scheduled_compliance_check():
                     all_arp_sources = sources + sources2
                     for source in all_arp_sources:
                         try:
+                            from datetime import UTC as _utc
+                            from datetime import datetime as _dt
+                            from datetime import timedelta as _td
+
                             from sqlalchemy import select as sa_select
-                            from datetime import datetime as _dt, UTC as _utc, timedelta as _td
 
                             from app.models.terminal import Terminal
                             from app.services.config_service import ConfigService
@@ -438,7 +444,9 @@ async def scheduled_compliance_check():
                             retry_terminals = retry_r.scalars().all()
                             if retry_terminals:
                                 import re
-                                from datetime import datetime as dt_cls, UTC as utc_cls, timedelta as td_cls
+                                from datetime import UTC as utc_cls
+                                from datetime import datetime as dt_cls
+                                from datetime import timedelta as td_cls
 
                                 block_time = await service._get_block_time()
                                 match = re.match(r'^(\d+)([dhm])$', block_time.lower())
@@ -574,10 +582,8 @@ async def scheduled_compliance_check():
                                         )
                         except Exception as re_err:
                             logger.error(f"Error in retry-block for {source.tag}: {type(re_err).__name__}: {re_err} [source=scheduler]")
-                            try:
+                            with suppress(Exception):
                                 await db.rollback()
-                            except Exception:
-                                pass
 
                     # ========== Periodic full compliance recalculation (self-healing) ==========
                     # Ensures terminals stuck in stale states (e.g. whitelist terminals left as
@@ -627,10 +633,8 @@ async def scheduled_compliance_check():
                 await _release_task_lock("compliance_check")
         except Exception as e:
             logger.error(f"Error in scheduled compliance check task: {type(e).__name__}: {e} [source=scheduler]")
-            try:
+            with suppress(Exception):
                 await _release_task_lock("compliance_check")
-            except Exception:
-                pass
 
 
 async def scheduled_auto_unblock():
@@ -742,8 +746,8 @@ def _should_run_backup_now(cron_expr: str) -> bool:
     Supports basic cron format: "minute hour day month dayofweek"
     Each field can be: * (any), a number, or comma-separated numbers.
     """
+
     from app.core.timezone import now as _now
-    import re
 
     try:
         parts = cron_expr.strip().split()
@@ -762,9 +766,8 @@ def _should_run_backup_now(cron_expr: str) -> bool:
                     return True
                 if "/" in part:
                     base, step = part.split("/", 1)
-                    if base == "*" or base == "0":
-                        if current_val % int(step) == 0:
-                            return True
+                    if (base == "*" or base == "0") and current_val % int(step) == 0:
+                        return True
                 else:
                     value = int(part)
                     if transform is not None:

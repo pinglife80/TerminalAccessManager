@@ -106,9 +106,10 @@ async def export_whitelist(
     current_user: User = Depends(require_permission("whitelist:read"))
 ):
     """Export whitelist as CSV with filtering support"""
-    from sqlalchemy import select, or_, and_, desc
+    from sqlalchemy import and_, desc, or_, select
+
     from app.models.whitelist import Whitelist
-    from app.services.terminal_service import _parse_date_range, _escape_like, _normalize_mac
+    from app.services.terminal_service import _escape_like, _normalize_mac, _parse_date_range
 
     conditions = []
 
