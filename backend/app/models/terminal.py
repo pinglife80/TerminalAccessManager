@@ -1,7 +1,7 @@
 import enum
 from datetime import UTC, datetime
 
-from sqlalchemy import Column, DateTime, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Column, DateTime, Index, Integer, String, Text, UniqueConstraint
 
 from app.core.database import Base
 
@@ -45,6 +45,11 @@ class Terminal(Base):
     # 'no_firewall' -> non_compliant 且 ARP 源无绑定防火墙（不可封锁）
     # 'block_failed'-> non_compliant 且封锁失败（可恢复，等待 retry-block）
     # 'offline'     -> 记录陈旧（终端已离线，IP/MAC 不再被 ARP 采集到）
+    # 命中排除规则但因已封锁/有效黑名单而保留的记录标记为 True：
+    # 该终端不在合规范围内，仪表盘统计需要过滤掉这些行。
+    excluded_by_rule = Column(
+        Boolean, default=False, nullable=False, index=True
+    )
     non_compliant_type = Column(String(10), nullable=True)  # "ip" / "mac" / "both" / null（真实不合规因素）
     # Physical device identity (IPGuard AGENT.ID). Nullable: terminal without a
     # device match keeps NULL and falls back to per-NIC compliance behavior.

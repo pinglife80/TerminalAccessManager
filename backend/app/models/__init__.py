@@ -9,6 +9,7 @@ from app.models.notification import NotificationChannel, NotificationLog
 from app.models.role import Permission, Role, RolePermission, UserRole
 from app.models.system_config import SystemConfig
 from app.models.terminal import Terminal, TerminalStatus
+from app.models.terminal_exclusion import TerminalExclusion
 from app.models.user import User
 from app.models.whitelist import Whitelist
 
@@ -19,6 +20,7 @@ __all__ = [
     "Whitelist",
     "Blacklist",
     "ComplianceScope",
+    "TerminalExclusion",
     "AuditLog",
     "SystemConfig",
     "DataSource",
