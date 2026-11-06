@@ -1,6 +1,6 @@
 # TerminalAccessManager 后端实现文档
 
-> 文档版本：v3.28.0  更新日期：2026-11-05
+> 文档版本：v3.28.1  更新日期：2026-11-06
 
 ## 1. 概述
 
@@ -885,6 +885,26 @@ def _normalize_mac_raw(mac: str) -> str:
 - 白名单备注同步：当终端合规状态为 `bypass` 时，自动将白名单备注同步到终端（格式：`Whitelist: {comments}`），已有备注则追加。
 - 历史数据回填：对已封锁但缺少 `firewall_tag` 的终端，自动回填关联防火墙标签。
 
+#### 设备归组与离线状态（v3.28.1+）
+
+- **`device_id` 有效性**：设备归组开启时，判定的 `device_id` 必须与当前 MAC→设备映射一致。新增 `_effective_device_id(stamped, mac_norm, mac_to_device)`：
+  - 注册表可读（`mac_to_device` 非空）→ 以映射结果为准，与库中 `device_id` 不一致时视为陈旧，判定不再信任并写回自愈值（含 `None`）。
+  - 注册表不可用（空映射）→ 回退旧逻辑，保留库中 `device_id`，避免缓存故障导致全量误判。
+- **设备扩展防护**：`_expand_non_compliant_to_device` 只按通过映射校验的触发条目拉取兄弟终端，避免陈旧关联连带封锁真正合规的设备终端。
+- **离线守卫**：`block_state=offline` 且未封锁的终端不参与 `auto_block_non_compliant`、retry-block 与设备归组扩展。
+- **离线状态冻结**：`recalculate_all_compliance` 跳过离线终端（`offline_skip_count`），其 `compliance_status` 保持不变；此类记录需通过存量修复脚本重置。
+- **追踪日志**：统一前缀 `[compliance-trace]`，分 `[device-grouping]`、`[offline-skip]`、`[auto-block]` 三类，记录关联校验、跳过原因与封锁决策。
+
+#### 存量修复脚本（v3.28.1+）
+
+`backend/scripts/repair_stale_device_ids.py` → `ComplianceService.repair_stale_device_ids(apply=False)`：
+
+1. 读取当前设备注册表；`device_ids` 为空时直接中止（返回 `aborted`）。
+2. 扫描所有 `device_id IS NOT NULL` 的终端，按 `mac_address_normalized`（缺失时回退 `mac_address` 归一化）比对当前映射。
+3. 映射不一致的记录：清空 `device_id`；若同时 `block_state=offline` 且未封锁，重置 `compliance_status="unknown"`、确认计数、`non_compliant_type`、`compliant_checked_at`、`compliance_checked_at`。
+4. `apply=False` 仅输出清单；`apply=True` 提交变更。
+5. 返回 `{"aborted", "scanned", "repaired", "applied", "details"}`。
+
 #### 缓存策略
 
 | 缓存 | Redis 键 | TTL |
@@ -924,7 +944,7 @@ def _normalize_mac_raw(mac: str) -> str:
 
 `process_arp_entries(entries, source_tag)`：
 
-1. **Upsert**：按 IP+MAC 查找，存在则更新时间戳和来源并重置 `compliance_status="unknown"`（确保基线变更后重新评估），不存在则新建（`compliance_status="unknown"`）。
+1. **Upsert**：按 IP+MAC 查找，存在则更新 `updated_at`、来源与 `device_id`，并重置 `compliance_status="unknown"`（确保基线变更后重新评估）；不存在则新建（写入 `updated_at=now()`、`compliance_status="unknown"`，并按当前设备注册表写入 `device_id`）。v3.28.1 起，已存在记录的 `device_id` 以当前 MAC→设备映射为准刷新；映射为空（注册表不可用）时保留原值。
 2. **批量合规检查**：对 `compliance_status="unknown"` 的条目执行 `batch_check_compliance`。
 3. **应用合规结果**：使用 `_apply_compliance_result` 共享方法更新终端状态，包括 compliance_status、wl_match_type、comments（白名单备注）、自动封堵/解封、事件通知。
 
@@ -960,7 +980,7 @@ def _normalize_mac_raw(mac: str) -> str:
 `run_scheduled_collection()` 采集完成后，对每个 ARP 数据源执行终端在线/离线检测：
 
 1. 获取该数据源下所有终端的 IP 集合（`seen_ips`）。
-2. 遍历所有终端的 `updated_at`（`last_seen`）时间戳，计算与当前时间的差值。
+2. 遍历所有终端的 `updated_at or created_at`（`last_seen`）时间戳（v3.28.1 起优先 `updated_at`，缺失时回退 `timestamp`），计算与当前时间的差值。
 3. 若 `(now - last_seen) > offline_threshold_seconds`（默认 300s），判定为离线。
 4. 对每个新发现的离线终端发射 `terminal.offline` 事件（通过 `emit_terminal_offline()`），携带 `ip_address`、`mac_address` 字段。
 5. 仅检测"新离线"终端，已离线终端不重复触发事件。
@@ -1426,12 +1446,14 @@ python cli.py role permissions
 | test_whitelist.py | TestWhitelistModel | 2 | 白名单模型字段 |
 | | TestWhitelistValidation | 1 | 白名单输入验证 |
 | test_blacklist.py | TestBlacklistModel | 2 | 黑名单模型字段 |
-| test_compliance_service.py | TestComplianceService | 22 | 合规服务状态转换、自动封锁/解封、清理、白名单匹配、合规重算 |
+| test_compliance_service.py | TestComplianceService 等 | 196 | 合规服务状态转换、自动封锁/解封、离线守卫、设备归组与陈旧 device_id 校验、存量修复、合规重算 |
+| test_device_grouping.py | TestDeviceGroupingJudgment 等 | 16 | 设备归组 any 判定、白名单优先级、陈旧/冲突 device_id 校验、设备扩展防护 |
+| test_arp_collector_service.py | TestProcessArpEntries 等 | 70 | ARP 解析与入库、`updated_at` 写入、离线检测、`device_id` 刷新、采集调度 |
 | test_app.py | TestGlobalExceptionHandler | 4 | 全局异常处理器 |
 | test_terminal_exclusion_service.py | TestTerminalExclusionService 等 | 76 | 规则校验、IP/CIDR/IP 段/MAC 前缀匹配、AND/OR 组合、清理与保留、标记回收、可选解封（成功/失败/跳过/部分成功） |
 | test_terminal_exclusion_integration.py | — | 5 | 排除规则 + 白名单采集链路、合规重算跳过、保留行打标与统计过滤、停用后统计恢复、解封后统计归零 |
 | test_endpoints_terminal_exclusions.py | — | 3 | 解封参数的黑名单写权限校验、默认关闭回归、toggle 请求体兼容 |
-| **合计** | | **1764** | 后端全量 |
+| **合计** | | **1781** | 后端全量 |
 
 ### 7.3 运行测试
 

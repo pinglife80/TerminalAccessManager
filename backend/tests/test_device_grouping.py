@@ -226,6 +226,70 @@ class TestDeviceGroupingJudgment:
         assert result.non_compliant == 2
 
     @pytest.mark.asyncio
+    async def test_stale_device_id_falls_back_to_per_nic(self, service):
+        """残留 device_id 在当前映射中已不存在 → 按单网卡口径判定，并清空该值。"""
+        service._is_device_grouping_enabled = AsyncMock(return_value=True)
+        service._load_device_grouping_cache = AsyncMock(
+            return_value=({"C8B29BFA03BB": "101"}, {"101"})
+        )
+        service._load_whitelist_cache = AsyncMock(return_value=[])
+        service._load_scope_cache = AsyncMock(return_value=[])
+        service._load_all_ipguard_cache = AsyncMock(return_value={})
+        entries = [{
+            "ip_address": "10.8.15.41",
+            "mac_address": "34-B1-EB-EE-96-73",
+            "device_id": "3786",
+        }]
+
+        result = await service.batch_check_compliance(entries)
+
+        assert result.compliant == 0
+        assert result.non_compliant == 1
+        assert entries[0]["device_id"] is None
+        assert entries[0]["ig_match"] is False
+
+    @pytest.mark.asyncio
+    async def test_stamped_device_id_conflicting_with_mapping_uses_mapped_device(self, service):
+        """残留 device_id 与当前映射冲突 → 以映射为准（202 命中基线则合规）。"""
+        service._is_device_grouping_enabled = AsyncMock(return_value=True)
+        service._load_device_grouping_cache = AsyncMock(
+            return_value=({"34B1EBEE9673": "202"}, {"101", "202"})
+        )
+        service._load_whitelist_cache = AsyncMock(return_value=[])
+        service._load_scope_cache = AsyncMock(return_value=[])
+        service._load_all_ipguard_cache = AsyncMock(return_value={})
+        entries = [{
+            "ip_address": "10.8.15.41",
+            "mac_address": "34-B1-EB-EE-96-73",
+            "device_id": "101",
+        }]
+
+        result = await service.batch_check_compliance(entries)
+
+        assert result.compliant == 1
+        assert result.non_compliant == 0
+        assert entries[0]["device_id"] == "202"
+
+    @pytest.mark.asyncio
+    async def test_empty_mapping_falls_back_to_stamped_device_id(self, service):
+        """设备注册表不可用（空映射）→ 保留旧行为，继续信任已打 device_id。"""
+        service._is_device_grouping_enabled = AsyncMock(return_value=True)
+        service._load_device_grouping_cache = AsyncMock(return_value=({}, {"101"}))
+        service._load_whitelist_cache = AsyncMock(return_value=[])
+        service._load_scope_cache = AsyncMock(return_value=[])
+        service._load_all_ipguard_cache = AsyncMock(return_value={})
+        entries = [{
+            "ip_address": "10.8.15.41",
+            "mac_address": "34-B1-EB-EE-96-73",
+            "device_id": "101",
+        }]
+
+        result = await service.batch_check_compliance(entries)
+
+        assert result.compliant == 1
+        assert entries[0]["device_id"] == "101"
+
+    @pytest.mark.asyncio
     async def test_whitelist_still_wins_over_device_override(self, service):
         """白名单优先级最高：即使设备命中基线，白名单记录仍判 bypass。"""
         service._is_device_grouping_enabled = AsyncMock(return_value=True)
@@ -285,6 +349,21 @@ class TestDeviceBlockGranularity:
     @pytest.mark.asyncio
     async def test_expand_no_device_id_returns_unchanged(self, service, mock_db):
         entry = _mk_term("10.8.11.80", "C8-B2-9B-FA-03-BB", device_id=None, id_=1)
+
+        expanded, expansion = await service._expand_non_compliant_to_device([entry], "lab")
+
+        assert expanded == [entry]
+        assert expansion == {}
+        mock_db.execute.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_expand_skips_entries_with_stale_device_id(self, service, mock_db):
+        """未通过映射校验的触发条目不得按其陈旧 device_id 连带封锁兄弟终端。"""
+        entry = _mk_term("10.8.15.41", "34-B1-EB-EE-96-73", device_id="3786", id_=1)
+        service._load_device_grouping_cache = AsyncMock(
+            return_value=({"C8B29BFA03BB": "101"}, {"3786", "101"})
+        )
+        mock_db.execute = AsyncMock()
 
         expanded, expansion = await service._expand_non_compliant_to_device([entry], "lab")
 

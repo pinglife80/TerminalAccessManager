@@ -1,6 +1,6 @@
 # 更新日志
 
-> 文档版本：v3.28.0  更新日期：2026-11-05
+> 文档版本：v3.28.1  更新日期：2026-11-06
 
 本文件记录 TerminalAccessManager 的所有重要变更。
 
@@ -8,6 +8,29 @@
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ***
+
+## [3.28.1] - 2026-11-06
+
+### 修复
+
+- **合规震荡（10.8.18.183）**：新增 ARP 记录补写 `updated_at`，离线检测改用 `updated_at or timestamp` 兜底，修复已有记录被误判离线后反复在合规/非合规之间震荡的问题
+- **离线状态冻结**：`auto_block_non_compliant`、定时任务 retry-block、设备归组扩展三处查询均排除 `block_state=offline` 终端，避免离线终端的错误状态被覆盖或提前封锁
+- **陈旧 `device_id` 误判合规（10.8.15.41）**：设备归组判定改为以当前 MAC→设备映射为准，映射为空时回退旧逻辑；重算与 ARP 采集自动刷新/清空失效关联，不再凭历史关联授予整机合规
+- **存量修复脚本**：新增 `backend/scripts/repair_stale_device_ids.py`，默认 dry-run，`--apply` 清理失效关联、并将离线且未封锁的终端重置为 `unknown`
+
+### 可观测性
+
+- 新增统一前缀 `[compliance-trace]` 追踪日志：`device-grouping`（关联校验与设备级覆盖）、`offline-skip`（跳过原因与冻结状态）、`auto-block`（候选数、设备扩展、逐条封锁）
+- 离线终端若为 `compliant` 且 `device_id` 已失效，重算时输出 WARNING 并提示运行修复脚本
+
+### 测试
+
+- 后端全量 1781 passed（较 v3.28.0 新增 17 条）
+- 新增离线陈旧关联端到端回归用例，覆盖“离线 + 陈旧 device_id + 冻结 compliant”场景
+
+### 数据库
+
+- 本次无数据库迁移
 
 ## [3.28.0] - 2026-11-05
 

@@ -1,10 +1,70 @@
 # 版本跟踪记录
 
-> 文档版本：v3.28.0 | 更新日期：2026-11-05
+> 文档版本：v3.28.1 | 更新日期：2026-11-06
 >
 > 本文档记录 TerminalAccessManager 每个版本的详细发布过程，包括变更内容、提交记录、测试验证和发布操作。
 >
 > 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)，变更描述遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范。
+
+---
+
+## [v3.28.1] - 2026-11-06
+
+### 合规误判修复与判定链路可观测性（Patch 版本）
+
+#### 背景
+
+v3.28.0 上线后出现两类合规误判：
+
+1. **合规震荡**：10.8.18.183 的 MAC 位于基线，但终端持续在合规/非合规间切换。根因是 ARP 采集对已存在记录未写入 `updated_at`，离线检测回落到未更新的创建时间，导致终端被反复标记为离线；离线记录又跳过重算，状态被冻结。
+2. **陈旧 device_id 误判合规**：10.8.15.41 的 IP 与 MAC 均不在 IPGuard 基线，却因设备归组使用历史遗留的 `device_id=3786` 被判为合规。根因是 `device_id` 只在为 `NULL` 时回填、从不清除，且设备归组直接以该字段覆盖单网卡判定。
+
+#### 主要变更
+
+| 模块 | 内容 |
+|------|------|
+| ARP 采集 | 新增记录写入 `updated_at=now()`；离线检测改为 `updated_at or timestamp` 兜底；已存在记录按当前设备注册表刷新/清空 `device_id`（映射为空时保留，避免缓存故障导致全量清空） |
+| 合规判定 | 新增 `_effective_device_id()`：注册表可用时以当前 MAC→设备映射为准，否则回退旧逻辑；批量首检与全量重算均写入自愈后的 `device_id` |
+| 离线守卫 | `auto_block_non_compliant`、定时任务 retry-block、`_expand_non_compliant_to_device` 统一排除 `block_state=offline` 且未封锁的终端 |
+| 存量修复 | 新增 `backend/scripts/repair_stale_device_ids.py`：dry-run 默认，`--apply` 清理失效关联；离线且未封锁的记录同步重置 `compliance_status=unknown` 与确认计数、检查时间 |
+| 可观测性 | 新增 `[compliance-trace]` 统一前缀日志（device-grouping / offline-skip / auto-block）；离线冻结合规且关联失效时输出 WARNING |
+
+影响范围仅限存在陈旧 `device_id` 或离线冻结状态的终端；正常在线终端的判定、封锁与解封行为不变。
+
+#### 数据库迁移
+
+无。复用现有 `terminals` 表字段。
+
+#### 升级步骤（推荐：一键升级）
+
+    git checkout main
+    git pull origin main
+    ./manage.sh upgrade
+
+本地开发环境：
+
+    ./manage.sh update
+
+#### 升级注意事项
+
+- 离线且 `compliance_status=compliant` 的记录会因存量修复变为 `unknown`，属于预期行为（离线状态本就无法实时判定）。
+- 设备归组判定变严：历史遗留关联不再提供整机合规豁免；如需临时放宽，可关闭 `device_grouping_enabled`。
+- 升级后建议先执行 dry-run 确认存量，再按需 `--apply`：
+
+      docker exec -w /app tam_backend python scripts/repair_stale_device_ids.py
+
+#### 回滚说明
+
+    ./manage.sh upgrade v3.28.0
+
+本次无数据库迁移，回滚无需 `alembic downgrade`。已被脚本清空的 `device_id` 不会随代码回滚恢复；旧逻辑对 `NULL` 关联按单网卡口径判定，不会重新产生误合规。
+
+#### 验证结果
+
+- 后端全量测试：1781 passed（较 v3.28.0 新增 17 条）
+- ruff：`ruff check app/ tests/` 零告警
+- 本地重建与 `./manage.sh health` 通过；重算实测 580 条、offline 跳过 113 条、无新增封锁/解封
+- 存量修复：5 条陈旧关联清空并重置，全库复扫 0 条残留；10.8.15.41 运行时判定为 `non_compliant`
 
 ---
 
