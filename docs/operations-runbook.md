@@ -661,6 +661,107 @@ docker exec -w /app tam_backend python scripts/repair_stale_device_ids.py --appl
 
 > 注意：脚本仅在设备注册表可读时执行（`device_ids` 为空会直接中止）；`--apply` 不可逆，被清空的 `device_id` 不会自动恢复，执行前先 dry-run 核对清单。
 
+### 2.13 合规状态升级路径与生效时延
+
+**判定原则**
+
+- `compliant` 的落库写点只有 2 处：`_apply_compliance_result`（`compliance_service.py` L2575）与 `auto_unblock_compliant` 解封成功分支（L1229）。其余赋值只写 `bypass` / `unknown` / `non_compliant`。
+- **升级方向没有确认阈值**：命中基线即改写。`compliance_confirm_threshold`、`compliance_compliant_downgrade_threshold`、`compliance_ipguard_absence_threshold` 只作用于**降级**。
+- 已封锁终端不依赖自动解封任务：周期重算同样会写 `compliant`。
+- 手动 force 检查与定时 unknown 兜底检查**没有 offline 守卫**；周期重算会跳过离线终端。
+
+**默认时间参数**：`T_arp=300s`、`T_sync=600s`、`T_recalc=300s`、`T_unblock=600s`、`T_cleanup=3600s`、`G_ip=10min`；缓存 TTL：IPGuard 900s，白名单与作用域共用 300s。
+
+**A 类：经 `_apply_compliance_result` 的直接判定**
+
+| # | 场景 | 状态变化 | 默认耗时 | 最坏耗时 | 关键守卫/说明 |
+|---|------|---------|---------|---------|--------------|
+| A1 | 基线补齐（IP+MAC 双命中） | non_compliant → compliant | 300–900s | ≈900s | 升级无确认阈值 |
+| A2 | OR 作用域 / IP-only 命中 | 同上 | 300–900s | ≈900s | IP-only 下「IP 缺失但 MAC 命中」为 hold |
+| A3 | 设备归组命中 | 同上 | 300–900s | ≈900s | 陈旧 `device_id` 不再授予合规 |
+| A4 | 开启设备归组开关 | 同上 | ≤300s | ≈900s | 配置变更本身不触发重算 |
+| A5 | 合规作用域变更 | 同上 | ≤600s | ≈600s | 变更本身不触发重算 |
+| A6 | 手动「立即同步」基线 | 同上 | ≤300s | ≈300s+同步耗时 | 不触发重算 |
+| A7 | 手动删除基线 | 同上 | 秒级 | 全表重算耗时 | 删除接口内同步重算 |
+| A8 | 新建/安全删除数据源绑定 | 同上 | 秒级 | 全表重算耗时 | 重建「数据源-防火墙」关系 |
+| A9 | 启用 ARP 数据源 | 同上 | 终端出现后 ≤300s | ≈300s | 无终端时为空操作 |
+| A10 | 手动强制检查（`force=true`） | 同上（**含离线终端**） | 秒级 | 全表扫描耗时 | compliant 分支**无 offline 守卫、无 IP 宽限** |
+| A11 | 定时 unknown 兜底首检 | unknown → compliant | ≤300s | ≈300s | **无 offline 过滤** |
+| A12 | 白名单新增（IP 模式）/导入/备份恢复 | 命中项为 **bypass**；同批其他非合规终端可被连带升级 | 秒级 | 全表重算耗时 | 白名单优先级高于基线，结果不是 compliant |
+| A13 | 黑名单到期清理 | non_compliant → compliant（若基线命中） | ≤3600s | ≈3600s | 非离线终端通常已被 A1 提前升级 |
+| A14 | 排除规则移除后重新发现 | unknown → compliant | ≤300s | ≈300s | 规则存续期间不参与判定 |
+| A15 | 离线终端恢复在线 | offline(non_compliant) → compliant | 300–600s | ≈600s（叠加宽限 ≈900s） | 离线期间重算跳过，blocked 除外 |
+
+**B 类：经 `auto_unblock_compliant` 的旁路改写**
+
+| # | 场景 | 状态变化 | 默认耗时 | 最坏耗时 | 说明 |
+|---|------|---------|---------|---------|------|
+| B1 | 已封锁终端自动解封（IPGuard 命中） | non_compliant → compliant | ≤600s | ≈600s | 防火墙解封部分失败则保持原状态，下轮重试 |
+| B2 | 手动触发自动解封 | 同上 | 秒级 | 防火墙接口耗时 | 需 `datasource:compliance` 权限 |
+| B3 | auto-unblock 命中白名单 | non_compliant → **bypass** | ≤600s | ≈600s | 白名单是豁免，不是合规 |
+
+**C 类：已封锁终端的普通重算升级**
+
+| # | 场景 | 状态变化 | 默认耗时 | 最坏耗时 | 说明 |
+|---|------|---------|---------|---------|------|
+| C1 | 已封锁终端在周期重算中命中基线 | non_compliant → compliant | ≤300s | ≈300s | 不依赖自动解封任务 |
+| C2 | 已封锁 + 冷却期内 | 同上（状态写 compliant，解封被跳过） | ≤300s | ≈300s | `bypass` 或 `ig_match=true` 绕过冷却即时解封 |
+
+**守卫差异对照**
+
+| 守卫/条件 | 周期重算 A1/A3 | 手动 force A10 | 定时 unknown A11 | 自动解封 B1 |
+|-----------|---------------|---------------|-----------------|------------|
+| offline 终端 | **跳过** | **不跳过** | **不跳过** | 不涉及 |
+| IP 变更宽限 | **升级 held** | **不检查** | **不检查** | 不涉及 |
+| IPGuard 缓存过期（>12min） | 仅阻止降级，升级照常 | 不受影响 | 不受影响 | 不受影响 |
+| IPGuard 缓存为空 | **整轮跳过** | 按未命中处理 | 同左 | 无法判定 |
+| 白名单命中 | bypass | bypass | bypass | bypass |
+| 陈旧 `device_id` | 拒绝并自愈 | 同样校验 | 同左 | 不涉及 |
+
+**明确不构成「非合规 → 合规」的情形**
+
+| 情形 | 实际结果 |
+|------|---------|
+| 终端加入白名单 | 立即变为 **`bypass`** |
+| 手动解封 / 封锁到期解封 | 只恢复 `status`；到期流程把 `compliance_status` 重置为 **`unknown`** |
+| 命中排除规则 | 不入库、不判定 |
+| 防火墙对账 | 最多写 `bypass` / `non_compliant` |
+| 禁用 ARP 数据源 | 该源终端被**删除**，不存在状态转换 |
+| IPGuard 中 IP+MAC 双缺失（或 ip-only 下 IP 缺失）达 `compliance_ipguard_absence_threshold` | **降级**为 non_compliant，不会升级 |
+
+**仅影响降级方向、不参与升级的参数**
+
+| 配置项 | 默认值 | 实际作用 | 影响方向 | 折算时间 |
+|--------|-------|---------|---------|---------|
+| `compliance_confirm_threshold` | 2 | 连续命中「不合规」的确认次数 | 任意 → non_compliant | 2 × 300s = 10min |
+| `compliance_ipguard_absence_threshold` | 18（钳制 2–200） | IP+MAC 双缺失（或 ip-only 作用域下仅 IP 缺失）时改用长阈值，防数据源瞬时缺口误封；`block_state=offline` 的终端不适用 | unknown / compliant → non_compliant | 18 × 300s = 90min |
+| `compliance_compliant_downgrade_threshold` | 6 | 已合规终端持续不匹配的降级确认次数 | compliant → non_compliant | 6 × 300s = 30min |
+| `compliance_compliant_grace_minutes` | 10min | 最近一次转为合规后的降级宽限 | compliant → non_compliant | 10min 内不降级 |
+| `compliance_new_terminal_grace_minutes` | 10min | 新终端延迟降级的宽限 | unknown → non_compliant | 10min 内不降级 |
+
+> `compliance_ipguard_absence_threshold` 仅在 `apply_initial_compliance_result` 的不合规分支与周期重算降级分支使用，升级分支不读取。两处均带 `block_state != "offline"` 条件：离线终端不适用长阈值，回退到 `compliance_confirm_threshold`（2）或 `compliance_compliant_downgrade_threshold`（6）。`total_absence` 的判定为「IP+MAC 双缺失」或「ip-only 作用域下 IP 缺失」。同一 MAC 有 N 条记录时窗口约为 18/N 个重算周期。
+
+**时间结论速查**
+
+| 操作 | 生效时延 |
+|------|---------|
+| 基线/设备归组变化 → 周期升级 | 最坏 ≈900s（15min） |
+| 手动同步基线后 | ≤300s |
+| 手动强制检查 / 删除基线 / 绑定变更 | 秒级 |
+| 离线恢复 | ≤600s（叠加 IP 宽限 ≈13min） |
+| 黑名单到期清理 | ≤3600s（通常已被周期重算提前升级） |
+| 白名单 | 秒级，结果为 bypass |
+
+**验证方法**
+
+```sql
+SELECT id, ip_address, mac_address, source_tag, compliance_status, status, block_state,
+       device_id, compliant_checked_at, compliance_checked_at, updated_at
+FROM terminals WHERE ip_address = '<IP>' OR mac_address_normalized = '<MAC_NORM>';
+```
+
+日志关键字：`[compliance-trace][device-grouping]`、`[compliance-trace][offline-skip]`、`[compliance-guard][ip-grace]`、`[compliance-guard][confirm-hold]`。
+
 ---
 
 ## 3. 定时任务管理

@@ -895,6 +895,15 @@ def _normalize_mac_raw(mac: str) -> str:
 - **离线状态冻结**：`recalculate_all_compliance` 跳过离线终端（`offline_skip_count`），其 `compliance_status` 保持不变；此类记录需通过存量修复脚本重置。
 - **追踪日志**：统一前缀 `[compliance-trace]`，分 `[device-grouping]`、`[offline-skip]`、`[auto-block]` 三类，记录关联校验、跳过原因与封锁决策。
 
+#### 升级方向与生效时延（v3.28.1+）
+
+- **落库写点仅 2 处**：`_apply_compliance_result`（`compliance_status = new_compliance`）与 `auto_unblock_compliant` 解封成功分支。其余赋值只写 `bypass` / `unknown` / `non_compliant`。
+- **升级方向无确认阈值**：命中基线即改写为 `compliant`，不做多次确认。`compliance_confirm_threshold`（默认 2）与 `compliance_compliant_downgrade_threshold`（默认 6）只作用于降级。
+- **`compliance_ipguard_absence_threshold`（默认 18，钳制 2–200）仅作用于降级**：终端在 IPGuard 中「IP+MAC 双缺失」（非 ip-only 作用域）或「IP 缺失」（ip-only 作用域）时改用该长阈值，方向为 `unknown / compliant → non_compliant`，用于数据源瞬时缺口的防误封（18 × 300s ≈ 90min，同一 MAC 有 N 条记录时约 18/N 个重算周期）。仅两处使用：`apply_initial_compliance_result` 的不合规分支与周期重算降级分支，升级分支不读取。两处均要求 `block_state != "offline"`，离线终端回退到 `compliance_confirm_threshold` 或 `compliance_compliant_downgrade_threshold`。
+- **守卫只在周期重算生效**：`recalculate_all_compliance` 跳过离线终端，并对 IP 变更施加 `compliance_ip_grace_minutes` 宽限（命中 `ig_match` 时仍升级）；手动 `force=true` 合规检查与定时 unknown 兜底检查均无 offline 过滤、无 IP 宽限。
+- **已封锁终端**：周期重算不跳过 `status=blocked`，命中基线时直接写 `compliant`，不依赖自动解封任务。
+- 场景与耗时对照见 `docs/operations-runbook.md` §2.13。
+
 #### 存量修复脚本（v3.28.1+）
 
 `backend/scripts/repair_stale_device_ids.py` → `ComplianceService.repair_stale_device_ids(apply=False)`：
