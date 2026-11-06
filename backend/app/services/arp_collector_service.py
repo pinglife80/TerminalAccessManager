@@ -417,8 +417,21 @@ class ArpCollectorService:
                     existing.updated_at = datetime.now(UTC)
                     existing.source_tag = source_tag
                     existing.source = "arp"
-                    if existing.device_id is None:
-                        existing.device_id = mac_to_device.get(mac_norm_key)
+                    # Refresh the device association from the current registry.
+                    # A stamped device_id is only trusted while its MAC still maps
+                    # to that device; clearing it stops device grouping from
+                    # judging this terminal compliant off a stale association.
+                    # An empty mapping means the registry is unavailable, so the
+                    # stored value is kept to avoid wiping every association.
+                    if mac_to_device:
+                        mapped_device = mac_to_device.get(mac_norm_key)
+                        if existing.device_id != mapped_device:
+                            if existing.device_id is not None and mapped_device is None:
+                                logger.info(
+                                    f"ARP device grouping: clearing stale device_id "
+                                    f"{existing.device_id} for {ip_addr}/{mac_normalized}"
+                                )
+                            existing.device_id = mapped_device
                     updated += 1
                 else:
                     # Create new entry
@@ -431,6 +444,10 @@ class ArpCollectorService:
                         source_tag=source_tag,
                         compliance_status="unknown",
                         device_id=mac_to_device.get(mac_norm_key),
+                        # New records must carry a last-seen timestamp; otherwise
+                        # offline detection skips them forever and a one-off ARP
+                        # entry keeps taking part in compliance recalculation.
+                        updated_at=datetime.now(UTC),
                     )
                     # IP migration: same MAC already exists under a different IP.
                     # Mark ip_changed_at so the compliance grace period holds
@@ -649,43 +666,55 @@ class ArpCollectorService:
                         })
                     continue
 
-                if not terminal.updated_at:
+                last_seen_dt = terminal.updated_at or terminal.timestamp
+                if last_seen_dt is None:
+                    # 没有可用的最后采集时间：无法证明终端仍在线，按陈旧记录
+                    # 处理，避免插入后从未再次被采集的记录永久参与合规重算。
+                    age_seconds = None
+                    stale = True
+                else:
+                    age_seconds = now_ts - self._as_utc_timestamp(last_seen_dt)
+                    stale = age_seconds > offline_threshold_seconds
+
+                if not stale:
                     continue
 
-                last_seen = self._as_utc_timestamp(terminal.updated_at)
-                if (now_ts - last_seen) > offline_threshold_seconds:
-                    newly_offline += 1
-                    # Mark the stale record offline (via block_state) so compliance
-                    # recalculation can skip it and the UI can surface it. Blocked
-                    # records are left alone here — old-IP release is handled in P1-a.
-                    if terminal.status != "blocked" and terminal.block_state is None:
-                        terminal.block_state = "offline"
-                        logger.info(
-                            f"ARP offline: {terminal.ip_address}/{terminal.mac_address} "
-                            f"stale {(now_ts - last_seen):.0f}s (threshold {offline_threshold_seconds}s), "
-                            f"marked offline"
-                        )
-                        pending_state_audits.append({
-                            "username": "system",
-                            "action": "terminal_offline",
-                            "resource_type": "terminal",
-                            "resource_id": str(terminal.id),
-                            "details": {
-                                "message": f"Terminal went offline: {terminal.ip_address}/{terminal.mac_address}",
-                                "terminal_id": terminal.id,
-                                "ip_address": terminal.ip_address,
-                                "mac_address": terminal.mac_address,
-                                "old_block_state": None,
-                                "new_block_state": "offline",
-                                "reason": "stale_not_seen",
-                            },
-                            "ip_address": "System",
-                        })
-                    with suppress(Exception):
-                        await emit_terminal_offline(
-                            ip_address=terminal.ip_address,
-                            mac_address=terminal.mac_address or "",
-                        )
+                newly_offline += 1
+                # Mark the stale record offline (via block_state) so compliance
+                # recalculation can skip it and the UI can surface it. Blocked
+                # records are left alone here — old-IP release is handled in P1-a.
+                if terminal.status != "blocked" and terminal.block_state is None:
+                    terminal.block_state = "offline"
+                    age_text = (
+                        "last-seen unknown"
+                        if age_seconds is None
+                        else f"stale {age_seconds:.0f}s (threshold {offline_threshold_seconds}s)"
+                    )
+                    logger.info(
+                        f"ARP offline: {terminal.ip_address}/{terminal.mac_address} "
+                        f"{age_text}, marked offline"
+                    )
+                    pending_state_audits.append({
+                        "username": "system",
+                        "action": "terminal_offline",
+                        "resource_type": "terminal",
+                        "resource_id": str(terminal.id),
+                        "details": {
+                            "message": f"Terminal went offline: {terminal.ip_address}/{terminal.mac_address}",
+                            "terminal_id": terminal.id,
+                            "ip_address": terminal.ip_address,
+                            "mac_address": terminal.mac_address,
+                            "old_block_state": None,
+                            "new_block_state": "offline",
+                            "reason": "stale_not_seen",
+                        },
+                        "ip_address": "System",
+                    })
+                with suppress(Exception):
+                    await emit_terminal_offline(
+                        ip_address=terminal.ip_address,
+                        mac_address=terminal.mac_address or "",
+                    )
 
             if newly_offline > 0:
                 logger.info(

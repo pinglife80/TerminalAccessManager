@@ -23,6 +23,7 @@ from app.models.terminal import Terminal, TerminalStatus
 from app.models.terminal_exclusion import TerminalExclusion
 from app.schemas.data_source import ComplianceCheckResult, SyncResult
 from app.services.arp_collector_service import ArpCollectorService
+from app.services.compliance_service import ComplianceService
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -337,6 +338,8 @@ class TestProcessArpEntries:
         assert added.compliance_status == "unknown"
         assert added.source_tag == "lab"
         assert added.ip_changed_at is None
+        # 一次性 ARP 记录也必须带有最后采集时间，否则离线检测会永久跳过它。
+        assert added.updated_at is not None
 
     @pytest.mark.asyncio
     async def test_updates_existing_terminal_same_ip(self, service, mock_db):
@@ -358,6 +361,64 @@ class TestProcessArpEntries:
         assert result.entries_added == 0
         assert existing.ip_changed_at is None
         online.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_existing_terminal_clears_stale_device_id(self, service, mock_db):
+        """当前映射不含该 MAC → 清空残留 device_id，避免设备归组误判合规。"""
+        existing = make_terminal(ip="10.0.0.1")
+        existing.device_id = "3786"
+        entries = [{"ip_address": "10.0.0.1", "mac_address": "aa:bb:cc:dd:ee:ff"}]
+        set_exec_sequence(
+            mock_db,
+            [
+                make_exec_result(scalar=existing),
+                make_exec_result(rows=[]),
+                make_exec_result(rows=[]),
+            ],
+        )
+        with patch("app.services.event_emitter.emit_terminal_online", AsyncMock()), \
+             patch("app.services.config_service.get_config_value", AsyncMock(side_effect=[300, 3])), \
+             patch.object(
+                 ComplianceService, "_is_device_grouping_enabled",
+                 AsyncMock(return_value=True),
+             ), \
+             patch.object(
+                 ComplianceService, "_load_device_grouping_cache",
+                 AsyncMock(return_value=({"B0BE835CCE41": "101"}, {"101"})),
+             ):
+            result = await service.process_arp_entries(entries, "lab")
+
+        assert result.entries_updated == 1
+        assert existing.device_id is None
+
+    @pytest.mark.asyncio
+    async def test_existing_terminal_keeps_device_id_when_mapping_unavailable(self, service, mock_db):
+        """注册表不可用（空映射）→ 保留原 device_id，避免误清全量关联。"""
+        existing = make_terminal(ip="10.0.0.1")
+        existing.device_id = "3786"
+        entries = [{"ip_address": "10.0.0.1", "mac_address": "aa:bb:cc:dd:ee:ff"}]
+        set_exec_sequence(
+            mock_db,
+            [
+                make_exec_result(scalar=existing),
+                make_exec_result(rows=[]),
+                make_exec_result(rows=[]),
+            ],
+        )
+        with patch("app.services.event_emitter.emit_terminal_online", AsyncMock()), \
+             patch("app.services.config_service.get_config_value", AsyncMock(side_effect=[300, 3])), \
+             patch.object(
+                 ComplianceService, "_is_device_grouping_enabled",
+                 AsyncMock(return_value=True),
+             ), \
+             patch.object(
+                 ComplianceService, "_load_device_grouping_cache",
+                 AsyncMock(return_value=({}, set())),
+             ):
+            result = await service.process_arp_entries(entries, "lab")
+
+        assert result.entries_updated == 1
+        assert existing.device_id == "3786"
 
     @pytest.mark.asyncio
     async def test_same_mac_new_ip_marks_ip_changed_at(self, service, mock_db):
@@ -676,10 +737,17 @@ class TestProcessArpEntries:
         offline.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_offline_detection_skip_null_updated_at(self, service, mock_db):
+    async def test_offline_detection_uses_timestamp_when_updated_at_null(self, service, mock_db):
+        """历史记录 updated_at 为 NULL 时，用 timestamp 兜底判断离线。
+
+        新记录此前不写 updated_at，导致只被采集一次的记录永远不会被标记
+        离线；这里验证兜底逻辑会正常发出离线事件并写入 block_state。
+        """
         entries = [{"ip_address": "10.0.0.1", "mac_address": "aa:bb:cc:dd:ee:ff"}]
         existing = make_terminal(ip="10.0.0.1", mac_norm="AABBCCDDEEFF")
         null_ts = make_terminal(ip="10.0.0.2", mac_norm="112233445566")  # updated_at None
+        null_ts.timestamp = datetime(2025, 1, 1, tzinfo=UTC)
+        null_ts.block_state = None
 
         set_exec_sequence(
             mock_db,
@@ -690,11 +758,50 @@ class TestProcessArpEntries:
             ],
         )
 
-        with patch("app.services.config_service.get_config_value", AsyncMock(side_effect=[300, 3])), \
+        fixed_now = datetime(2026, 1, 1, tzinfo=UTC)
+        with patch("app.core.timezone.now_utc", return_value=fixed_now), \
+             patch("app.services.config_service.get_config_value", AsyncMock(side_effect=[300, 3])), \
              patch("app.services.event_emitter.emit_terminal_offline", AsyncMock()) as offline:
             await service.process_arp_entries(entries, "lab")
 
-        offline.assert_not_called()
+        assert null_ts.block_state == "offline"
+        offline.assert_called_once_with(ip_address="10.0.0.2", mac_address=null_ts.mac_address or "")
+
+    @pytest.mark.asyncio
+    async def test_one_off_duplicate_ip_record_is_marked_offline(self, service, mock_db):
+        """同一 MAC 曾短暂出现在两个 IP：只被采集一次的记录必须离线。
+
+        复现 10.8.18.183/92-70-FA-71-63-DB 场景：同一批采集创建了 .136 与
+        .183 两条记录，之后只重新采集到 .136；.183 记录 updated_at 为 NULL，
+        必须通过 timestamp 兜底标记离线，避免持续参与合规重算。
+        """
+        entries = [{"ip_address": "10.0.0.136", "mac_address": "92:70:fa:71:63:db"}]
+        seen = make_terminal(ip="10.0.0.136", mac="92-70-FA-71-63-DB", mac_norm="9270FA7163DB")
+        seen.block_state = None
+        one_off = make_terminal(ip="10.0.0.183", mac="92-70-FA-71-63-DB", mac_norm="9270FA7163DB")
+        one_off.updated_at = None
+        one_off.timestamp = datetime(2025, 1, 1, tzinfo=UTC)
+        one_off.block_state = None
+
+        set_exec_sequence(
+            mock_db,
+            [
+                make_exec_result(scalar=seen),
+                make_exec_result(rows=[]),
+                make_exec_result(rows=[seen, one_off]),
+            ],
+        )
+
+        fixed_now = datetime(2026, 1, 1, tzinfo=UTC)
+        with patch("app.core.timezone.now_utc", return_value=fixed_now), \
+             patch("app.services.config_service.get_config_value", AsyncMock(side_effect=[300, 3])), \
+             patch("app.services.event_emitter.emit_terminal_offline", AsyncMock()) as offline:
+            await service.process_arp_entries(entries, "lab")
+
+        assert one_off.block_state == "offline"
+        offline.assert_called_once_with(
+            ip_address="10.0.0.183", mac_address="92-70-FA-71-63-DB"
+        )
 
     @pytest.mark.asyncio
     async def test_offline_detection_marks_block_state(self, service, mock_db):
