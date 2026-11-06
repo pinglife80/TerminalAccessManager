@@ -1,6 +1,6 @@
 # TerminalAccessManager - 运维操作手册
 
-> 文档版本：v3.28.0  更新日期：2026-11-05
+> 文档版本：v3.28.1  更新日期：2026-11-06
 
 ## 目录
 
@@ -593,6 +593,73 @@ FROM terminals GROUP BY compliance_status, status, excluded_by_rule;
 ```
 
 > 注意：`blocked` 统计按有效黑名单 IP 计算，因此保留的已封锁排除终端仍会计入 `blocked`，这是预期行为；`total`、合规状态分布与 `unblocked` 不含这些行。
+
+---
+
+### 2.12 设备归组陈旧 device_id 与合规状态冻结排查（v3.28.1+）
+
+**症状 A：IP 与 MAC 都不在 IPGuard 基线，终端却显示「合规」**
+
+1. 核查终端是否被设备归组授予合规（`device_id` 非空即可覆盖单网卡判定）：
+
+```sql
+SELECT id, ip_address, mac_address, device_id, block_state, compliance_status, status
+FROM terminals
+WHERE device_id IS NOT NULL AND compliance_status = 'compliant'
+ORDER BY id;
+```
+
+2. 对照 IPGuard 当前设备成员，确认该 MAC 是否仍属于该 `device_id`：
+
+```sql
+-- 在 IPGuard 库执行
+SELECT DEVICE_ID, IP_ADDRESS, MAC_ADDRESS
+FROM OCULAR3.AGENT.AGT_IP_MAC_STR
+WHERE DEVICE_ID = '<device_id>';
+```
+
+3. 若 MAC 已不属于该设备，说明关联已失效，按下方「存量修复」清理。
+
+**症状 B：终端在合规/非合规之间反复震荡**
+
+1. 查看该终端的 `updated_at`、`block_state` 与合规状态：
+
+```sql
+SELECT id, ip_address, mac_address, status, block_state, compliance_status,
+       updated_at, compliance_checked_at
+FROM terminals WHERE ip_address = '<IP>' ORDER BY id;
+```
+
+2. 若 `updated_at` 长期未更新但终端实际在线，检查 ARP 采集日志与数据源连通性；v3.28.1 起新记录会写入 `updated_at`，离线检测以 `updated_at or timestamp` 兜底。
+3. 离线记录会被重算跳过（状态冻结），恢复在线后需等待下一轮采集/重算或手动触发。
+
+**日志关键字**
+
+| 日志 | 含义 |
+|------|------|
+| `[compliance-trace][device-grouping]` | 设备归组关联校验：stale device_id 被拒绝、映射后的 device_id、设备级结果覆盖单网卡结果 |
+| `[compliance-trace][offline-skip]` | 重算跳过离线终端的原因与字段快照；冻结合规且关联失效时输出 WARNING |
+| `[compliance-trace][auto-block]` | 自动封锁候选数、设备扩展连带终端、逐条封锁参数与结果 |
+
+快速筛选：
+
+```bash
+./manage.sh logs backend -n 500 | grep "compliance-trace"
+```
+
+**存量修复**
+
+```bash
+# dry-run（默认，仅输出，不写库）
+docker exec -w /app tam_backend python scripts/repair_stale_device_ids.py
+
+# 生效：清空失效 device_id；离线且未封锁的记录同步重置为 unknown
+docker exec -w /app tam_backend python scripts/repair_stale_device_ids.py --apply
+```
+
+输出字段说明：`old_device_id`（库中现值）、`current_device_id`（当前注册表映射，`None` 表示已不属于任何设备）、`offline_reset`（是否同时重置离线冻结状态）。
+
+> 注意：脚本仅在设备注册表可读时执行（`device_ids` 为空会直接中止）；`--apply` 不可逆，被清空的 `device_id` 不会自动恢复，执行前先 dry-run 核对清单。
 
 ---
 

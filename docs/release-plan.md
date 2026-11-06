@@ -1,6 +1,6 @@
-# v3.28.0 发布方案
+# v3.28.1 发布方案
 
-> 文档版本：v3.28.0 | 更新日期：2026-11-05
+> 文档版本：v3.28.1 | 更新日期：2026-11-06
 > 文档性质：版本发布输出文档，记录发布准备、流程、部署步骤和回滚方案
 
 ---
@@ -9,37 +9,41 @@
 
 | 项目 | 内容 |
 |------|------|
-| **版本号** | v3.28.0 |
-| **版本类型** | Minor |
-| **基线版本** | v3.27.0 |
-| **发布日期** | 2026-11-05 |
+| **版本号** | v3.28.1 |
+| **版本类型** | Patch |
+| **基线版本** | v3.28.0 |
+| **发布日期** | 2026-11-06 |
 | **开发分支** | `develop` |
 | **发布分支** | `main` |
 | **数据库迁移** | 无 |
 
 ### 发布主题
 
-**排除规则可选解封已封锁终端**，同时修复 CI 三个必然失败的 Job 并完成后端 ruff 告警清零。
+**修复合规误判**：合规震荡、离线状态冻结、陈旧 `device_id` 误判合规，同时补充 `[compliance-trace]` 判定链路追踪日志与存量修复脚本。
 
 ---
 
 ## 二、变更内容
 
-### 2.1 新功能
+### 2.1 缺陷修复
 
 | 模块 | 内容 |
 |------|------|
-| 后端 | 创建 / 停用→启用排除规则支持 `unblock_blocked`（默认 false）；仅当终端绑定的全部防火墙解封成功才删除终端记录，黑名单置 `auto_unblocked=true`、`unblock_reason=excluded_by_rule`；失败/部分成功/无绑定保留并打标 |
-| 接口 | `POST /terminal-exclusions`、`POST /terminal-exclusions/{id}/toggle` 接收 `unblock_blocked`；响应新增 `impact.blocked` 与 `unblock` 明细；勾选时额外校验 `blacklist:write` |
-| 前端 | 影响预览新增「已封锁」指标；解封勾选与二次确认；启停确认弹窗；toast 展示成功/失败/跳过 |
-| 可观测性 | 解封流程 ALL_SUCCESS / PARTIAL / SKIPPED / finished 分支日志；审计归属当前操作人 |
+| ARP 采集 | 新增记录写入 `updated_at=now()`；离线检测改为 `updated_at or timestamp` 兜底，修复已有记录被误判离线导致的合规震荡（10.8.18.183） |
+| 设备归组判定 | 新增 `_effective_device_id()`：注册表可用时以当前 MAC→设备映射为准，映射为空时回退旧逻辑；批量首检与全量重算写回自愈值，修复陈旧关联授予的误合规（10.8.15.41） |
+| 离线守卫 | `auto_block_non_compliant`、定时任务 retry-block、`_expand_non_compliant_to_device` 统一排除 `block_state=offline` 且未封锁的终端 |
+| 存量修复 | 新增 `backend/scripts/repair_stale_device_ids.py`：默认 dry-run，`--apply` 清理失效关联并将离线未封锁记录重置为 `unknown` |
 
-### 2.2 工程化
+### 2.2 可观测性
 
-- 修复 CI 三个必然失败 Job：backend-lint（固定 `ruff==0.15.17`）、frontend-lint（空 catch + warning 阈值 30）、frontend-build（仓库根构建上下文 + `VERSION` 注入）。
-- CI 新增 `permissions`、`concurrency` 与各 Job `timeout-minutes`；前端 lint 统一走 `npm run lint`。
-- 后端 ruff 317 条告警全部修复，移除 22 条临时基线豁免，恢复零容忍门禁。
-- 行为验证：646 条定向回归 + 1764 条全量测试通过，解封冒烟输出与清理前一致。
+- 统一前缀 `[compliance-trace]`：`[device-grouping]` 关联校验与设备级覆盖、`[offline-skip]` 跳过原因与冻结状态、`[auto-block]` 候选数/设备扩展/逐条封锁。
+- 离线终端为 `compliant` 且 `device_id` 已失效时输出 WARNING，并提示运行修复脚本。
+
+### 2.3 测试
+
+- 后端全量 1781 passed（较 v3.28.0 新增 17 条）。
+- 新增“离线 + 陈旧 device_id + 冻结 compliant”端到端回归用例，锁定事故场景。
+- `ruff check app/ tests/` 零告警。
 
 ---
 
@@ -47,12 +51,9 @@
 
 | # | 提交信息 | 内容 |
 |---|---------|------|
-| 1 | `feat(exclusions): 支持创建/启用排除规则时可选解封已封锁终端` | 后端 schema / service / compliance / API 与测试 |
-| 2 | `feat(frontend): 排除规则页面支持可选解封已封锁终端` | 页面、API client、三语文案 |
-| 3 | `docs(terminals): 补充排除规则可选解封说明` | api / backend / user-guide / operations-runbook |
-| 4 | `chore(ci): 修复工作流失败并统一 lint 门禁` | ci.yml、deployment.md、前端 lint 修复 |
-| 5 | `refactor(backend): 清零 ruff 告警并移除临时基线豁免` | 77 个后端文件的等价格式/静态修复 |
-| 6 | `chore(release): bump version to v3.28.0 and refresh docs` | VERSION 与发布文档 |
+| 1 | `fix(arp): harden offline detection and refresh device_id from registry` | ARP `updated_at`、离线检测兜底、`device_id` 刷新与对应测试 |
+| 2 | `fix(compliance): reject stale device_id and keep offline terminals out of blocking` | 设备归组映射校验、离线守卫、存量修复脚本、追踪日志与测试 |
+| 3 | `chore(release): bump version to v3.28.1 and refresh docs` | VERSION 与发布文档 |
 
 ---
 
@@ -85,24 +86,25 @@ git push origin develop
 ### 4.3 创建 PR
 
 - 方向：`develop` → `main`
-- 标题：`release: v3.28.0 排除规则可选解封 + CI 修复与 lint 清零`
-- 说明：使用下方模板
+- 标题：`release: v3.28.1 修复合规误判与陈旧 device_id 关联`
 
 ```markdown
 ## Summary
-- 排除规则创建/启用新增可选解封：全部防火墙成功才删除终端并标记黑名单，失败/部分成功/无绑定保留并打标
-- 修复 CI 三个必然失败 Job（ruff 未固定版本、ESLint 阈值、前端镜像构建上下文），新增并发取消与超时
-- 后端 ruff 317 条告警清零，移除全部临时基线豁免，恢复零容忍门禁
+- 修复 ARP 新记录缺少 updated_at 导致的合规震荡，离线检测增加 timestamp 兜底
+- auto-block / retry-block / 设备归组扩展排除 offline 终端，避免错误状态被覆盖
+- 设备归组以当前 MAC→设备映射校验 device_id，陈旧关联不再误判合规；重算与采集自动自愈
+- 新增 repair_stale_device_ids 存量修复脚本（默认 dry-run）与 [compliance-trace] 追踪日志
 
 ## 行为影响
-- 解封为可选操作，默认关闭时与 v3.27.0 行为完全一致
-- lint 清理无行为变化：1764 条后端测试、75 条前端测试全部通过
+- 仅影响存在陈旧 device_id 或离线冻结状态的终端；离线记录合规状态变为 unknown（预期）
+- 无 API/schema/数据库迁移变更；正常在线终端判定与封锁行为不变
 
 ## Test plan
-- [ ] 后端 `pytest tests/` 1764 passed
-- [ ] 前端 `npm run lint` / `tsc` / `vitest run` / `vite build`
-- [ ] `docker build ./backend`、`docker build -f frontend/Dockerfile .`
+- [ ] 后端 `pytest tests/` 1781 passed
+- [ ] 后端 `ruff check app/ tests/` 零告警
+- [ ] 前端 `npm run lint` / `tsc` / `vitest run` / `vite build`（CI）
 - [ ] `./manage.sh update && ./manage.sh health`
+- [ ] 升级后 repair_stale_device_ids dry-run 为 0 条
 - [ ] PR CI 6 个 Job 全部通过
 ```
 
@@ -113,11 +115,11 @@ PR CI 通过后合并（merge commit），然后：
 ```bash
 git checkout main
 git pull origin main
-git tag -a v3.28.0 -m "release v3.28.0: optional unblock for excluded blocked terminals, CI fixes, zero-warning lint"
-git push origin v3.28.0
+git tag -a v3.28.1 -m "release v3.28.1: fix compliance misjudgment, stale device_id and offline state handling"
+git push origin v3.28.1
 ```
 
-创建 GitHub Release：标题 `v3.28.0`，正文复用 `docs/release-notes.md` 的 `[v3.28.0]` 段落。
+创建 GitHub Release：标题 `v3.28.1`，正文复用 `docs/release-notes.md` 的 `[v3.28.1]` 段落。
 
 ### 4.5 同步 develop
 
@@ -150,16 +152,23 @@ git pull origin main
 
 本次无数据库迁移，无需执行 `alembic upgrade`。
 
+升级后建议执行存量修复 dry-run：
+
+```bash
+docker exec -w /app tam_backend python scripts/repair_stale_device_ids.py
+```
+
 ---
 
 ## 六、回滚方案
 
 ```bash
-./manage.sh upgrade v3.27.0
+./manage.sh upgrade v3.28.0
 ```
 
 - 无数据库迁移，回滚不涉及 schema 变更。
-- 若仅解封行为异常，取消勾选 `unblock_blocked` 即可恢复 v3.27.0 的默认行为。
+- 已被存量修复脚本清空的 `device_id` 不会随代码回滚恢复；v3.28.0 对 `NULL` 关联按单网卡口径判定，不会重新产生误合规。
+- 若设备归组判定过严，可临时关闭 `device_grouping_enabled`。
 
 ---
 
@@ -167,34 +176,29 @@ git pull origin main
 
 | 文件 | 变更类型 | 说明 |
 |------|---------|------|
-| `VERSION` | 编辑 | 3.27.0 → 3.28.0 |
-| `backend/app/schemas/terminal_exclusion.py` | 编辑 | `unblock_blocked`、`blocked`、`ExclusionUnblockResult`、`TerminalExclusionToggle` |
-| `backend/app/services/terminal_exclusion_service.py` | 编辑 | 解封编排、分支日志、失败/跳过统计 |
-| `backend/app/services/compliance_service.py` | 编辑 | `_unblock_on_firewall(actor=...)` |
-| `backend/app/api/v1/endpoints/terminal_exclusions.py` | 编辑 | 参数接收、`blacklist:write` 校验、响应与审计扩展 |
-| `backend/tests/test_terminal_exclusion_{service,integration}.py` | 编辑 | 解封分支与失败策略测试 |
-| `backend/tests/test_endpoints_terminal_exclusions.py` | 新增 | 端点级权限与参数测试 |
-| `frontend/src/pages/TerminalExclusions.tsx` | 编辑 | 已封锁指标、解封勾选与确认、结果提示 |
-| `frontend/src/api/terminalExclusions.ts` | 编辑 | 类型与 toggle 参数 |
-| `frontend/src/i18n/locales/{zh,en,ja}.ts` | 编辑 | 新增文案 |
-| `.github/workflows/ci.yml` | 编辑 | 修复 3 个 Job，新增权限/并发/超时 |
-| `frontend/package.json` | 编辑 | lint warning 阈值 30 |
-| `frontend/src/{components/LDAPImportModal.tsx,components/datasources/OperationSourceTab.tsx,hooks/useTokenExpiration.ts}` | 编辑 | 空 catch 修复 |
-| 后端 77 个 `app/`、`tests/` 文件 | 编辑 | ruff 告警等价修复 |
-| `docs/{api,backend,user-guide,operations-runbook,deployment}.md` | 编辑 | 功能/CI 说明与版本号 |
-| `docs/changelog.md` / `release-notes.md` / `release-plan.md` / `production-readiness-assessment.md` | 编辑 | 发布文档 |
+| `VERSION` | 编辑 | 3.28.0 → 3.28.1 |
+| `backend/app/services/arp_collector_service.py` | 编辑 | `updated_at` 写入、离线检测兜底、`device_id` 刷新 |
+| `backend/app/services/compliance_service.py` | 编辑 | `_effective_device_id`、离线守卫、重算自愈、存量修复、追踪日志 |
+| `backend/app/main.py` | 编辑 | retry-block 排除离线终端 |
+| `backend/tests/test_arp_collector_service.py` | 编辑 | `updated_at`、离线检测、`device_id` 刷新测试 |
+| `backend/tests/test_compliance_service.py` | 编辑 | 离线守卫、存量修复、离线陈旧关联回归测试 |
+| `backend/tests/test_device_grouping.py` | 编辑 | 陈旧/冲突 `device_id` 判定与扩展防护测试 |
+| `backend/scripts/repair_stale_device_ids.py` | 新增 | 存量修复 CLI（dry-run 默认） |
+| `docs/{changelog,release-notes,release-plan}.md` | 编辑 | 发布文档 |
+| `docs/{backend,operations-runbook,production-readiness-assessment}.md` | 编辑 | 功能说明、排查手册、版本跟踪 |
 
 ---
 
 ## 八、验证清单
 
-- [ ] 根 `VERSION` = 3.28.0
-- [ ] 功能文档与发布文档版本统一为 v3.28.0
+- [ ] 根 `VERSION` = 3.28.1
+- [ ] 功能文档与发布文档版本统一为 v3.28.1
 - [ ] `ruff check app/ tests/` 零告警
-- [ ] 后端全量 1764 passed，前端 75 passed
-- [ ] 6 个提交已推送 develop，CI 全部通过
+- [ ] 后端全量 1781 passed
+- [ ] 3 个提交已推送 develop，CI 全部通过
 - [ ] 发布 PR（develop → main）CI 通过并已合并
-- [ ] `v3.28.0` tag 已创建并推送
-- [ ] GitHub Release `v3.28.0` 已发布
+- [ ] `v3.28.1` tag 已创建并推送
+- [ ] GitHub Release `v3.28.1` 已发布
 - [ ] develop 已同步 main（包含 tag）
-- [ ] 部署后 `./manage.sh health` 通过，版本显示 3.28.0
+- [ ] 部署后 `./manage.sh health` 通过，版本显示 3.28.1
+- [ ] `repair_stale_device_ids.py` dry-run 输出 0 条陈旧关联
