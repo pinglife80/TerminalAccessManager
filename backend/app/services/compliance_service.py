@@ -104,6 +104,34 @@ async def _release_compliance_lock(token: str) -> None:
         logger.warning(f"Failed to release compliance lock: {e}")
 
 
+def not_offline_condition():
+    """SQL condition keeping only terminals that are not marked stale/offline.
+
+    Offline records are skipped by compliance recalculation, so their stored
+    ``non_compliant`` status may be stale; blocking them would hit an IP they
+    no longer hold (possibly shared with an online terminal).
+
+    ``is_distinct_from`` is used on purpose: a plain ``!= 'offline'`` evaluates
+    to NULL for the normal ``block_state IS NULL`` rows and would silently
+    exclude them from blocking.
+    """
+    return Terminal.block_state.is_distinct_from("offline")
+
+
+def retry_block_candidates_stmt(source_tag: str):
+    """Terminals eligible for the scheduler's retry-block pass.
+
+    Same eligibility as ``auto_block_non_compliant``: non-compliant, unblocked
+    and not marked offline.
+    """
+    return select(Terminal).where(
+        (Terminal.source_tag == source_tag) &
+        (Terminal.compliance_status == "non_compliant") &
+        (Terminal.status == "unblocked") &
+        not_offline_condition()
+    )
+
+
 class ComplianceService:
     """Service for compliance checking and auto-block/unblock operations"""
 
@@ -234,12 +262,27 @@ class ComplianceService:
             # 方向 C（误判自纠绕过解封冷却）语义；recalc 路径已有该信号。
             # Device grouping (any) override before final classification.
             if device_grouping_enabled:
-                device_id = entry.get("device_id")
-                if device_id is None and mac_addr:
-                    device_id = mac_to_device.get(self._norm_mac_key(mac_addr))
-                if device_id is not None:
-                    ig_match = device_id in device_ids
-                    entry["device_id"] = device_id
+                per_nic_match = ig_match
+                stamped_device_id = entry.get("device_id")
+                mac_norm = self._norm_mac_key(mac_addr)
+                effective_device_id = self._effective_device_id(
+                    stamped_device_id, mac_norm, mac_to_device
+                )
+                if mac_to_device and stamped_device_id != effective_device_id:
+                    logger.info(
+                        f"[compliance-trace][device-grouping] batch {ip_addr}/{mac_addr}: "
+                        f"stale device_id {stamped_device_id} rejected "
+                        f"(registry mapping={mac_to_device.get(mac_norm)}, mac={mac_norm}); "
+                        f"effective device_id={effective_device_id}"
+                    )
+                if effective_device_id is not None:
+                    ig_match = effective_device_id in device_ids
+                    logger.info(
+                        f"[compliance-trace][device-grouping] batch {ip_addr}/{mac_addr}: "
+                        f"device_id={effective_device_id} (stamped={stamped_device_id}), "
+                        f"device_in_baseline={ig_match}, per_nic_match={per_nic_match}"
+                    )
+                entry["device_id"] = effective_device_id
             entry["ig_match"] = ig_match
 
             if wl_result:
@@ -508,11 +551,17 @@ class ComplianceService:
             .where(
                 (Terminal.source_tag == arp_source_tag) &
                 (Terminal.compliance_status == "non_compliant") &
-                (Terminal.status != "blocked")
+                (Terminal.status != "blocked") &
+                not_offline_condition()
             )
         )
         result = await self.db.execute(stmt)
         non_compliant_entries = result.scalars().all()
+        logger.info(
+            f"[compliance-trace][auto-block] source={arp_source_tag}: "
+            f"{len(non_compliant_entries)} non-compliant candidates "
+            f"(dry_run={dry_run}, block_time={block_time})"
+        )
 
         # Device granularity: when grouping is on and block granularity is device,
         # a non-compliant device blocks ALL its currently-visible IPs (sibling
@@ -524,6 +573,15 @@ class ComplianceService:
             non_compliant_entries, expansion = await self._expand_non_compliant_to_device(
                 non_compliant_entries, arp_source_tag
             )
+            if expansion:
+                logger.info(
+                    f"[compliance-trace][auto-block] source={arp_source_tag}: "
+                    f"device expansion added {len(expansion)} sibling terminal(s): "
+                    + ", ".join(
+                        f"{sid}(device_id={info['device_id']}, trigger={info['trigger_ip']})"
+                        for sid, info in expansion.items()
+                    )
+                )
 
         # Filter out entries already in blacklist (IP+MAC level)
         def is_already_blacklisted(entry):
@@ -533,6 +591,11 @@ class ComplianceService:
         non_compliant_entries = [
             e for e in non_compliant_entries if not is_already_blacklisted(e)
         ]
+        logger.info(
+            f"[compliance-trace][auto-block] source={arp_source_tag}: "
+            f"{len(non_compliant_entries)} candidate(s) remain after "
+            f"already-blacklisted filter"
+        )
 
         # Terminals covered by an exclusion rule must never be blocked: they are
         # intentionally outside the compliance scope (normally they are not
@@ -676,6 +739,14 @@ class ComplianceService:
                     "device_grouped": True,
                     "device_grouped_expanded": False,
                 }
+            logger.info(
+                f"[compliance-trace][auto-block] issuing block "
+                f"{entry.ip_address}/{entry.mac_address} "
+                f"(terminal_id={entry.id}, compliance={entry.compliance_status}, "
+                f"device_id={entry.device_id}, "
+                f"device_grouped={bool(exp) or bool(grouping_enabled and entry.device_id)}, "
+                f"firewalls={firewall_tags}, dry_run={dry_run}, driver={entry.source_tag})"
+            )
             if dry_run:
                 details.append({
                     "ip_address": entry.ip_address,
@@ -719,7 +790,12 @@ class ComplianceService:
                         successfully_blocked_fw.append(fw_tag)
                         if newly_blocked:
                             newly_blocked_fw.append(fw_tag)
-                        logger.debug(f"Blocked {entry.ip_address} on firewall '{fw_tag}'")
+                        logger.info(
+                            f"[compliance-trace][auto-block] blocked {entry.ip_address} "
+                            f"on firewall '{fw_tag}' "
+                            f"(terminal_id={entry.id}, newly_blocked={newly_blocked}, "
+                            f"device_grouped={bool(exp) or bool(grouping_enabled and entry.device_id)})"
+                        )
                         await self.log_action("system", "firewall_block", "terminal", str(entry.id), {
                             "message": f"Blocked IP {entry.ip_address} on firewall {fw_tag}",
                             "terminal_id": entry.id,
@@ -1688,6 +1764,23 @@ class ComplianceService:
 
         return result_data
 
+    @staticmethod
+    def _effective_device_id(
+        stamped: str | None,
+        mac_norm: str | None,
+        mac_to_device: dict[str, str],
+    ) -> str | None:
+        """Return the device_id that may be trusted for compliance judgment.
+
+        When the MAC->device mapping is available it is authoritative: a stamped
+        device_id is only trusted if it still matches the current mapping. An
+        empty mapping means the registry could not be loaded, so the stamped
+        value is kept to avoid mass false downgrades on cache failure.
+        """
+        if mac_to_device:
+            return mac_to_device.get(mac_norm) if mac_norm else None
+        return stamped or None
+
     async def _load_device_grouping_cache(self) -> tuple[dict[str, str], set[str]]:
         """Load the physical-device registry merged across all IPGuard baselines.
 
@@ -1758,18 +1851,38 @@ class ComplianceService:
         device_ids = {e.device_id for e in entries if e.device_id}
         if not device_ids:
             return entries, {}
+        # Device expansion must only follow device_ids that the current registry
+        # still supports for the triggering MAC. Otherwise a stale association
+        # would drag genuinely compliant siblings of that device into a block.
+        # An empty mapping means the registry is unavailable: keep legacy behavior.
+        try:
+            mac_to_device, _ = await self._load_device_grouping_cache()
+        except Exception:
+            mac_to_device = {}
+        trusted_entries = entries
+        if mac_to_device:
+            trusted_entries = [
+                e for e in entries
+                if self._effective_device_id(
+                    e.device_id, self._norm_mac_key(e.mac_address), mac_to_device
+                ) == e.device_id
+            ]
+            device_ids = {e.device_id for e in trusted_entries if e.device_id}
+            if not device_ids:
+                return entries, {}
         try:
             stmt = select(Terminal).where(
                 (Terminal.source_tag == arp_source_tag) &
                 (Terminal.device_id.in_(device_ids)) &
-                (Terminal.status != "blocked")
+                (Terminal.status != "blocked") &
+                not_offline_condition()
             )
             result = await self.db.execute(stmt)
             siblings = result.scalars().all()
         except Exception:
             return entries, {}
         triggers: dict[str, Terminal] = {}
-        for e in entries:
+        for e in trusted_entries:
             if e.device_id and e.device_id not in triggers:
                 triggers[e.device_id] = e
         seen_ids = {e.id for e in entries}
@@ -1787,6 +1900,80 @@ class ComplianceService:
                         "trigger_ip": trigger.ip_address,
                     }
         return merged, expansion
+
+    async def repair_stale_device_ids(self, apply: bool = False) -> dict:
+        """Clear device_id associations that no longer match the device registry.
+
+        A stamped device_id is only meaningful while its MAC still maps to that
+        device in the current IPGuard registry. Stale values would otherwise make
+        device grouping mark terminals compliant without any IP/MAC baseline hit.
+
+        Offline, unblocked records are additionally reset to ``unknown`` because
+        recalculation skips them, so their frozen status would stay wrong.
+
+        ``apply=False`` performs a dry run and writes nothing.
+        """
+        mac_to_device, device_ids = await self._load_device_grouping_cache()
+        if not device_ids:
+            logger.warning("repair_stale_device_ids aborted: device registry unavailable")
+            return {
+                "aborted": "device registry unavailable",
+                "scanned": 0,
+                "repaired": 0,
+                "applied": False,
+                "details": [],
+            }
+
+        stmt = select(Terminal).where(Terminal.device_id.is_not(None))
+        result = await self.db.execute(stmt)
+        terminals = result.scalars().all()
+
+        details: list[dict] = []
+        for terminal in terminals:
+            mac_norm = terminal.mac_address_normalized or self._norm_mac_key(terminal.mac_address)
+            current_device_id = mac_to_device.get(mac_norm) if mac_norm else None
+            if current_device_id == terminal.device_id:
+                continue
+
+            offline_reset = (
+                terminal.block_state == "offline" and terminal.status != "blocked"
+            )
+            details.append({
+                "id": terminal.id,
+                "ip_address": terminal.ip_address,
+                "mac_address": terminal.mac_address,
+                "old_device_id": terminal.device_id,
+                "current_device_id": current_device_id,
+                "offline_reset": offline_reset,
+            })
+            logger.info(
+                f"repair_stale_device_ids: terminal id={terminal.id} "
+                f"{terminal.ip_address}/{terminal.mac_address} device_id "
+                f"{terminal.device_id} -> {current_device_id} "
+                f"(offline_reset={offline_reset}, apply={apply})"
+            )
+            if not apply:
+                continue
+
+            terminal.device_id = None
+            if offline_reset:
+                terminal.compliance_status = "unknown"
+                terminal.non_compliant_confirm_count = 0
+                terminal.compliant_confirm_count = 0
+                terminal.non_compliant_type = None
+                terminal.compliant_checked_at = None
+                terminal.compliance_checked_at = None
+
+        if apply and details:
+            await self.db.commit()
+
+        return {
+            "aborted": None,
+            "scanned": len(terminals),
+            "repaired": len(details),
+            "applied": apply,
+            "details": details,
+        }
 
     # ------------------------------------------------------------------
     # Firewall Operations
@@ -2896,9 +3083,32 @@ class ComplianceService:
                     if terminal.block_state == "offline" and terminal.status != "blocked":
                         offline_skip_count += 1
                         logger.info(
-                            f"Recalc skip offline: {terminal.ip_address}/{terminal.mac_address} "
-                            f"(block_state=offline, status={terminal.status})"
+                            f"[compliance-trace][offline-skip] recalc skip "
+                            f"{terminal.ip_address}/{terminal.mac_address} "
+                            f"(terminal_id={terminal.id}, block_state=offline, "
+                            f"status={terminal.status}, "
+                            f"compliance_status={terminal.compliance_status}, "
+                            f"device_id={terminal.device_id}, "
+                            f"source={terminal.source_tag}, updated_at={terminal.updated_at})"
                         )
+                        stale_suspended = (
+                            terminal.compliance_status == "compliant"
+                            and terminal.device_id
+                            and mac_to_device
+                            and self._effective_device_id(
+                                terminal.device_id,
+                                self._norm_mac_key(terminal.mac_address or ""),
+                                mac_to_device,
+                            ) != terminal.device_id
+                        )
+                        if stale_suspended:
+                            logger.warning(
+                                f"[compliance-trace][offline-skip] suspended compliant state "
+                                f"with stale device_id={terminal.device_id} for "
+                                f"{terminal.ip_address}/{terminal.mac_address} "
+                                f"(terminal_id={terminal.id}); run "
+                                f"scripts/repair_stale_device_ids.py to clear it"
+                            )
                         continue
 
                     # Excluded terminals are outside the compliance scope. They
@@ -2940,14 +3150,39 @@ class ComplianceService:
                     # device-wide membership signal. Backfills device_id for pre-migration
                     # records first. Whitelist precedence is applied later and still wins.
                     if device_grouping_enabled:
-                        if terminal.device_id is None and mac_addr:
-                            terminal.device_id = mac_to_device.get(self._norm_mac_key(mac_addr))
-                        if terminal.device_id is not None:
-                            ig_match = terminal.device_id in device_ids
+                        per_nic_match = ig_match
+                        mac_norm = self._norm_mac_key(mac_addr)
+                        effective_device_id = self._effective_device_id(
+                            terminal.device_id, mac_norm, mac_to_device
+                        )
+                        if mac_to_device and terminal.device_id != effective_device_id:
+                            logger.info(
+                                f"[compliance-trace][device-grouping] recalc {ip_addr}/{mac_addr} "
+                                f"(terminal_id={terminal.id}): stale device_id "
+                                f"{terminal.device_id} rejected "
+                                f"(registry mapping={mac_to_device.get(mac_norm)}, mac={mac_norm}); "
+                                f"effective device_id={effective_device_id}, "
+                                f"old_compliance={old_compliance}, "
+                                f"block_state={terminal.block_state}"
+                            )
+                            # Self-heal the stored association (None included).
+                            terminal.device_id = effective_device_id
+                        if effective_device_id is not None:
+                            ig_match = effective_device_id in device_ids
                             # Set both found flags equal so the device-wide signal does not
                             # trip the per-NIC total_absence branch; a device absent from the
                             # baseline downgrades under the standard threshold.
                             ig_ip_found = ig_mac_found = ig_match
+                            if ig_match != per_nic_match:
+                                logger.info(
+                                    f"[compliance-trace][device-grouping] recalc "
+                                    f"{ip_addr}/{mac_addr} (terminal_id={terminal.id}): "
+                                    f"device_id={effective_device_id} "
+                                    f"device_in_baseline={ig_match} overrides "
+                                    f"per_nic_match={per_nic_match} "
+                                    f"(old_compliance={old_compliance}, "
+                                    f"block_state={terminal.block_state})"
+                                )
 
                     # Initialize compliant_confirm_count if not present (handles pre-migration records)
                     if not hasattr(terminal, 'compliant_confirm_count') or terminal.compliant_confirm_count is None:

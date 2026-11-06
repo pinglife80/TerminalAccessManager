@@ -435,11 +435,8 @@ async def scheduled_compliance_check():
 
                         # Retry blocking for non_compliant + unblocked terminals
                         try:
-                            retry_stmt = sa_select(Terminal).where(
-                                (Terminal.source_tag == source.tag) &
-                                (Terminal.compliance_status == "non_compliant") &
-                                (Terminal.status == "unblocked")
-                            )
+                            from app.services.compliance_service import retry_block_candidates_stmt
+                            retry_stmt = retry_block_candidates_stmt(source.tag)
                             retry_r = await db.execute(retry_stmt)
                             retry_terminals = retry_r.scalars().all()
                             if retry_terminals:

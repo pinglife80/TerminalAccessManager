@@ -12,9 +12,10 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from sqlalchemy import select
 
 from app.models.blacklist import Blacklist
-from app.models.terminal import TerminalStatus
+from app.models.terminal import Terminal, TerminalStatus
 from app.models.whitelist import Whitelist
 from app.services.compliance_service import (
     COMPLIANCE_RECALC_LOCK_KEY,
@@ -25,6 +26,8 @@ from app.services.compliance_service import (
     ComplianceService,
     _acquire_compliance_lock,
     _release_compliance_lock,
+    not_offline_condition,
+    retry_block_candidates_stmt,
 )
 
 # ---------------------------------------------------------------------------
@@ -4472,7 +4475,7 @@ class TestRecalculateComplianceEdges:
         assert terminal.compliance_status == "unknown"  # untouched
         assert terminal.non_compliant_confirm_count == 5  # not accumulated/reset
         # 离线跳过必须留痕，便于确认陈旧记录未参与判定。
-        assert_logged_any(info_logger, "Recalc skip offline", "10.8.18.183")
+        assert_logged_any(info_logger, "[offline-skip] recalc skip", "10.8.18.183")
 
     @pytest.mark.asyncio
     async def test_recalculate_does_not_skip_blocked_offline(self, service, mock_db):
@@ -5149,4 +5152,341 @@ class TestExclusionGuards:
         assert result["unchanged"] == 0
         assert result["compliant"] == 0
         assert result["non_compliant"] == 0
+
+
+# ===========================================================================
+# TestOfflineBlockGuards
+# ===========================================================================
+
+class TestOfflineBlockGuards:
+    """Stale/offline terminals must never enter a block path.
+
+    These tests use a real SQLite session so the SQL semantics of
+    ``not_offline_condition`` are exercised, especially the NULL block_state
+    rows that a naive ``!= 'offline'`` would silently drop.
+    """
+
+    @staticmethod
+    def _add_terminal(
+        db,
+        ip,
+        mac_norm,
+        *,
+        block_state=None,
+        compliance_status="non_compliant",
+        status="unblocked",
+        source_tag="lab",
+        device_id=None,
+    ):
+        mac = "-".join(mac_norm[i:i + 2] for i in range(0, 12, 2))
+        terminal = Terminal(
+            ip_address=ip,
+            mac_address=mac,
+            mac_address_normalized=mac_norm,
+            status=status,
+            compliance_status=compliance_status,
+            source_tag=source_tag,
+            block_state=block_state,
+            device_id=device_id,
+            source="arp",
+        )
+        db.add(terminal)
+        return terminal
+
+    @pytest.mark.asyncio
+    async def test_not_offline_condition_keeps_null_and_non_offline(self, api_db):
+        self._add_terminal(api_db, "10.0.0.1", "AABBCCDDEE01")
+        self._add_terminal(api_db, "10.0.0.2", "AABBCCDDEE02", block_state="offline")
+        self._add_terminal(api_db, "10.0.0.3", "AABBCCDDEE03", block_state="no_firewall")
+        self._add_terminal(api_db, "10.0.0.4", "AABBCCDDEE04", block_state="block_failed")
+        await api_db.flush()
+
+        result = await api_db.execute(select(Terminal).where(not_offline_condition()))
+        ips = {t.ip_address for t in result.scalars().all()}
+
+        assert ips == {"10.0.0.1", "10.0.0.3", "10.0.0.4"}
+
+    @pytest.mark.asyncio
+    async def test_auto_block_dry_run_skips_offline_but_keeps_null(self, api_db):
+        # Online record (block_state NULL) and the incident's stale duplicates.
+        self._add_terminal(api_db, "10.8.18.183", "B0BE835CCE41")
+        self._add_terminal(api_db, "10.8.18.183", "9270FA7163DB", block_state="offline")
+        self._add_terminal(api_db, "10.8.18.136", "9270FA7163DB", block_state="offline")
+        await api_db.flush()
+
+        service = ComplianceService(api_db)
+        from app.services.data_source_service import DataSourceService
+
+        with patch.object(service, "_get_block_time", return_value="30d"), \
+             patch.object(service, "_is_device_grouping_enabled", return_value=False), \
+             patch.object(service, "_load_whitelist_cache", return_value=[]), \
+             patch.object(
+                 DataSourceService, "get_firewall_tags_for_arp", return_value=["fw1"]
+             ):
+            result = await service.auto_block_non_compliant("lab", dry_run=True)
+
+        assert result.total_non_compliant == 1
+        assert result.blocked == 1
+        assert [d["ip_address"] for d in result.details] == ["10.8.18.183"]
+        assert result.details[0]["mac_address"] == "B0-BE-83-5C-CE-41"
+
+    @pytest.mark.asyncio
+    async def test_device_expansion_skips_offline_siblings(self, api_db):
+        trigger = self._add_terminal(
+            api_db, "10.0.0.10", "AABBCCDDEE10", device_id="dev-1"
+        )
+        online_sibling = self._add_terminal(
+            api_db, "10.0.0.11", "AABBCCDDEE11", device_id="dev-1"
+        )
+        self._add_terminal(
+            api_db, "10.0.0.12", "AABBCCDDEE12",
+            block_state="offline", device_id="dev-1",
+        )
+        await api_db.flush()
+
+        service = ComplianceService(api_db)
+        merged, expansion = await service._expand_non_compliant_to_device([trigger], "lab")
+
+        assert {t.ip_address for t in merged} == {"10.0.0.10", "10.0.0.11"}
+        assert online_sibling.id in expansion
+
+    @pytest.mark.asyncio
+    async def test_retry_block_candidates_exclude_offline(self, api_db):
+        online = self._add_terminal(api_db, "10.0.0.20", "AABBCCDDEE20")
+        self._add_terminal(api_db, "10.0.0.21", "AABBCCDDEE21", block_state="offline")
+        self._add_terminal(api_db, "10.0.0.22", "AABBCCDDEE22", status="blocked")
+        self._add_terminal(api_db, "10.0.0.23", "AABBCCDDEE23", source_tag="other")
+        await api_db.flush()
+
+        result = await api_db.execute(retry_block_candidates_stmt("lab"))
+        ids = [t.id for t in result.scalars().all()]
+
+        assert ids == [online.id]
+
+
+# ===========================================================================
+# TestRepairStaleDeviceIds
+# ===========================================================================
+
+class TestRepairStaleDeviceIds:
+    """``device_id`` stamped by device grouping must match the current registry.
+
+    Stale associations make device grouping judge a terminal compliant without
+    any IP/MAC baseline hit (incident: 10.8.15.41 -> device 3786).
+    """
+
+    @staticmethod
+    def _add_terminal(db, ip, mac_norm, *, device_id, block_state=None,
+                      compliance_status="compliant", status="unblocked"):
+        mac = "-".join(mac_norm[i:i + 2] for i in range(0, 12, 2))
+        terminal = Terminal(
+            ip_address=ip,
+            mac_address=mac,
+            mac_address_normalized=mac_norm,
+            status=status,
+            compliance_status=compliance_status,
+            source_tag="lab",
+            block_state=block_state,
+            device_id=device_id,
+            source="arp",
+            non_compliant_confirm_count=2,
+            compliant_confirm_count=3,
+            non_compliant_type="both",
+            compliant_checked_at=datetime.now(UTC),
+            compliance_checked_at=datetime.now(UTC),
+        )
+        db.add(terminal)
+        return terminal
+
+    @pytest.mark.asyncio
+    async def test_repair_clears_stale_online_device_id(self, api_db):
+        terminal = self._add_terminal(api_db, "10.8.17.49", "0AC23534EB88", device_id="3786")
+        await api_db.flush()
+
+        service = ComplianceService(api_db)
+        with patch.object(
+            service, "_load_device_grouping_cache",
+            AsyncMock(return_value=({"B0BE835CCE41": "101"}, {"101"})),
+        ):
+            result = await service.repair_stale_device_ids(apply=True)
+
+        await api_db.refresh(terminal)
+        assert result["repaired"] == 1
+        assert terminal.device_id is None
+        # Online records keep their compliance status; recalc applies the threshold.
+        assert terminal.compliance_status == "compliant"
+
+    @pytest.mark.asyncio
+    async def test_repair_resets_offline_stale_terminal(self, api_db):
+        terminal = self._add_terminal(
+            api_db, "10.8.15.41", "34B1EBEE9673",
+            device_id="3786", block_state="offline",
+        )
+        await api_db.flush()
+
+        service = ComplianceService(api_db)
+        with patch.object(
+            service, "_load_device_grouping_cache",
+            AsyncMock(return_value=({"B0BE835CCE41": "101"}, {"101"})),
+        ):
+            result = await service.repair_stale_device_ids(apply=True)
+
+        await api_db.refresh(terminal)
+        assert result["repaired"] == 1
+        assert terminal.device_id is None
+        # Offline records are skipped by recalc, so their status must be reset.
+        assert terminal.compliance_status == "unknown"
+        assert terminal.non_compliant_confirm_count == 0
+        assert terminal.compliant_confirm_count == 0
+        assert terminal.non_compliant_type is None
+        assert terminal.compliant_checked_at is None
+        assert terminal.compliance_checked_at is None
+
+    @pytest.mark.asyncio
+    async def test_repair_keeps_valid_association(self, api_db):
+        terminal = self._add_terminal(
+            api_db, "10.8.11.80", "C8B29BFA03BB", device_id="101",
+        )
+        await api_db.flush()
+
+        service = ComplianceService(api_db)
+        with patch.object(
+            service, "_load_device_grouping_cache",
+            AsyncMock(return_value=({"C8B29BFA03BB": "101"}, {"101"})),
+        ):
+            result = await service.repair_stale_device_ids(apply=True)
+
+        await api_db.refresh(terminal)
+        assert result["repaired"] == 0
+        assert terminal.device_id == "101"
+
+    @pytest.mark.asyncio
+    async def test_repair_aborts_when_registry_unavailable(self, api_db):
+        terminal = self._add_terminal(
+            api_db, "10.8.15.41", "34B1EBEE9673", device_id="3786",
+        )
+        await api_db.flush()
+
+        service = ComplianceService(api_db)
+        with patch.object(
+            service, "_load_device_grouping_cache",
+            AsyncMock(return_value=({}, set())),
+        ):
+            result = await service.repair_stale_device_ids(apply=True)
+
+        await api_db.refresh(terminal)
+        assert result["aborted"] == "device registry unavailable"
+        assert result["repaired"] == 0
+        assert terminal.device_id == "3786"
+
+
+# ===========================================================================
+# TestStaleDeviceIdOfflineRegression
+# ===========================================================================
+
+class TestStaleDeviceIdOfflineRegression:
+    """回归锁定：离线终端不得因陈旧 device_id 被冻结为「合规」。
+
+    事故链（10.8.15.41）：
+      1. 终端 MAC 已不属于 device_id=3786，但陈旧关联仍在；
+      2. 设备归组凭该关联把终端判为 compliant（IP/MAC 均未命中基线）；
+      3. 终端转离线后重算整体跳过，错误状态被永久冻结。
+    本用例按事故链依次断言两道防线：存量修复 + 重新判定。
+    """
+
+    _add_terminal = staticmethod(TestRepairStaleDeviceIds._add_terminal)
+
+    @pytest.mark.asyncio
+    async def test_offline_stale_device_id_cannot_stay_compliant(self, api_db):
+        terminal = self._add_terminal(
+            api_db, "10.8.15.41", "34B1EBEE9673",
+            device_id="3786",
+            block_state="offline",
+            compliance_status="compliant",  # 事故现场：错误状态已冻结
+        )
+        await api_db.flush()
+
+        service = ComplianceService(api_db)
+        # 当前注册表中 3786 只剩另一块网卡，34B1EBEE9673 已不再属于它。
+        registry = ({"2C8DB159D9DB": "3786"}, {"3786"})
+        with patch.object(
+            service, "_load_device_grouping_cache",
+            AsyncMock(return_value=registry),
+        ):
+            repaired = await service.repair_stale_device_ids(apply=True)
+
+        assert repaired["repaired"] == 1
+        await api_db.refresh(terminal)
+        assert terminal.device_id is None
+        assert terminal.compliance_status == "unknown"
+
+        # 防线二：设备重新出现在 ARP（离线解除）后按单网卡口径重判。
+        # 若仅靠修复脚本、判定层缺少映射校验，这里会再次被切回 compliant。
+        terminal.block_state = None
+        service._is_device_grouping_enabled = AsyncMock(return_value=True)
+        service._load_device_grouping_cache = AsyncMock(return_value=registry)
+        service._load_whitelist_cache = AsyncMock(return_value=[])
+        service._load_scope_cache = AsyncMock(return_value=[])
+        service._load_all_ipguard_cache = AsyncMock(return_value={})
+        entries = [{
+            "ip_address": terminal.ip_address,
+            "mac_address": terminal.mac_address,
+            "device_id": terminal.device_id,
+        }]
+
+        result = await service.batch_check_compliance(entries)
+
+        assert result.compliant == 0
+        assert result.non_compliant == 1
+        assert entries[0]["device_id"] is None
+        assert entries[0]["ig_match"] is False
+
+    @pytest.mark.asyncio
+    async def test_stale_compliant_is_flagged_during_offline_skip(self, api_db):
+        """离线跳过分支必须留下可检索告警，便于线上发现同类冻结状态。"""
+        from loguru import logger as loguru_logger
+
+        from app.services.terminal_exclusion_service import TerminalExclusionService
+
+        self._add_terminal(
+            api_db, "10.8.15.41", "34B1EBEE9673",
+            device_id="3786",
+            block_state="offline",
+            compliance_status="compliant",
+        )
+        await api_db.flush()
+
+        service = ComplianceService(api_db)
+        messages: list[str] = []
+        handler_id = loguru_logger.add(messages.append, level="INFO")
+        try:
+            with patch.object(
+                service, "_load_device_grouping_cache",
+                AsyncMock(return_value=({"2C8DB159D9DB": "3786"}, {"3786"})),
+            ), patch.object(
+                service, "_is_device_grouping_enabled", AsyncMock(return_value=True),
+            ), patch.object(
+                service, "_is_ipguard_cache_stale", AsyncMock(return_value=False),
+            ), patch.object(
+                service, "_load_whitelist_cache", AsyncMock(return_value=[]),
+            ), patch.object(
+                service, "_load_scope_cache", AsyncMock(return_value=[]),
+            ), patch.object(
+                service, "_load_all_ipguard_cache",
+                AsyncMock(return_value={"lab": [{"ip_address": "10.9.9.9"}]}),
+            ), patch.object(
+                TerminalExclusionService, "load_active_rules", AsyncMock(return_value=[]),
+            ), patch(
+                "app.services.compliance_service._acquire_compliance_lock",
+                AsyncMock(return_value="test-lock"),
+            ), patch(
+                "app.services.compliance_service._release_compliance_lock",
+                AsyncMock(),
+            ):
+                result = await service.recalculate_all_compliance()
+        finally:
+            loguru_logger.remove(handler_id)
+
+        assert result["offline_skip_count"] == 1
+        assert any("stale device_id=3786" in str(m) for m in messages)
 
